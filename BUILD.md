@@ -1,0 +1,268 @@
+# malmo Build & Boot Pipeline
+
+> Working spec for how malmo ships — from source to a USB stick to a running box. Companion to `SPEC.md`, `CONTROL_PLANE.md`, `FIRST_RUN.md`, `STORAGE.md`.
+
+This doc is **draft / option-survey**. Most sections present alternatives with a recommendation; locked decisions are called out explicitly. The intent is to surface forks before committing.
+
+## What this doc covers
+
+- The Debian base — release, kernel, what's preinstalled.
+- ISO composition — tooling, layout, online vs. offline.
+- The installer — what runs between USB-boot and reboot-to-disk.
+- `host-agent` packaging and how it lands on disk.
+- `malmo-brain` image build, distribution, first-boot pull.
+- Versioning and release artifacts.
+
+What it does **not** cover: update mechanics post-install (separate doc), CI/CD specifics, signing infrastructure (deferred until we have a release to sign).
+
+---
+
+## 1. Debian base
+
+### Release
+
+- **Debian 13 "Trixie" (stable).** Current as of 2026, fresh enough kernel/userland for modern hardware.
+- Tracking testing or unstable would buy newer packages at the cost of stability we cannot afford for a non-technical-user appliance.
+
+**Locked: Debian stable.** Re-pin when the next stable cuts.
+
+### Kernel
+
+Two real options:
+
+- **Stock stable kernel.** Whatever ships in Trixie. Conservative, well-tested, but a 2026 stable kernel will already be a year+ behind on hardware support — bad for BYO x86 where the user's NIC / Wi-Fi / GPU may be newer than the kernel knows about.
+- **`linux-image-*-bpo` (backports kernel).** Newer kernel, same Debian packaging discipline. Standard answer for "I want broad hardware support on stable." Used by ProxmoxVE, many appliances.
+
+**Recommendation: backports kernel.** BYO hardware is a stated pillar (`SPEC.md`); shipping a kernel that doesn't recognize last year's Wi-Fi chips defeats it. Cost is a slightly larger update surface — acceptable.
+
+### Firmware
+
+- Include `firmware-linux`, `firmware-iwlwifi`, `firmware-realtek`, `firmware-amd-graphics`, `firmware-misc-nonfree` and similar. Non-free firmware is now in Debian's official installer by default (since Bookworm); we follow suit. Without this, half of laptops won't have working Wi-Fi at first boot.
+
+### Preinstalled packages
+
+Minimum to be a malmo box:
+
+- `systemd`, `systemd-cryptenroll`, `cryptsetup` — boot, encryption, TPM auto-unlock (`STORAGE.md`).
+- `docker-ce` (or `docker.io` from Debian; see below) — runtime for everything.
+- `avahi-daemon` — mDNS publishing for `*.malmo.local` (`SPEC.md`).
+- `caddy` — only if we ship it on host; if it runs as a container under the brain (per `CONTROL_PLANE.md`), skip on host.
+- `malmo-host-agent` — our own `.deb`.
+- Standard base utilities (`curl`, `ca-certificates`, `tpm2-tools`, `lvm2`, `e2fsprogs`, `cryptsetup-initramfs`).
+
+**Open: `docker-ce` (upstream Docker repo) vs. `docker.io` (Debian-packaged).** Upstream is fresher and what the Docker docs assume; Debian's package lags but integrates more cleanly with apt security updates. Lean toward `docker-ce` from Docker's own apt repo — most of our app authors test against upstream Docker.
+
+### What we deliberately do not preinstall
+
+- Desktop environment, X/Wayland session manager (except as needed for the installer — see §3).
+- SSH server enabled-by-default. Installed but disabled until a setup-wizard toggle or admin action turns it on.
+- Anything from `tasksel`'s "standard" set beyond what we explicitly list.
+
+---
+
+## 2. ISO build tooling
+
+This is the largest open fork. Four real options:
+
+### Option A — `live-build`
+
+Debian's official meta-tool for building live + installer ISOs. Used by Kali, Tails, official Debian Live.
+
+- **Pros:** Designed exactly for this. Handles squashfs, bootloader (GRUB/syslinux for BIOS+UEFI), hybrid ISO/USB, package selection, hooks for customization. Mature, well-documented, Debian-blessed.
+- **Cons:** Configuration is a sprawl of directories and shell hooks. Debugging is "read the source." The tool is in maintenance mode — works fine, but few new features.
+
+### Option B — `debian-installer` + preseed
+
+The installer Debian ships on its own ISOs. Drive it via a preseed file (`preseed.cfg`).
+
+- **Pros:** The most boring, well-trodden path. Massive deployments use it.
+- **Cons:** Preseed is a key-value config file with awkward escape rules. Customizing the installer's *appearance* (malmo branding, custom screens) means patching `cdebconf` themes and is genuinely painful. Conditional logic (e.g., "if no second disk, skip step 2") is a pre-script hack.
+- **Verdict:** Right for a sysadmin tool, wrong for a consumer appliance.
+
+### Option C — `mkosi`
+
+systemd-team's modern image builder. Declarative TOML config, can produce disk images, ISOs, container images. Used by Fedora CoreOS-adjacent work and increasingly in the systemd ecosystem.
+
+- **Pros:** Clean config. First-class support for the kind of immutable / A/B image we expect to migrate to (`SPEC.md` "OS update model"). Aligned with systemd, which we depend on heavily.
+- **Cons:** Newer; less battle-tested for Debian specifically (better support for Fedora/Arch). Smaller community for "I'm building a Debian appliance" recipes.
+- **Strategic angle:** if we're going to A/B immutable later anyway, picking mkosi now means one tool for both v1 and the future. live-build has no story for A/B images.
+
+### Option D — Custom (`debootstrap` + `xorriso` + scripts)
+
+Roll our own. What Ubuntu's modern installers do under the hood.
+
+- **Pros:** Full control. No tool quirks to work around.
+- **Cons:** We become the maintainers of an ISO builder. Many person-weeks to match what live-build gives for free.
+- **Verdict:** Reject. Premature DIY for a problem with mature solutions.
+
+### Recommendation
+
+**Option A (`live-build`) for v1, with an eye toward migrating to Option C (`mkosi`) when we move to A/B immutable updates.**
+
+Reasoning:
+- live-build gets v1 out the door fastest with the least surprise.
+- mkosi is the better long-term fit but its Debian support is thinner — picking it now means writing recipes that don't exist yet in the wider community.
+- The migration cost from live-build → mkosi is real but bounded: both produce the same kind of artifact. The cost we'd avoid by skipping live-build (learning two tools) is smaller than the cost of betting v1 on mkosi-on-Debian and discovering a sharp edge.
+
+**Alternative to push back on:** if you'd rather take the migration hit upfront, mkosi-now is defensible. The deciding question is whether v1 ship date or future-migration cost matters more.
+
+---
+
+## 3. The installer
+
+`FIRST_RUN.md` Phase 1 specifies the installer's user-visible flow: hardware check → disk selection → recovery passphrase → confirm wipe → install → reboot. This section is *how* that flow runs.
+
+### Three execution models
+
+- **Model 1 — Custom TUI** (text-mode, ncurses-style). Lightweight, ugly, fine for tinkerers, wrong for the long-term audience.
+- **Model 2 — Custom GUI in a minimal Xorg/Wayland session.** Boot a minimal desktop, run a malmo-branded GTK/Qt app. Pretty, heavy on ISO size and dev work.
+- **Model 3 — Web installer in a kiosk browser.** Boot a minimal compositor (`cage` or `weston --kiosk`), launch Chromium pointed at a local installer service (Go binary serving HTTP on `localhost`). The installer service does the actual work (partitioning, LUKS, TPM enrollment, file copy).
+
+### Recommendation: Model 3 (kiosk web installer)
+
+- Reuses our web stack — same TypeScript framework, same components, same designers as the post-install dashboard. Visual consistency from USB-boot to dashboard.
+- The installer service is a sibling to `malmo-brain` in shape: Go binary, HTTP API, but its job ends at first reboot. We can borrow patterns and even some packages.
+- ISO cost: ~150–250 MB for compositor + Chromium. Acceptable on a multi-GB ISO.
+- The same UI language carries forward — no jarring "install looks like a 90s setup, then suddenly it's a polished web app."
+
+ZimaOS and a couple of other appliance OSes use this exact pattern. It's well-trodden.
+
+### What the installer service does
+
+1. Probe hardware (CPU, RAM, disks, UEFI, TPM2). Refuse with a clear message if any hard requirement (`FIRST_RUN.md`) fails.
+2. Present disk picker + recovery-passphrase screen.
+3. On confirm:
+   a. Partition target disk(s) (GPT, ESP + LUKS-encrypted root).
+   b. `cryptsetup luksFormat`, generate recovery passphrase, enroll TPM2 with `systemd-cryptenroll`.
+   c. Lay down the OS image (squashfs → ext4 copy, or rsync from the live filesystem). The installer's *own* live environment is essentially the same image we lay on disk.
+   d. Install GRUB to the ESP, configure for UEFI.
+   e. Run `update-initramfs` so initramfs has TPM-unlock support.
+4. Show recovery passphrase, require user confirmation.
+5. Reboot.
+
+### Decision: live filesystem == installed filesystem
+
+The same squashfs the live ISO boots from is what gets copied to disk. No separate "live image" vs. "installable image." Means everything we test in the live environment is what runs post-install. Standard live-build pattern.
+
+---
+
+## 4. `host-agent` packaging
+
+Three options:
+
+- **A — Ship as `.deb` in our own apt repo.** ISO build pulls it during package selection. Updates ride apt. Standard Debian.
+- **B — Bake the binary directly into the live filesystem at ISO build time** (no `.deb`, just a file + a systemd unit). Simpler, but no apt-managed update path.
+- **C — Distribute as a container alongside the brain.** Inverts the architecture — host-agent is the *one* thing that should be on the host, not in a container (`CONTROL_PLANE.md`). Reject.
+
+**Recommendation: A.** Ship `malmo-host-agent.deb` from our apt repo.
+
+- Native package, native systemd unit, native logs.
+- apt is how host-agent updates until we move to A/B images. When we do, the `.deb` gets baked into the immutable image and the apt path retires. Cheap migration.
+- Our apt repo (`apt.malmo.network` or similar) hosts this one package for v1. Adding more later is mechanical.
+
+The repo is signed; the ISO build trusts our key. Key management is a release-infra concern, deferred to the release-infra doc.
+
+---
+
+## 5. `malmo-brain` image
+
+Per `CONTROL_PLANE.md`: brain runs as a container, supervised by host-agent.
+
+### Build
+
+- Multi-stage Dockerfile. Build stage compiles the Go binary (static, CGO disabled where possible). Runtime stage: `gcr.io/distroless/static-debian12` or `debian:trixie-slim`. Distroless is smaller and has less attack surface; slim is easier to debug. Lean distroless; ship a debug image variant if needed.
+- Output is a single OCI image, tagged `vX.Y.Z` and `latest` (latest only on stable channel).
+
+### Distribution — three options
+
+- **A — Public registry (`ghcr.io/malmo/brain` or Docker Hub).** Pull at first boot. Simple, no infra to run beyond a registry account. Requires internet at first boot.
+- **B — Self-hosted registry (`registry.malmo.network`).** Same as A but we own the namespace and don't depend on GitHub/Docker policies. Modest VPS cost.
+- **C — Bundle the image in the ISO.** Image is loaded into Docker at install time via `docker load`. Works offline at first boot. ISO grows by the image size (~50–150 MB for a Go-based brain — small).
+
+### Recommendation: B + C combined
+
+- **Bundle a pinned brain image in the ISO** so the box boots and is functional with zero internet.
+- **Self-hosted registry for ongoing updates.** host-agent (or the brain itself) pulls newer tags from `registry.malmo.network` when online.
+- Self-hosted over public-registry-only because: (1) a `malmo` namespace on Docker Hub is not guaranteed; (2) we already need `malmo.network` infra for the mesh, adding a registry is incremental; (3) avoids dependency on a third party's pull-rate-limit policy.
+- We can mirror to a public registry as a redundancy story, but it's not the source of truth.
+
+### First-boot brain bootstrap
+
+1. host-agent starts (systemd, after Docker).
+2. host-agent checks `/var/lib/malmo/brain-image.tar` (bundled in ISO) — if Docker doesn't already have the image, `docker load` it.
+3. host-agent pulls the latest tag from `registry.malmo.network` if online and a newer version exists. (Behavior on offline: keep the bundled version. Behavior on update failure: keep current. Never break boot.)
+4. host-agent starts the brain container with the configured pin.
+5. Brain takes over from there — Caddy, sidecars, etc. (`CONTROL_PLANE.md`).
+
+---
+
+## 6. Artifacts and channels
+
+### Per-release artifacts
+
+- `malmo-vX.Y.Z-amd64.iso` — the installer ISO.
+- `malmo-host-agent_X.Y.Z_amd64.deb` — published to `apt.malmo.network`.
+- `registry.malmo.network/malmo/brain:vX.Y.Z` — the brain image. `latest` tag advances on stable channel.
+
+### Channels
+
+- **Stable** — what `malmo.com/download` points at. Default for all installs.
+- **Beta** — opt-in via Settings. Same artifacts, different repo / tag suffix.
+- *(No nightly in v1. Internal CI builds exist but aren't a user-facing channel.)*
+
+A box's channel determines which apt repo it follows for `host-agent` and which brain tag it tracks.
+
+### Versioning
+
+- **SemVer** for `host-agent` and `brain` (`vMAJOR.MINOR.PATCH`).
+- **CalVer (`YYYY.MM`)** for the ISO itself, since it's a snapshot of host-agent + brain + Debian + apps. Avoids semver-stretching for a thing that isn't a single component.
+- ISO carries a manifest listing the exact versions of every component it bundles.
+
+---
+
+## 7. Build pipeline shape (informational)
+
+Not locking specifics, but the rough shape:
+
+```
+   Source (host-agent, brain, UI)
+            │
+            ▼
+       CI (build, test)
+            │
+            ├──► host-agent .deb ──► apt.malmo.network
+            ├──► brain image ─────► registry.malmo.network
+            └──► UI bundle ───────► (deploy method TBD, see WEB_UI.md)
+                                     │
+                                     ▼
+                          live-build ISO assembly
+                                     │
+                                     ▼
+                       malmo-vX.Y.Z-amd64.iso
+                                     │
+                                     ▼
+                              releases.malmo.network
+```
+
+GitHub Actions or self-hosted CI — TBD, not architecturally interesting at this stage.
+
+---
+
+## Locked decisions
+
+- **Base: Debian stable (currently Trixie / 13).**
+- **Kernel: Debian backports kernel** for hardware support on BYO x86.
+- **Non-free firmware bundled** for Wi-Fi and GPU support out of the box.
+- **ISO tooling: `live-build` for v1.** Migrate to `mkosi` when we move to A/B immutable updates. Conscious near-term-risk-reduction tradeoff over future-migration cost.
+- **Installer execution model: kiosk web installer.** Minimal compositor (`cage` / `weston --kiosk`) + Chromium pointed at a local installer service. Closest production reference: Fedora's Anaconda Web UI.
+- **Docker package source: `docker-ce` from Docker's official apt repo.** Revisit if Docker Inc. policy changes; swap to `docker.io` is a one-line apt source change.
+- **`host-agent` ships as a Debian package** from our own apt repo, not as a container.
+- **`malmo-brain` ships as an OCI image**, distroless runtime, from our own registry, also bundled in the ISO for offline first-boot.
+- **Same squashfs serves both the live (installer) environment and the installed system.**
+- **No SSH enabled by default.**
+- **Channels: stable + beta for v1, no nightly.**
+- **Versioning: SemVer for components, CalVer for the ISO.**
+
+## Open questions
+
+Tracked centrally in [`NEXT.md`](NEXT.md). Resolutions land back here (or in `DECISIONS.md` if they flip a position).
