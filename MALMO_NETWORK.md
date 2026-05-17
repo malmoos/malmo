@@ -121,14 +121,14 @@ Previously specified as "the app cannot be installed until the user enrolls." Re
 
 Enrollment is opt-in. The first-run wizard surfaces it with plain-language framing:
 
-> *Enrolling gives every app a secure URL like `photos.your-box.malmo.network`. Your data never goes through malmo's servers — only DNS lookups do. You can skip this and access your apps at `photos.malmo.local` instead.*
+> *Enrolling gives every app a secure URL like `photos.cindy-fox.malmo.network`. Your data never goes through malmo's servers — only DNS lookups do. You can skip this and access your apps at `photos.malmo.local` instead.*
 
 If the user enrolls:
 
 1. Box generates a keypair, sends an enrollment request to the enrollment API.
-2. Wizard shows a **"Name your box"** screen with a suggested name (e.g. `cindy-zx9`) and an editable text field. User can accept the suggestion or type their own (e.g. `the-perez-family`).
-3. API checks availability. On collision, offers alternatives (`the-perez-family-2`, etc.) or the user types another. Reserved names (single dictionary words, malmo-internal slugs) are rejected with a clear message.
-4. Once accepted, API returns the box-id and an API token. Box persists both.
+2. Wizard shows a **"Name your box"** screen with a base-name text field (e.g. `cindy`) and a system-assigned suffix shown as static text next to it (e.g. `-fox`). A reshuffle die (`🎲`) picks a different suffix; reshuffles are unlimited.
+3. API checks availability of the `(base, suffix)` pair. On collision, auto-rerolls the suffix and shows the new combo. Reserved bases (malmo-internal slugs, crude words) are rejected with a clear message; the user types another.
+4. Once accepted, API returns the box-id (`<base>-<suffix>`) and an API token. Box persists both.
 5. Box phones the API to set an A record: `*.<box-id>.malmo.network` → box's LAN IP.
 6. Caddy on the box uses ACME DNS-01 (via a malmo-provided plugin or generic API) to obtain a wildcard cert for `*.<box-id>.malmo.network`. Renewal every ~60 days.
 
@@ -139,6 +139,27 @@ If the user declines:
 - The "Use secure URLs" toggle in Settings → Network is disabled, with an inline "Enroll your box to enable" affordance.
 - Apps that declare `needs_secure_context: true` (see `APP_MANIFEST.md`) install fine but show a warning that some features may not work over HTTP.
 - The user can enroll later from Settings → Network at any time.
+
+### Locked: box-id is base + curated suffix, joined by a dash
+
+The box-id is two parts joined by a dash: a **user-chosen base name** and a **system-assigned suffix** drawn from a small curated list. Examples: `cindy-fox`, `the-perez-family-pine`, `larry-raven`.
+
+**The base** is what the user types. Validation is permissive: lowercase letters and digits, single internal dashes, not starting or ending with a dash, reasonable length cap. A **reserved-base blocklist** rejects names that would collide with malmo-internal slugs (`photos`, `home`, `mail`, etc.) and a small set of crude words that combine poorly with any suffix. Not a generic profanity filter — a targeted list, kept small.
+
+**The suffix** is system-assigned at enrollment, never typed. It's drawn from a hand-curated list themed around **Nordic nature** — concrete nouns only, no adjectives, no verbs: animals (`fox`, `elk`, `owl`, `raven`, `wolf`), plants (`pine`, `oak`, `birch`, `moss`, `fern`), geography (`bay`, `cove`, `fjord`, `lake`, `dune`). 3–5 characters. **~50 entries at launch.** The semantic neutrality is load-bearing: a concrete-noun suffix can't combine with the base to form an unintended phrase, which is the failure mode of free-typed suffixes and adjective-noun pairs.
+
+The wizard renders the suffix as static text next to the base field, with a **🎲 reshuffle** affordance that picks a different one. **No cap on reshuffles** — the pool is curated to be semantically safe, so grinding produces nothing worth grinding for.
+
+The actual word list lives outside this spec (data, not design). Curation policy: concrete nouns only, Nordic-nature theme, 3–5 chars, no homophones with crude words, no trademarked terms, no ASCII-confusables.
+
+**Why this shape:**
+
+- **Dash, not dot.** Industry precedent for `<name>-<random>` PaaS URLs (Vercel, Netlify, Heroku, Render, Fly) is uniformly dash. Dot is reserved for hierarchically distinct labels (e.g. `<worker>.<account>.workers.dev`). Our suffix is anti-collision plumbing, not a namespace.
+- **Curated, not generated.** A pronounceable-nonsense generator (`cindy-zoki`) would also work and avoids list maintenance — but curated suffixes feel intentional, verbalize cleanly, and quietly carry malmo's Nordic identity. ~50 entries at launch is an afternoon; growth is on the order of ~10/year.
+- **System-assigned, not typed.** Letting users type the suffix re-opens squatting (`bob-001`...`bob-999`) and re-introduces the second naming negotiation we removed by adding the suffix in the first place. Reshuffle gives aesthetic choice without giving targetable strings.
+- **No paid "drop the suffix" tier.** Considered (`larry.malmo.network` as an upgrade). Rejected — willingness-to-pay is low, the suffix doesn't bleed enough to upsell, and pay-gating cosmetics doesn't fit the monetization shape (paid SKUs are off-site backup, relay bandwidth, paid apps).
+
+**Collision capacity.** ~50 suffixes × any base means each (base, suffix) pair is unique within the namespace; the brain rejects pair-level collisions at enrollment and auto-rerolls. Even at 100k-box scale, the most popular base name is expected to see low-thousand assignments — each suffix shoulders a manageable share. The list grows if real assignments outpace forecasts.
 
 ### Locked: pick the name at enrollment, no rename afterward
 
@@ -175,7 +196,7 @@ Chosen specifically so that none of these break the box:
 
 ### Knock-on to other docs
 
-- `APP_LIFECYCLE.md` § "Caddy route registration timing" — Caddy registration step always creates the `.local` HTTP route; adds the `.malmo.network` HTTPS route if the box is enrolled. The dashboard URL surfaced per app is determined by the global toggle, not per-app manifest fields.
+- `APP_LIFECYCLE.md` # "Caddy route registration timing" — Caddy registration step always creates the `.local` HTTP route; adds the `.malmo.network` HTTPS route if the box is enrolled. The dashboard URL surfaced per app is determined by the global toggle, not per-app manifest fields.
 - `FIRST_RUN.md` — wizard's enrollment step pairs naming the box with turning on secure URLs. For new users they are effectively the same choice.
 - `APP_MANIFEST.md` — adds `needs_secure_context: bool` (optional, default false). The field triggers a warning at install time when the user is on `.local`; it is not a routing override.
 
@@ -269,7 +290,7 @@ We need a coordination service to make the identity-based mesh work — keys exc
 2. User installs the **malmo app**, taps **"Pair with my malmo"**, scans the QR.
 3. The phone sends the token to the malmo.network coordinator. Coordinator validates, registers the phone's public key under the user's tailnet, and returns the box's address candidates plus an ACL granting access to the user's apps.
 4. Phone establishes a WireGuard tunnel — direct via hole-punching if possible, via DERP relay otherwise.
-5. Done. `photos.cindy-zx9.malmo.network` now resolves and is reachable from anywhere with a network connection.
+5. Done. `photos.cindy-fox.malmo.network` now resolves and is reachable from anywhere with a network connection.
 
 #### Sharing with another person (e.g. grandma sees Photos)
 

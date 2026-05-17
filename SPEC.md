@@ -59,7 +59,7 @@ Combination, not a single axis:
 
 - **Multi-user from day one.** Designed for the household: one account per family member.
 - **First account created = admin (root).** Owns the box, can manage other accounts and the system.
-- **Apps are owned by an account**, but data can be shared between users (e.g. shared Photos library on the common Storage pool).
+- **Apps are owned by an account**, but data can be shared between users (e.g. a shared Photos library under `~/Shared/`).
 - **Single shared app instance is the default for shared use cases.** Example: one grocery list app, one shared dataset, multiple malmo users log in to it.
 - **No malmo SSO into apps (for now).** Each app keeps its own authentication. The malmo login gates the device; in-app accounts are separate.
 

@@ -2,7 +2,7 @@
 
 > Working spec for how the brain enforces what apps can do at runtime. Companion to `SPEC.md`, `CONTROL_PLANE.md`, `APP_MANIFEST.md`, `SERVICE_PROVISIONING.md`, `STORAGE.md`, `FIRST_RUN.md`.
 
-The manifest declares *intent* (`internet: true`, `lan: false`, `shared_storage: [photos]`). This document describes what those declarations mean concretely — what Linux/Docker primitives back them, what the defaults are, and where the trust boundaries sit.
+The manifest declares *intent* (`internet: true`, `lan: false`, `user_folders: [{folder: photos}]`). This document describes what those declarations mean concretely — what Linux/Docker primitives back them, what the defaults are, and where the trust boundaries sit.
 
 ## Principles
 
@@ -31,7 +31,7 @@ malmo is multi-user (`FIRST_RUN.md`). Every user has private data; admins manage
 When a user installs a Tier-3 app, the brain spawns a container scoped to that user. If two users install the same app, two containers run — one per (user, app) tuple. Containers are named `malmo-<app>-<user-slug>`.
 
 - The container's main process runs as the **user's Linux UID/GID** (assigned at user creation, in the malmo-reserved 3000+ range). The brain enforces this via the compose `user:` field; we do not rely on `PUID`/`PGID` env-var conventions.
-- The container sees only that user's pool directories (`/mnt/data/users/<slug>/...`). Other users' pools are not bind-mounted; they're not even on the filesystem the container can reach.
+- The container sees only the bind-mounted use-case folders declared in the manifest (subset of `/home/<user>/Photos/`, `Documents/`, etc. — see `APP_MANIFEST.md` # `user_folders`). Other users' homes are not bind-mounted; they're not even on the filesystem the container can reach.
 - App authors write a single-user app. They do not need to know about users, sessions, or identity. malmo handles replication.
 
 ### Tier-2 apps (always shared)
@@ -46,17 +46,17 @@ Every Tier-3 app is per-user. Every Tier-2 app is shared. No manifest field expr
 
 Subdomains stay clean: `<app>.malmo.local` for everyone. The reverse proxy reads the session cookie, identifies the logged-in user, and routes to that user's per-user instance.
 
-Consequence: if Andrei sends Maria a URL like `photos.malmo.local`, Maria lands on *her* Photos, not Andrei's. This is a deliberate privacy property — no URL-level cross-user data leakage — but means the URL is not a stable shareable handle. Granular cross-user sharing (intentionally exposing one user's content to another) is a future feature; v1 sharing is "drop it in the global `shared/` pool" only (`STORAGE.md`).
+Consequence: if Andrei sends Maria a URL like `photos.malmo.local`, Maria lands on *her* Photos, not Andrei's. This is a deliberate privacy property — no URL-level cross-user data leakage — but means the URL is not a stable shareable handle. Granular cross-user sharing (intentionally exposing one user's content to another) is a future feature; v1 sharing is "drop it in `~/Shared/`" only (`STORAGE.md`).
 
 ### User lifecycle
 
 - **Login:** brain loads the user's session, ensures their per-user containers are running for the apps they have installed.
 - **Logout:** containers stay running. Lifecycle is decoupled from session activity, so background work (sync, backups, scheduled jobs) keeps working.
-- **User deletion:** admin is prompted. Default action is to **archive** the user's data to `/mnt/data/archived-users/<slug>-<date>/` and stop their app instances, not to delete. Admin can choose to delete instead. The archive can be cleaned up later from Settings.
+- **User deletion:** admin is prompted. Default action is to **archive** the user's data — rename `/home/<slug>/` to `/home/.archived/<slug>-<date>/` (atomic rename within the same filesystem) and stop their app instances, not to delete. Admin can choose to delete instead. The archive can be cleaned up later from Settings.
 
 ### Privacy ceiling at v1
 
-Per-user data lives at `/mnt/data/users/<slug>/...` with `0700` perms owned by the user. Other malmo users cannot read it through the filesystem. **The admin (or anyone with shell as root) can read everything**, because v1 only encrypts at the disk level (LUKS), not per user. Admin-resistant per-user encryption (fscrypt) is on the roadmap; see `STORAGE.md` "Future: per-user encryption" for the planned upgrade. v1 features that touch user data are designed as if that upgrade were already in place — backup is per-user-keyed, etc. — so the upgrade is data-only, not feature-redesign.
+Per-user data lives at `/home/<user>/` with `0750` perms owned by the user (`STORAGE.md` # Permissions). Other malmo users cannot read it through the filesystem. **The admin (or anyone with shell as root) can read everything**, because v1 only encrypts at the disk level (LUKS), not per user. Admin-resistant per-user encryption (fscrypt) is on the roadmap; see `STORAGE.md` "Future: per-user encryption" for the planned upgrade. v1 features that touch user data are designed as if that upgrade were already in place — backup is per-user-keyed, etc. — so the upgrade is data-only, not feature-redesign.
 
 ---
 
@@ -93,7 +93,7 @@ Cost: each `lan: true` app burns one IP on the user's LAN. Tolerable — single-
 
 Denied. Apps that need to share data go through:
 - Managed services (`services: [postgres]`)
-- Shared storage pools (`shared_storage: [photos]`)
+- A shared use-case folder (`user_folders: [...]` — two of the same user's apps see the same `~/Photos/`) or, for Tier-1 household apps, `shared_folders: [...]` against `/srv/malmo/shared/`
 
 A user who genuinely wants two apps wired directly together puts them in one Door-2 compose. Cross-app networking is not a v1 feature.
 
@@ -117,26 +117,26 @@ Persistent paths in the manifest map to brain-controlled host paths under `/var/
 
 **Bind mounts to arbitrary host paths are forbidden in store manifests.** Allowed in Door-2 compose because the user wrote it.
 
-### Pool storage (per-user)
+### User content (use-case folders)
 
-Each Tier-3 app instance is scoped to its user's private pool directories. Manifest:
+Each Tier-3 app instance is scoped to its user's private home directory. Apps reach user content by **bind-mounting use-case folders** declared in the manifest (`APP_MANIFEST.md` # `user_folders`):
 
 ```yaml
 permissions:
-  shared_storage:
-    - { name: photos, mode: rw }
-    - { name: documents, mode: ro }
+  user_folders:
+    - { folder: photos, mode: write }
+    - { folder: documents, mode: read }
 ```
 
-`mode` defaults to `ro` if unspecified — least privilege, and `rw` is a deliberate choice the catalog reviewer notices.
+`mode` defaults to `read` if unspecified — least privilege, and `write` is a deliberate choice the catalog reviewer notices.
 
-Pool taxonomy v1 (fixed): `photos`, `documents`, `videos`, `music`, `downloads`. User-defined pools deferred; schema reserves `custom:<name>`.
+Use-case folder taxonomy v1 (fixed): `photos`, `documents`, `movies`, `music`, `notes`, `downloads` — mapped to capitalized directories under `/home/<user>/` (`Photos/`, `Documents/`, etc., per `STORAGE.md`). User-defined folders deferred.
 
-**Layout.** Per-user pools live at `/mnt/data/users/<slug>/<pool>/`, owned by that user (UID in the malmo 3000+ range), mode `0700`. The container runs as the user's UID, sees its own pool dirs only, and never has a path to other users' files at all.
+**Layout.** Use-case folders live at `/home/<user>/<Folder>/`, owned by that user (UID in the malmo 3000+ range), with `/home/<user>/` mode `0750` (`STORAGE.md` # Permissions). The container runs as the user's UID and sees only the folders declared in its manifest, bind-mounted in — it has no path to other users' homes at all.
 
-**The global `shared/` pool is not exposed to per-user app instances at MVP.** A second tree at `/mnt/data/shared/<pool>/` exists for the v1 cross-user sharing story (drop a file in shared, every user's file browser sees it), but Tier-3 app containers do not bind-mount it. Allowing apps to read across the user/shared boundary is a deferred feature; the manifest schema reserves `shared_storage_access: read | write` for it.
+**Household-shared content (`/srv/malmo/shared/`) is not exposed to per-user app instances at MVP.** It exists for the v1 cross-user sharing story (drop a file in `Shared/`, every user's file browser sees it via the `malmo-shared` group — `STORAGE.md`, `USERS_AND_GROUPS.md`), but Tier-3 per-user containers do not bind-mount it. Tier-1 household apps (e.g., a household Jellyfin) reach this content via `shared_folders` in their manifest (`APP_MANIFEST.md` # `shared_folders`). Allowing Tier-3 per-user apps to read across the per-user/shared boundary is a deferred feature — tracked in `NEXT.md`.
 
-The `PUID`/`PGID` env-var pattern from earlier drafts is gone — we set the container's runtime UID directly via the compose `user:` field, so pool ownership lines up natively. Apps that hardcode an internal UID and ignore the runtime user override will hit permission errors and get pulled from the catalog.
+The `PUID`/`PGID` env-var pattern from earlier drafts is gone — we set the container's runtime UID directly via the compose `user:` field, so file ownership lines up natively. Apps that hardcode an internal UID and ignore the runtime user override will hit permission errors and get pulled from the catalog.
 
 ### Devices
 
@@ -182,7 +182,8 @@ The common case is expressed through high-level fields in the manifest, not raw 
 | `lan: true` | macvlan attachment + multicast |
 | `devices: [...]` | device cgroup entries |
 | `gpu: true` | platform-appropriate GPU runtime |
-| `shared_storage: [...]` | bind mount + group membership |
+| `user_folders: [...]` | bind mount of `/home/<user>/<Folder>/` |
+| `shared_folders: [...]` | bind mount of `/srv/malmo/shared/<folder>/` + `malmo-shared` group membership |
 
 App authors think "I need to control the network," not "I need `NET_ADMIN`." The brain does the translation.
 
@@ -253,7 +254,7 @@ Mounted-file secrets (Docker secrets style) deferred — only ~half of images su
 When a per-user app declares `services: [postgres]`, the brain runs a Postgres container **co-located on that (user, app)'s per-app network**. Only that specific instance — Andrei's Photos, not Maria's — can reach it.
 
 - Lifecycle tied to the (user, app) tuple. Uninstall Andrei's Photos → Andrei's Postgres goes away; data backed up first per `SERVICE_PROVISIONING.md`. Maria's Photos is untouched.
-- Postgres data lives under the user's pool (`/mnt/data/users/<slug>/managed/postgres/...`), so it inherits the same per-user privacy posture (and will inherit per-user encryption when fscrypt lands).
+- Postgres data lives under the per-(user, app) instance dir (`/var/lib/malmo/instances/<id>/managed/postgres/...`), owned by the user's UID with restrictive perms. Cross-user filesystem access is blocked the same way every other app-state dir is — POSIX ownership + the brain controlling the bind-mount surface. **Open:** when fscrypt lands for `/home/<user>/`, does it extend to `/var/lib/malmo/instances/` for per-user app state? Tracked in `NEXT.md`.
 - Network-layer isolation: cross-user, cross-app database access is impossible by construction.
 - Cost: in the worst case, N users × M apps requesting Postgres = N×M Postgres instances. Realistic case (1–2 users, one heavy account running most apps) keeps this well within home-server budgets.
 
@@ -263,7 +264,7 @@ When a per-user app declares `services: [postgres]`, the brain runs a Postgres c
 
 ## Failure mode
 
-When an app violates its declared permissions at runtime — tries to reach the LAN with `lan: false`, opens a raw socket without `NET_RAW`, writes to a `ro` pool — the action **silently fails at the kernel/Docker layer** and is **logged to the app's log stream** with a clear reason:
+When an app violates its declared permissions at runtime — tries to reach the LAN with `lan: false`, opens a raw socket without `NET_RAW`, writes to a `read`-mode folder — the action **silently fails at the kernel/Docker layer** and is **logged to the app's log stream** with a clear reason:
 
 ```
 [malmo-isolation] blocked outbound connection to 192.168.1.50:80 — app declares lan: false

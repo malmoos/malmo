@@ -34,8 +34,10 @@ The Docker HTTP API (via the socket proxy) is used directly only for things the 
 ├── compose.yml               # author's, verbatim
 ├── compose.override.yml      # malmo-generated, regenerated on update
 ├── .env                      # malmo-injected variables
-└── data/                     # bind-mount root for all app data
-    └── ...                   # subdirs per the compose's bind mounts
+├── data/                     # bind-mount root for all app data
+│   └── ...                   # subdirs per the compose's bind mounts
+└── snapshots/                # pre-update tar(s) of data_volumes + managed-service DB dumps
+    └── pre-update-<old-version>.tar  # see UPDATES.md # Pre-update snapshot
 ```
 
 The brain's install command is literally:
@@ -85,7 +87,7 @@ Each of these has a row (or rows) in SQLite expressing **desired state**. host-a
 
 How brain distinguishes: every state-changing op records "I am about to apply this change" before issuing it. If reconciliation sees a mismatch where the last-recorded intent matches desired, the user (or another process) drifted it. If it matches neither desired nor actual, an in-flight op was interrupted — re-apply.
 
-**Dangerous ops are excluded from auto-reconcile.** A `mkfs` or `apt dist-upgrade` interrupted halfway is not safe to re-run; the UI surfaces "an operation was interrupted while doing X — verify state before retrying." The `Dangerous` flag comes from the job-kind declaration (`BRAIN_HOST_PROTOCOL.md` § Failure semantics).
+**Dangerous ops are excluded from auto-reconcile.** A `mkfs` or `apt dist-upgrade` interrupted halfway is not safe to re-run; the UI surfaces "an operation was interrupted while doing X — verify state before retrying." The `Dangerous` flag comes from the job-kind declaration (`BRAIN_HOST_PROTOCOL.md` # Failure semantics).
 
 **Why same pattern for everything:** the discipline cost of "model desired state, make ops idempotent" is paid once per state-managing surface. Two reconciliation models would double the surface area for bugs without adding power.
 
@@ -145,7 +147,13 @@ Managed-service variables (`MALMO_SERVICE_*`) and per-instance secrets (`MALMO_S
 
 ## Locked: image digest pinning
 
-On first install, brain pulls each image, resolves the digest via `docker inspect`, and rewrites the override to pin `image: name@sha256:...`. From the second `up` onward, the compose is byte-deterministic. Updates re-resolve. The previous digest is kept in SQLite to power one-generation rollback.
+All app installs end up running against a `compose.override.yml` that pins every image as `image: name@sha256:...`. From the second `up` onward, the compose is byte-deterministic.
+
+**For store (Door-1) apps, the digest comes from the signed catalog** (`APP_STORE.md` # Trust model — catalog's `images` map). The brain refuses to install if the locally-resolved digest after `docker pull` doesn't match the catalog's promise — that's the binding from "the malmo store promised this version" to specific bytes.
+
+**For custom (Door-2) apps, the brain falls back to TOFU**: pull, resolve the digest via `docker inspect`, write it into the override. No external authority to compare against; the user pasted the compose themselves.
+
+Updates re-resolve (catalog for Door-1, fresh inspect for Door-2). The previous digest is kept in SQLite to power one-generation rollback.
 
 ## Locked: install transaction
 
@@ -175,14 +183,16 @@ Failure handling:
 1. Fetch new package (new manifest + compose)
 2. Re-run admission on new compose
 3. Save current override → compose.override.yml.prev; current digest → SQLite
-4. Generate new override
-5. docker compose pull
-6. docker compose up -d                       (recreates changed services)
-7. Wait healthy
-8. Mark state: running
+4. Snapshot data_volumes + managed-service DB → snapshots/pre-update-<old-version>.tar
+   (see UPDATES.md # Pre-update snapshot)
+5. Generate new override
+6. docker compose pull
+7. docker compose up -d                       (recreates changed services)
+8. Wait healthy
+9. Mark state: running
 ```
 
-If step 6 or 7 fails: swap `.prev` override back, `up -d` again with the pinned previous digest, mark `update_failed`. One generation of rollback history — sufficient for the one-step-back UX, no n-deep history in v1.
+If step 7 or 8 fails: stop new container, **restore the snapshot from step 4** (untar data_volumes; restore managed-service DB from dump), swap `.prev` override back, `up -d` again with the pinned previous digest, mark `update_failed`. One generation of rollback history — sufficient for the one-step-back UX, no n-deep history in v1. Snapshot + previous image are GC'd after 7 days.
 
 ## Locked: stop, start, uninstall
 
@@ -246,9 +256,11 @@ If the box is enrolled with malmo.network, the brain registers **two hostnames**
 
 ## Deferred: lifecycle hooks
 
-The manifest's `hooks:` block (`post_install`, `pre_update`, `pre_backup`, etc.) is **not in MVP.** Every hook use case is tied to managed services or backups, both deferred. Apps already run their own migrations on container start.
+The manifest's `hooks:` block (`post_install`, `pre_update`, `pre_backup`, etc.) is **not in MVP.** Apps run their own migrations on container start; the **pre-update snapshot** (`UPDATES.md` # Pre-update snapshot) is the v1 safety net for app-driven schema migrations that go wrong.
 
 When hooks return, they will be designed as **one-shot container images**, not in-container scripts. The manifest will reference a hook image (e.g. `pre_update: { image: photoprism/migrator:2.4.1 }`); the brain runs it as a transient container with the app's volumes attached. This respects closed-source images natively and removes the "main_service needs a shell" constraint.
+
+The author-provided `pre_update` hook, when it returns, *replaces* the brute-force tar for apps that ship one. The brain's snapshot stays the safety net for apps that don't. A `post_update_rollback` hook fired only when `post_update` fails is sketched in `APP_MANIFEST.md` # F for apps that need bespoke recovery — also deferred.
 
 ## Open questions
 

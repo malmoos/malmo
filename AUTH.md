@@ -12,8 +12,8 @@ The malmo session governs **malmo's own surfaces only**:
 
 The malmo session does **not** govern:
 
-- **Tier-3 apps** (`photos.malmo.local`, etc.). Each app has its own auth — explicit no-SSO call (`SPEC.md` § Accounts & users). Subdomain isolation is load-bearing for security; the malmo cookie is scoped to the dashboard host and never reaches app subdomains.
-- **SSH.** Linux PAM, not malmo. Optional, opt-in per user — see "SSH access" below.
+- **Tier-3 apps** (`photos.malmo.local`, etc.). Each app has its own auth — explicit no-SSO call (`SPEC.md` # Accounts & users). Subdomain isolation is load-bearing for security; the malmo cookie is scoped to the dashboard host and never reaches app subdomains.
+- **Device access (SSH + SMB).** Linux PAM + Samba directly. These services authenticate against the same password the user uses for the dashboard (PAM is the source of truth), but the brain's session cookie does not apply to them. Each protocol is opt-in per user — see "Device access (SSH + SMB)" below.
 
 ## Identity primitive: password
 
@@ -25,7 +25,11 @@ The malmo session does **not** govern:
 - No email = no fallback recovery for a lost passkey. Password recovery still has to exist anyway.
 - WebAuthn ceremony + attestation + recovery flows is real complexity for a v1 audience that's tinkerers-then-households.
 
-**Password storage:** argon2id, server-side, in the brain's SQLite. Parameters: memory 64 MiB, time cost 3, parallelism 1 (tune at implementation; well within the [OWASP 2024 floor](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html#argon2id)).
+**Password storage: PAM is the source of truth.** The password lives in `/etc/shadow` (hashed via yescrypt or `pam_argon2`, whichever Debian ships configured), managed by Linux PAM. The brain does not store a password hash in its SQLite — it asks host-agent to verify on every login attempt.
+
+**Why PAM, not brain SQLite:** the same password authenticates the dashboard, SSH, and SMB. PAM is the only credential store all three services can read uniformly. Keeping a copy in brain SQLite would create two sources of truth and a sync problem; routing dashboard verification through PAM keeps it to one. The per-login round-trip is brain → host-agent UNIX socket → PAM `authenticate()` — sub-millisecond, dwarfed by argon2id/yescrypt's deliberate cost.
+
+The host-agent exposes a `verify_password(user, password)` endpoint to the brain. See `BRAIN_HOST_PROTOCOL.md` for the wire surface. The brain still owns sessions, roles, recovery codes — everything except the credential itself.
 
 **Password rules:** minimum 8 characters, no upper bound, no composition rules. Surface the haveibeenpwned k-anonymity API check as a non-blocking warning ("this password has appeared in known breaches") if we have internet during account creation. Don't enforce.
 
@@ -117,7 +121,7 @@ When we add an API for third-party tools (NEXT.md Tier 1), we'll either issue an
 
 ## Roles
 
-Two roles in v1 (`FIRST_RUN.md` § Identity):
+Two roles in v1 (`FIRST_RUN.md` # Identity):
 
 | Capability                                  | Admin | Member |
 |---------------------------------------------|:-----:|:------:|
@@ -131,6 +135,12 @@ Two roles in v1 (`FIRST_RUN.md` § Identity):
 **Enforcement:** role is checked **server-side in the brain** on every authenticated request. The UI also hides admin-only sections from members — defense in depth, not the security boundary.
 
 Routes are grouped by role at the router level (e.g., `/api/admin/*` requires admin; `/api/me/*` requires any authenticated user). Hard to introduce a bypass by missing a check on one handler.
+
+**On top of the role check, destructive Settings operations re-prompt for the password** with a 5-minute elevation window per session (sudo-in-UI pattern). Full mechanics in `USERS_AND_GROUPS.md` # Elevation in the UI.
+
+**Enrollment-class operations bypass the elevation window.** Add-drive and eject-drive (`STORAGE.md` # Adding a data drive, # Ejecting a data drive) require a fresh password prompt every time, regardless of recent elevation. These operations extend the box's LUKS keyslot set or remove a physically-attached drive; they're rare, deliberate, and not safely batched. The 5-minute window covers user-management batch work, not enrollment.
+
+**Roles map to Linux groups on the host.** Members are unprivileged Linux users; admins are in the `sudo` group and can `sudo` over SSH for rescue work. See `USERS_AND_GROUPS.md` for the full posture, group reference table, and rescue path.
 
 ## Tier-2 admin surface lives in the dashboard
 
@@ -171,7 +181,7 @@ After the admin sets their password, the wizard shows:
 >
 > *If you forget your dashboard password, this code is the only way back in. Without it, you'd need to reinstall and restore from backup. Take a photo of the code with your phone — it'll back up automatically to your photos, and you'll have it when you need it.*
 
-If the user proceeds, the brain generates a recovery code (16 random characters, formatted as `XXXX-XXXX-XXXX-XXXX` for readability), shows it once full-screen with a copy button and explicit "I have saved this" checkbox. Hash (argon2id) stored alongside the user's password hash. Plaintext is **never persisted** — show-once is the floor.
+If the user proceeds, the brain generates a recovery code (16 random characters, formatted as `XXXX-XXXX-XXXX-XXXX` for readability), shows it once full-screen with a copy button and explicit "I have saved this" checkbox. Hash (argon2id) stored in the brain's SQLite, on the user row. Plaintext is **never persisted** — show-once is the floor.
 
 If the user toggles it off, an explicit confirmation: *"You won't be able to recover your account if you forget your password. Continue without a recovery code?"* Forces acknowledgment of the tradeoff.
 
@@ -179,7 +189,13 @@ If the user toggles it off, an explicit confirmation: *"You won't be able to rec
 
 ### Using the recovery code
 
-Login screen has a "Forgot password" link. It asks for the recovery code, validates the hash, and lets the user set a new password. On success, all existing sessions for that user are invalidated and the recovery code is consumed (single-use; user is offered to generate a new one).
+Login screen has a "Forgot password" link. It asks for the recovery code; the brain validates the argon2id hash in SQLite. On match, the brain serves a **forced** "set new password" screen — no skip, no "I'll do this later." The new password is sent to host-agent → `passwd <user>` + `smbpasswd -a` sync → PAM accepts the new password for dashboard, SSH, and SMB. The brain then invalidates all existing sessions for that user and consumes the old recovery code.
+
+Because the user now has no recovery code (single-use semantics), the next screen **generates and displays a fresh recovery code once**, with the same "I have saved this" checkbox as first-run. The toggle to opt out is available but defaults to keeping recovery on; opting out triggers the same "you won't be able to recover your account" confirmation as first-run.
+
+**Order-of-operations rule:** the brain checks host-agent reachability *before* consuming the recovery code. If host-agent is unreachable (rare — both run on the same box), the password change can't be applied, so the recovery code must survive. Otherwise a single-use code burns without effect.
+
+The user lands on the dashboard with a fresh password and a fresh recovery code. From here, every downstream feature that requires an admin password — including add-drive and eject-drive — works normally; there is no "logged in via recovery code, now wants to do X" carve-out because the recovery-code login terminates in a real password by construction.
 
 ### Threat model
 
@@ -191,33 +207,47 @@ Login screen has a "Forgot password" link. It asks for the recovery code, valida
 
 The LUKS recovery passphrase (shown at install, see `STORAGE.md`) recovers **disk decryption** when the TPM seal breaks (motherboard swap, firmware update). The dashboard recovery code recovers **account access**. Different things, different moments. Don't combine them onto one sheet — conflating them confuses threat models.
 
-## SSH access
+## Device access (SSH + SMB)
 
-**Off by default.** The Linux user account exists with the password disabled at first-run; SSH login is not possible until the user explicitly enables it.
+**One password for everything.** Dashboard, SSH, and SMB all authenticate against the same Linux account password — the one the user set at account creation, stored in PAM (`/etc/shadow`). Setting up SSH or mounting an SMB share uses the password the user already knows.
 
-**Flow:**
+**What's per-protocol is the *access*, not the *credential*.** The password is set when the account is created; what changes when the user opts in is which services accept that password for that account.
 
-1. Settings → My account → SSH access.
-2. Switch on "Enable SSH for this account." Confirm dashboard password.
-3. User can paste a public key (preferred) or set a separate SSH password. Brain calls host-agent, which writes `~/.ssh/authorized_keys` or runs `passwd` accordingly.
-4. SSH service refuses login until at least one credential is present.
+**Default posture: services on, accounts off.** sshd and Samba are enabled at boot, but no Linux account can log in to either until explicitly allowed:
 
-**Why separate from the dashboard password:**
+- `sshd_config.d/malmo-allowed.conf` carries an `AllowUsers` allowlist. Empty at install — sshd rejects every account by default.
+- `smb.conf` carries a `valid users` directive per share. Empty at install — Samba rejects every account.
 
-- The brain runs in a container and doesn't access `/etc/shadow`. Keeping dashboard password verification inside the brain (SQLite + argon2id) avoids a per-login round-trip through host-agent to PAM.
-- Non-technical users never see the SSH password concept. It only exists for users who explicitly turn on SSH.
-- SSH is LAN-only (`SPEC.md`), so the blast radius of a separate password is small.
+The password exists in PAM and is valid; the services just don't accept any user yet.
 
-**Locked:** dashboard password and SSH password are **independent**. Changing one does not change the other. The settings UI is explicit about which is which.
+**Flow (per protocol):**
+
+1. Settings → My account → Device access → toggle "Enable SSH" or "Enable file shares (SMB)."
+2. Confirm dashboard password (re-auth gate, prevents stolen-session abuse).
+3. Optional: paste an SSH public key (preferred for SSH; SMB doesn't use keys).
+4. Brain calls host-agent → adds the user to the relevant allowlist (`sshd AllowUsers` and/or Samba `valid users`) → reloads the service. Optionally writes `~/.ssh/authorized_keys`.
+5. User can now connect using their existing malmo password.
+
+**Why one password instead of two:**
+
+- Same threat model. SSH and SMB are non-browser access to the same box; the dashboard is browser access. Whatever the user types into a credential field, the security ceiling is the password's strength.
+- Realistic user behavior: with two passwords, users reuse the same string anyway. We'd be enforcing a separation that exists only on paper while paying the UX cost of explaining it.
+- Fewer credentials to manage means fewer credentials forgotten, written on Post-its, or stored in unsafe places.
+
+**Samba password backend:** Samba historically wants its own password DB (`tdbsam`), which doesn't share storage with `/etc/shadow`. We use Samba's PAM passdb backend (`passdb backend = tdbsam` with `unix password sync = yes` + `pam password change = yes`) so a password change via `passwd` automatically updates Samba. host-agent does the change atomically (`passwd` + Samba sync as one operation) so drift doesn't occur in practice.
+
+**Network scope:** SSH on :22 and SMB on :445 are firewalled to RFC1918 + the mesh interface — see `BUILD.md` # SSH. Both are structurally blocked from the public internet; both work from a paired mesh device. Pair the device to access the box remotely.
 
 ## Brain ↔ host-agent in the auth path
 
 For the operations that need host privilege:
 
-- **SSH enable / key + password updates:** brain → host-agent → `passwd`, `authorized_keys` write.
+- **Dashboard login (every login):** brain → host-agent `verify_password(user, password)` → PAM `authenticate()` → yes/no. The brain mints a session on yes; rate-limits on no.
+- **Password change** (Settings → My account → password, or recovery-code flow): brain → host-agent → `passwd <user>` + Samba sync (one atomic operation).
+- **SSH/SMB opt-in toggles:** brain → host-agent → add user to `AllowUsers` / `valid users` allowlist + service reload. Optional `authorized_keys` write.
 - **Tier-2 admin operations:** brain → host-agent → edit config, `systemctl` restart.
 
-The brain's session middleware never reaches host-agent for *authentication* — it only does so for *actions* that have already passed auth+role checks. Host-agent trusts the brain because brain ↔ host-agent communication is over a private channel: a UNIX socket whose access is kernel-enforced via group membership. See `BRAIN_HOST_PROTOCOL.md` for the full protocol.
+The brain's session middleware reaches host-agent for *credential verification* on each login (PAM is the credential store, not brain SQLite). After a session is established, role + ACL checks stay inside the brain — no per-request roundtrip. Host-agent trusts the brain because brain ↔ host-agent communication is over a private channel: a UNIX socket whose access is kernel-enforced via group membership. See `BRAIN_HOST_PROTOCOL.md` for the full protocol.
 
 **Test invariant (CI must assert):** the `malmo` group on the running system contains exactly one member — the brain's container runtime UID. Any additional member is a configuration error and fails the test. This is the entire authn/authz model for the brain↔host-agent boundary; if group membership is wrong, the security boundary is broken.
 
@@ -232,21 +262,22 @@ The brain's session middleware never reaches host-agent for *authentication* —
 ## Locked decisions
 
 - **Identity primitive: password only in v1.** No passkeys, no TOTP, no email-based recovery.
-- **Password storage: argon2id**, server-side in the brain's SQLite.
+- **Password storage: PAM (`/etc/shadow`) is the source of truth.** Brain verifies via host-agent's `verify_password`. Brain SQLite carries no password hash.
+- **One password for dashboard, SSH, and SMB.** The user has a single malmo password; service access (SSH, SMB) is gated per-protocol via allowlists, not separate credentials.
 - **Session shape: server-side opaque cookie**, 256-bit random ID, `HttpOnly`, `SameSite=Lax`, host-scoped (no `Domain` attribute), `Secure` on HTTPS origins.
 - **Session lifetime: 30-day rolling, 90-day hard cap.**
 - **Login UX: user-list style** with first name + letter glyph. Settings toggle to switch to a blank-form login for privacy-conscious users.
 - **Roles enforced server-side in the brain.** UI hiding is defense in depth.
 - **Tier-2 admin surface lives in the dashboard at `/settings/<service>/*`.** Same origin, same session, no forward-auth.
-- **SSH password is separate from dashboard password.** SSH is off by default; opt-in per user.
-- **Admin recovery code: opt-in toggle, default on.** Shown once, hashed with argon2id, single-use, no physical-access reset path.
+- **SSH and SMB are off-by-account-by-default.** Services run; per-user allowlists are empty until the user opts in via Settings.
+- **Admin recovery code: opt-in toggle, default on.** Shown once, hashed with argon2id (stored in brain SQLite), single-use, no physical-access reset path. Validating the code triggers a password change through host-agent → PAM.
 - **No SSO into Tier-3 apps.** Locked already in `SPEC.md`; reiterated here.
 - **Cross-origin re-auth on toggle flip is accepted.** No session handoff in v1.
 
 ## Knock-on to other docs
 
-- `FIRST_RUN.md` — Step 2 adds the recovery-code sub-step. SSH password explicitly out of the first-run flow.
+- `FIRST_RUN.md` — Step 2 adds the recovery-code sub-step. Per-account SSH/SMB opt-in explicitly out of the first-run flow (it's a post-install Settings toggle, not a wizard step).
 - `SERVICE_PROVISIONING.md` — Tier-2 implementation locked as "native Debian + systemd; UI in the dashboard." Previously left as "container or host service — implementation detail."
-- `CONTROL_PLANE.md` — host-agent scope expands to include Tier-2 systemd/config management and user-credential mutations (passwd, authorized_keys).
+- `CONTROL_PLANE.md` — host-agent scope expands to include Tier-2 systemd/config management, user-credential verification (`verify_password`), and credential mutations (`passwd`, `authorized_keys`, sshd/Samba allowlists).
 - `MALMO_NETWORK.md` — "toggle-flip re-auth" sharp edge points here for the concrete mechanism.
 - `SPEC.md` — "No malmo SSO into apps" still correct; this doc covers what the malmo session *does* govern.

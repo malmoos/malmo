@@ -6,7 +6,7 @@
 
 - UI lives in its **own repository**, developed independently of the brain. Vite for dev (HMR).
 - Dev loop: Vite dev server proxies `/api/...` calls to the brain. Instant reload on UI changes. No brain rebuild needed for frontend work.
-- **API contract is versioned and additive.** Brain serves under `/api/v1/...`. Minor versions are additive — fields are added, never removed or repurposed. UI bundle declares the API minor it requires in `version.json`. Brain returns `426 Upgrade Required` on mismatch. The 426 path is the in-tab safety net for "user had a tab open while the UI container updated" — not a transient-during-OS-update artifact. See `BRAIN_UI_PROTOCOL.md` § "API discipline" for the full versioning posture.
+- **API contract is versioned and additive.** Brain serves under `/api/v1/...`. Minor versions are additive — fields are added, never removed or repurposed. UI bundle declares the API minor it requires in `version.json`. Brain returns `426 Upgrade Required` on mismatch. The 426 path is the in-tab safety net for "user had a tab open while the UI container updated" — not a transient-during-OS-update artifact. See `BRAIN_UI_PROTOCOL.md` # "API discipline" for the full versioning posture.
 - **Why separate codebase + container:** UI iteration cadence is naturally faster than brain iteration cadence. A coupled ship model forces every CSS tweak through a brain release. Separating them with a stable API contract is the standard web-app shape; we keep it.
 
 ## Locked: deploy model — dedicated `malmo-ui` container
@@ -53,12 +53,24 @@
 | Lint / format | **ESLint** (`eslint-plugin-vue` + `@typescript-eslint`) + **Prettier** | Standard. |
 | Node | Latest LTS | Pinned via `.nvmrc`. |
 
+## Health & degraded mode surfacing
+
+The brain may be running in *degraded mode* — one or more health issues active that block specific operations (see `HEALTH.md`). The dashboard surfaces this consistently:
+
+- **`useHealth()` composable** wraps `useQuery(['health/issues'])` and reacts to `health.issue_raised` / `health.issue_cleared` / `health.issue_updated` events on the global SSE stream. Active issues live in a Pinia store; the rest of the app reads from it.
+- **Global banner** in the dashboard chrome whenever any `critical` or `error` issue is active. Click → dedicated Issues view.
+- **Inline cards** in the relevant section (Storage page for storage issues, Updates page for version issues, per-app card for `app-image-partial`, etc.). Each card carries the issue's primary action button.
+- **Disabled action affordances.** Components that perform potentially-blocked operations consult the health store and render disabled with an explanatory tooltip ("Disabled because: data drive isn't connected"). A `<HealthGated :blocks="'apps'">` wrapper component standardizes this.
+- **Toast on clear.** When an issue transitions to cleared, a brief toast confirms it. No modal, no interrupt — but the user *sees* the transition rather than the box silently auto-healing.
+- **No modals for issues.** Banners and inline cards surface in-place; the user reads them when they look. Modals are reserved for user-initiated confirmations (Tier-2 destructive actions).
+- **409 with `blocked-by-health-issue`** — the API client surfaces these as a toast with a "View" button that scrolls to the relevant banner.
+
 ## Architectural rules baked into the stack
 
 - **Server state lives in Query, not Pinia.** Anything fetched from the brain — apps, users, settings, jobs — flows through `useQuery`. Pinia is reserved for genuinely client-side state. This prevents the standard pattern of "I have the data in two places and they're out of sync."
 - **The SSE event stream is the cache-invalidation channel.** `useEvents()` subscribes once at app mount. Components don't subscribe to events directly; they read via `useQuery` and get fresh data when relevant events arrive. Push and pull share one cache.
 - **`<script setup>` only.** No Options API, no `defineComponent({...})` blocks. Code-review enforced.
-- **OpenAPI-codegen-ready.** The hand-rolled `apiClient` and the call-site shape mirror what `openapi-fetch` will produce. When codegen lands (`BRAIN_UI_PROTOCOL.md` § "API discipline"), it's a swap, not a rewrite.
+- **OpenAPI-codegen-ready.** The hand-rolled `apiClient` and the call-site shape mirror what `openapi-fetch` will produce. When codegen lands (`BRAIN_UI_PROTOCOL.md` # "API discipline"), it's a swap, not a rewrite.
 
 Forms library, testing stack, dark-mode trigger, i18n, and accessibility cadence are downstream decisions tracked separately.
 

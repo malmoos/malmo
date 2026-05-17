@@ -45,17 +45,39 @@ Minimum to be a malmo box:
 
 - `systemd`, `systemd-cryptenroll`, `cryptsetup` — boot, encryption, TPM auto-unlock (`STORAGE.md`).
 - `docker-ce` (or `docker.io` from Debian; see below) — runtime for everything.
-- `avahi-daemon` — mDNS publishing for `*.malmo.local` (`SPEC.md`).
+- `avahi-daemon` — mDNS publishing for `*.malmo.local` and SMB service discovery (`_smb._tcp`).
 - `caddy` — only if we ship it on host; if it runs as a container under the brain (per `CONTROL_PLANE.md`), skip on host.
 - `malmo-host-agent` — our own `.deb`.
+- `openssh-server` — SSH daemon, scoped to LAN + mesh via nftables (see "SSH" below).
+- `samba` — SMB file shares for cross-device access (`STORAGE.md` # Cross-device access).
+- `mergerfs` — userspace union for data drives (`STORAGE.md` # Data drives). Activates whenever a data drive is present.
+- `nftables` — firewall, scoping SSH and SMB to LAN + mesh.
 - Standard base utilities (`curl`, `ca-certificates`, `tpm2-tools`, `lvm2`, `e2fsprogs`, `cryptsetup-initramfs`).
 
 **Open: `docker-ce` (upstream Docker repo) vs. `docker.io` (Debian-packaged).** Upstream is fresher and what the Docker docs assume; Debian's package lags but integrates more cleanly with apt security updates. Lean toward `docker-ce` from Docker's own apt repo — most of our app authors test against upstream Docker.
 
+### SSH
+
+`openssh-server` is **installed and enabled at boot** — sshd listens on :22 from first boot. However, **no account can authenticate by default**: `sshd_config.d/malmo-allowed.conf` carries an empty `AllowUsers` directive, so sshd rejects every account regardless of whether the password is valid. Per-account opt-in (Settings → My account → Enable SSH) adds the user to `AllowUsers` and reloads sshd. The user's malmo password — the same one they use for the dashboard — is what authenticates them; SSH does not have its own password (`AUTH.md` # Device access).
+
+Why daemon-on-but-no-account instead of daemon-off-until-toggle:
+
+- The "turn on SSH" UX is a single toggle in Settings, with no host-level service restart visible to the user. The brain calls host-agent to edit the allowlist; the daemon was already running.
+- An attacker on the LAN sees an open :22, but no account is in the allowlist — sshd rejects connections at auth-name resolution, before evaluating credentials. Blast radius is bounded by `AUTH.md`'s opt-in mechanics.
+- `PermitRootLogin no`, `PasswordAuthentication yes` (sshd accepts the user's malmo password; a public key can also be added to `~/.ssh/authorized_keys` for key-based login).
+
+**Network scope: LAN + mesh only, structurally.** An nftables rule on :22 default-denies and allows only:
+
+- RFC1918 source ranges: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` (the LAN).
+- The mesh interface (`tailscale0` / `headscale0`) when present — devices the user has paired via `MALMO_NETWORK.md`.
+
+SSH from the public internet is **structurally blocked**, not relying on per-account opt-in alone. A port scan from outside sees a closed port, not a refused-auth banner. The path to "SSH to my box from outside" is "pair the device on the mesh" — same trust model the user already learns for the dashboard. Interface-agnostic by design (nftables on source IP, not `ListenAddress` on a NIC name), so changing NICs / adding Wi-Fi doesn't break it.
+
+Implemented as a drop-in at `/etc/nftables.d/malmo-ssh.conf`, owned by the `.deb`. Mesh interface name is templated at host-agent startup based on which mesh client is installed.
+
 ### What we deliberately do not preinstall
 
-- Desktop environment, X/Wayland session manager (except as needed for the installer — see §3).
-- SSH server enabled-by-default. Installed but disabled until a setup-wizard toggle or admin action turns it on.
+- Desktop environment, X/Wayland session manager (except as needed for the installer — see #3).
 - Anything from `tasksel`'s "standard" set beyond what we explicitly list.
 
 ---
@@ -242,6 +264,9 @@ Not locking specifics, but the rough shape:
                                      │
                                      ▼
                               releases.malmo.network
+                                     │
+                                     ▼
+                        stable.json (+ minisig) — see RELEASE_MANIFEST.md
 ```
 
 GitHub Actions or self-hosted CI — TBD, not architecturally interesting at this stage.
@@ -259,8 +284,8 @@ GitHub Actions or self-hosted CI — TBD, not architecturally interesting at thi
 - **`host-agent` ships as a Debian package** from our own apt repo, not as a container.
 - **`malmo-brain` ships as an OCI image**, distroless runtime, from our own registry, also bundled in the ISO for offline first-boot.
 - **Same squashfs serves both the live (installer) environment and the installed system.**
-- **No SSH enabled by default.**
-- **Channels: stable + beta for v1, no nightly.**
+- **SSH daemon enabled at boot; no account can authenticate until per-user opt-in** (`AUTH.md` # SSH access). Root login disabled.
+- **Channels: stable only in v1, no beta, no nightly.** Beta is additive when triggered (see `RELEASE_MANIFEST.md`).
 - **Versioning: SemVer for components, CalVer for the ISO.**
 
 ## Open questions

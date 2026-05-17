@@ -18,7 +18,7 @@
 - **API + UI** — HTTP + SSE + (future) WebSocket API for the web UI; ships the UI. Wire spec in `BRAIN_UI_PROTOCOL.md`; client-side stack in `WEB_UI.md`.
 - **Identity** — user accounts, sessions, admin/root account, sharing/ACLs. See `AUTH.md`.
 - **Managed services** — runs shared Postgres / Redis / etc., provisions databases on app install, handles backups + upgrades. See `SERVICE_PROVISIONING.md`.
-- **Storage** — manages the disk pool, fast/slow tier mounts, app data directories. See `STORAGE.md`.
+- **Storage** — manages the data drive (mergerfs union, ext4+LUKS+TPM unlock), bind mounts for `/home/` and `/var/lib/malmo/`, app data directories. See `STORAGE.md`.
 - **Mesh** — integrates with Headscale, registers the box, manages pairing tokens, surfaces people/devices UI. See `MALMO_NETWORK.md`.
 - **Backups** — orchestrates app backup hooks, schedules, restores.
 - **Auto-updates** — apps, the OS itself, and the control plane. See `UPDATES.md`.
@@ -69,7 +69,7 @@
 
 A small native Go binary running as a systemd service. **Does as little as possible.**
 
-- Bootstrap the system at boot — mount the storage pool, check disks, start Docker.
+- Bootstrap the system at boot — unlock and mount the data drive(s), assemble the mergerfs union, check disks, start Docker.
 - Pull and start the `malmo-brain`.
 - Apply OS-level updates (today: `apt`; tomorrow: A/B image swaps).
 - Recover the brain if it crashes.
@@ -91,6 +91,7 @@ A single Go process holding all orchestration logic. Internal packages:
 - Identity — accounts, sessions, ACLs
 - API server — serves the dashboard API (spec: `BRAIN_UI_PROTOCOL.md`)
 - Backup orchestrator
+- **Health manager** — owns the typed set of active health issues, consults them to gate write/app/user operations, surfaces them via the API + SSE channel. The brain runs in *degraded mode* when any issue is active. Spec: `HEALTH.md`.
 
 Persists its own state in **SQLite** (single file, no separate DB process for malmo's own data; managed Postgres is for *apps*, SQLite is for *malmo*).
 
@@ -122,6 +123,52 @@ The brain runs *next to* these and orchestrates them — not inside them.
 - The proxy is configured with an allowlist of Docker API endpoint families the brain actually needs (`CONTAINERS=1`, `IMAGES=1`, `NETWORKS=1`, etc.). Dangerous endpoints (`EXEC`, arbitrary host mounts on `POST /containers/create`) are denied.
 - **Why:** the brain has the largest attack surface (HTTP API exposed to the LAN, third-party app manifests we evaluate). If it's ever compromised, the proxy prevents trivial host takeover via Docker. Cheap defense in depth — one extra container, one env var, ~5MB RAM, negligible ongoing burden.
 - **Operational rule:** when the brain needs a new Docker API endpoint family, that's an explicit config change to the proxy. Forces conscious thought about what privileges the brain holds.
+
+### Locked: host-agent runs under systemd as `Type=notify`
+
+- Unit type **`Type=notify`**, not `simple`. host-agent calls `sd_notify(READY=1)` only after its UNIX socket is bound and accepting connections. Anything ordered `After=host-agent.service` (brain container, downstream services) sees a ready socket on first try — no startup races.
+- **`Restart=always`**, `RestartSec=2s`, `StartLimitBurst=5` / `StartLimitIntervalSec=60s`. Crash → restart fast, but a sustained crashloop (5 in 60s) stops and surfaces failure. On stop, `OnFailure=malmo-recovery.target` routes the box into recovery boot — host-agent itself broken means the brain can't run, so the dashboard isn't reachable and a separate rescue page is the only option (see `BOOT.md` # Failure → recovery target — the narrow cases).
+- **Watchdog enabled.** `WatchdogSec=30s`; host-agent pings `sd_notify(WATCHDOG=1)` every ~10s from a dedicated goroutine. Converts a hung process into a restart. Conservative interval avoids false positives during long legitimate operations (backup tarball walks, large image pulls).
+- **Ordering**: `After=malmo-storage-ready.target docker.service network-online.target`, `Wants=network-online.target malmo-storage-ready.target`, `Requires=docker.service`. host-agent starts even if storage assembly partially failed — it reads `/run/malmo/health/storage.json` and forwards findings to the brain, which raises health issues per `HEALTH.md`. The brain is the single source of truth for "is it safe to write right now"; systemd ordering is best-effort, not strict-gate. Full boot-chain context in `BOOT.md`.
+- **Socket activation is deliberately deferred** — extra complexity with no win on an always-on appliance. Tracked in `NEXT.md` if we ever revisit.
+
+### Locked: host-agent hardening directives
+
+host-agent is root, but its filesystem and kernel reach is constrained by systemd:
+
+```
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/malmo /etc/malmo /run/malmo
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+```
+
+`ProtectHome=true` is load-bearing: **host-agent has no general filesystem-read API over `/home`.** Any operation that touches a user's home directory is a narrow, named operation in `BRAIN_HOST_PROTOCOL.md`, not a generic file-read primitive. This is a deliberate constraint, not an oversight.
+
+Capability dropping (`CapabilityBoundingSet=`) is **not** used — host-agent's job is "do root things on the box" (mount, cryptsetup, useradd, systemctl). The filesystem and kernel constraints above are where the meaningful blast-radius reduction happens.
+
+### Locked: host-agent launches the brain container
+
+- During its own startup, after Docker is ready, host-agent pulls (if needed) and starts the brain container with Docker restart policy `unless-stopped`. After that, Docker keeps brain alive across host-agent restarts; host-agent does not actively supervise brain during steady-state operation.
+- **One chain of custody.** host-agent owns every container on the box (apps, managed services, *and* brain). The reconciler pattern from `APP_LIFECYCLE.md` extends to brain naturally.
+- **Lockstep version check happens at launch.** host-agent refuses to start a brain whose major protocol version it doesn't speak (per `BRAIN_HOST_PROTOCOL.md`). One actor owns both endpoints' lifecycles, so the check is a function call, not an out-of-band reconciliation.
+- The alternative — a separate `malmo-brain.service` systemd unit — was rejected because it splits the update flow (host-agent already owns the brain+UI update stream per `UPDATES.md`) and moves the lockstep version check out-of-band into first-request failure.
+
+### Locked: Caddy is malmo substrate, runs as a container
+
+- Caddy is **not a Tier-2 OS integration**. It needs no NET_ADMIN, no external auth flow, has no user-facing settings page; it's malmo's own machinery, in the same bucket as the brain itself.
+- Runs as a container, started by the brain alongside other malmo-managed containers. Joins the malmo Docker network and publishes host ports 80 and 443.
+- Configured via Caddy's **admin API on `localhost:2019`** from inside the Docker network — no Caddyfile on disk, no `caddy reload` shell-out. Atomic reloads, no file I/O.
+- **Updates ride the brain+UI stream**, not the Debian base stream — image tag in the release manifest, pulled and reconciled by host-agent + brain. Decouples Caddy version from Debian's release cadence.
+- **Performance is a non-issue for the household workload.** Docker bridge networking adds microseconds per connection — invisible at household scale. The heaviest "big file" path (SMB transfers of media to/from laptops) bypasses Caddy entirely: SMB is a Tier-2 host service on port 445. DLNA likewise. Caddy carries HTTP app traffic only (Jellyfin/Plex/Immich streaming, dashboards, app UIs); even a household of 4K streamers is well below containerized Caddy's ceiling.
+- **Memory overhead from containerization is negligible.** Containers are not VMs — same process, same RSS, no extra kernel or libc.
+- **Escape hatch if needed:** `--network=host` recovers host-level networking at the cost of internal-DNS service-name routing. We don't expect to need it.
 
 ### Locked: implementation specifics
 

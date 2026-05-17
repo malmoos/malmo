@@ -69,6 +69,7 @@ links:
   homepage: https://photoprism.app
   source: https://github.com/photoprism/photoprism
   support: https://docs.photoprism.app
+changelog_url: https://github.com/photoprism/photoprism/releases  # optional; used by the "What's new" panel after an update
 ```
 
 ### B. Runtime
@@ -85,6 +86,8 @@ needs_secure_context: false           # optional; default false. See below.
 
 The compose file is held **verbatim**. Authors test it with `docker compose up` and it behaves identically inside malmo. Malmo configures the surrounding environment; it does not edit the compose file.
 
+**Image references in compose use version tags, not digests.** Authors write `image: photoprism/photoprism:2.4.1` — readable, portable, the same line that runs outside malmo. For **store apps**, malmo's catalog CI resolves each `image:tag` to a specific `sha256:` digest at publish time and writes it into the signed catalog (`APP_STORE.md` # Trust model). The brain pulls by digest derived from the catalog — the version tag is the author's API, the digest is the bytes-binding. For **Door-2 custom apps**, the brain falls back to trust-on-first-use: pull, resolve digest, pin in the override.
+
 **`needs_secure_context`** signals that the app relies on browser APIs gated on a [secure context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts) (camera, mic, clipboard, service workers, PWA install, secure cookies, WebAuthn). It's an **author-provided hint**, used by the brain to warn the user at install time — not a routing instruction.
 
 - `needs_secure_context: false` (default): no special treatment.
@@ -96,27 +99,32 @@ Previously this field was named `requires_https` and gated install on un-enrolle
 
 ### C. Storage
 
-Where the app's data lives, what tier, how much space.
+Two distinct kinds of storage in every app — user content and app state. See `STORAGE.md` # Files are first-class.
+
+**User content** is what the user owns — photos, music, notes, documents. Lives at `/home/<user>/Photos/`, `~/Music/`, etc. Apps reach it by **bind-mounting use-case folders**, declared in `permissions.user_folders` (next section). Survives app uninstall.
+
+**App state** is the app's own working data — indexes, caches, databases, configs. Lives at `/var/lib/malmo/instances/<id>/data/`. Opaque to the user. Deleted on uninstall (or archived if the user picks "keep data").
+
+The `storage:` block configures app state only.
 
 ```yaml
 storage:
-  data_volumes:                       # user data → backed up
-    - ./data/originals
-    - ./data/sidecar
-  cache_volumes:                      # transient → excluded from backup
+  data_volumes:                       # app state to back up (indexes, configs, app DB)
+    - ./data/index
+    - ./data/config
+  cache_volumes:                      # transient app state → excluded from backup
     - ./data/cache
+    - ./data/thumbnails
   tier: fast                          # fast | normal | any  (default: any)
   estimated_size: 10GB                # for warnings on small disks
-  user_facing_paths:                  # this app's data exposed to other apps
-    - { mount: /photos, pool: photos }
+  app_managed_user_content: false     # opt-in; see "Apps that manage their own content tree"
 ```
 
-Two important things here:
+**`data_volumes` vs `cache_volumes`** — the backup system uses this. Cache is regeneratable; data isn't. Without this distinction, we'd back up thumbnail caches.
 
-- **Data vs cache distinction.** The backup system uses this. Without it, we'd back up node_modules.
-- **`user_facing_paths`.** This is how an app exposes data to *other* apps via shared pools. PhotoPrism puts originals in the shared `photos` pool; the Files app and a future backup app can read them. This is the cross-app data sharing primitive.
+**`app_managed_user_content: true`** is the opt-in for apps that genuinely can't expose user content via use-case folders (legacy apps with opaque libraries). Triggers an install-time warning to the user: *"This app stores your files in its own folder, not your malmo Photos/Music/Documents. You'll need this app to access them."* The malmo store prefers apps that don't set this; curation policy may reject third-party manifests that do (TBD, `NEXT.md`).
 
-**Bind mounts only — no Docker named volumes.** All app data lives under the instance's `data/` directory via bind mounts. Compose uses `${MALMO_DATA_DIR}/foo:/foo` (absolute) or `./data/foo:/foo` (relative to the project dir). One backup root, one disk-usage view, one mental model. See `APP_LIFECYCLE.md` § "on-disk layout per instance" for the layout.
+**Bind mounts only — no Docker named volumes.** All app state lives under the instance's `data/` directory via bind mounts. Compose uses `${MALMO_DATA_DIR}/foo:/foo` (absolute) or `./data/foo:/foo` (relative to the project dir). One backup root, one disk-usage view, one mental model. See `APP_LIFECYCLE.md` # on-disk layout per instance.
 
 ### D. Managed services
 
@@ -157,31 +165,73 @@ What the app is allowed to touch. Default is "very little"; manifest opts in to 
 permissions:
   internet: true                      # outbound internet allowed
   lan: false                          # can talk to LAN devices
-  shared_storage: [photos]            # shared pools it can read/write
+  user_folders:                       # access to per-user content (see below)
+    - { folder: photos, mode: write }
+  shared_folders:                     # access to /srv/malmo/shared/* (see below)
+    - { folder: movies, mode: read }
   devices: [/dev/dri]                 # GPU access etc.
   privileged: false                   # almost never true
   network_isolation: per_app          # per_app | shared
 ```
 
-Permissions are **declared and enforced.** Not metadata — the brain actually configures Docker networks, mounts, and capabilities to match. Apps cannot reach what they didn't declare.
+Permissions are **declared and enforced.** Not metadata — the brain actually configures Docker networks, bind mounts, and capabilities to match. Apps cannot reach what they didn't declare.
 
 Store review checks the declared permissions match the app's actual usage.
+
+#### `user_folders` — access to per-user content
+
+How an app reads/writes the user's use-case folders (`STORAGE.md` # What apps and users actually see). For each folder, declare scope and mode:
+
+```yaml
+permissions:
+  user_folders:
+    - folder: photos                  # photos | music | movies | documents | notes | downloads
+      mode: write                     # read | write
+      scope: whole                    # whole | pick-subfolder  (default: whole)
+    - folder: notes
+      mode: write
+      scope: pick-subfolder           # user picks at install
+      default: Notes/Obsidian         # default subfolder; user can override
+```
+
+- **`scope: whole`** (default) — brain bind-mounts the entire folder (e.g., all of `~/Photos/`) into the container.
+- **`scope: pick-subfolder`** — install screen prompts the user: "Which folder should this app manage?" Default is the manifest's `default` (auto-created if absent), user can choose any path under the folder. Used for notes apps (one vault per "context"), media apps that should manage a subset of a library, etc.
+
+`mode: write` shows up on the install screen as "this app can ADD, CHANGE, AND DELETE files in your X folder" — read-only declarations are visibly different.
+
+#### `shared_folders` — access to household-shared content
+
+Same shape as `user_folders`, but bind-mounts from `/srv/malmo/shared/<folder>/`. The container is added to the `malmo-shared` group. Typical use: a Tier-1 household Jellyfin reading from `Shared/Movies/`.
+
+```yaml
+permissions:
+  shared_folders:
+    - { folder: movies, mode: read }
+    - { folder: music, mode: read }
+```
+
+#### External-storage convention for popular apps
+
+The malmo-tuned manifest for an app whose upstream supports external libraries (Immich, Photoprism, Jellyfin, Nextcloud, Paperless-ngx, Navidrome, ...) declares `user_folders` and configures the app via env vars or post-install steps to **point its internal "library path" at the bind-mounted use-case folder**. The user's files stay at `~/Photos/`, the app indexes them there, uninstalling the app keeps the files. This is the path that earns the manifest a "files first-class" badge in the store.
+
+Apps that don't support external libraries fall back to `storage.app_managed_user_content: true` (`STORAGE.md` # Files are first-class). For v1, the store catalog is hand-curated by malmo — we write manifests that follow the external-storage pattern wherever upstream supports it.
 
 **No `cap_add` for store (Tier-3) apps.** The brain's override drops ALL capabilities and adds none. Apps that genuinely need Linux capabilities (VPN clients, FUSE mounts, raw sockets) belong in Tier 2 — OS integrations curated by malmo with a separate install path. See `SERVICE_PROVISIONING.md`. If a Tier-3 compose declares `cap_add`, the brain refuses to install it.
 
 ### F. Lifecycle hooks — deferred from MVP
 
-The `hooks:` block is **not part of v1.** Every concrete hook use case is tied to managed services or backups, both deferred. Apps already run their own migrations on container start.
+The `hooks:` block is **not part of v1.** Apps already run their own migrations on container start; the brain's **pre-update snapshot** (`UPDATES.md` # Pre-update snapshot) is the v1 safety net for migrations that go wrong.
 
 When hooks return, they will be designed as **one-shot container images** rather than in-container scripts:
 
 ```yaml
 # Sketch, not v1 syntax
 hooks:
-  pre_update: { image: photoprism/migrator:2.4.1 }
+  pre_update:          { image: photoprism/migrator:2.4.1 }
+  post_update_rollback: { image: photoprism/migrator:2.4.1, args: ["rollback"] }
 ```
 
-The brain will run the hook image as a transient container with the app's volumes attached. This respects closed-source images (no shell-in-app-container required) and gives commercial vendors a clean integration path. Tracked in `APP_LIFECYCLE.md` § "Deferred: lifecycle hooks".
+The brain will run the hook image as a transient container with the app's volumes attached. This respects closed-source images (no shell-in-app-container required) and gives commercial vendors a clean integration path. `pre_update`, when supplied, replaces the brain's brute-force tar for that app — the snapshot remains the default for apps without a hook. `post_update_rollback` fires only when the update fails after the new container started; it's the right shape for apps with bespoke recovery (e.g., a destructive schema migration that needs explicit reversal). Tracked in `APP_LIFECYCLE.md` # "Deferred: lifecycle hooks".
 
 ### G. Multi-user behavior
 
@@ -219,19 +269,18 @@ main_port: 2342
 preferred_slugs: [photos, photoprism]
 
 storage:
-  data_volumes: [./originals, ./sidecar]
-  cache_volumes: [./cache]
+  data_volumes: [./index, ./sidecar]    # app's own index/metadata
+  cache_volumes: [./cache, ./thumbs]
   tier: fast
   estimated_size: 10GB
-  user_facing_paths:
-    - { mount: /photos, pool: photos }
 
 services:
   database: { type: postgres, version: "15" }
 
 permissions:
   internet: true
-  shared_storage: [photos]
+  user_folders:
+    - { folder: photos, mode: write }   # PhotoPrism reads/writes ~/Photos/
   devices: [/dev/dri]
 
 multi_user:
@@ -276,6 +325,9 @@ No managed services by default. Best-effort backup of all volumes (we can't tell
 - **Most fields optional with sensible defaults.** Required: `id`, `manifest_version`, `name`, `version`, `compose_file`, `main_service`, `main_port`.
 - **Compose file is verbatim.** Malmo doesn't rewrite it.
 - **Permissions are declared and enforced.** Not just metadata.
+- **User content vs. app state are separate stores.** User content (`/home/<user>/Photos/`, etc.) accessed by manifest-declared bind mounts of use-case folders; app state in `/var/lib/malmo/instances/<id>/data/`. Apps reach user content by reference, never by copy.
+- **`scope: pick-subfolder`** for `user_folders` — install-time prompt for apps that should manage a subset (notes apps, media subsets). Default is provided by the manifest; user can override.
+- **`app_managed_user_content: true`** is the opt-in for apps that don't expose user content via use-case folders. Triggers an install-time warning. Curated store prefers apps without it.
 - **No `cap_add` for Tier-3 store apps.** Apps needing Linux capabilities belong in Tier 2.
 - **Bind mounts only — no Docker named volumes for app data.** All data lives under the instance's `data/` dir.
 - **Hooks deferred from MVP.** When reintroduced, they will be one-shot container images, not in-container scripts.
@@ -284,8 +336,9 @@ No managed services by default. Best-effort backup of all volumes (we can't tell
 - **Env-var injection: app-defined naming.** App's compose maps malmo's stable `MALMO_SERVICE_*` variables to whatever names the app expects. No auto-rewrite. Authors adapt; we document.
 - **Permissions granularity: medium for v1.** Internet, LAN, shared storage, devices, privileged, network isolation. Not coarse-only, not fine-grained Kubernetes-style.
 - **Custom apps can request managed services.** Allowed, not encouraged.
-- **No inter-app dependencies in v1.** Apps are self-contained. If they need multiple services, they go in the same compose. Cross-app sharing only via shared storage pools.
+- **No inter-app dependencies in v1.** Apps are self-contained. If they need multiple services, they go in the same compose. Cross-app sharing only via shared use-case folders (`user_folders` for same-user apps; `shared_folders` for household-wide apps).
 - **Manifest can live in-repo or in malmo's catalog repo.** Both patterns supported indefinitely. Schema is identical in both cases. We bootstrap by writing manifests for popular apps; over time, upstreams ship their own.
+- **Image references use version tags; the store catalog resolves digests.** Authors write `image: foo/bar:1.2.3`; malmo's CI pins the bytes via a `sha256:` digest in the signed catalog (`APP_STORE.md`). Door-2 custom apps fall back to TOFU digest pinning in the brain.
 
 ## Open questions
 

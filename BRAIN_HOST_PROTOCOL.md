@@ -2,7 +2,7 @@
 
 > The wire-level contract between the malmo brain (in a container) and `host-agent` (running on the host with root). Companion to `CONTROL_PLANE.md`, `AUTH.md`, `SERVICE_PROVISIONING.md`.
 >
-> Covers transport, wire format, patterns, auth, versioning, and failure semantics. The reconciler pattern (desired-vs-actual state) that goes with this protocol is in `APP_LIFECYCLE.md` § "same reconciler pattern extends to all host-managed state."
+> Covers transport, wire format, patterns, auth, versioning, and failure semantics. The reconciler pattern (desired-vs-actual state) that goes with this protocol is in `APP_LIFECYCLE.md` # "same reconciler pattern extends to all host-managed state."
 
 ## Scope
 
@@ -34,7 +34,7 @@ host-agent listens on a UNIX socket:
 | Group       | `malmo`                              |
 | Mode        | `0660`                               |
 
-The brain's container UID is a member of the `malmo` group. The socket is mounted into the brain's container; nothing else on the host can connect.
+The brain's container UID is a member of the `malmo` group. The socket is mounted into the brain's container; nothing else on the host can connect. The `malmo` group is **unrelated to `malmo-shared`** (the household-content group) — see `USERS_AND_GROUPS.md` # Group reference.
 
 **Why UNIX socket over loopback TCP:**
 - File-permission access control is kernel-enforced and stronger than any app-level token.
@@ -80,13 +80,34 @@ GET /v1/system/status
   { "hostname": "cindy-zx9", "uptime_s": 84021, "disk_pressure": false, ... }
 ```
 
+```
+POST /v1/auth/verify-password
+  { "user": "cindy", "password": "..." }
+→ 200 OK
+  { "valid": true }
+```
+
 Plain HTTP. The brain blocks on the response. Errors come back as HTTP status + JSON body with `code` and `message`.
+
+**`/v1/auth/verify-password` is hit on every dashboard login** (brain delegates PAM verification rather than storing a password hash itself — see `AUTH.md` # Identity primitive). Implementation: host-agent runs PAM `authenticate()` with the supplied credentials, returns `valid: true|false`. The endpoint never reveals *why* a verification failed (wrong password vs. unknown user vs. locked account) — only the binary result, mirroring PAM's own posture. Rate-limiting lives in the brain; this endpoint just answers truthfully.
+
+**`enroll-drive` and `eject-drive` carry credentials inline** because host-agent verifies them via PAM as the first step of the job and uses them to authorize reading `/etc/malmo/secrets/luks-recovery.key`. The brain does not cache or forward the password beyond the single request. On invalid credentials the job fails immediately with `error.code = "auth-failed"`; otherwise host-agent proceeds with format → LUKS → TPM enrollment → mount → mergerfs add (enroll) or stop apps → unmount → marker removal (eject). Declared attributes: `Dangerous: true`, `ResourceClass: "disk"`, `MaxDuration: 10m`. See `STORAGE.md` # Adding a data drive and # Ejecting a data drive for the user-facing flow; `AUTH.md` # Roles for the fresh-password requirement.
 
 ### Pattern B — Jobs (long-running ops)
 
 For anything that **may exceed 5 seconds** or that needs progress / cancel:
 
 ```
+POST /v1/jobs/enroll-drive
+  { "device": "/dev/sdb", "admin_user": "andrei", "admin_password": "..." }
+→ 202 Accepted
+  { "job_id": "j_77c1a3", "status": "running", "kind": "enroll-drive" }
+
+POST /v1/jobs/eject-drive
+  { "admin_user": "andrei", "admin_password": "..." }
+→ 202 Accepted
+  { "job_id": "j_88d2b4", "status": "running", "kind": "eject-drive" }
+
 POST /v1/jobs/system-update
 → 202 Accepted
   { "job_id": "j_a4f7b2", "status": "running", "kind": "system-update" }

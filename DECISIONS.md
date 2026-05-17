@@ -21,6 +21,229 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-05-17 — App store as a signed static catalog; app update UX; pre-update snapshot as the v1 migration safety net
+
+**Previously:** Three connected gaps — (1) no spec for how the app catalog reaches the box or what the box trusts; mentions of "third-party stores" in `APP_MANIFEST.md` without an infra shape; (2) `UPDATES.md` had the update *mechanics* for apps but not the *interface* (Tier 2 in `NEXT.md`); (3) app-driven schema migrations had no rollback story — image-only revert leaves old code running against migrated data, and hooks (the intended fix) were deferred.
+
+**Now (three coupled decisions):**
+
+1. **App store is a signed static JSON catalog**, sibling to `RELEASE_MANIFEST.md` in shape. Git-repo source of truth (`malmo/store`), CDN serving (`store.malmo.network`), minisign/Ed25519 signature, pubkey baked into the brain image (verifier accepts a list for forward-compat rotation), separate signing key from the release manifest. Verification lives in the **brain**, not host-agent — the catalog is about app lifecycle, which is the brain's domain. Authors declare `image: foo/bar:1.2.3` in compose; CI resolves digests at catalog-build time and writes them into the signed catalog. Per-app manifest + compose files are bound to the catalog by content hash (one signed root, hash-chained leaves). We don't host container images — local image cache delivers the "app keeps working if the developer disappears" property; mirroring is deferred. v1 catalog is hand-curated by malmo; the brain's data model supports multiple catalogs from day one, but UI ships for one. New doc: `APP_STORE.md`.
+
+2. **App update UX:** per-app tile badges + Settings → Updates aggregate view + auto-dismissing post-batch toast. The permission-expansion prompt is the only modal — surfaces on **next login of the instance owner**, blocks the app until they decide, accepted updates apply **immediately** (not at 03:00) since the user just initiated. Admins get read-only visibility into other users' pending updates in Settings → Users; they cannot accept on another user's behalf. New `changelog_url` field in the manifest powers the "What's new" panel. Landed in `UPDATES.md` # 6.
+
+3. **Pre-update snapshot** of `data_volumes` (+ `pg_dump` of any managed-service DB) is taken before every app update, restored on health-check failure alongside the image revert. Brute force on purpose: the brain doesn't know the app's schema, so it captures the bytes. `cache_volumes` are excluded — that's literally what the data/cache split was designed for. Retained 7 days alongside the kept image. When hooks return, an author-provided `pre_update` replaces the tar for that app; the brain's snapshot stays the default for apps without one. A `post_update_rollback` hook is sketched but deferred.
+
+**Why each landed where it did:**
+
+- **Catalog signed-by-malmo with digest pinning in the catalog (not the manifest):** the meaningful trust binding is "the malmo store promised this version → these specific bytes." Putting that in the catalog rather than asking authors to manage SHAs in their manifest keeps the author surface ergonomic (versions, not 64-char digests) while making the bytes cryptographically pinned. Tag mutation on Docker Hub can't ship malicious code to malmo boxes because the box pulls by digest the signed catalog committed to.
+- **Two signing keys (release + store):** different blast radius. A compromised store key publishes a bad app manifest; a compromised release key ships a bad brain. Don't merge the two.
+- **Verification in brain, not host-agent:** the release manifest controls the brain itself, so host-agent verifies it (avoids brain-verifying-its-own-upgrade). The store catalog is about apps — the brain's domain. Two verifiers, two scopes, clean layering.
+- **Permission-expansion prompt on next login (not push notification, not banner):** push channels don't exist yet (email-on-file is still in `NEXT.md`); a banner makes "decline" mean "I'll never see this again." A modal-on-next-login matches the user's actual attention pattern with the dashboard — the box waits until the user is present.
+- **Accept applies immediately, not at 03:00:** the user just deliberately initiated the action; making them wait until tomorrow morning is confusing. The minute of unavailability is the cost of the choice they made.
+- **Pre-update snapshot in v1 (vs. waiting for hooks):** the rollback UX promise is unconditional ("Update failed → previous version restored"). Image-only rollback violates that promise the moment an app's migration touches its own data volume. The brain doesn't know the app's schema, so the safety net has to be byte-level (tar of declared `data_volumes`). Cost is bounded — declared data is typically small, snapshot runs in the 03:00 window. Hooks will refine this when they return; the snapshot stays the default.
+- **App-side rollback hook (`post_update_rollback`) deferred:** would push complexity onto every author for a case the brain's snapshot handles. Right shape long-term for apps with destructive migrations that can't be tar-restored cleanly, but not the right v1 first move.
+
+**Sharp edges:**
+
+- **Image hosting is upstream's, not ours.** If an upstream registry pulls a version we've published in our catalog, new installs of that app fail until we publish a manifest update pointing at a different version or image source. Existing installs keep working (image is in the box's local cache). Acceptable for v1; mirroring is a known Tier-3 future.
+- **Two users running different versions of the same Tier-3 per-user app is normal**, not a bug. Per-user instances are isolated by design; coordination would be a new constraint to add, not an old one we lost.
+- **The snapshot doesn't protect Door-2 custom apps from their own migrations the same way** — Door-2 apps may not have declared `data_volumes` honestly. The brain still snapshots whatever is declared; if the user pasted a compose with everything in one volume, that gets tar'd in full. Acceptable: Door-2 is the tinkerer door, not the long-term-audience door.
+
+**Affected docs:** new `APP_STORE.md`; `UPDATES.md` (# 4 mechanics renumbered with snapshot, new "Pre-update snapshot" subsection, new # 6 "Dashboard update UX" section, rollback summary table updated, locked decisions extended); `APP_LIFECYCLE.md` (on-disk layout adds `snapshots/`, digest-pinning section split into Door-1 catalog-authoritative vs. Door-2 TOFU, update transaction renumbered to include snapshot step + restore on failure, deferred-hooks section points at snapshot); `APP_MANIFEST.md` (runtime section notes catalog/digest binding, `changelog_url` field added, `post_update_rollback` sketched in hooks future, two new locked decisions); `CLAUDE.md` (`APP_STORE.md` added to documents list); `NEXT.md` ("App update UX" Tier-2 item removed, "Third-party manifest curation criteria" reframed as "Store catalog curation policy").
+
+---
+
+## 2026-05-16 — LUKS recovery passphrase hidden by default; one passphrase covers all drives; admin password gates add/eject
+
+**Previously:** `STORAGE.md` # Encryption posture had the recovery passphrase *"generated at install, shown to the user once with 'write this down or save it somewhere.'"* `FIRST_RUN.md` Phase 1 had a dedicated "Recovery passphrase shown once" installer step (full-screen, copy-to-clipboard, "I have saved this" checkbox). Each drive enrollment (initial install + add-drive-later) had its own passphrase display. The user was on the hook for capturing and storing the secret.
+
+**Now (three coupled decisions):**
+
+1. **One recovery passphrase covers every drive on the box**, present and future. Generated once at install; enrolled as a LUKS keyslot on the OS drive, the data drive (if present), and every drive added later. The user's mental model is "one box, one recovery secret."
+2. **The passphrase is not shown to the user.** At install, it's silently stored at `/etc/malmo/secrets/luks-recovery.key` (mode `0400`, root-owned, on the LUKS-encrypted OS drive). The installer no longer has a "show passphrase" step. The dashboard recovery code (`AUTH.md` # The recovery code) becomes the only "save this" moment in first-run. Tinkerers who need the passphrase (drive moves, BIOS reset, motherboard swap) find it under Settings → Storage → Advanced.
+3. **Add-drive and eject-drive are host-agent jobs gated by a fresh admin password.** host-agent verifies the password via PAM, then reads the passphrase file and extends/removes the keyslot. The fresh-password requirement bypasses the 5-minute UI elevation window — add/eject are enrollment-class actions, not batch-work. A user with the dashboard recovery code but no admin password redeems the code first (forced password reset, `AUTH.md`), then proceeds normally — add-drive never accepts the recovery code directly.
+
+**Why each flipped:**
+
+- **One passphrase per box (vs. per-drive):** the "drives are independent LUKS volumes" framing led naturally to per-drive passphrases, but it's a leaky implementation detail. Users care about *the box*, not about how many LUKS headers it contains. A single keyslot value enrolled on multiple headers is no security loss (drives are co-located) and a meaningful UX simplification.
+- **Hide the passphrase entirely (vs. show-once at install):** the passphrase only matters in scenarios where the box can't auto-unlock at boot — TPM wiped, Secure Boot policy change, drive moved to another box. All three are tinkerer scenarios. For non-technical users, the v1 answer to hardware death is already *restore from off-box backup* (`STORAGE.md` # What we don't do in v1), not *type the passphrase at the console*. Asking every user to capture a 32-character secret they'll likely never use is friction without payoff. The doubly-lost case (box can't boot, no backup, never fetched the passphrase) is honest and accepted.
+- **Admin-password-gated host-agent op (vs. just-do-it / TPM-sealed):** add-drive needs *some* gate, since it extends the recovery keyslot. Three options were on the table: (a) re-prompt for the existing passphrase, forcing the user to know the secret we just decided to hide; (b) generate a new passphrase per drive, breaking the "one passphrase forever" promise; (c) the file-on-disk + admin-password approach taken here. (c) is the only option consistent with hiding the passphrase. The marginal trust handed to admins (they can implicitly authorize key extension) is already present — admins mutate the host via host-agent on every settings change.
+
+**Sharp edges:**
+
+- **Doubly-lost scenario is real and accepted.** Box can't boot *and* no off-box backup *and* never opened Settings → Advanced: data is gone. Surfaced in `STORAGE.md` # Threat model. Mitigation lives in the eventual backup-nagging UX, not here.
+- **Recovery-code → drive operation chain is intentionally indirect.** Recovery code redeems to a fresh admin password (`AUTH.md` # Using the recovery code) which then unlocks add-drive. No carve-out for "logged in via recovery code, doing add-drive in the same session" — the redemption flow terminates in a real password by construction, so the carve-out is unnecessary.
+
+**Affected docs:** `STORAGE.md` (# Encryption posture rewritten; # Adding a data drive expanded with host-agent flow; new # Ejecting a data drive section; # Threat model gains the doubly-lost line; # First-run flow drops the show-passphrase step), `FIRST_RUN.md` (# Phase 1 drops the dedicated passphrase step; # Step 2a clarifies redemption flow), `AUTH.md` (# Using the recovery code expanded with forced-new-password + fresh-recovery-code; # Roles gains the enrollment-class bypass note), `BRAIN_HOST_PROTOCOL.md` (`enroll-drive` and `eject-drive` jobs added to Pattern B examples; declared as `Dangerous: true, ResourceClass: "disk"`), `HEALTH.md` (new `disk-full` issue with `blocks_writes`/`blocks_apps` at 95%), `NEXT.md` (Storage Level 1 walk-through closed; Tier-3 entry for the remaining UX design pass).
+
+---
+
+## 2026-05-16 — Degraded mode in the brain; boot is best-effort, not strict-gate
+
+**Previously:** `BOOT.md` had `malmo-storage-ready.target` as a **strict** gate (`Requires=` on every malmo userspace service, `BindsTo=` floated for the catastrophic-failure-mode units). Storage anomalies — data drive missing, UUID mismatch, canary mismatch — routed to `malmo-recovery.target`, which served a static page on port 80. The model optimized for "never silently corrupt data, even at the cost of refusing to boot."
+
+**Now:** The boot chain is **best-effort, not strict-gate.** `malmo-storage-ready.target` uses `Wants=` (not `Requires=`); `malmo-storage-verify.service` is a **reporter** that writes findings to `/run/malmo/health/storage.json` rather than a gatekeeper that fails the boot. host-agent always starts (assuming Docker is up); the brain always starts (assuming host-agent is up); the dashboard is always reachable if the brain can run.
+
+Anomalies become **health issues** the brain raises in *degraded mode*. The brain holds a typed set of active issues, each with `blocks_writes` / `blocks_apps` / `blocks_users` flags that gate operations uniformly. The dashboard surfaces issues as banners + inline cards + disabled action affordances. Every issue carries a primary remediation action, tiered: **Tier 1** (physical action by the user, UI detects completion), **Tier 2** (UI-driven one-click remediation), **Tier 3** (genuinely needs console/SSH — reserved for the cases where the brain can't run).
+
+`malmo-recovery.target` shrinks to **two triggers only**: TPM2 unseal failure on the root drive (box can't boot at all unattended; LUKS recovery passphrase at console), and host-agent crashloop past `StartLimitBurst` (host-agent itself broken; static rescue page on port 80 with a one-click "roll back host-agent" button). Everything else — drive missing, drive wrong, canary mismatch, brain DB corrupt, version mismatch — flows through the degraded-mode mechanism.
+
+**Why the flip:**
+
+- The strict-gate model optimized for malmo's *least likely catastrophic failure* (silent wrong-tree writes) at the cost of malmo's *most likely catastrophic failure* (a non-technical user faced with a dark, unbootable box and no SSH knowledge). For the target audience — home users, not sysadmins — a brick is a worse outcome than the rare corruption case it prevents. Most corruption risks are also recoverable if caught early: the user's files are usually still *there*, just inaccessible or in the wrong place.
+- The competitive landscape supports this. **Synology** is the gold standard: UI always reachable, drive issues surface as banners + guided walkthroughs, box never bricks. **TrueNAS / HexOS** keep the main UI up in degraded states too (just with a more prosumer-friendly tone). **Umbrel / ZimaOS / CasaOS** punt to SSH-rescue when things go wrong — which is the failure mode malmo explicitly wants to avoid. Copying Synology's model is the right shape for malmo's audience.
+- The "silent wrong-tree writes" risk is still mitigated, just at the application layer: the brain consults the health-issue set on every write and refuses writes when `blocks_writes` is active. The protection is *application-level soft-refusal*, not *systemd-level hard-refusal*. The brain can also tell the user *why* the write was refused, which a systemd hard-stop cannot.
+- The recovery-target surface stays *honestly* small. Two triggers, both unavoidable. Everything pulled out of that target becomes a Tier-1 or Tier-2 issue the user can self-recover from with no shell access.
+
+**No-override stance preserved.** Critical blocks (data drive missing, brain DB corrupt) cannot be "clicked through" with a confirm dialog. The block is the protection; an override is an option the user will use, blame malmo for, and remember. Degraded mode is friendlier than recovery mode, not weaker.
+
+**Tier-3 stays tiny on purpose.** A new health issue landing in Tier 3 is a design red flag — the question is always "can we pull this back to Tier 2 with better tooling?" The two existing Tier-3 cases (TPM unseal, host-agent crashloop) are the irreducible set: the brain can't run, so there's no UI to surface anything from.
+
+**Affected docs:** `HEALTH.md` (new — the model in full), `BOOT.md` (rewritten — best-effort assembly, recovery-target shrunk to two cases, storage-verify reframed as reporter, `Wants=` throughout), `STORAGE.md` (canary section reframed: device-backing check added, "reporter not gatekeeper" noted, marker-mismatch behaviors point at `HEALTH.md`), `CONTROL_PLANE.md` (host-agent ordering uses `Wants=malmo-storage-ready.target` not `Requires=`; brain gains a Health manager package), `BRAIN_UI_PROTOCOL.md` (new `/api/v1/health/issues` endpoints, new `health.issue_raised` / `_cleared` / `_updated` event kinds, `blocked-by-health-issue` 409 response shape), `WEB_UI.md` (new Health & degraded mode surfacing section: `useHealth()`, global banner, inline cards, `<HealthGated>` wrapper), `CLAUDE.md` (HEALTH.md added to the doc list), `NEXT.md` (RECOVERY.md scope narrowed to the two true rescue-page cases).
+
+---
+
+## 2026-05-15 — Admins get sudo; UI is the path, SSH is rescue
+
+**Previously:** No written posture on Linux-side privileges. The implicit working assumption (carried over from the Tier 1 OS-structure sketch) was "no sudo for anyone by default, opt-in admin-sudo toggle deferred to Tier 2." The thinking: keep dashboard-admin and Unix-root as distinct trust boundaries, so a compromised admin session can't escalate to the host.
+
+**Now:** **Dashboard role maps to Linux group membership.** Members are unprivileged Linux users (own group + `malmo-shared` only). Admins are additionally in the `sudo` group and can `sudo` over SSH. Promote/demote in the dashboard flips group membership via host-agent.
+
+On top of the role check, **destructive Settings operations re-prompt for the password** with a **5-minute elevation window** per session — sudo-in-UI pattern, scoped to the brain's session (not a real `sudo -v`).
+
+The principle: **every privileged operation on a malmo box has a UI path; SSH is a rescue tool, not a workflow.** If a feature can only be configured from the shell, that's a bug in the spec.
+
+**Why the flip from "no sudo for anyone":**
+
+- The strict-separation posture left no recovery path when the brain itself is broken (corrupt SQLite, failed migration, host-agent unreachable). An admin couldn't restart services, read logs, or fix the box without a reinstall. That's unacceptable papercut for the tinkerer audience that v1 is actually shipping to.
+- The marginal blast radius of "admin SSH session = root" is small: a dashboard admin already mutates the host through host-agent on every settings change. The trust boundary that matters is "is this user an admin," not "do they have a root shell."
+- SSH is off-by-account-by-default (`AUTH.md` # Device access). An admin who doesn't opt in to SSH gets no shell access at all — the strict posture lives on, just opt-in instead of mandatory.
+- Members get no opt-in. The "tinkerer who wants member + sudo" case is rejected; if you want shell-root, use an admin account.
+
+**5-minute window over alternatives:**
+- *Always re-prompt* on every destructive op is too annoying for admins doing batch work (setting up multiple users, configuring a new household).
+- *Elevate-for-session* leaves a forgotten browser tab as a standing admin shell.
+- 5 minutes matches the macOS System Settings pattern users already know.
+
+**Affected docs:** `USERS_AND_GROUPS.md` (new), `CLAUDE.md` (doc list entry + load-bearing decision), `AUTH.md` (Roles section adds elevation + Linux-group pointer), `STORAGE.md` (malmo-shared mention pointers to group reference), `FIRST_RUN.md` (Step 2 notes admin = sudo group), `BRAIN_HOST_PROTOCOL.md` (clarifies `malmo` group vs. `malmo-shared`), `NEXT.md` (TPM-fail rescue, demotion-doesn't-kill-sudo, `malmo-shared` management UI).
+
+---
+
+## 2026-05-15 — One password for dashboard + SSH + SMB; PAM is the credential store
+
+**Previously:** `AUTH.md` had a separate "Device access password" — one credential for SSH+SMB, independent from the dashboard password. Stored separately (`/etc/shadow` for device, brain SQLite for dashboard). Rationale was "different blast radii" and "brain runs in a container, can't access /etc/shadow."
+
+**Now:** **One malmo password per user.** Same string authenticates the dashboard, SSH, and SMB. **PAM (`/etc/shadow`) is the single source of truth**; the brain has no password hash in its SQLite. Dashboard login calls host-agent's `verify_password` endpoint, which runs PAM `authenticate()` and returns yes/no.
+
+Per-protocol access stays per-protocol — SSH and SMB are still off-by-account-by-default. What's off is *which services accept the password for each account*, controlled via sshd's `AllowUsers` and Samba's `valid users`. The password exists in PAM from account creation; opt-in just adds the user to the relevant allowlist.
+
+**Why the flip:**
+
+- The "different blast radii" argument was theoretical — users would reuse the same string for both anyway. We'd be enforcing a separation that existed only on paper while paying the UX cost of explaining it.
+- "Brain runs in a container, can't access `/etc/shadow`" was an implementation-convenience reason, not a security reason. Easily solved by routing dashboard verification through host-agent (which already has root). Per-login PAM check is sub-millisecond.
+- The recovery code mechanic is unchanged — it's a brain-SQLite artifact, validated by the brain, then triggers a `passwd` through host-agent. No coupling to the password-storage flip.
+- Net UX win: one password to remember; SMB on a phone uses the password the user already knows; first device-access opt-in has no new-credential friction.
+
+**Affected docs:** `AUTH.md` (rewrite of "Device access password" → "Device access (SSH + SMB)"; password storage moves to PAM; brain↔host-agent path adds verify_password; locked decisions updated), `BRAIN_HOST_PROTOCOL.md` (Pattern A example adds `/v1/auth/verify-password`), `STORAGE.md` (SMB share auth references "malmo password" not "Device access password"), `FIRST_RUN.md` (Step 2 reframed), `CLAUDE.md` (load-bearing decision updated).
+
+**Supersedes** the "unified device-access password" decision from earlier the same day — that was an interim position that kept the *device* credential separate from the *dashboard* credential. We've now collapsed all three.
+
+---
+
+## 2026-05-15 — Filesystem layout, mergerfs from day 1, SMB shares, SSH scoped to LAN+mesh
+
+**Previously:** `STORAGE.md` had user content at `/mnt/data/users/<slug>/` and explicitly excluded mergerfs from v1 ("No pooling without parity. Level 2 by itself is a footgun by default"). `AUTH.md` had a separate "SSH password" with no cross-protocol scope. `BUILD.md` was contradictory about whether sshd was enabled at boot.
+
+**Now (six locked decisions, one session):**
+
+1. **User content lives at `/home/<user>/`** with macOS / XDG-style capitalized use-case folders: `Photos/`, `Music/`, `Movies/`, `Documents/`, `Notes/`, `Downloads/`. The data drive mounts at `/srv/malmo/` with bind mounts to `/home/` and `/var/lib/malmo/`. Standard Linux paths; no invented vocabulary.
+
+2. **Mergerfs ships from day 1.** Always-pool when a data drive is present (pool of one with one drive). Adding drive #N is `mergerfs add` with zero downtime. Placement: `epmfs` ("existing path, most-free-space"). SnapRAID parity stays deferred as Level 2.
+
+3. **Files are first-class, apps are windows.** User content (photos, music, notes) lives in `/home/<user>/<use-case>/`. App state (indexes, caches, DBs) lives in `/var/lib/malmo/instances/<id>/data/`. Uninstalling an app deletes the index, never the photos. Manifests bind-mount use-case folders by declaration. Apps that can't comply opt in via `storage.app_managed_user_content: true` with a user-visible warning; curation discourages.
+
+4. **SMB shares** via Samba: `\\malmo\<user>` (per-user home) and `\\malmo\shared` (household). mDNS-advertised so devices auto-discover. TimeMachine-compatible. The household-shared tree lives at `/srv/malmo/shared/` with setgid + `malmo-shared` group.
+
+5. **Unified Device access password** for SSH and SMB. Same threat model (non-browser LAN/mesh access); one credential, not two. Off by default per user, opt-in via Settings. Separate from the dashboard password.
+
+6. **SSH (and SMB) scoped to LAN + mesh via nftables.** RFC1918 + the mesh interface (`tailscale0`/`headscale0`). SSH from the public internet is structurally blocked, not just per-account opt-in. Pair the device on the mesh to access the box remotely — same trust model as the dashboard.
+
+**Why each flipped:**
+
+- **`/mnt/data/users/` → `/home/<user>/`**: pure FHS pedantry on the old layout. Every Linux tool, SSH session, SMB client expects `/home/<user>/`. macOS does `/Users/`, Windows does `C:\Users\`. Inventing a different path was friction without benefit. The "user content lives on the data drive" concern is solved by *mounting* the data drive such that `/home` lives on it — standard Linux multi-disk pattern.
+- **Mergerfs day 1 instead of Level 2-deferred**: the audience explicitly includes tinkerers who add drives. Without always-pool, expanding storage is a "stop services, swap mounts, restart" operation; with it, it's `mergerfs add` with zero downtime. The FUSE overhead (single-digit % on most workloads) is a small permanent tax for a meaningful UX property. Trading correctness-friction for expansion-friction is the right call for this audience.
+- **Files-first-class principle**: the differentiator vs. Nextcloud/Photoprism is "your files are real files, accessible from any device via SMB, surviving any app swap." This is a value statement, not a layout detail.
+- **SMB instead of WebDAV/NFS/AFP**: only protocol with first-class clients on Windows, macOS, iOS, Android, Linux. Zero-config discovery via mDNS gets the box into every device's file browser without instruction.
+- **Unified device password (SSH+SMB)**: three passwords (dashboard + SSH + SMB) is too many; users would reuse them. Two passwords (dashboard for browser, device for everything else) maps to the user's actual mental model. Same threat model = same credential.
+- **SSH+SMB on :22 firewalled to LAN+mesh**: a closed port to the public internet is structurally safer than "open port relying on per-account opt-in." The trust model already exists for remote access (mesh pairing); SSH inherits it.
+
+**Affected docs:** `STORAGE.md` (rewrite of disk roles, mount layout, permissions, SMB; mergerfs always-on; reframed levels table), `AUTH.md` (SSH section → Device access password section, SMB notes), `APP_MANIFEST.md` (`permissions.user_folders` / `shared_folders` with `scope: pick-subfolder`, `storage.app_managed_user_content`, external-storage convention), `BUILD.md` (SSH daemon-on-but-no-auth, nftables :22 scoping, samba/mergerfs preinstalled), `FIRST_RUN.md` (device access password reference).
+
+---
+
+## 2026-05-15 — Brain web library: huma; CI enforces additive-minor via generated OpenAPI + oasdiff
+
+**Previously:** `BRAIN_UI_PROTOCOL.md` # Codegen said "deferred — v1 ships with hand-rolled Go structs ↔ TS types; OpenAPI 3 spec + generated TS client lands as a follow-up build step before the public-API surface goes external." `NEXT.md` Tier 2 had "CI enforcement of additive-minor API discipline" as an open item, sketched as "diff `openapi.yaml` between commits" — but no `openapi.yaml` was specified to exist.
+
+**Now:** The brain is written using [`huma`](https://huma.rocks), a Go web library that emits OpenAPI 3 from typed handler registrations. The OpenAPI artifact is a byproduct of the code, not a hand-maintained file. CI runs `oasdiff breaking` between base and PR on every commit; non-zero exit fails the build. Bypass is moving the change to `/api/v2`, not a skip flag.
+
+The "Codegen deferred" line splits: **server-side OpenAPI emission lands from day one** (it's the CI substrate); **client-side TS generation stays deferred** until the schema is stable enough that hand-maintenance cost > codegen cost.
+
+**Why huma over alternatives:**
+
+- **`huma`** wins on "OpenAPI is the byproduct of writing handlers, not a separate doc." Typed I/O structs per route; library reflects to emit OpenAPI 3. Active 2026 project, designed around this exact pattern.
+- **`chi` + `swaggest/rest` or `go-swagger` annotations** can also produce OpenAPI but treat it as a side-channel — handler signature and schema live in different places, so drift returns through the back door.
+- **`gin` / `echo`** are popular but don't put schema first; OpenAPI is a third-party plugin afterthought.
+- **Hand-written `openapi.yaml` + standard router** was the alternative that asks for trouble — second source of truth, drift caught only when something breaks for a real caller.
+
+**Why oasdiff over snapshot tests:** snapshot tests verify what they call. A snapshot suite has coverage gaps (untested endpoint, unobserved enum value, omitted-empty optional field, error-response shape). Removing a field that no snapshot happened to capture is a silent breaking change. `oasdiff` operates on the schema — the set of *possible* responses — so a field declared in a type is checked whether or not a test exercises it. Structural, not heuristic.
+
+**The forcing function this protects:** in-flight UI tabs across a malmo update, and external callers from day one (third-party stores, CLI, future tooling) per the public-API posture. Both groups can't be coordinated with at change-time; the discipline is the only thing that keeps their code working.
+
+**Headline calls:**
+
+- **Generated OpenAPI, not hand-written.** Drift is structurally impossible.
+- **Schema-diff, not snapshot-diff.** Contract changes are detected, not just observed ones.
+- **Event `kind` and error `code` are first-class Go enum types** so they appear in OpenAPI as named enums; oasdiff catches removals.
+- **No bypass flag.** Breaking a v1 contract requires moving to v2.
+
+**Resolves:** `NEXT.md` Tier 2 "CI enforcement of additive-minor API discipline."
+
+**Affected docs:** `BRAIN_UI_PROTOCOL.md` (# Codegen rewritten; new # CI enforcement; locked-decisions bullets updated), `NEXT.md` (Tier 2 entry removed).
+
+---
+
+## 2026-05-15 — Release manifest: no phased rollout, no beta channel in v1
+
+**Previously:** `UPDATES.md` # 3 specced a time-based phased rollout (`rollout: [{after, percent}, ...]` in the manifest, deterministic `hash(machine_id + version)` cohort bucket) and a beta channel with a 7–14 day bake before promoting to stable. Both treated as v1 mechanics.
+
+**Now:** v1 ships **one channel (`stable`) with no phased rollout**. The manifest is a small static JSON file (`brain`, `ui`, `minimum_host_agent`, `released_at`, `rollback_to`, plus `manifest_version` and `channel` for forward-compat), signed with minisign (Ed25519). `rollback_to` is the load-bearing protection. Every box that polls sees the new manifest immediately. Phased rollout + beta channel are deferred with explicit triggers (see `RELEASE_MANIFEST.md` # Future work, # Channels).
+
+**Why:**
+
+- **Admin-prompted updates already provide natural pacing at v1 scale.** The first admins to click are self-selected eager adopters — functionally equivalent to a beta cohort. A separate beta cohort on a fleet in the hundreds would be effectively empty.
+- **Detection of bad releases at v1 scale is GitHub issues + forum + direct reports**, not telemetry-gated cohort advancement. Channels and cohorts mitigate a problem (auto-apply at scale) we don't have yet.
+- **`rollback_to` is independent of pacing.** It works whether the rollout is staggered or instantaneous; it's the protection that actually matters in v1.
+- **Both deferrals are additive.** `manifest_version: 1` is present from day one; host-agent ignores unknown fields. A future `rollout` field or `beta.json` lands without a flag day.
+- **Trigger to revisit:** A/B immutable images landing (auto-apply becomes safe, admin-prompting no longer paces) or fleet growth past the point where direct reports are timely. Either signal flips both decisions.
+
+**One forward-compat nudge kept from the start:** the signing verifier accepts a **list** of pubkeys, not a single constant. This is the only thing that has to be right now to keep key rotation cheap forever — without it, a lost or compromised key forces a synchronized fleet update.
+
+**Cohort hash refinement (when phased rollout activates):** `UPDATES.md` previously specified `hash(machine_id + version)`. `RELEASE_MANIFEST.md` # Future work narrows this to `hash(machine_id || canonical(brain, ui))` — hashing over the version pair (not the full manifest bytes) keeps cohort identity stable across mid-rollout schedule edits. Canonical form pinned when the feature lands.
+
+**Headline calls:**
+
+- One static JSON manifest per channel, git repo as source of truth, CDN as delivery cache. Promotion is a PR.
+- Signed with minisign (Ed25519); pubkey list baked into host-agent.
+- `rollback_to` is the kill switch and the only fleet-coordination mechanism in v1.
+- No phased rollout, no beta, no cohorts in v1 — additive when triggers fire.
+
+**Resolves:** `NEXT.md` Tier 2 "Release-manifest schema + publishing pipeline."
+
+**Affected docs:** `RELEASE_MANIFEST.md` (new), `UPDATES.md` (# 3 compressed; rollout array, cohort hashing, and beta-bake paragraphs removed and deferred), `BUILD.md` (channels line; pipeline diagram points at RELEASE_MANIFEST.md), `CLAUDE.md` (Documents list), `NEXT.md` (Tier 2 #1 removed, Tier 3 + Tier 4 follow-ups added).
+
+---
+
 ## 2026-05-14 — Web UI deploy: dedicated container, release-manifest, API-versioned (not lockstep)
 
 **Previously:** Two threads pointed in tension:
@@ -57,7 +280,7 @@ The lockstep posture made `embed.FS` look attractive (one binary, one update). B
 - Concrete release-manifest schema and publishing pipeline (the JSON shape is sketched in `UPDATES.md`; the build + signing infrastructure isn't).
 - CI enforcement for additive-minor discipline (regression test that compares `openapi.yaml` between commits and fails on field removal / repurpose).
 
-**Affected docs:** `WEB_UI.md` (Option 1 locked, deploy section rewritten), `BRAIN_UI_PROTOCOL.md` (lockstep replaced with additive-minor versioning, `426` reframed as in-tab safety net), `UPDATES.md` (§3 covers brain + UI as one stream with two artifacts; release manifest carries both versions), `NEXT.md`.
+**Affected docs:** `WEB_UI.md` (Option 1 locked, deploy section rewritten), `BRAIN_UI_PROTOCOL.md` (lockstep replaced with additive-minor versioning, `426` reframed as in-tab safety net), `UPDATES.md` (#3 covers brain + UI as one stream with two artifacts; release manifest carries both versions), `NEXT.md`.
 
 ---
 
@@ -65,7 +288,7 @@ The lockstep posture made `embed.FS` look attractive (one binary, one update). B
 
 **Previously:** `NEXT.md` Tier 1 "Web UI framework + deploy model" was open. The "UI is a separate codebase" / Vite / `/api/v1` proxy / version-handshake were locked, but the framework and the libraries on top were unspecified.
 
-**Now:** Framework + library stack locked in `WEB_UI.md` § "Locked: stack." Deploy model (bundled in brain image vs. separate static-files container vs. served by the brain directly) remains open — narrowed Tier 1 item in `NEXT.md`.
+**Now:** Framework + library stack locked in `WEB_UI.md` # "Locked: stack." Deploy model (bundled in brain image vs. separate static-files container vs. served by the brain directly) remains open — narrowed Tier 1 item in `NEXT.md`.
 
 **The lock list:**
 
@@ -164,7 +387,7 @@ The lockstep posture made `embed.FS` look attractive (one binary, one update). B
 
 **Previously:** Failure modes were deliberately deferred when the happy-path protocol landed. `NEXT.md` Tier 1 carried "Brain ↔ host-agent failure semantics" as the explicit follow-up.
 
-**Now:** Locked in `BRAIN_HOST_PROTOCOL.md` § Failure semantics and `APP_LIFECYCLE.md` § "same reconciler pattern extends to all host-managed state." Treated as four distinct problems with four distinct mechanisms — not one unified framework.
+**Now:** Locked in `BRAIN_HOST_PROTOCOL.md` # Failure semantics and `APP_LIFECYCLE.md` # "same reconciler pattern extends to all host-managed state." Treated as four distinct problems with four distinct mechanisms — not one unified framework.
 
 | # | Problem                                                            | Mechanism                                                                                  |
 |---|--------------------------------------------------------------------|--------------------------------------------------------------------------------------------|
@@ -194,7 +417,7 @@ The lockstep posture made `embed.FS` look attractive (one binary, one update). B
 
 **Resolves:** `NEXT.md` Tier 1 item "Brain ↔ host-agent failure semantics."
 
-**Affected docs:** `BRAIN_HOST_PROTOCOL.md` (§ Failure semantics replaces the deferred-stub), `APP_LIFECYCLE.md` (reconciler pattern extended from apps to all host-managed state), `NEXT.md`.
+**Affected docs:** `BRAIN_HOST_PROTOCOL.md` (# Failure semantics replaces the deferred-stub), `APP_LIFECYCLE.md` (reconciler pattern extended from apps to all host-managed state), `NEXT.md`.
 
 ---
 
@@ -304,7 +527,7 @@ The lockstep posture made `embed.FS` look attractive (one binary, one update). B
 **Why:**
 - The one-scheme-at-a-time model eliminates the day-to-day cross-origin case the handoff was solving.
 - SSO into apps would require every app to implement an OIDC-style flow against malmo — a real ask we'd be making of app authors, for v1, with no concrete user demand.
-- Keeping app auth fully independent preserves the "apps work as upstream authors designed them" principle that drove subdomain routing (`SPEC.md` § "Why subdomain").
+- Keeping app auth fully independent preserves the "apps work as upstream authors designed them" principle that drove subdomain routing (`SPEC.md` # "Why subdomain").
 
 **Affected docs:** none yet — this is a confirmation of the existing position, captured here because we considered changing it.
 
@@ -321,7 +544,7 @@ The lockstep posture made `embed.FS` look attractive (one binary, one update). B
 - One-shot container images let the app vendor publish a separate migrator image (`photoprism/migrator:2.4.1`) that the brain runs as a transient container with the app's volumes mounted. Clean integration boundary, no in-image patching.
 - Deferring entirely (rather than shipping a half-formed in-container version) avoids locking ourselves into the wrong shape.
 
-**Affected docs:** `APP_MANIFEST.md` § F, `APP_LIFECYCLE.md` (lifecycle hooks).
+**Affected docs:** `APP_MANIFEST.md` # F, `APP_LIFECYCLE.md` (lifecycle hooks).
 
 ---
 
@@ -336,7 +559,7 @@ The lockstep posture made `embed.FS` look attractive (one binary, one update). B
 - The apps that legitimately need caps (VPN, SMB, DLNA, mount tooling) are a small, identifiable set — they fit Tier 2's "curated by malmo" model naturally.
 - Splitting cleanly at the tier boundary is simpler than per-capability allowlists and matches how Umbrel/Synology handle the same problem (system services vs. user apps).
 
-**Affected docs:** `APP_MANIFEST.md` § E, `SERVICE_PROVISIONING.md`, `APP_ISOLATION.md`.
+**Affected docs:** `APP_MANIFEST.md` # E, `SERVICE_PROVISIONING.md`, `APP_ISOLATION.md`.
 
 ---
 

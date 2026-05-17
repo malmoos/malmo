@@ -168,14 +168,14 @@ Three integrations targeted for v1. All three have clear demand, established imp
 
 - Settings → Sharing → Network shares.
 - Installed as the upstream `samba` Debian package. `smbd` and `nmbd` run under systemd on the host.
-- Exposes the user's storage pools (e.g., `photos`, `documents`) over SMB so Windows / macOS / Linux clients can mount them as network drives.
-- Malmo's UI at `/settings/shares` lets the user pick which pools to expose, with read-only or read-write toggles and optional per-malmo-user credentials. Brain generates `/etc/samba/smb.conf` and asks host-agent to `systemctl reload smbd`.
+- Exposes two share shapes over SMB so Windows / macOS / Linux clients can mount them as network drives: per-user home (`\\malmo\<user>` → `/home/<user>/`) and household-shared (`\\malmo\shared` → `/srv/malmo/shared/`). See `STORAGE.md` # Cross-device access (SMB).
+- Malmo's UI at `/settings/shares` lets each user opt in/out of their own SMB share (off-by-account-by-default per `AUTH.md`). Brain edits `/etc/samba/smb.conf` (specifically `valid users` allowlists) and asks host-agent to `systemctl reload smbd`. Credentials are the user's malmo password — no per-share password.
 - Critical for the "I plug in malmo and want it as a NAS for my laptop" use case.
 
 ### DLNA / UPnP media streaming
 
 - Settings → Sharing → Media streaming.
-- Exposes media in the `photos` / `videos` pools over DLNA so smart TVs and game consoles can browse and play them.
+- Exposes media in the household `Shared/Photos/` and `Shared/Movies/` folders over DLNA so smart TVs and game consoles can browse and play them.
 - Often folded into specific apps (Plex, Jellyfin) but a lightweight built-in option covers the "I just want to play videos on my TV" non-app case.
 - May be deprioritized if Jellyfin coverage in the app store is solid at launch; revisit closer to v1.
 
@@ -188,6 +188,59 @@ Three integrations targeted for v1. All three have clear demand, established imp
 - **Available as a Debian package (or packageable by us as a `.deb`).** If a Tier-2-shaped integration only ships as a Docker container, we either (a) don't support it in v1, or (b) accept a one-off Docker-with-extra-caps path for that specific case. Most viable Tier-2 candidates have first-class Debian packaging from upstream.
 
 We don't accept third-party Tier-2 contributions in v1. Adding a new Tier-2 integration is an OS feature, not an app submission.
+
+---
+
+## Post-v1 candidates
+
+Ideas explicitly out of scope for v1, kept here so we don't lose them. Nothing in this section is committed — each entry would need a separate design pass before becoming a locked decision.
+
+The bar for promotion is the same we apply to new Tier-1 types: (1) 5+ apps would actually use it, (2) sharing creates real benefit beyond convenience (security patching, ops integration, user-visible UX), (3) does not require app upstreams to redesign themselves around malmo, (4) bounded API surface.
+
+### Scheduled / deferred jobs
+
+A unified facility for apps to declare periodic or constraint-based background work. Cron-style schedules ("re-index every 24h") and constraint-based dispatch ("run when the box is idle, on AC power") in one shape — Android's `WorkManager` is the model. Apps declare jobs in the manifest; malmo arbitrates execution.
+
+Value:
+- Single observability surface — Activity view can show *why your box is loud at 3am* (Immich indexing, Paperless OCR'ing). Synology-tier ops visibility.
+- Resource arbitration — don't let five apps kick off heavy jobs simultaneously.
+- Power-aware — defer expensive jobs when the laptop-in-the-pantry is on battery.
+
+Caveat: apps with framework-embedded schedulers (Sidekiq-cron, APScheduler, etc.) won't fully migrate; malmo's scheduler covers what apps choose to declare, not all background work.
+
+### Additional managed data services (Tier-1 catalog growth)
+
+Extend the catalog as concrete app demand justifies. We **host the substrates apps already use** rather than inventing new APIs — same shape as Postgres/Redis today.
+
+Plausible additions:
+- **MariaDB** — Nextcloud, WordPress, and similar require it specifically.
+- **MongoDB** — common in modern self-hosted apps.
+- **Kafka, RabbitMQ** — queue/streaming *substrates*, if app demand emerges.
+
+We host queue substrates, not queue libraries. Sidekiq (Ruby), BullMQ (Node), Celery (Python), RQ — these are libraries that run *inside the app's own container*, pointed at a substrate we provide (already-managed Redis for most; potentially Kafka or RabbitMQ later). Malmo does not build or expose a queue API of its own.
+
+### Cross-box services (federated state)
+
+The biggest and most differentiated post-v1 idea. None of the home-server OS competitors have a story here.
+
+User-facing pitch: "your grocery list syncs with your partner's box; your photos sync with your parents' box" — without either app author writing networking code.
+
+The shape is unresolved — three plausible technical models, each implying a different developer experience:
+
+- **Master-master replication** (CouchDB / PouchDB). Each box holds a full DB copy; bidirectional eventually-consistent sync. Mature but dated DX; apps work with conflict-resolution documents.
+- **CRDT-as-library** (Automerge, Yjs). No central "server" — apps work with CRDT documents directly, sync is peer-to-peer. Modern DX, arguably better-aligned with the "files are first-class" instinct elsewhere in the spec, but storage story is less mature.
+- **Local-first SQLite with sync** (cr-sqlite, Turso embedded replicas). Apps see a normal SQL DB; sync at the storage layer. Most familiar API, youngest ecosystem.
+
+These are not interchangeable; the choice constrains what apps can be built on top. Not locked.
+
+The bigger unresolved piece is **cross-box identity and consent**, which is the load-bearing part of any federation story and likely needs its own design doc (sketch: `FEDERATION.md`) before this gets serious. Components: how a user is named across boxes (box-ID + username? email-shape?), how box-B verifies that box-A's claim of "I'm Alice" is real (tied to the mesh's identity model, or separate?), the consent surface in the dashboard, granularity (per-app? per-document?), and revocation — which is genuinely hard once data has propagated. Each of these is its own design problem.
+
+Why this is post-v1:
+- Scope is large across multiple unsettled axes (sync model, identity, consent, revocation).
+- No concrete apps demand it in 2026 — the self-hosted ecosystem is single-box-shaped. Risk of building rails for users who don't exist.
+- Ecosystem seeding: this only pays off if apps adopt the pattern, which likely requires malmo shipping reference apps to demonstrate it.
+
+Locked now: **the malmo mesh is the intended transport for future cross-box services.** Whatever we build later rides on the same Headscale/DERP substrate we ship for personal device access, not a separate network plane.
 
 ---
 

@@ -29,6 +29,8 @@ GET  /api/v1/apps              → list installed instances
 GET  /api/v1/apps/:id          → instance detail
 POST /api/v1/users             → create user
 GET  /api/v1/settings/network  → current network config
+GET  /api/v1/health/issues     → active health issues (see HEALTH.md)
+POST /api/v1/health/:id/:act   → invoke a remediation action attached to an issue
 ```
 
 Plain HTTP. Errors: HTTP status + `{ "code": "...", "message": "...", "details": {...} }`. Codes are stable strings; messages are human-readable, not contractual.
@@ -90,9 +92,19 @@ GET /api/v1/events
   id: 3
   event: drift.surfaced
   data: {"surface":"smbd","desired":"enabled","actual":"disabled"}
+
+  id: 4
+  event: health.issue_raised
+  data: {"id":"data-drive-missing","severity":"error","summary":"Your data drive isn't connected."}
+
+  id: 5
+  event: health.issue_cleared
+  data: {"id":"data-drive-missing"}
 ```
 
-One long-lived stream per dashboard tab. Carries typed events for: app lifecycle transitions, updates available / applied / failed, drift surfaces, peer / mesh events (when mesh ships), Tier-2 service state changes, user notifications.
+One long-lived stream per dashboard tab. Carries typed events for: app lifecycle transitions, updates available / applied / failed, drift surfaces, peer / mesh events (when mesh ships), Tier-2 service state changes, **health issues raised / cleared / updated** (see `HEALTH.md`), user notifications.
+
+**Blocked-operation responses.** When a request is refused because a health issue's `blocks_writes` / `blocks_apps` / `blocks_users` flag is set, the brain returns `409 Conflict` with `{code: "blocked-by-health-issue", issue_id: "...", message: "..."}`. The UI uses `issue_id` to link the user from the failed action back to the banner explaining why.
 
 **Event `kind` values are enumerated in the API schema.** No untyped `{type, data}` blobs. Adding a new event kind is an API-version-bumping change.
 
@@ -110,7 +122,7 @@ Reserved for the web terminal (`NEXT.md` Tier 3). HTTP upgrade on the same serve
 
 **Versioning.** The API is **versioned and additive**, not lockstep. Brain serves under `/api/v1/...`. Minor versions are additive — fields are added, never removed or repurposed. The UI bundle declares the API minor it requires (in `version.json`); brain accepts any UI built against `v1.X` where `X ≤ current_minor`. Breaking changes go to `/api/v2`, which the brain serves alongside `/api/v1` during the deprecation window.
 
-This is deliberately *not* lockstep with the brain version. The UI and brain ship as separate images on a shared release channel (`WEB_UI.md` § "deploy + update flow") and iterate at independent cadences. Most UI ships don't move the brain; most brain ships don't move the UI.
+This is deliberately *not* lockstep with the brain version. The UI and brain ship as separate images on a shared release channel (`WEB_UI.md` # "deploy + update flow") and iterate at independent cadences. Most UI ships don't move the brain; most brain ships don't move the UI.
 
 **The `426 Upgrade Required` path is the in-tab safety net.** When the user has a dashboard tab open and the UI container updates underneath them, the next API call from the stale tab may declare a `version` the brain no longer supports (or the inverse — the UI just updated to require an API minor the brain doesn't yet serve, during a coordinated ship between minor pull and brain restart). On `426`, the UI shows "malmo updated — refresh to continue."
 
@@ -120,7 +132,35 @@ This is deliberately *not* lockstep with the brain version. The UI and brain shi
 - No hidden auth shortcuts the dashboard uses but external callers can't (e.g. no "internal" routes outside `/api/v1/`).
 - Rate-limit and abuse posture is a `NEXT.md` follow-up — public-callable from day one means we'll need it before third-party stores ship.
 
-**Codegen.** Deferred. v1 ships with hand-rolled Go structs ↔ TS types. Schema iteration runs at editing speed. OpenAPI 3 spec + generated TS client lands as a follow-up build step before the public-API surface goes external; the URL/error/event shapes above are designed to round-trip cleanly through an OpenAPI generator when that step arrives.
+**Codegen.** Split. **Server-side OpenAPI 3 emission lands from day one** — the brain is written using [`huma`](https://huma.rocks), a Go web library that produces an OpenAPI schema as a byproduct of handler registration. Typed request/response Go structs *are* the schema; there is no hand-maintained `openapi.yaml`. The schema is the substrate for the CI enforcement described below. **Client-side codegen is deferred** — the UI keeps hand-rolled TS types in v1; the generated TS client (`openapi-fetch` or similar) lands as a follow-up before the public-API surface goes external, when schema stability makes hand-maintenance cost more than codegen.
+
+### CI enforcement
+
+The additive-minor discipline above is a *contract* — with in-flight UI tabs during a malmo update, and with external callers (third-party stores, CLI, future tooling) per the public-API posture. The cost of breaking it is paid by callers, not the change author. Discipline-by-convention decays; CI is the mechanism that internalizes the cost so a breaking change can't merge silently.
+
+**Mechanism: generated OpenAPI + `oasdiff breaking`.**
+
+On every PR, CI:
+
+1. Builds the brain and writes `openapi.json` (a `make openapi` target or a tiny Go binary that calls `api.OpenAPI()`).
+2. Runs `oasdiff breaking origin/main:openapi.json HEAD:openapi.json`. Non-zero exit = breaking change detected = build fails.
+
+[`oasdiff`](https://github.com/tufin/oasdiff) (Tufin, Apache-2.0) has a closed, rule-based notion of "breaking": response field removed; response field type changed or narrowed; enum value removed; endpoint removed; request field newly required; optional response field becoming nullable; error-code enum value removed; etc. The check is **structural, not heuristic** — it sees the declared schema, not a sampled set of responses. A field declared in a Go struct is in the schema whether any test exercises it or not; an enum value listed in a Go type is in the schema whether any test fires it or not.
+
+**Two nudges to make this work cleanly:**
+
+- **Event `kind` and error `code` are first-class Go enum types**, each registered in a single file (`events/kinds.go`, `errors/codes.go`). Each appears in OpenAPI as a named enum schema; oasdiff catches removals from either set the same way it catches field removals.
+- **PR template includes a "does this change `/api/v1`?" checkbox.** If checked, the reviewer is on the hook for confirming the change is deliberate — mechanical CI catches the schema, the checkbox catches *intent* (e.g., a copy-paste accident that happens to produce a clean diff).
+
+**Why generated, not hand-written OpenAPI.** A hand-written `openapi.yaml` becomes a second source of truth that drifts from the Go code — and the drift isn't caught until a PR breaks something real for a caller. Generated-from-types makes drift structurally impossible: the schema is the byproduct of the code that serves it.
+
+**Why this over snapshot-testing responses.** Snapshot tests verify what they call. Coverage gaps — endpoint never tested, enum value never observed, error response shape, omitted optional fields — silently let breaking changes through. The schema diff is the contract diff; the snapshot diff is "did anything I happened to look at change?"
+
+**No escape hatches.**
+
+- No "let this one through" CI flag. Bypass is "move to `/api/v2`," not "skip the check."
+- No grace period for newly-added enum values to be removed later. Once landed, additive forever.
+- No "internal" routes outside `/api/v1` that escape the discipline. Public-API posture is from day one.
 
 **Debuggability is a first-class design constraint** (inherited from `BRAIN_HOST_PROTOCOL.md`). Anything the dashboard does is reproducible with `curl` and a session cookie:
 
@@ -139,12 +179,12 @@ Future changes that would make the protocol harder to debug from `curl` need exp
 - **Authentication:** opaque `malmo_session` cookie. No bearer tokens. SSE/WS auth via the same cookie.
 - **CSRF:** `SameSite=Strict` cookie + `Origin` check on state-changing requests.
 - **Versioning:** API-versioned, additive-minor. `/api/v1` minors only add fields; breaking changes go to `/api/v2`. UI and brain ship independently on a shared release channel (`WEB_UI.md`). UI declares `X-Malmo-API-Version`; brain returns 426 if it can't serve that minor.
-- **Additive-minor discipline.** Fields in `/api/v1` are never removed or repurposed. New fields are always optional. Event `kind` values are added, never removed (deprecation = stop emitting). CI enforces.
+- **Additive-minor discipline.** Fields in `/api/v1` are never removed or repurposed. New fields are always optional. Event `kind` values are added, never removed (deprecation = stop emitting). **CI enforces via generated OpenAPI + `oasdiff breaking`** (see # CI enforcement). Bypass is `/api/v2`, not a skip flag.
 - **Errors:** HTTP status + `{code, message, details?}` body. Codes are stable strings.
 - **Event `kind` values are enumerated in the schema.** Adding a new kind is an API-version-bumping change.
 - **SSE reconnect:** monotonic `id`, ~256 KB per-stream rolling buffer, `Last-Event-ID` replay, single `{"lost": true}` event on overflow.
 - **Stream cap:** ≤16 concurrent SSE streams per session.
-- **Codegen deferred.** Hand-rolled types in v1; OpenAPI 3 + `openapi-fetch` lands before public-API surface goes external.
+- **Codegen split.** Server-side: OpenAPI 3 emitted by the brain via [`huma`](https://huma.rocks) from day one (substrate for CI enforcement). Client-side: TS types hand-rolled in v1; generated TS client (`openapi-fetch` or similar) lands before public-API surface goes external.
 - **Public-API posture from day one.** Dashboard uses the same routes any external caller will hit. No internal carve-outs.
 - **Debuggability is a first-class design constraint.** Future changes that hurt `curl`-debuggability need explicit justification.
 

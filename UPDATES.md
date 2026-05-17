@@ -64,7 +64,7 @@ Tiny native binary, supervises the brain (`CONTROL_PLANE.md`). Updates are rare 
 - Brain orchestrating its own supervisor is a layering inversion we don't want.
 
 Pros:
-- Same plumbing as §1 — no new mechanism.
+- Same plumbing as #1 — no new mechanism.
 - apt's transactional model means partial-failure states are rare.
 
 Cons:
@@ -83,7 +83,7 @@ This is the most user-visible update stream because the brain + UI together *are
 ### Options on update trigger
 
 - **A — Auto-pull `latest` tag continuously.** Box polls registry, pulls when tag advances.
-- **B — Release manifest.** Box polls a JSON manifest at `releases.malmo.network/stable.json` that lists the *current* stable version. Lets us stage rollouts, halt them if telemetry goes bad, gate by cohort/region.
+- **B — Release manifest.** Box polls a JSON manifest at `releases.malmo.network/stable.json` that lists the *current* stable version. Gives us a kill switch (retract a bad release) and a place to gate rollouts if we later need pacing. See `RELEASE_MANIFEST.md` for the full schema + publishing pipeline.
 - **C — Periodic prompt.** Box checks for updates, surfaces "malmo X.Y.Z available — update now?" in the UI.
 - **D — Fully manual.** Admin clicks update.
 
@@ -91,58 +91,29 @@ This is the most user-visible update stream because the brain + UI together *are
 
 - Release manifest (not raw `latest` tag) because we need a kill switch. If we ship a bad version and 5% of boxes start crashlooping, we want to flip the manifest back and stop *availability* of that version *now*, before more boxes prompt their admin to install it.
 - Admin-prompted (not auto-applied) because v1 has no A/B rollback at the OS level. Phone-OS-style auto-apply assumes hardware-backed rollback we don't have until A/B images land. Surfacing "malmo X.Y.Z is available" and waiting for the admin is the honest posture.
-- The manifest carries per-version metadata: minimum host-agent version, minimum app manifest_version supported, rollout cohort, deprecated flags.
+- The manifest names both `brain` and `ui` versions, plus `minimum_host_agent` and `rollback_to`. Full schema, signing (minisign / Ed25519), and publishing pipeline live in `RELEASE_MANIFEST.md`. v1 ships a single `stable` channel with no phased rollout — admin-prompting provides natural pacing at v1 scale.
 
-```json
-{
-  "channel": "stable",
-  "brain": "1.4.2",
-  "ui": "1.4.9",
-  "minimum_host_agent": "1.0.0",
-  "released_at": "2026-05-08T12:00:00Z",
-  "rollout": [
-    { "after": "0d",  "percent": 5 },
-    { "after": "2d",  "percent": 25 },
-    { "after": "4d",  "percent": 50 },
-    { "after": "7d",  "percent": 100 }
-  ],
-  "rollback_to": null
-}
-```
-
-The manifest names **both** versions. The updater compares each against what's currently installed:
+The updater compares each named version against what's currently installed:
 
 - `brain` unchanged + `ui` advanced → recreate only `malmo-ui`. Brain keeps running; no API interruption.
 - `brain` advanced + `ui` unchanged → recreate only `malmo-brain`. UI keeps serving; brief API gap during brain restart (the in-tab `426` safety net per `BRAIN_UI_PROTOCOL.md` covers stale tabs).
 - Both advanced → coordinated transaction: pull both, recreate both, verify both healthy, commit. On failure of either, revert both to the previous pair.
 
-`rollback_to` is a *paired* rollback (brain + UI both revert together when fired), since brain/UI version pairs are tested together before publication.
+`rollback_to` is a *paired* rollback (brain + UI both revert together when fired), since brain/UI version pairs are tested together before publication. If set, the offer for the bad version is retracted from all boxes that haven't yet applied it; already-updated boxes see a "downgrade available" prompt that recommends reverting (using the kept-for-7-days snapshot). Cheap insurance. Full rollback semantics in `RELEASE_MANIFEST.md`.
 
-**Cohort selection is deterministic and local.** Each box hashes `machine_id + version` into a 0–99 bucket and checks "is my bucket below today's percentage?" Same approach Ubuntu's phased apt updates use. No coordination with our servers required beyond fetching the manifest.
+For the silent (telemetry-off) population, our visibility comes from the same channels Ubuntu and Debian have always used: GitHub issues, support forum, direct reports. Slower than real-time metrics, sufficient for the appliance's risk profile at v1 scale.
 
-`rollback_to: "1.4.1"` is the kill-switch field — if set, the offer for `1.4.2` is retracted from all boxes that haven't yet applied it. Boxes already on `1.4.2` see a "downgrade available" prompt that recommends reverting (using the kept-for-7-days snapshot). Cheap insurance.
+### Phased rollout and beta channel — deferred
 
-### Why time-based, not metric-gated
+Both are deferred from v1 with explicit triggers documented in `RELEASE_MANIFEST.md` # "Future work" and # "Channels":
 
-We considered telemetry-gated rollouts (advance only when crash rate stays under X%). Rejected for v1 on two grounds:
-
-1. **Telemetry is opt-in** (`FIRST_RUN.md`). We cannot rely on data we don't have from users who declined.
-2. **Scale.** At launch the total install base is in the hundreds. "5% of 200" is 10 boxes — too small for statistical confidence in either direction.
-
-So the rollout schedule is **time-based**, the same shape Ubuntu has used at much larger scale for a decade. Telemetry, where present, is a **signal that lets us halt or roll back early** — not a precondition for advancing. If telemetry-enabled boxes start reporting crash loops on a new version, we flip `rollback_to` and freeze the rollout. Boxes with telemetry off get the same protection because the manifest applies to everyone.
-
-For the silent (telemetry-off) population, our visibility comes from the same channels Ubuntu and Debian have always used: GitHub issues, support forum, beta-tester reports. Slower than real-time metrics, sufficient for the appliance's risk profile.
-
-### Bake on beta before promoting to stable
-
-A brain version is published to the **beta channel** first and bakes there for **7–14 days** before promoting to `stable`. Beta is opt-in (advanced Setting); the population is self-selected tinkerers who are tolerant of breakage and good at filing reports. Beta is, statistically, our pre-rollout signal — telemetry-on or telemetry-off.
-
-Promotion criteria are deliberately soft for v1: no critical bugs filed, no auto-rollback triggers fired on beta boxes, subjective sanity check by us. We tighten this once we have data on what "healthy bake" actually looks like at our scale.
+- **Phased rollout / cohorts** activates when A/B immutable images land and auto-apply becomes safe — admin-prompting no longer provides natural pacing. Schema is additive (`rollout` array + deterministic `hash(machine_id || canonical(brain, ui))` bucket).
+- **Beta channel** reactivates when fleet growth outpaces direct-report detection, or when auto-apply lands. Additive — a new `beta.json` alongside `stable.json`, opt-in setting, no schema change.
 
 ### Update mechanics
 
 1. host-agent polls the release manifest hourly.
-2. If a newer manifest applies to this box (rollout cohort, channel, host-agent compat), host-agent surfaces a "malmo update available — vX.Y.Z" notification in the dashboard. Current versions keep running.
+2. If a newer manifest applies to this box (channel, host-agent compat), host-agent surfaces a "malmo update available — vX.Y.Z" notification in the dashboard. Current versions keep running.
 3. When the admin clicks **Update**, host-agent runs the changed-only transaction:
    a. Pull each image whose version moved (`malmo-brain`, `malmo-ui`, or both).
    b. **If brain moved:** snapshot the brain's SQLite database to `/var/lib/malmo/brain-snapshots/<old-version>.db`. Cheap (SQLite is one file, single-digit MB at v1 scale).
@@ -157,7 +128,7 @@ If the release manifest's `rollback_to` field retracts the currently-offered ver
 
 ### Update window
 
-Control-plane updates are admin-triggered, so they apply when the admin clicks. There is no fixed window. Apps and managed-service patches still serialize to the 03:00–04:00 window (§4, §5).
+Control-plane updates are admin-triggered, so they apply when the admin clicks. There is no fixed window. Apps and managed-service patches still serialize to the 03:00–04:00 window (#4, #5).
 
 Impact at apply time depends on what moved:
 
@@ -176,7 +147,7 @@ Impact at apply time depends on what moved:
 The trigger for prompting is **permission expansion**, not version bumps. Concretely, the brain diffs the new manifest's `permissions:` block against the running version's:
 
 - New permission key (e.g., `devices` newly present) → prompt.
-- Widened value (`internet: false → true`, new entry in `shared_storage`, new entry in `devices`, `gpu: false → true`, etc.) → prompt.
+- Widened value (`internet: false → true`, new entry in `user_folders` or `shared_folders`, new entry in `devices`, `gpu: false → true`, mode upgrade `read → write` on an existing folder, etc.) → prompt.
 - Same or narrower permissions → auto-apply, no prompt.
 
 This means a Photos `1.4 → 2.0` bump that doesn't touch permissions auto-applies. A Photos `1.4 → 1.5` bump that adds `devices: [/dev/dri]` for hardware-accelerated thumbnails prompts.
@@ -205,13 +176,32 @@ Same as brain: **03:00–04:00 local** by default. App updates serialize one at 
 ### Update mechanics per app
 
 1. Pull new image.
-2. Run `pre_update` hook (`APP_MANIFEST.md`).
-3. If managed-service major version changed: take pre-migration backup (per `SERVICE_PROVISIONING.md`), spin up new major, `pg_dump | pg_restore`.
-4. Stop old container, start new container with the same volumes.
-5. Wait up to 120s for the app to respond on `main_port`.
-6. **On failure:** revert to previous image. If managed-service was migrated, revert to the previous major and restore from the pre-migration dump. Notify admin.
+2. **Snapshot the app's state** — see "Pre-update snapshot" below.
+3. Run `pre_update` hook (`APP_MANIFEST.md`) — deferred from MVP; the snapshot is the v1 safety net.
+4. If managed-service major version changed: take pre-migration backup (per `SERVICE_PROVISIONING.md`), spin up new major, `pg_dump | pg_restore`.
+5. Stop old container, start new container with the same volumes.
+6. Wait up to 120s for the app to respond on `main_port`.
+7. **On failure:** restore from the pre-update snapshot, revert to previous image. If managed-service was migrated, revert to the previous major and restore from the pre-migration dump. Notify admin.
 
-**Keep the previous image for 7 days.** "App is broken since last night" is the realistic complaint and we want the rollback button to actually work.
+**Keep the previous image and snapshot for 7 days.** "App is broken since last night" is the realistic complaint and we want the rollback button to actually work.
+
+### Pre-update snapshot
+
+The single biggest gap in image-only rollback is **app-managed schema migrations**. A new app version starts up, alters tables / rewrites data-volume files as part of its boot migration, then fails health check. Image rollback alone leaves the *old* code running against *migrated* data — broken in a way restoring the image doesn't fix.
+
+Until lifecycle hooks return (`APP_MANIFEST.md` # F, `APP_LIFECYCLE.md` # Deferred: lifecycle hooks), the brain takes a brute-force snapshot before every app update:
+
+1. **Tar the manifest's declared `data_volumes`** to `/var/lib/malmo/instances/<id>/snapshots/pre-update-<old-version>.tar`. `cache_volumes` are excluded — that's literally what the data/cache split is for (`APP_MANIFEST.md` # C).
+2. **If the app uses a managed service**, `pg_dump` (or equivalent for the service type) the app's logical database into the same snapshot dir. Cheap, well-bounded, runs in the 03:00 window when nothing else is going on. Applies whether or not the service version moved — protects against app-driven schema changes inside the same major.
+3. **Retain alongside the previous image for 7 days**, then GC.
+
+On health-check failure of the new container, the brain stops the new container, restores the tar (and the logical DB dump if present), and starts the previous image. Single-generation rollback — enough for the one-step-back UX, no n-deep history in v1.
+
+Cost is bounded: `data_volumes` are author-declared and typically small (indexes, configs, app DBs); the bulk of app state usually lives in `cache_volumes` and is excluded. Snapshot happens during the 03:00–04:00 window when nothing else is running. Disk pressure surfaces as a `disk-full` health issue per `HEALTH.md`; if the box is too full to take a snapshot, the update is deferred and the user is told.
+
+When hooks return, `pre_update` (author-provided, app-aware) replaces the tar for apps that ship one. The brain's snapshot stays the safety net for apps that don't.
+
+**App-side rollback hooks are deferred.** A `post_update_rollback` hook fired only when `post_update` fails is the right long-term shape for apps that need bespoke recovery, but it pushes complexity onto every author for a case the snapshot already handles. Sketched in `APP_MANIFEST.md` # F; not in v1.
 
 ### Per-app auto-update toggle
 
@@ -235,13 +225,64 @@ Postgres, Redis, etc. Per `SERVICE_PROVISIONING.md`, brain owns lifecycle.
 
 Patch updates serialize per major-version instance. Brain stops the container, pulls new image, starts it. App connections drop and reconnect — handled by client retry logic in the apps.
 
-Cross-major migrations are an app-update mechanic, not a managed-service-update mechanic. They live in §4.
+Cross-major migrations are an app-update mechanic, not a managed-service-update mechanic. They live in #4.
 
 **No user-visible toggle for managed-service updates.** The user didn't install Postgres; they installed Photos. Postgres patch updates are infrastructure, not a user concern.
 
 ---
 
-## 6. Cross-cutting concerns
+## 6. Dashboard update UX
+
+The mechanics above describe *what* happens. This section describes how the dashboard surfaces it.
+
+### Where updates appear
+
+Three surfaces, one mental model:
+
+- **Per-app tile.** A small badge on the app's tile in the dashboard when its version moved (auto-applied overnight, or pending user decision). Click → "What's new" panel with the upstream changelog (sourced from the manifest's `links.support` or a `changelog_url` field — small additive field).
+- **Settings → Updates.** Single aggregate view: "X apps updated last night, Y waiting on you, Z failed." This is where the rollback affordance lives (using the kept-for-7-days image + snapshot per # 4).
+- **No global "update now" button.** Auto-updates serialize in the 03:00–04:00 window. The dashboard does not pretend the user controls cadence beyond the per-app toggle and the permission-expansion accept (below).
+
+### The permission-expansion prompt
+
+The only case the box asks. Surfaces **on next login of the instance owner**, as a modal on first dashboard load — not a dismissible banner. The app stays on its current version until the user decides.
+
+- **Diff shown in plain language.** "Photos wants new access: **read & write your Movies folder**." Same vocabulary as the install screen (`APP_MANIFEST.md` # E), so the user recognizes it.
+- **Two buttons: Allow & update / Keep current version.** No third "remind me later" — closing the modal is dismissal, and the prompt re-surfaces on the *next* login (not every page load).
+- **Allow & update applies immediately**, not at 03:00. The user just made a deliberate decision; making them wait until tomorrow morning is confusing. The ~minute of app unavailability is the cost of the choice they explicitly initiated.
+- **Accept later** is available from the app's Settings page.
+
+Consequence (already noted in # 4): two users on the same box may run different versions of the same Tier-3 per-user app for a while. By design — instances are already per-user isolated.
+
+### Admin visibility into other users' versions
+
+The instance-owner prompt model means an admin can't directly see *why* Cindy's Photos is on a stale version. They can wonder why disk usage diverges, or why behavior differs across accounts.
+
+Settings → Users → `cindy` exposes "Apps Cindy hasn't accepted updates for: Photos 2.0 (pending permission: read & write Movies)." Read-only — the admin sees the fact, but cannot accept on Cindy's behalf. Tier-3 per-user instances are Cindy's to authorize.
+
+### Failure signaling
+
+Auto-rollback already happens (# 4). The dashboard surfaces it:
+
+- **Per-app tile banner**, persistent until acknowledged: "Photos couldn't update to 2.0 last night. Rolled back to 1.4."
+- **Settings → Updates** lists the failure with mode (image pull / health check / hook / snapshot restore) and a "view logs" link to the diagnostic bundle (`LOGGING.md`).
+- **After 3 consecutive failures** to the same manifest (# 4 mechanics), the prompt stops and the banner changes to "Update is failing repeatedly. Paused. See logs." The retry button is still available; the box just stops trying on its own.
+
+### Post-update toast
+
+A small, auto-dismissing toast on the next dashboard visit after an overnight update batch: "3 apps updated overnight" → click for the list with per-app "what's new" snippets. Not modal, not blocking. Auto-dismisses after one view.
+
+### What lives in `APP_MANIFEST.md`
+
+Additive fields the manifest grows to support this UX:
+
+- **`changelog_url`** — optional pointer to a per-version changelog. If absent, the dashboard links to `links.support`.
+
+No other UX-driven manifest fields in v1.
+
+---
+
+## 7. Cross-cutting concerns
 
 ### Update ordering
 
@@ -268,7 +309,7 @@ Reboot at v1 means roughly 30–60s of full unavailability. Acceptable nightly, 
 
 ### Compatibility matrix
 
-The release manifest (§3) carries `minimum_host_agent`. The brain carries `minimum_manifest_version` and `maximum_manifest_version` for apps. host-agent carries `minimum_brain_version`.
+The release manifest (#3) carries `minimum_host_agent`. The brain carries `minimum_manifest_version` and `maximum_manifest_version` for apps. host-agent carries `minimum_brain_version`.
 
 If an app update wants a manifest_version newer than the running brain supports, the brain refuses the update and surfaces "malmo needs to update first" in the UI. The next brain update should resolve it; if it doesn't, the app stays pinned.
 
@@ -287,7 +328,7 @@ When telemetry is enabled (`FIRST_RUN.md` opt-in), boxes report:
 - Update failures with the failure mode (image pull, health check, hook).
 - Crash counts per brain version.
 
-Telemetry is a **signal that accelerates our reaction time**, not a gate that the rollout schedule depends on. The rollout is time-based (§3); telemetry just lets us halt or trigger `rollback_to` faster than we'd otherwise notice. Boxes with telemetry off get the same updates on the same schedule and the same protection — they just don't contribute signal.
+Telemetry is a **signal that accelerates our reaction time**, not a gate. Boxes with telemetry off get the same updates and the same protection (manifest applies to everyone; `rollback_to` retracts a bad release fleet-wide) — they just don't contribute signal. When phased rollout activates post-v1, the schedule will be time-based — telemetry will let us halt or trigger `rollback_to` faster than we'd otherwise notice, not gate advancement.
 
 ### Rollback summary
 
@@ -296,7 +337,7 @@ Telemetry is a **signal that accelerates our reaction time**, not a gate that th
 | Debian base | None in v1; A/B images later |
 | `host-agent` | apt revert (manual, rare path) |
 | `malmo-brain` + `malmo-ui` | Previous image pair + SQLite snapshot; revert as a pair, automatic on health-check fail of either |
-| App | Previous image, automatic on health-check fail; keep 7 days |
+| App | Previous image + pre-update tar of `data_volumes` (+ `pg_dump` of managed-service DB if any), automatic on health-check fail; keep 7 days |
 | Managed service (patch) | Previous image; data is shared so this is a tag-flip |
 | Managed service (major migration) | Pre-migration dump, automatic on app-update fail |
 
@@ -310,8 +351,11 @@ The Debian-base "no rollback" is the v1 hole we accept. Everything else has a de
 - **Two-track posture, modeled after Android:** silent auto-apply for security patches; admin-prompted for anything that changes meaningful surface (brain, app permissions, OS major upgrades).
 - **Debian base: `unattended-upgrades` security-only.** Full upgrades and Debian point-releases stay admin-triggered until A/B images.
 - **`host-agent`: `unattended-upgrades` from our apt repo.**
-- **Control plane (`malmo-brain` + `malmo-ui`): release-manifest-driven, admin-prompted.** Manifest carries `brain`, `ui`, `minimum_host_agent`, a time-based `rollout` schedule, and `rollback_to`. Cohort selection is deterministic from `machine_id + manifest hash` — Ubuntu-style phased rollout, no server coordination. Bake on beta channel for 7–14 days before promoting to stable. Telemetry is a halt-fast signal, not a rollout gate. Updater recreates only what changed; brain+UI revert as a pair on failure.
+- **Control plane (`malmo-brain` + `malmo-ui`): release-manifest-driven, admin-prompted.** Manifest carries `brain`, `ui`, `minimum_host_agent`, and `rollback_to` (full schema + signing + publishing pipeline in `RELEASE_MANIFEST.md`). v1 ships a single `stable` channel; phased rollout and beta channel are deferred (additive when triggers fire — see `RELEASE_MANIFEST.md` # Future work). Telemetry is a halt-fast signal, not a rollout gate. Updater recreates only what changed; brain+UI revert as a pair on failure.
 - **Apps: auto-update by default** (per `SPEC.md`); **prompt the instance owner only when the manifest's `permissions:` block expands** (new key or widened value). Permission-neutral updates of any size auto-apply. Different users on the same box may temporarily run different versions of the same app — by design, since instances are already per-user isolated. Tier-2 apps prompt the admin (box-wide).
+- **Pre-update snapshot of `data_volumes` (plus `pg_dump` of any managed-service DB)** is taken before every app update. Restored on health-check failure alongside the image revert. Hooks remain deferred; the snapshot is the v1 safety net for app-driven schema migrations. Kept 7 days.
+- **Permission-expansion prompt surfaces on next login of the instance owner**, modal on first dashboard load, two buttons (Allow & update / Keep current version). Accept applies immediately, not at 03:00. Admin sees per-user pending-update facts in Settings → Users; cannot accept on another user's behalf.
+- **Update surfaces in the dashboard:** per-app tile badge for available/applied/failed; Settings → Updates for the aggregate view and rollback affordance; auto-dismissing toast for overnight batches.
 - **Managed services: brain-owned, no user toggle.** Patches in update window; cross-major migrations triggered transparently by app updates with a pre-migration backup.
 - **Update window: 03:00–04:00 local** for apps, managed services, Debian base, reboots. Configurable, advanced setting. Brain has no fixed window — it's admin-triggered.
 - **Update ordering: host-agent → brain → apps & managed services → Debian base.**
