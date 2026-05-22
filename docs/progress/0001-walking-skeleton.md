@@ -108,12 +108,8 @@ all-native inner loop (`make help`). See
 
 Ordered, roughly by leverage:
 
-1. **Startup reconcile pass** (`APP_LIFECYCLE.md`) — on brain start, walk SQLite,
-   re-assert Caddy routes + mDNS, fix container drift. Removes the
-   "restart loses routes" gap.
-2. **Health-wait + splash route flip** — register a splash route on install,
-   wait for `main_service` healthy, flip to the real upstream; surface
-   `failed` with logs.
+1. ~~**Startup reconcile pass**~~ — done in [0002](0002-reconcile-and-health-wait.md).
+2. ~~**Health-wait + splash route flip**~~ — done in [0002](0002-reconcile-and-health-wait.md).
 3. **Door-2 custom-compose path + admission policy** — `docker compose config`
    rejection rules, synthetic manifest generation.
 4. **`WEB_UI.md` component stack** — Tailwind 4 + shadcn-vue, real layout,

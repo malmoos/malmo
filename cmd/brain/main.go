@@ -40,8 +40,13 @@ func main() {
 	bus := events.NewBus()
 	life := lifecycle.NewManager(st, cat, host, cd, bus, cfg.stateDir)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	life.EnsureIngress(ctx, cfg.caddyListen)
+	// Startup reconcile: converge Docker + routing to SQLite desired state and
+	// re-assert Caddy routes lost when EnsureIngress reset the server block.
+	if err := life.Reconcile(ctx); err != nil {
+		log.Printf("startup reconcile: %v", err)
+	}
 	cancel()
 
 	if status, err := host.SystemStatus(context.Background()); err != nil {

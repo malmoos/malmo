@@ -34,3 +34,4 @@ Ordered follow-ups. Update as they land.
 | # | Title | Status |
 |---|-------|--------|
 | [0001](0001-walking-skeleton.md) | Walking skeleton — install an app end-to-end | done |
+| [0002](0002-reconcile-and-health-wait.md) | Startup reconcile + health-wait & splash flip | done |
