@@ -37,9 +37,20 @@ malmo's positioning is a *combination*, not a single axis: branding, hardware op
 
 ## Repo state
 
-**Spec-phase only.** No code, no build, no tests. Everything here is markdown design docs. Do not scaffold code, package layouts, or tooling unless explicitly asked.
+**Spec + early implementation.** The markdown design docs remain the source of truth; a walking-skeleton implementation now lives alongside them. The skeleton proves the spine end-to-end (UI → brain → docker compose → Caddy route → SSE → uninstall) and runs natively on a dev box — no VM. The real host-integrated parts (Avahi, LUKS/TPM, boot ordering, auth) are still stubbed or unbuilt.
+
+Implementation layout:
+- `cmd/brain/` + `internal/` — `malmo-brain` (Go, huma API + SQLite, `docker compose` CLI driver). Packages: `api`, `lifecycle`, `catalog`, `manifest`, `store`, `caddy`, `hostclient`, `events`, `protocol`.
+- `cmd/host-agent/` — **fake** host-agent: real `BRAIN_HOST_PROTOCOL.md` wire format over a real UNIX socket, canned host ops (no Avahi/LUKS/apt yet).
+- `web-ui/` — Vue 3 + Vite + TanStack Query dashboard (Tailwind/shadcn-vue deferred; plain CSS for now).
+- `catalog/` — hand-written sample manifests (currently `whoami`).
+- `dev/` + `Makefile` — dev orchestration: Caddy container + `make` targets. Inner loop is all-native; `make help` lists targets.
+
+When extending the implementation, keep it faithful to the locked specs and update the relevant doc if a decision flips. Do not build out host-integrated subsystems (storage, boot, networking) without the VM outer loop the specs assume.
 
 ## Documents
+
+**All spec docs live in `docs/specs/`.** Filenames below (and the bare-filename cross-references throughout these docs) are relative to that directory. Implementation progress lives in `docs/progress/`, developer how-to in `docs/dev/`; `docs/README.md` is the full map.
 
 - `SPEC.md` — top-level vision, distribution, local access model, monetization. Start here for context.
 - `CONTROL_PLANE.md` — `host-agent` + `malmo-brain` (Go, single binary, SQLite) + Caddy + managed sidecars. Brain runs as a container, talks to Docker via socket-proxy. Architectural overview; topical specs split out into the docs below.
@@ -72,9 +83,19 @@ malmo's positioning is a *combination*, not a single axis: branding, hardware op
 - `DECISIONS.md` — evolution-of-thinking log. Captures what we changed our mind about and *why*. Read this before relitigating; add an entry when a load-bearing decision flips.
 - `NEXT.md` — prioritized list of open design topics, with pointers back to the relevant doc for context. The "Open questions" section in each doc is now just a pointer to this file; never add open items to individual docs, add them here.
 
-**Rule: this list is the canonical map of the spec.** Whenever a new top-level `.md` doc is added (or an existing doc's scope changes materially), update this list in the same change. One-line entry: filename, what it owns, and the headline locked decisions. If you find a doc in the repo that isn't listed here, that's a bug — fix it.
+**Rule: this list is the canonical map of the spec.** Whenever a new doc is added to `docs/specs/` (or an existing doc's scope changes materially), update this list in the same change. One-line entry: filename, what it owns, and the headline locked decisions. If you find a doc in `docs/specs/` that isn't listed here, that's a bug — fix it.
 
 When working on a topic, read the relevant doc(s) end-to-end before proposing changes. The docs cross-reference each other heavily and decisions in one constrain the others.
+
+## Documentation discipline
+
+Every change ships with documentation — a code change is not complete until its docs are written in the same change.
+
+- **Three doc homes.** Design source of truth → `docs/specs/`. Implementation progress → `docs/progress/`. Developer how-to (running locally, code-level architecture) → `docs/dev/`.
+- **Every unit of work gets a progress entry.** Add a numbered `docs/progress/NNNN-<slug>.md` (ADR-style, sequential) that records **what was done** and **what's next**, following the template in `docs/progress/0001-walking-skeleton.md`. Update the entry's "what's next" as follow-ups land.
+- **Keep specs and reality in sync.** When the implementation realizes or diverges from a spec, update the matching `docs/specs/` doc in the same change (and add a `DECISIONS.md` entry if a locked decision flips).
+- **The doc map is load-bearing.** Keep `docs/README.md` and `docs/progress/README.md` (the indexes) current in the same change. A doc not linked from the map is a bug.
+- **Root `README.md`** is the front door (pitch + quickstart); keep its quickstart accurate when the dev workflow changes.
 
 ## Load-bearing decisions (don't relitigate without cause)
 
