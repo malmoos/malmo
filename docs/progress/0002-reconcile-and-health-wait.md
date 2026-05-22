@@ -81,8 +81,7 @@ a brain bug.)
 
 Picks up the [0001](0001-walking-skeleton.md) list, now that 1–2 are done:
 
-1. **Door-2 custom-compose path + admission policy** — `docker compose config`
-   rejection rules, synthetic-manifest generation.
+1. ~~**Door-2 custom-compose path + admission policy**~~ — done in [0003](0003-door-2-and-admission.md).
 2. **`WEB_UI.md` component stack** — Tailwind 4 + shadcn-vue, `useJob()`
    composable, splash/failed state surfaced in the dashboard.
 3. **60s heartbeat reconcile + post-op verify** — extend reconcile beyond the

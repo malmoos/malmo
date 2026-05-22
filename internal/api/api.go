@@ -14,9 +14,11 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
+	"github.com/malmo/malmo/internal/admission"
 	"github.com/malmo/malmo/internal/catalog"
 	"github.com/malmo/malmo/internal/events"
 	"github.com/malmo/malmo/internal/lifecycle"
+	"github.com/malmo/malmo/internal/manifest"
 	"github.com/malmo/malmo/internal/store"
 )
 
@@ -65,6 +67,11 @@ func (s *Server) register(api huma.API) {
 		OperationID: "install-app", Method: "POST", Path: "/api/v1/apps",
 		Summary: "Install an app (job)", DefaultStatus: http.StatusAccepted,
 	}, s.installApp)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "install-custom-app", Method: "POST", Path: "/api/v1/apps/custom",
+		Summary: "Install a user-pasted (Door-2) compose (job)", DefaultStatus: http.StatusAccepted,
+	}, s.installCustomApp)
 
 	huma.Register(api, huma.Operation{
 		OperationID: "uninstall-app", Method: "DELETE", Path: "/api/v1/apps/{id}",
@@ -165,6 +172,41 @@ func (s *Server) installApp(ctx context.Context, in *struct {
 	}
 	job := s.jobs.run("app-install", func(job *Job) (map[string]any, error) {
 		inst, err := s.life.Install(context.Background(), manifestID, job.setStep)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"instance_id": inst.ID, "slug": inst.Slug}, nil
+	})
+	return &struct{ Body Job }{Body: job.snapshot()}, nil
+}
+
+func (s *Server) installCustomApp(ctx context.Context, in *struct {
+	Body struct {
+		Name        string `json:"name"`
+		Compose     string `json:"compose"`
+		MainService string `json:"main_service,omitempty"`
+		MainPort    int    `json:"main_port"`
+	}
+}) (*struct{ Body Job }, error) {
+	spec := lifecycle.CustomSpec{
+		Name:        in.Body.Name,
+		Compose:     in.Body.Compose,
+		MainService: in.Body.MainService,
+		MainPort:    in.Body.MainPort,
+	}
+
+	// Sync pre-checks so the user gets immediate, specific feedback instead of
+	// a failed job: synthesize (catches missing name/port, ambiguous service)
+	// and admit the compose (catches ports:/privileged/etc).
+	if _, _, err := manifest.Synthesize(spec.Name, []byte(spec.Compose), spec.MainService, spec.MainPort); err != nil {
+		return nil, huma.Error422UnprocessableEntity(err.Error())
+	}
+	if err := admission.Check(ctx, []byte(spec.Compose)); err != nil {
+		return nil, huma.Error422UnprocessableEntity(err.Error())
+	}
+
+	job := s.jobs.run("app-install", func(job *Job) (map[string]any, error) {
+		inst, err := s.life.InstallCustom(context.Background(), spec, job.setStep)
 		if err != nil {
 			return nil, err
 		}

@@ -35,3 +35,4 @@ Ordered follow-ups. Update as they land.
 |---|-------|--------|
 | [0001](0001-walking-skeleton.md) | Walking skeleton — install an app end-to-end | done |
 | [0002](0002-reconcile-and-health-wait.md) | Startup reconcile + health-wait & splash flip | done |
+| [0003](0003-door-2-and-admission.md) | Door-2 custom apps + admission policy | done |

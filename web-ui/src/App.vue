@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import { ref } from "vue";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/vue-query";
-import { api, waitForJob, type CatalogEntry, type Instance, type Job } from "./api";
+import { api, waitForJob, type ApiError, type CatalogEntry, type Instance, type Job } from "./api";
 import { useEvents } from "./useEvents";
 
 useEvents();
@@ -35,6 +36,28 @@ const uninstall = useMutation({
 function installedManifest(id: string): boolean {
   return (apps.data.value?.apps ?? []).some((a) => a.manifest_id === id);
 }
+
+// Door-2: paste a raw compose, name it, pick the main port.
+const customName = ref("");
+const customPort = ref<number | undefined>(undefined);
+const customCompose = ref("");
+
+const installCustom = useMutation({
+  mutationFn: async () => {
+    const job = await api.post<Job>("/apps/custom", {
+      name: customName.value,
+      compose: customCompose.value,
+      main_port: Number(customPort.value),
+    });
+    return waitForJob(job.job_id);
+  },
+  onSuccess: () => {
+    customName.value = "";
+    customPort.value = undefined;
+    customCompose.value = "";
+  },
+  onSettled: () => qc.invalidateQueries({ queryKey: ["apps"] }),
+});
 </script>
 
 <template>
@@ -86,6 +109,31 @@ function installedManifest(id: string): boolean {
       </ul>
       <p v-if="install.isError.value" class="error">{{ (install.error.value as Error).message }}</p>
     </section>
+
+    <section>
+      <h2>Add custom app</h2>
+      <form class="custom" @submit.prevent="installCustom.mutate()">
+        <div class="row">
+          <input v-model="customName" placeholder="App name" required />
+          <input v-model.number="customPort" type="number" placeholder="Main port" required />
+        </div>
+        <textarea
+          v-model="customCompose"
+          rows="8"
+          spellcheck="false"
+          placeholder="Paste a docker-compose.yml…"
+          required
+        />
+        <div class="row">
+          <button type="submit" :disabled="installCustom.isPending.value">
+            {{ installCustom.isPending.value ? "Installing…" : "Install custom app" }}
+          </button>
+        </div>
+        <p v-if="installCustom.isError.value" class="error">
+          {{ (installCustom.error.value as ApiError).message }}
+        </p>
+      </form>
+    </section>
   </main>
 </template>
 
@@ -110,4 +158,9 @@ a { color: #2b6cb0; font-size: 0.85rem; }
 button { border: 1px solid #ccc; background: #fafafa; border-radius: 8px; padding: 0.4rem 0.9rem; cursor: pointer; font-size: 0.85rem; }
 button:disabled { opacity: 0.5; cursor: default; }
 button:not(:disabled):hover { background: #f0f0f0; }
+.custom { display: flex; flex-direction: column; gap: 0.5rem; }
+.custom .row { display: flex; gap: 0.5rem; }
+.custom input { flex: 1; border: 1px solid #ddd; border-radius: 8px; padding: 0.45rem 0.7rem; font-size: 0.9rem; }
+.custom input[type="number"] { flex: 0 0 8rem; }
+.custom textarea { border: 1px solid #ddd; border-radius: 8px; padding: 0.6rem 0.8rem; font-family: ui-monospace, monospace; font-size: 0.8rem; resize: vertical; }
 </style>

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/malmo/malmo/internal/admission"
 	"github.com/malmo/malmo/internal/caddy"
 	"github.com/malmo/malmo/internal/catalog"
 	"github.com/malmo/malmo/internal/events"
@@ -60,18 +61,50 @@ func (m *Manager) instanceDir(id string) string {
 	return filepath.Join(m.stateDir, "instances", id)
 }
 
-// Install runs the install transaction for a catalog manifest_id.
+// Install runs the install transaction for a catalog (Door-1) manifest_id.
 func (m *Manager) Install(ctx context.Context, manifestID string, progress func(step string)) (store.Instance, error) {
+	man, composeBytes, err := m.catalog.Load(manifestID)
+	if err != nil {
+		return store.Instance{}, err
+	}
+	return m.install(ctx, man, composeBytes, progress)
+}
+
+// CustomSpec is a user-pasted (Door-2) app: a raw compose plus the bits the
+// brain can't infer.
+type CustomSpec struct {
+	Name        string
+	Compose     string
+	MainService string // optional if the compose has exactly one service
+	MainPort    int
+}
+
+// InstallCustom synthesizes a manifest from a pasted compose (APP_MANIFEST.md #
+// Custom container — synthetic manifest) and installs it through the same
+// transaction as catalog apps.
+func (m *Manager) InstallCustom(ctx context.Context, spec CustomSpec, progress func(step string)) (store.Instance, error) {
+	man, composeBytes, err := manifest.Synthesize(spec.Name, []byte(spec.Compose), spec.MainService, spec.MainPort)
+	if err != nil {
+		return store.Instance{}, err
+	}
+	return m.install(ctx, man, composeBytes, progress)
+}
+
+// install is the shared transaction both doors converge on (APP_MANIFEST.md #
+// one model, two doors): a manifest + verbatim compose pair, whether loaded
+// from the catalog or synthesized from a pasted compose.
+func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBytes []byte, progress func(step string)) (store.Instance, error) {
 	step := func(s string) {
 		if progress != nil {
 			progress(s)
 		}
 	}
 
-	// 1-2. Parse + validate manifest (compose admission is a follow-up).
-	step("loading_manifest")
-	man, composeBytes, err := m.catalog.Load(manifestID)
-	if err != nil {
+	// 1-2. Manifest validated by the caller; admit the compose. Admission runs
+	// for BOTH doors and writes no state on rejection (APP_LIFECYCLE.md #
+	// admission policy).
+	step("admitting_compose")
+	if err := admission.Check(ctx, composeBytes); err != nil {
 		return store.Instance{}, err
 	}
 

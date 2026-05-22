@@ -34,6 +34,8 @@ Orientation:
 
 See [`progress/README.md`](progress/README.md) for the index. Latest:
 
+- [`0003-door-2-and-admission.md`](progress/0003-door-2-and-admission.md)
+  — paste-a-compose (Door-2) installs + the shared compose admission policy.
 - [`0002-reconcile-and-health-wait.md`](progress/0002-reconcile-and-health-wait.md)
   — startup reconcile pass + health-wait and splash→real route flip.
 - [`0001-walking-skeleton.md`](progress/0001-walking-skeleton.md) — first
