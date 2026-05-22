@@ -272,6 +272,10 @@ Auto-rollback already happens (# 4). The dashboard surfaces it:
 
 A small, auto-dismissing toast on the next dashboard visit after an overnight update batch: "3 apps updated overnight" → click for the list with per-app "what's new" snippets. Not modal, not blocking. Auto-dismisses after one view.
 
+### Notification center
+
+The update outcomes surfaced here also fan out to the dashboard notification center (`NOTIFICATIONS.md`), routed per the actionability + ownership rule: **OS / host-agent / brain+UI updates → admins only**; **app auto-update / permission-approval-pending / failed-rollback → the instance owner** (box-wide Tier-2 apps → admins), never broadcast to all users. The per-app tile badge, Settings → Updates view, and post-update toast remain the in-context surfaces; the notification is the durable, read-stateful copy for the user who wasn't looking when it happened.
+
 ### What lives in `APP_MANIFEST.md`
 
 Additive fields the manifest grows to support this UX:

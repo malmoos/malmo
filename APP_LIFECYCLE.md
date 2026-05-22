@@ -228,6 +228,10 @@ Avahi runs on the host as a normal Debian service (`avahi-daemon`). It needs hos
 
 The `host-agent` owns the Avahi integration and exposes a narrow `publish/unpublish hostname` RPC over the host-agent ↔ brain channel. The brain calls this RPC during install (publish) and uninstall (unpublish). The brain never talks to Avahi directly.
 
+**Mechanism:** `publish` writes a static service file at `/etc/avahi/services/app-<slug>.service` declaring an A-record alias for `<slug>.malmo.local`. Avahi watches that directory and announces on file create — handling re-announcement on link-up and IP change for free, durable across daemon restarts. `unpublish` removes the file. Preferred over a long-lived `avahi-publish` process per app, which would need supervision for no upside. The full mechanism (record types, interface scoping, conflict handling) lives in `DISCOVERY.md`.
+
+**Readiness gate:** `publish` is a Pattern-B job (`BRAIN_HOST_PROTOCOL.md`) — host-agent writes the file, then waits on Avahi's DBus for `EntryGroup.StateChanged → ESTABLISHED` (typically <1s, but a real propagation step) before returning success. The brain does not mark the app `ready` until publish completes; an unannounced name behind a live Caddy route is a confusing "browser timeout" failure mode we structurally prevent.
+
 **Why:** matches the layering principle — host-agent owns host resources, brain owns app logic. The alternative (bind-mounting Avahi's D-Bus socket into the brain container) would expand the brain's host attack surface for no real benefit. The brain has the most code and the broadest exposure; keeping it sandboxed from host services is worth a small RPC.
 
 Side benefit: host-agent already needs a brain-facing channel for OS updates and storage management. Avahi publish/unpublish is one more method on the same interface, not a new dependency.

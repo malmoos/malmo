@@ -37,6 +37,12 @@ See `DECISIONS.md` (2026-05-14) for why we collapsed from the earlier "two URLs 
 - **HTTPS-only via the cloud URL** alone is what HexOS tried; users pushed back hard on the "I'm on my own LAN, why does this need your servers?" feel. Even though malmo's cloud would be DNS-only (never a traffic proxy), the optics of cloud-mediated LAN access aren't worth the principle.
 - **Hybrid** keeps `.local` HTTP as the always-works fallback (no internet, no cloud, no per-device setup) and offers `.malmo.network` HTTPS for users who want real certs and the modern web's full feature set. Privacy-strict users can decline enrollment and never touch the cloud; the box remains fully functional.
 
+### `.local` is a desktop URL scheme — Android needs the cloud path
+
+`.local` resolution requires the OS to wire mDNS into `getaddrinfo`. macOS, iOS, Linux (with `nss-mdns`), and Windows (with Bonjour installed) all do this. **Android does not**, and there is no app-layer workaround — Android's NSD is an API for apps that want to *browse* for services, not a system resolver browsers can use. A user typing `photos.malmo.local` into Chrome on an Android phone gets NXDOMAIN.
+
+This makes the secure-URLs toggle the **Android compatibility path** in practice. The label doesn't say that, but the first-run wizard asks about it directly ("Will anyone in your household use this from an Android phone?") and flips the toggle pre-emptively for yes. See `FIRST_RUN.md` and `DISCOVERY.md` for the full client-compatibility matrix and gotchas (AP isolation, `.local` AD collisions, hostname conflict).
+
 ### What cloud actually does in this model
 
 - Resolves `<box-id>.malmo.network` to the box's LAN IP. **No traffic ever traverses malmo's servers.**

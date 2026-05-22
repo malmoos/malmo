@@ -17,45 +17,19 @@ When a topic is **decided**, remove its entry here and add the rationale to `DEC
 
 ## Tier 1 — Blocking
 
-### Telemetry / crash-reporting / phone-home posture
-
-Do we collect anything from boxes — install success, app-catalog hit counts, crash dumps, none? Opt-in vs. opt-out, what's collected, retention, where it's published. Must land before the first public ISO ships: users who installed under "we collect nothing" feel betrayed when that changes, and the **first-run wizard needs the toggle (or its absence) baked in**. Touches the privacy story across the whole product.
-
-**Context:** `FIRST_RUN.md`, `SPEC.md` (positioning), `MALMO_NETWORK.md` (cloud surface).
-**Why Tier 1:** retrofit landmine — every shipped box without an opt-in screen forecloses adding one later without trust damage. Also a marketing/positioning decision against Umbrel (opt-in telemetry) and Yunohost (none).
-
-### Time / timezone / NTP
-
-Boring but load-bearing: Let's Encrypt fails on clock skew (`MALMO_NETWORK.md`), audit-event ordering needs monotonic time (`LOGGING.md`), cron-based maintenance windows (`UPDATES.md`) depend on TZ, future TOTP would too. First-run needs to set timezone; NTP source needs a default (Debian pool / malmo-operated `time.malmo.network` / user-configurable). Not specced anywhere today.
-
-**Context:** `FIRST_RUN.md`, `MALMO_NETWORK.md`, `UPDATES.md`, `LOGGING.md`.
-**Why Tier 1:** blocks first-run wizard finalization and the certificate-renewal happy path.
-
-### Wifi + first-run network setup
-
-The "old laptop in the pantry" case includes wifi-only machines with no ethernet jack. The live installer needs a wifi step; the dashboard needs a network panel (switch SSID, static IP vs. DHCP, see which NIC is active, multi-NIC). FIRST_RUN.md assumes the box comes up on the LAN — but it might not.
-
-**Context:** `FIRST_RUN.md`, `BUILD.md` (installer).
-**Why Tier 1:** blocks the target-audience install path. Tinkerers will ethernet-tether; the long-term audience won't.
-
-### `malmo.local` / mDNS discoverability
-
-We've assumed `http://malmo.local` Just Works. It doesn't on networks that block mDNS (some corporate, some ISP routers, Android pre-12 quirks). Also: multi-box on one LAN (`malmo-2.local`?), what URL the user actually types (vs. the `<box-id>.malmo.network` once `MALMO_NETWORK` is enrolled), captive-portal-style "we can't find your box" fallback. This is the first interaction with the product.
-
-**Context:** `SPEC.md` # Local access, `MALMO_NETWORK.md`, `FIRST_RUN.md`.
-**Why Tier 1:** first-touch UX. If the user can't reach the dashboard after install, nothing else matters.
+*(No active Tier-1 items at 2026-05-18.)*
 
 ---
 
 ## Tier 2 — UX-shaping
 
-### Notifications & alerts (`NOTIFICATIONS.md`)
+### Off-box notification transports (`NOTIFICATIONS.md` # transport-agnostic seam)
 
-`HEALTH.md` and `UPDATES.md` assume the user *sees* events on the dashboard. They don't — boxes run unattended in a pantry. How does the user find out the drive is degraded, a login happened from a new device, an update applied overnight, the box rebooted? Decisions needed: transports (email-only v1? push via FCM/APNs later? in-product notification center?), per-event severity, user-vs-admin scoping, snooze, daily-digest. Deserves its own doc.
+The in-product notification center (the dashboard bell) is **decided and specced in `NOTIFICATIONS.md`** — v1 is dashboard-only. What remains open is the *off-box* delivery that actually reaches the user who isn't looking at the dashboard (the pantry-box case the bell deliberately doesn't solve): **email** and **mobile push**. Both slot in behind the transport-agnostic seam already designed in `NOTIFICATIONS.md` — no model rework, just new sinks + per-user/per-category/per-severity delivery preferences. Email is gated on **email-on-file** (separate Tier-2 item below); push is gated on the mobile app (deferred with the mesh). Also still open: quiet-hours / snooze and daily-digest, which only earn their keep once an off-box transport exists.
 
-**Context:** `HEALTH.md`, `UPDATES.md`, `AUTH.md` (new-device login), `LOGGING.md` (audit events → notifications overlap), `MALMO_NETWORK.md` (email transport — own SMTP vs. relay).
-**Why Tier 2:** HEALTH and UPDATES are half-features without it. A degraded-mode banner only the dashboard shows misses the user who's two rooms away. Email-on-file (Tier 2) is the prerequisite transport.
-**Prior art:** Synology DSM's push/email/SMS notification center is the closest model; TrueNAS uses Apprise for a wide transport set; Umbrel has an in-product notification center only. Our shape is probably Synology-lite (email + in-product) for v1.
+**Context:** `NOTIFICATIONS.md` (the model + seam), email-on-file entry below, `MALMO_NETWORK.md` (SMTP relay — own vs. transactional; residential-IP deliverability), mobile app (deferred, `MALMO_NETWORK.md` # mesh).
+**Why Tier 2:** the bell closes the "I missed a transient banner" gap; it does **not** close the "nobody's looking" gap. Until an off-box transport lands, a degraded drive in a pantry goes unseen until someone next opens the dashboard.
+**Prior art:** Synology DSM (push/email/SMS center) is the target shape; TrueNAS pairs an always-on in-UI bell with opt-in transport services — exactly the seam we built. v1 = bell only (Umbrel's level, done well); off-box transports move us toward Synology-lite.
 
 ### UPS, clean shutdown, power-event handling
 
@@ -63,20 +37,6 @@ The box is plugged into a wall and lives 24/7 in a pantry. Power blip → unclea
 
 **Context:** `BOOT.md`, `HEALTH.md`, `FIRST_RUN.md`, `AUTH.md` (who can shut down the box from the UI).
 **Why Tier 2:** Synology/TrueNAS treat this as table stakes. Most boxes will never see a UPS, but "shut down from the dashboard" and "don't corrupt on power blip" are universal.
-
-### App resource limits (manifest field)
-
-One runaway indexing job shouldn't OOM the box or starve the brain. Docker has `mem_limit`, `cpus`, `pids_limit`, `blkio` — we need a `resources:` block in the manifest with sane defaults (so authors can skip it), store-policy guidance on when authors *should* set it, and a dashboard view of per-app usage so users can see who the offender is. Cheap to add now; breaking change to add after the catalog grows.
-
-**Context:** `APP_MANIFEST.md`, `APP_ISOLATION.md`, `APP_STORE.md` (curation policy — when must this be set).
-**Why Tier 2:** schema-shaping; cleanest decided before the catalog is real.
-
-### Threat model document
-
-`AUTH.md`, `APP_ISOLATION.md`, `STORAGE.md`, `MALMO_NETWORK.md` all implicitly defend against an unwritten model. Writing it down once — "LAN attacker present; compromised app possible; physical access to a removed drive defended by LUKS; full-box physical attacker out of scope beyond at-rest encryption; malicious app authors filtered by curation, not by sandbox-proof isolation" — gives us a checking framework and a place to point when arguing edge cases. Doesn't change any decisions; clarifies all of them.
-
-**Context:** `AUTH.md`, `APP_ISOLATION.md`, `STORAGE.md`, `MALMO_NETWORK.md`, `USERS_AND_GROUPS.md`.
-**Why Tier 2:** unblocks future security arguments rather than enabling a feature. Cheap to write, expensive to keep relitigating without.
 
 ### i18n posture (v1 + schema door)
 
@@ -169,10 +129,24 @@ A user granted Immich access to `~/Photos/`. Six months later they want to revok
 
 ### Hostname / box-name rename
 
-Can the user change the box's display name after first-run? Cascades into mDNS hostname (`malmo.local` → `kitchen.local`?), Let's Encrypt cert SANs on the `MALMO_NETWORK` side, audit log historical naming, SMB advertisement. Easy to forbid; easy to allow with caveats; expensive to retrofit if we wire the name into too many places.
+Can the user change the box's display name after first-run? Cascades into mDNS hostname (`malmo.local` → `kitchen.local`?), Let's Encrypt cert SANs on the `MALMO_NETWORK` side, audit log historical naming, SMB advertisement. Easy to forbid; easy to allow with caveats; expensive to retrofit if we wire the name into too many places. Also the forced-rename path: when Avahi conflict-resolves us to `malmo-2.local` (`HEALTH.md` `hostname-conflict`), how aggressively does the dashboard prompt for a real fix vs. let the user ride it out?
 
-**Context:** `FIRST_RUN.md`, `MALMO_NETWORK.md`, `STORAGE.md` (Samba), `LOGGING.md`.
+**Context:** `FIRST_RUN.md`, `MALMO_NETWORK.md`, `STORAGE.md` (Samba), `LOGGING.md`, `DISCOVERY.md`, `HEALTH.md`.
 **Why Tier 3:** not a v1 feature; pin the architectural separation between "box-id" (stable) and "display name" (mutable) before too much code depends on conflating them.
+
+### Per-app Bonjour service records (`_http._tcp`)
+
+`DISCOVERY.md` ships v1 with per-app A records only — apps don't appear in Finder's "Network" sidebar or Windows Explorer's network view as individually browseable services. Adding `_http._tcp` advertisements per app would surface them there, plus enable some "discover devices on your network" flows in other apps. Easy to add; the open question is whether the dashboard isn't already the right browse surface.
+
+**Context:** `DISCOVERY.md`.
+**Why Tier 3:** additive, can land any time. Default position: don't add it; revisit if real demand appears.
+
+### URL-scheme unification
+
+Two URL schemes, two access models in users' heads: `.local` HTTP on the LAN, `<box-id>.malmo.network` HTTPS via the toggle. The current model accepts the cognitive cost because the alternatives (always cloud, always `.local`, private CA + cert install on every device) each impose worse failure modes. Worth revisiting once we have real first-run analytics: how many users flip the toggle, how many are confused by the scheme switch, do Android households self-select toward enrolled boxes.
+
+**Context:** `MALMO_NETWORK.md`, `DISCOVERY.md`, `FIRST_RUN.md`.
+**Why Tier 3:** unification is a v2 question — needs operational data we don't have yet.
 
 ### Documentation surface
 
@@ -219,9 +193,9 @@ Decided in principle: when hooks return, they're **one-shot container images**, 
 
 ### Cert-expired UX
 
-When a box has been offline long enough that `.malmo.network` certs expired: serve the expired cert with browser warning, transparently redirect to `.local`, or surface a banner in the dashboard.
+When a box has been offline long enough that `.malmo.network` certs expired: serve the expired cert with browser warning, transparently redirect to `.local`, or surface a banner in the dashboard. `DISCOVERY.md` makes the `.local` fallback well-defined (per-app records keep working without cloud reachability), so "redirect to `.local` + banner" is the leading option for desktop households — but it doesn't work for Android households, where `.local` URLs are unreachable. The open question is whether to special-case that audience (e.g., a static "your cert expired, plug in for an hour" page served on the LAN IP).
 
-**Context:** `MALMO_NETWORK.md` ("Failure modes").
+**Context:** `MALMO_NETWORK.md` ("Failure modes"), `DISCOVERY.md`.
 
 ### Phased rollout / cohort + beta channel activation
 
@@ -263,6 +237,13 @@ The architecture and the install/wizard/add-drive/eject mechanics are locked (`S
 **Context:** `BOOT.md` # Failure → recovery target — the narrow cases, `HEALTH.md` (the rest of what used to live here), `STORAGE.md` # Encryption posture, `AUTH.md` (recovery code vs. LUKS recovery passphrase distinction).
 **Why Tier 3:** doesn't block v1 happy-path development; bites the moment a user hits one of the two genuinely-unrecoverable-from-UI cases. Pin the shape before public release.
 
+### Threat-model re-pass when the mesh ships
+
+`THREAT_MODEL.md` is scoped to v1 closed-by-default and explicitly names the trigger for a re-pass: remote access via the mesh (`MALMO_NETWORK.md` # Deferred) reshapes boundary **B1** (off-LAN reachability), introduces a new principal (a paired-but-non-household device — "grandma sees Photos"), and narrows "closed-by-default" to "closed except to identity-paired devices." When the mesh is picked up, the threat model gets a dedicated boundary pass + `DECISIONS.md` entries.
+
+**Context:** `THREAT_MODEL.md` # When this model changes, `MALMO_NETWORK.md` # Deferred: remote access via mesh.
+**Why Tier 3:** rides the mesh work, which is itself deferred. Pinned here so the "living document" claim isn't hollow.
+
 ### fscrypt rollout plan
 
 Per-user encryption is deferred but on the roadmap. Key-loading model (Model A vs. B in `STORAGE.md`), interaction with background app work (`APP_ISOLATION.md`), password-recovery escape hatch.
@@ -297,12 +278,15 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - DNS provider for the apex — Cloudflare free tier vs. self-hosted PowerDNS. `MALMO_NETWORK.md`.
 - ACME DNS-01 plugin path — Caddy generic vs. malmo-specific plugin. `MALMO_NETWORK.md`.
 - Privacy doc surface — what we log (DNS queries, enrollment metadata) and retention. `MALMO_NETWORK.md`.
-- mDNS service-advertisement set — `_smb._tcp`, `_adisk._tcp` (Time Machine), `_http._tcp`, anything else (Bonjour-discoverable printer / DLNA?). `SPEC.md`, `STORAGE.md` (Samba).
+- **Multicast / discovery diagnostic-bundle probe — exact shape.** `LOGGING.md` and `DISCOVERY.md` commit to including a multicast self-test in the diagnostic bundle; the precise measurements (which queries we send, on which interfaces, how we present "responses: 0" to a support tech) need a pass. `LOGGING.md`, `DISCOVERY.md`.
+- **Windows Bonjour detection in first-run.** `FIRST_RUN.md` points Windows users at the Bonjour installer; the trigger today is User-Agent, which is unreliable. Consider a JS-side mDNS probe (does the browser actually resolve `malmo.local` *from this client*?) so the prompt only fires on clients that need it. `FIRST_RUN.md`, `DISCOVERY.md`.
 - Custom domain on the LAN — user owns `home.example.com` and wants the dashboard there. Caddy + ACME DNS-01 with their provider, or accept-cert-warning. `MALMO_NETWORK.md`.
 - Local DNS resolver shape — host runs dnsmasq (container resolution + free Pi-hole-shape ad-blocking as a side effect) vs. pure systemd-resolved. `APP_ISOLATION.md`, `MALMO_NETWORK.md`.
 - UPnP / port-forwarding stance — closed-by-default implies "no"; state it explicitly so a future "convenience" PR doesn't sleepwalk into it. `MALMO_NETWORK.md`, `SPEC.md`.
 - `status.malmo.network` outage-comms surface — boxes show a banner from a cached status JSON when cloud is down. `MALMO_NETWORK.md`.
 - Anti-clone check at enrollment — two boxes with the same `box-id` (cloned ISO) must not both enroll. `MALMO_NETWORK.md`.
+- **Live-installer WiFi step.** A WiFi-only laptop has no ethernet, so the live ISO itself needs an SSID-picker before "Install to disk" (or be fully offline-installable). Also: WiFi credentials entered in the installer must survive into the installed system's NetworkManager config, not just the live environment. Driver coverage (Realtek/Broadcom non-free firmware) is the connected build-side concern. `BUILD.md`, `FIRST_RUN.md` # Step 1.
+- **Dashboard Settings → Network panel UX.** The plumbing (NM-backed endpoints) is in `BRAIN_HOST_PROTOCOL.md`; the UX details (saved-networks list, signal/security indicators, switch-network "you may briefly lose this page" confirmation, static-IP form, multi-NIC priority controls) belong to `WEB_UI.md`. `BRAIN_HOST_PROTOCOL.md` # Network endpoints, `WEB_UI.md`.
 
 **Isolation & runtime**
 - GPU sharing across apps (MIG / time-slice / exclusive). `APP_ISOLATION.md`.
@@ -337,13 +321,24 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 **Runtime & host**
 - Container image / layer cleanup policy — `docker image prune` cadence + retention so old images don't fill the OS drive over time. `APP_LIFECYCLE.md`, `UPDATES.md`.
 - Container runtime version pinning — which Docker engine version we ship, how it tracks Debian-base updates vs. upstream `docker-ce`. `BUILD.md`, `UPDATES.md`.
-- Crash-dump / coredump capture policy — host kernel panics, brain process crashes; what we keep, where, retention. Pairs with the Tier-1 telemetry decision. `LOGGING.md`, `HEALTH.md`.
+- Host kernel panic / coredump capture policy — what we keep, where, retention. Brain & host-agent process panics are covered by `TELEMETRY.md` (structured crash events when opt-in is on). Kernel panics are the remaining gap. `LOGGING.md`, `HEALTH.md`.
 - Log rotation for non-journald files (Caddy access logs, anything that escapes the journal). `LOGGING.md`.
 
 **Observability (user-facing)**
-- Per-app disk usage display ("Immich is using 240 GB"). Pairs with HEALTH `disk-full`. `HEALTH.md`, `WEB_UI.md`.
-- Resource graphs — last-24h CPU/RAM/disk-IO. Yes / no / lite position. `WEB_UI.md`, `HEALTH.md`.
+- Per-container live monitor ("Activity Monitor" view) — sortable table of all containers with live CPU/RAM/net/disk. Host-level live view is specced (top-bar dropdown); per-container live is the deferred surface. Mechanism same as system-resources SSE. `LOCAL_ANALYTICS.md`, `WEB_UI.md`.
+- App-level network bandwidth accounting (per-container veth stats). Useful for "which app is hammering my ISP" but expensive. `LOCAL_ANALYTICS.md`.
+- Storage growth attribution — what *kind* of data grew ("Photos +50 GB this month, mostly RAW files"). Compound on top of the per-app storage trend already specced. `LOCAL_ANALYTICS.md`, `STORAGE.md`.
 - "What's eating my disk" explorer — top-N folders/apps under `/srv/malmo`. Folds into Settings → Storage UX (Tier 3). `STORAGE.md`, `WEB_UI.md`.
+
+**Time**
+- Captive-network NTP fallback — reconsider `time.malmo.network` if user reports surface (networks that block external NTP). `TIME.md`.
+- Per-user display TZ — browser-side `Intl.DateTimeFormat` covers the traveler case in v1; revisit if box-time-regardless requests appear. `TIME.md`.
+- `last-known-time` rollback prevention — persist last-shutdown wall-clock so first-boot-no-network doesn't render 1970 in logs. Polish. `TIME.md`.
+
+**Telemetry (project-side)**
+- GeoIP source for country bucketing on the telemetry edge — which DB, refresh cadence, unresolved-IP placeholder. `TELEMETRY.md`.
+- Crash stream split — v1 uses PostHog Cloud for both usage + crashes; split to self-hosted Sentry later if crash volume justifies it. `TELEMETRY.md`.
+- `events` vs `audit_events` table unification in brain SQLite — single table with `category` discriminator, or two tables. Implementation choice; spec treats them as one logical store. `LOCAL_ANALYTICS.md`, `LOGGING.md`.
 
 **Backup & migration**
 - On-box / local backup to external USB drive — pre-cloud, v1-shaped: snapshot scheduling, retention, restore UI. Distinct from the off-site architecture entry above. `STORAGE.md`, `APP_LIFECYCLE.md`.
@@ -375,7 +370,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Whether DLNA stays in v1 or gets cut. `SERVICE_PROVISIONING.md`.
 
 **Control plane**
-- Per-user instance hostname strategy — `<slug>-<user>.malmo.local` vs. `<user>.<slug>.malmo.local`. `APP_LIFECYCLE.md`.
+- Per-user instance hostname strategy — `<slug>-<user>.malmo.local` vs. `<user>.<slug>.malmo.local`. The publish mechanism is settled (`DISCOVERY.md`: one Avahi service file per name, written by the reconciler); only the slug-shape choice is open. `APP_LIFECYCLE.md`, `DISCOVERY.md`.
 - Re-import path for archived ("keep data") instances after uninstall. `APP_LIFECYCLE.md`.
 
 **Build & distribution**

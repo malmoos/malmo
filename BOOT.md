@@ -92,6 +92,7 @@ What it checks (the canary check, the enrollment-marker match, the device backin
 - **`host-agent.service`** orders `After=malmo-storage-ready.target docker.service`, `Wants=` both. Reads `/run/malmo/health/storage.json` after startup and forwards findings to the brain via the existing protocol.
 - **`smbd.service`** drop-in orders `After=malmo-storage-ready.target Wants=…`. Comes up regardless. When the brain has a `blocks_writes` health issue active, the brain calls host-agent to reload Samba with a read-only share config. Read access stays available even when the data drive is degraded.
 - **`tailscaled.service`** doesn't need storage at all; the ordering is just for predictable boot sequencing.
+- **`avahi-daemon.service`** is off the critical path for dashboard reachability. It depends on `network.target` (not `network-online.target`) and starts as soon as a link is up, so `malmo.local` resolves before NTP, storage, Docker, or the brain. App-slug records are written into `/etc/avahi/services/` by the install reconciler at app-install time (`DISCOVERY.md`, `APP_LIFECYCLE.md`); Avahi watches the directory and re-announces on every boot for free. If Avahi crashes, the brain raises `mdns-down` (`HEALTH.md`) but nothing else degrades.
 
 **Rule: services use `Wants=` for the storage target so a partial-assembly failure surfaces as a runtime degraded state, not a boot block. Services that touch user data must consult the brain's health state before writing — the brain is the single source of truth for "is it safe to write right now."**
 
@@ -124,11 +125,24 @@ Docker writes its own iptables/nftables rules at startup for container NAT and f
 
 Cross-ref: `MALMO_NETWORK.md` and `USERS_AND_GROUPS.md` for what those rules enforce (SSH/SMB scoping to LAN + mesh).
 
-### `network-online.target` is scoped to the primary interface
+### NetworkManager owns the network stack
 
-`systemd-networkd-wait-online` by default declares "online" when *any* configured interface is up. On boxes with two NICs or WiFi+Ethernet, that races or hangs unpredictably. malmo configures `RequiredForOnline=routable` on the primary ethernet interface; secondary interfaces are best-effort.
+malmo uses **NetworkManager** for all interfaces — ethernet, WiFi, and any future bridge or VPN. Not systemd-networkd. The decisive points are that WiFi is a first-class supported case (`FIRST_RUN.md` # Step 1 — Network) and that host-agent needs a DBus-accessible API for scan / connect / state-change events to drive the dashboard's network panel; systemd-networkd has neither (WiFi requires a separately-managed `wpa_supplicant`, and there is no DBus surface for SSID scan). Running both is split-brain over the routing table, DNS, and `network-online.target`. See `DECISIONS.md` 2026-05-18.
 
-This matters because Caddy ACME, mDNS publishing, and dashboard reachability all depend on the box actually being on the LAN before they start. If the primary interface fails to come up within the timeout, the brain still starts and raises a `lan-unreachable` health issue (warning, blocks nothing).
+NM-specific tuning malmo applies:
+- NetworkManager's internal `dnsmasq` plugin is **off**; DNS is plain `/etc/resolv.conf` written by NM from DHCP. No internal resolver that would fight Docker's embedded DNS or the host's recursive resolver.
+- WiFi MAC randomization is **off** by default — DHCP reservations on the user's router need a stable MAC. Toggleable from the network panel.
+- NetworkManager does not manage Docker's bridges. NM's `unmanaged-devices` config excludes `docker0`, `br-*`, `veth*`, and the macvlan parent interface used by `lan: true` apps. NM and Docker do not touch each other's interfaces.
+
+### `network-online.target` is scoped to the primary connection
+
+`NetworkManager-wait-online.service` declares "online" when *any* configured connection has finished activating. On boxes with two NICs or WiFi+Ethernet, that races or hangs unpredictably. malmo pins this to a single primary connection:
+
+- Each NM connection profile carries `connection.required-for-network-online`. Exactly one connection has it set to `true` at a time — the "primary" connection.
+- The primary is chosen at first-run (ethernet preferred when present and carrier-up; WiFi otherwise) and re-pinned by host-agent when the user explicitly switches in the dashboard. Multiple ethernet NICs use `connection.autoconnect-priority` to break ties; secondary interfaces are best-effort.
+- A WiFi-only box has its WiFi connection as primary. This is the supported case for laptops in the pantry without an ethernet jack.
+
+This matters because Caddy ACME, mDNS publishing, and dashboard reachability all depend on the box actually being on the LAN before they start. If the primary connection fails to come up within the timeout, the brain still starts and raises a `lan-unreachable` health issue (warning, blocks nothing).
 
 ### `docker.service` `Wants=` the storage target, not `Requires=`
 

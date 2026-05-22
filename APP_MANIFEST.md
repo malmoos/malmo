@@ -82,7 +82,10 @@ main_service: photoprism              # which compose service is "the app"
 main_port: 2342                       # port the main service listens on internally
 preferred_slugs: [photos, photoprism] # subdomain priority list; OS picks first free
 needs_secure_context: false           # optional; default false. See below.
+timezone: system                      # optional; "system" (default) or "utc"
 ```
+
+**`timezone`** controls the container's TZ. Default `system` — the brain bind-mounts `/etc/localtime` and sets `TZ=<system_tz>`, so timestamps in app UIs match the user's wall clock. Set `utc` for apps that prefer UTC internally (databases, queues, anything that explicitly normalizes on UTC). Full model in `TIME.md`. Most apps should leave this unset.
 
 The compose file is held **verbatim**. Authors test it with `docker compose up` and it behaves identically inside malmo. Malmo configures the surrounding environment; it does not edit the compose file.
 
@@ -96,6 +99,19 @@ The compose file is held **verbatim**. Authors test it with `docker compose up` 
 The field is **never a routing override.** The URL each app gets is determined entirely by the global "Use secure URLs" toggle in Settings — see `MALMO_NETWORK.md`. App authors should set this honestly: many apps work fine on HTTP and shouldn't set it; apps that genuinely depend on a secure-context API should.
 
 Previously this field was named `requires_https` and gated install on un-enrolled boxes. Changed 2026-05-14 — see `DECISIONS.md`.
+
+### B2. Resources (recommended, never a limit)
+
+The author declares **recommended** specs — advice only, never a ceiling.
+
+```yaml
+resources:
+  recommended:
+    memory: 512M
+    cpu: 1.0
+```
+
+Used for the install-time capacity check ("you have 800M free; this wants 512M; fine") and store display/sorting. **There is deliberately no `limit` field** — the author can't see the user's hardware, so a manifest-imposed cap would throttle legitimate usage peaks. Apps run with no cgroup cap by default and burst freely; limiting is the *user's* call (an optional per-app **memory** cap in the UI, default off), and the brain protects its own control plane via OOM priority rather than caps. Full runtime model — including why CPU is never capped and how the brain stays alive under memory pressure — is owned by `APP_ISOLATION.md` # Resource limits.
 
 ### C. Storage
 
@@ -268,6 +284,9 @@ main_service: photoprism
 main_port: 2342
 preferred_slugs: [photos, photoprism]
 
+resources:
+  recommended: { memory: 1G, cpu: 2.0 }  # advice only; never a cap
+
 storage:
   data_volumes: [./index, ./sidecar]    # app's own index/metadata
   cache_volumes: [./cache, ./thumbs]
@@ -324,6 +343,7 @@ No managed services by default. Best-effort backup of all volumes (we can't tell
 - **Schema versioned from day one.** `manifest_version: 1`. Backward compatible for at least the previous two majors.
 - **Most fields optional with sensible defaults.** Required: `id`, `manifest_version`, `name`, `version`, `compose_file`, `main_service`, `main_port`.
 - **Compose file is verbatim.** Malmo doesn't rewrite it.
+- **`resources.recommended` is advice, never a cap.** No `limit` field exists in the manifest; authors can't see the user's hardware. Default runtime is uncapped burst; user-set memory caps and control-plane OOM protection live in `APP_ISOLATION.md` # Resource limits.
 - **Permissions are declared and enforced.** Not just metadata.
 - **User content vs. app state are separate stores.** User content (`/home/<user>/Photos/`, etc.) accessed by manifest-declared bind mounts of use-case folders; app state in `/var/lib/malmo/instances/<id>/data/`. Apps reach user content by reference, never by copy.
 - **`scope: pick-subfolder`** for `user_folders` — install-time prompt for apps that should manage a subset (notes apps, media subsets). Default is provided by the manifest; user can override.

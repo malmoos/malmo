@@ -46,10 +46,24 @@ First boot lands on a local web UI at `malmo.local` (mDNS) or the box's LAN IP. 
 
 ### Step 1 — Network
 
-- DHCP by default; static-IP option for power users.
-- Detect primary LAN interface; this is what `lan: true` apps will macvlan-attach to (`APP_ISOLATION.md`).
-- **Strongly recommend Ethernet.** Wi-Fi is allowed but the wizard surfaces a clear warning: discovery-based smart-home apps (`lan: true`) may not work reliably over Wi-Fi due to macvlan/multicast quirks.
-- IPv6 opportunistic.
+The wizard branches on what the box has:
+
+- **Ethernet link detected and DHCP succeeded:** the step is silent — connection name, IP, and gateway are shown for confirmation, "Continue" advances. No prompt; the common case is a no-op.
+- **No ethernet carrier (cable unplugged or WiFi-only box):** the wizard runs a WiFi scan and presents an SSID picker. The user taps a network and enters the password. Hidden networks are reachable from a "Join other network…" affordance that takes SSID + password + security type. Enterprise WPA (802.1X) is deferred — out of scope for v1.
+- **Ethernet present but the user wants WiFi anyway** (laptop near the router but they'd rather not run a cable): a secondary "Use WiFi instead" link from the ethernet-detected screen reveals the same SSID picker.
+
+After WiFi password entry, the wizard tests the connection and waits for DHCP. On failure it surfaces a clear retry inline (`wrong password`, `couldn't reach DHCP`, `no signal`). On success the WiFi connection is saved (NM's connection store) and pinned as the **primary connection** (`BOOT.md` # NetworkManager).
+
+**Ethernet is recommended, not required.** Discovery-based smart-home apps (`lan: true`, macvlan-attached — `APP_ISOLATION.md`) depend on reliable multicast, which most consumer APs rate-limit or filter; guest-network "client isolation" blocks peer discovery entirely; macvlan on WiFi is unreliable across drivers. The wizard surfaces this once, on the WiFi-confirmation screen: *"You're on WiFi. Most apps work fine — but smart-home apps that find devices on your network (Home Assistant, camera apps) work much better over an Ethernet cable. You can switch later from Settings → Network."* Not a blocker; just honest.
+
+Other Step 1 details:
+
+- **DHCP by default; static-IP option** for power users, available on both ethernet and WiFi connections (Settings → Network later, or expanded "Advanced" in the wizard).
+- The detected primary interface is what `lan: true` apps will macvlan-attach to. On a WiFi-primary box, `lan: true` apps install but are flagged with a `discovery-on-wifi-degraded` warning in the dashboard (`HEALTH.md`-shaped, but per-app rather than global).
+- **IPv6 opportunistic** — if the network provides it, NetworkManager picks it up; we don't ask.
+- **Captive-portal networks** (hotels, dorms) are explicitly out of scope. The wizard can't navigate a captive portal page; the failure mode is a stuck "couldn't reach DHCP" with a hint to use a real home network.
+
+**Cross-device note.** If the user is running the wizard from another device on a wired network and changes the box to a different WiFi, the wizard warns that the dashboard URL may move to a new IP, finishes the WiFi switch last, and surfaces the new LAN IP on the "done" screen so the user knows where to reconnect.
 
 ### Step 2 — First admin
 
@@ -80,11 +94,16 @@ The recovery code is **separate from the LUKS recovery passphrase** (`STORAGE.md
 - If the box has no internet at first-run, the wizard falls back to asking the user to pick from a list.
 - Always overridable from Settings later.
 
+Full time / NTP model in `TIME.md`. NTP itself (chrony with NTS sources) is up by the time the wizard runs — no user-facing NTP configuration at first-run.
+
 ### Step 4 — Telemetry
 
-- One unchecked checkbox: *"Send anonymous crash reports and usage counts to help improve malmo."*
+- One unchecked checkbox: *"Send anonymous usage statistics and crash reports to help improve malmo."*
 - Off by default. Plain language. No dark patterns.
-- Toggleable from Settings later.
+- Inline "What does this collect?" disclosure expands to show the field allowlist.
+- Toggleable from Settings → Privacy later.
+
+Full spec: `TELEMETRY.md`. The one toggle covers both the usage stream and the crash stream; both go to `telemetry.malmo.network` (a malmo-controlled endpoint, not a third-party SaaS).
 
 ### Step 5 — Secure URLs & enrollment (optional)
 
@@ -96,7 +115,11 @@ This step is two coupled choices presented as one. Turning on **"Use secure (HTT
 >
 > *Some apps need HTTPS to work fully — cameras, password managers, app-like installs on your phone. We'll give your malmo a name like `cindy-zx9.malmo.network` and a real certificate, so your apps are reachable at HTTPS URLs on your home network. Your data never leaves your box; only DNS lookups go through our servers.*
 >
+> *Tip: **if anyone in your household uses an Android phone, you'll want this on.** Android can't open the default `.local` URLs from a browser; the secure URLs work everywhere.*
+>
 > *You can also do this later from Settings.*
+
+The Android line is not decorative — it's the load-bearing reason this toggle exists for many households. See `DISCOVERY.md` for the full client-compatibility picture; the short version is that Android does not wire mDNS into the system resolver and there is no workaround at malmo's layer.
 
 Two buttons: **"Yes, set it up"** and **"Skip for now"**.
 
@@ -168,6 +191,13 @@ Kid-account restrictions (limit which apps a member can install, content filters
 Once the wizard is done the box is fully usable. The dashboard is the user's primary surface; the wizard never reappears.
 
 What's *on* the dashboard at first arrival is an open question (see below) — empty, suggested apps, or a starter bundle.
+
+### Reaching the dashboard from other devices
+
+`malmo.local` resolves out of the box on macOS, iOS, and Linux (with `nss-mdns`, almost universal). Two cases need help:
+
+- **Windows clients** need Apple's Bonjour service. Most Windows 10/11 installs do not have it. The "Add another device" / share-link surface in the dashboard detects a Windows User-Agent visiting for the first time and links to the Bonjour Print Services installer with a one-line explanation. If the household is using the secure-URL path, this is moot — `cindy-zx9.malmo.network` resolves via public DNS on every OS.
+- **Android browsers** do not resolve `.local` at all (see Step 5 above and `DISCOVERY.md`). The only path that works is the secure-URL scheme; the same share surface surfaces this for Android visitors when secure URLs are off.
 
 ## What v1 does not include
 

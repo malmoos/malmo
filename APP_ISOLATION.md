@@ -217,7 +217,7 @@ A store app cannot request them. Door-2 custom compose can do all three — the 
 
 ## Resource limits
 
-The manifest declares recommended specs:
+The manifest declares **recommended** specs only — never a ceiling:
 
 ```yaml
 resources:
@@ -230,7 +230,30 @@ Used for:
 - **Capacity check at install time.** "You have 800M free; this app wants 512M; fine."
 - **Store display and sorting.**
 
-**No hard cgroup enforcement in v1.** Apps can burst above their recommendation. A misbehaving app that starts evicting others can be addressed later with OOM-priority hints; not a v1 concern at home-server scale.
+**The manifest cannot impose a limit — there is no `limit` field, by design.** The author can't see the user's hardware: a baked-in `mem_limit` would OOM-kill an app during a legitimate usage peak (photo indexing, transcode, ML) on a box with gigabytes free. Limiting is the *user's* call ("the user owns the box"), not the author's. `recommended` is advice; it never throttles.
+
+### Default runtime: burst freely
+
+Apps run with **no cgroup cap by default** and may burst above their recommendation. Peaks should complete fast, not be throttled. CPU in particular is **never capped** — it's time-shared, so a CPU-hungry app simply runs slower and harms nothing; throttling it only makes it feel needlessly sluggish.
+
+### Control-plane protection (structural, not a cap)
+
+"Default unlimited" leaves one hole: a runaway app exhausting RAM could trip the kernel OOM-killer and take down the *brain*, removing the very UI the user needs to fix it. Closed structurally, independent of any app limit:
+
+- **The brain and host-agent get a protected OOM score** (effectively last-to-be-killed under memory pressure). A genuine runaway app is killed before the control plane.
+
+This is deliberately **OOM-priority, not a hard cap**: a cap bites even when RAM is free (degrading peaks); OOM scoring only acts when memory is *actually* exhausted, so peaks that fit are untouched and only a true runaway is reaped — and the offending app dies before the brain. It serves the no-degraded-peaks goal and the don't-starve-the-brain goal at once.
+
+### Optional user-set cap (memory only)
+
+For the rare app that *persistently* misbehaves, the user can set a per-app **memory** cap from the UI:
+
+- **Default off.** Set only when a user chooses to clamp a specific hog.
+- **Memory only** — no CPU cap (see above).
+- Surfaced reactively: the per-app usage view (`LOCAL_ANALYTICS.md`) and the app-hog signal (`NOTIFICATIONS.md`) help the user identify *which* app to clamp.
+- Setting it shows a plain-language warning: *"Limiting this app may cause it to slow down or restart during heavy use."* The user-caused OOM-during-peak risk is theirs, explicitly acknowledged.
+
+When the user sets a cap, the brain applies the corresponding cgroup `mem_limit` on the container; clearing it returns the app to unlimited burst.
 
 ---
 

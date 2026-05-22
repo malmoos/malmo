@@ -12,7 +12,7 @@
 - **Tier-2 native ops** — `systemctl` toggles, write `/etc/samba/smb.conf`, run `tailscale up`, edit `authorized_keys`, run `passwd`.
 - **Disk / LUKS / TPM** — mount, format, smartctl probe, recovery-passphrase operations.
 - **System updates** — `apt`.
-- **Network configuration** — DHCP vs. static IP, primary interface detection.
+- **Network configuration** — NetworkManager-backed: list/scan/connect/forget WiFi networks, DHCP vs. static IP per connection, primary-connection pinning, active-interface state. host-agent talks to NetworkManager over DBus; the brain talks to host-agent over this protocol.
 - **Power** — shutdown, reboot.
 - **Misc host state** — time zone, hostname, system summary.
 
@@ -90,6 +90,47 @@ POST /v1/auth/verify-password
 Plain HTTP. The brain blocks on the response. Errors come back as HTTP status + JSON body with `code` and `message`.
 
 **`/v1/auth/verify-password` is hit on every dashboard login** (brain delegates PAM verification rather than storing a password hash itself — see `AUTH.md` # Identity primitive). Implementation: host-agent runs PAM `authenticate()` with the supplied credentials, returns `valid: true|false`. The endpoint never reveals *why* a verification failed (wrong password vs. unknown user vs. locked account) — only the binary result, mirroring PAM's own posture. Rate-limiting lives in the brain; this endpoint just answers truthfully.
+
+**Network endpoints (NetworkManager-backed).** host-agent exposes Pattern A routes that wrap NetworkManager's DBus surface:
+
+```
+GET  /v1/network/state
+  → { "primary": "ethernet-1", "ethernet": [...], "wifi": [{ "ssid": "...", "connected": true, "signal": -52, "secured": true, "saved": true }, ...], "ipv4": {...}, "ipv6": {...} }
+
+POST /v1/network/wifi/scan
+  → { "networks": [{ "ssid": "...", "signal": -52, "secured": true, "freq_mhz": 5180 }, ...] }
+
+POST /v1/network/wifi/connect
+  { "ssid": "...", "password": "...", "hidden": false }
+  → { "connection_id": "...", "state": "activated" }    (or error.code = "auth-failed" | "no-signal" | "timeout")
+
+POST /v1/network/wifi/forget               { "connection_id": "..." }
+POST /v1/network/connection/set-primary    { "connection_id": "..." }
+POST /v1/network/connection/configure-ip
+  { "connection_id": "...", "ipv4": { "mode": "dhcp" | "static", "address": "...", "gateway": "...", "dns": [...] } }
+```
+
+All network ops are Pattern A (NM DBus calls return promptly). State-change notifications from NM (signal level, connection drops, primary switch) flow as SSE on `GET /v1/network/events` so the dashboard can update live without polling. WiFi credentials are stored by NetworkManager itself (`/etc/NetworkManager/system-connections/`, mode `0600`, root-only) — the brain never sees the password after the `connect` call returns. The primary-connection pin (`connection.required-for-network-online=true`) is owned by `set-primary` — exactly one connection carries it at any time; see `BOOT.md` # NetworkManager.
+
+**Discovery / mDNS endpoints (Avahi-backed).** host-agent owns the publisher; brain registers and unregisters per-app `.local` names. Pattern A:
+
+```
+POST /v1/discovery/publish
+  { "slug": "photos" }
+  → 200 OK  { "name": "photos.malmo.local", "state": "established" }
+  (or error.code = "hostname-conflict" | "avahi-down" | "timeout")
+
+POST /v1/discovery/unpublish
+  { "slug": "photos" }
+  → 200 OK
+
+GET  /v1/discovery/state
+  → { "publisher": "avahi", "host_name": "malmo", "renamed_to": null,
+      "published": [{ "slug": "photos", "name": "photos.malmo.local", "state": "established" }, ...],
+      "interfaces": ["eth0", "wlan0"] }
+```
+
+Implementation: `publish` writes `/etc/avahi/services/app-<slug>.service`, waits on Avahi's DBus for `EntryGroup.StateChanged → ESTABLISHED` (typically <1s), returns. `unpublish` removes the file. Both ops are idempotent — duplicate publish is a no-op, unpublish on an unknown slug returns 200. Avahi's RFC 6762 §9 conflict-resolution (host rename to `malmo-2.local`) surfaces in `state.renamed_to` and the brain raises `hostname-conflict` (`HEALTH.md`). The Avahi interface allow-list (`allow-interfaces=` in `/etc/avahi/avahi-daemon.conf`) is computed by host-agent from NetworkManager state at boot and on interface change — eth/wlan in, `tailscale0` / `docker0` / `br-*` out. See `DISCOVERY.md` for the full record model and gotchas.
 
 **`enroll-drive` and `eject-drive` carry credentials inline** because host-agent verifies them via PAM as the first step of the job and uses them to authorize reading `/etc/malmo/secrets/luks-recovery.key`. The brain does not cache or forward the password beyond the single request. On invalid credentials the job fails immediately with `error.code = "auth-failed"`; otherwise host-agent proceeds with format → LUKS → TPM enrollment → mount → mergerfs add (enroll) or stop apps → unmount → marker removal (eject). Declared attributes: `Dangerous: true`, `ResourceClass: "disk"`, `MaxDuration: 10m`. See `STORAGE.md` # Adding a data drive and # Ejecting a data drive for the user-facing flow; `AUTH.md` # Roles for the fresh-password requirement.
 
@@ -285,6 +326,7 @@ Beyond the malmo-group membership assertion (above), CI asserts:
 - **Reconciler pattern lives in `APP_LIFECYCLE.md`.** Drift policy: brain auto-reconciles when *it* made the last change; surfaces (doesn't auto-fix) when something else did. Dangerous ops excluded from auto-reconcile.
 - **Heartbeat: 60 seconds.** Brain polls `GET /v1/state/summary`.
 - **host-agent self-update drains all jobs first**; 5-minute hard cap before failing the OS update.
+- **Network endpoints wrap NetworkManager over DBus.** host-agent is the only thing on the box that talks to NM. WiFi credentials live in NM's connection store (`/etc/NetworkManager/system-connections/`, root-only); the brain never persists them. See `BOOT.md` # NetworkManager and `DECISIONS.md` 2026-05-18.
 
 ## Knock-ons to other docs
 

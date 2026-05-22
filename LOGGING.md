@@ -195,6 +195,10 @@ Format-drift risk is real: if Debian's sshd changes its message wording in a poi
 
 Enforced at the brain API layer per `BRAIN_UI_PROTOCOL.md`.
 
+### Audit events that also notify
+
+A small allowlisted subset of audit actions additionally fan out to the dashboard notification center (`NOTIFICATIONS.md`) — login from a new device, repeated failed logins, recovery-code use, role/password change affecting a member, SSH/SMB auth failures, `sudo`/`su` outside the UI elevation window, user create/delete. The `audit_events` row stays the append-only system of record; the notification is a separate, prunable, read-stateful copy in the `notifications` table. Most audit actions do **not** notify — the Activity view is their home.
+
 ## Dashboard UI surfaces
 
 Three distinct views, each scoped tight for v1:
@@ -228,9 +232,10 @@ Three distinct views, each scoped tight for v1:
 ### Diagnostic bundle
 
 - Settings → System → "Download diagnostics" button (admin-only).
-- Produces a tarball: last 24h of journal export (`journalctl --since '24h ago' -o export`), brain state snapshot (excluding secrets), audit-events table dump, host-agent's recent state.
+- Produces a tarball: last 24h of journal export (`journalctl --since '24h ago' -o export`), brain state snapshot (excluding secrets), audit-events table dump, host-agent's recent state, and a **multicast/discovery probe** (see below).
 - The "send us your logs" affordance. Has obvious privacy implications — bundle is generated on demand, never auto-uploaded, never auto-shared. User decides what to do with it.
 - **Cross-user privacy note.** The bundle contains every member's app logs, source IPs, and audit events — consistent with admins-see-everything, but the bundle is exportable off-box. The download dialog explicitly surfaces this: "This file includes activity from every member of the household. Only share it with someone you trust to receive it."
+- **Multicast / discovery probe.** A small section captured at bundle-generation time: the current Avahi published-name set, the interface allow-list, Avahi daemon state, and a synchronous multicast self-test (broadcast a query for the box's own host record, count responses on each LAN interface). Zero responses with a healthy NIC strongly implies router-level AP/client isolation — the single most common cause of "`.local` doesn't work" support tickets. Captured as JSON in `discovery.json` inside the bundle. See `DISCOVERY.md`.
 
 ## Mechanisms — how the dashboard actually reads logs
 
@@ -257,7 +262,7 @@ Worth being explicit:
 
 - **Operational logs may contain user-visible filenames, app behavior, request paths.** They're treated as user-private data. Stay on the box, never auto-uploaded, never auto-shared. Visibility follows the rule pinned under "Per-app logs" above — Tier-3 instance owners see their own; Tier-1 shared apps are admin-only; system logs are admin-only.
 - **Audit logs contain user actions and source IPs.** Same treatment. Member visibility scoped to their own events.
-- **Diagnostic bundles are explicit user action.** Generated on demand, downloaded to the requesting admin's device, user decides what to do with it. No automatic upstream telemetry in v1.
+- **Diagnostic bundles are explicit user action.** Generated on demand, downloaded to the requesting admin's device, user decides what to do with it. No automatic upstream of bundles, ever — even when project telemetry (`TELEMETRY.md`) is enabled, only structured `brain_panic` / `host_agent_panic` events with scrubbed paths leave the box; full bundles never do.
 
 ## What this doc deliberately doesn't pin
 

@@ -174,12 +174,14 @@ Files on the box are reachable from any other device on the LAN via Samba — th
 | `\\malmo\<user>` | `/home/<user>/` | that user's malmo password (same as dashboard) |
 | `\\malmo\shared` | `/srv/malmo/shared/` | any household user's malmo password |
 
-mDNS (`_smb._tcp`) advertises the box so it appears automatically in:
+mDNS (`_smb._tcp`) advertises the box via Avahi so it appears automatically in:
 
 - macOS Finder "Network" sidebar
-- Windows Explorer "Network" view
+- Windows Explorer "Network" view (requires Bonjour installed — `FIRST_RUN.md`)
 - iOS Files.app "Connect to Server" suggestions
-- Android file managers' SMB tabs
+- Android file managers' SMB tabs (NSD-aware file managers find SMB advertisements even though Android browsers can't resolve `.local` URLs)
+
+Samba's Avahi integration is shipped upstream; the malmo systemd drop-in keeps it ordered behind `malmo-storage-ready.target` but unblocking. The publisher itself (Avahi) and the LAN-only interface scoping are owned in `DISCOVERY.md`.
 
 **TimeMachine compatibility** is enabled on a per-user dedicated share (`fruit:time machine = yes`) — Mac users get a backup target without configuration.
 

@@ -113,7 +113,9 @@ These are the issue types the brain knows about at v1. New issues are added by c
 | ID | Severity | Blocks | Tier | Summary |
 |---|---|---|---|---|
 | `mdns-down` | warning | nothing | 1 | Avahi isn't publishing — the box may not appear as `malmo.local`. |
+| `hostname-conflict` | warning | nothing | 2 | Another device on the LAN already claims `malmo.local`; Avahi renamed our host (e.g. `malmo-2.local`). Admin picks a new hostname from Settings → System → Network. See `DISCOVERY.md`. |
 | `lan-unreachable` | warning | nothing | 1 | network-online.target didn't reach in time; LAN reachability from other devices may be delayed. |
+| `clock-not-synced` | warning | nothing | 2 | chrony hasn't synced in 6h or offset > 10s. Gates Let's Encrypt renewal within 7 days of expiry; surfaces in Settings → System → Time. See `TIME.md`. |
 
 ### Capacity & informational
 
@@ -192,6 +194,7 @@ The non-negotiable invariant — the dashboard is the user's tool to recover the
 - **`WEB_UI.md`** — banners, inline cards, disabled-action affordances. Pinia store for active issues; SSE subscription wires updates; `useHealth()` composable.
 - **`AUTH.md`** — admin-only vs. member-visible issues. v1: members see all banners (transparency), but Tier-2 actions on critical issues require admin elevation (existing 5-minute window).
 - **`LOGGING.md`** — issue raises/clears land in `audit_events` (`action: health.issue_raised`, etc.). Diagnostic-bundle endpoint includes the current issue set + recent transitions.
+- **`NOTIFICATIONS.md`** — issue raise/clear is the primary trigger for the dashboard notification center. The issue-raise path additionally emits a notification for allowlisted issue types (storage + system criticals; box-wide criticals also emit a member-facing transparency variant). No change to the issue model.
 
 ## Locked decisions
 

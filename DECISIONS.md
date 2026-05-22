@@ -21,6 +21,66 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-05-18 — Avahi + per-app mDNS records as the LAN discovery model; `.local` is a desktop story
+
+**Previously:** `MALMO_NETWORK.md` committed to subdomain URLs (`photos.malmo.local`) and a two-scheme model (`.local` HTTP default, opt-in `<box-id>.malmo.network` HTTPS) but never specified *how* those `.local` names resolve on the LAN. No publisher daemon chosen, no record-publication mechanism, no handling of multi-app subdomains, no acknowledgement that `.local` doesn't work on Android. Implicit assumption: "we'll figure out mDNS later."
+
+**Now:**
+
+1. **Avahi is the publisher** — `avahi-daemon` enabled at image-build; systemd-resolved's mDNS responder disabled. Avahi publishes service records (the things Finder/Explorer key off), Samba already integrates with it for SMB/TimeMachine advertisement, and it's what every neighbor (Umbrel, Synology, TrueNAS) runs.
+2. **Per-app A records are the only viable subdomain mechanism.** mDNS has no wildcard support and CNAME-following is too inconsistent across resolvers (Android's NSD especially) to rely on. Each installed app gets a static service file at `/etc/avahi/services/app-<slug>.service` written by the install reconciler — the *same* transaction that writes the Caddy site block. Install/uninstall keeps the two in lockstep. The dashboard does not mark an app `ready` until Avahi reports `EntryGroup.StateChanged → ESTABLISHED`.
+3. **Avahi is scoped to LAN interfaces only.** host-agent computes the allow-list from NetworkManager state (eth/wlan in, `tailscale0` / `docker0` / `br-*` out) and writes the Avahi config fragment at boot and on interface change.
+4. **`.local` is a desktop URL scheme.** Works on macOS, iOS, Windows (with Bonjour installed), and Linux desktop. **Does not work on Android browsers** — NSD is an app-level API, not a system resolver, and `getaddrinfo("photos.malmo.local")` returns NXDOMAIN. This is by Google's design (battery, multicast-on-WiFi cost, cloud-mediated discovery preference) and there is no workaround at malmo's layer. The `<box-id>.malmo.network` HTTPS path from `MALMO_NETWORK.md` is therefore not a "premium" feature — it is the **compatibility path** for an entire OS family, and first-run nudges Android households toward it explicitly.
+
+New doc: `DISCOVERY.md`.
+
+**Why each landed where it did:**
+
+- **Avahi over systemd-resolved's mDNS:** systemd-resolved is hostname-only — no service records. Finder / Explorer / TimeMachine all need service records (`_smb._tcp`, `_device-info._tcp`, etc.); Samba already integrates with Avahi. Running both would mean two responders multicasting on the same socket. One responder, full feature set.
+- **Per-app A records, not wildcards or CNAMEs:** mDNS (RFC 6762) has no central server and no zone — wildcards are undefined and unimplemented. CNAME-following works on Apple, mostly on Bonjour, inconsistently on systemd-resolved, and unreliably on Android's NSD; same reconciler work as A records for strictly worse compatibility. Host-header routing at Caddy is moot because the name has to resolve before the HTTP request is built.
+- **Static service files, not `avahi-publish` processes:** Avahi watches `/etc/avahi/services/` and handles re-announcement on link-up and IP change automatically. One file write per app, durable across daemon restarts. `avahi-publish` would need a supervised process per name with no upside.
+- **LAN-only scoping:** announcing on the Headscale mesh interface fights MagicDNS (which is the mesh's naming model); announcing on Docker bridges leaks per-container names back into the host's mDNS namespace. Both are wrong; both are easy to prevent with a config allow-list.
+- **`.local` as HTTP-only by definition:** Let's Encrypt requires public DNS; `.local` has none. Shipping a private CA and installing it on every client device is the wrong shape for our audience. State the constraint instead of fighting it — HTTPS goes via `<box-id>.malmo.network`.
+- **Android compatibility framed honestly:** the "Use secure URLs" toggle was previously described as a security/convenience choice. After looking at it carefully, the load-bearing reason it exists is "your partner has an Android phone." Surface that in first-run; don't bury it.
+
+**Sharp edges:**
+
+- **AP isolation / client isolation on consumer routers silently breaks mDNS.** Common on guest networks, occasional on default home configs. Diagnostic bundle includes a multicast probe so support tickets can be triaged. No fix at our layer — affected users have to disable client isolation on the router or switch to secure URLs.
+- **`.local` collision with Active Directory.** Some SOHO networks use `.local` as an internal AD domain and the unicast resolver swallows queries before Avahi gets asked. Rare for our audience but real; documented, with secure URLs as the workaround.
+- **Hostname conflicts.** RFC 6762 §9 conflict-resolution renames a duplicate to `malmo-2.local`. The dashboard surfaces a new typed health issue `hostname-conflict` and prompts the admin to pick a new hostname.
+- **Two URL schemes, two access models in users' heads.** We are explicitly accepting this complexity — single-scheme proposals (always secure, or always `.local`) were briefly considered and both impose worse failure modes than the toggle. Tracked in `NEXT.md` # the "URL scheme unification" topic.
+
+**Affected docs:** new `DISCOVERY.md`; `MALMO_NETWORK.md` (Android-compatibility framing for the secure-URLs toggle, cross-ref); `APP_LIFECYCLE.md` (install transaction adds Avahi service-file step alongside Caddy; readiness gate on `ESTABLISHED`); `FIRST_RUN.md` (Android-household nudge in the wizard, Windows-Bonjour link); `HEALTH.md` (new `hostname-conflict` typed issue); `BOOT.md` (`avahi-daemon.service` ordering, off the critical path); `BRAIN_HOST_PROTOCOL.md` (host-agent computes Avahi interface allow-list from NM state); `LOGGING.md` (multicast probe in the diagnostic bundle); `STORAGE.md` (Samba/Avahi cross-ref); `NEXT.md` (discovery open items added); `CLAUDE.md` (`DISCOVERY.md` in document list, new load-bearing decision).
+
+---
+
+## 2026-05-18 — NetworkManager for the whole network stack; WiFi is first-class in first-run
+
+**Previously:** `BOOT.md` cited `systemd-networkd-wait-online` and a "primary ethernet interface" with `RequiredForOnline=routable`. `FIRST_RUN.md` Step 1 was a few bullets ("DHCP by default, Ethernet recommended, WiFi allowed with a warning"). No mechanism for picking an SSID, entering a password, or switching networks later. `BRAIN_HOST_PROTOCOL.md` had a single bullet — *"Network configuration — DHCP vs. static IP, primary interface detection"* — with no endpoints sketched. `NEXT.md` Tier 1 carried "Wifi + first-run network setup" as an open item.
+
+**Now (one decision, three doc impacts):**
+
+1. **NetworkManager owns every interface on the box** — ethernet, WiFi, future bridge/VPN. Not systemd-networkd. NM's internal `dnsmasq` plugin is off; `unmanaged-devices` excludes Docker's bridges/macvlan parents; WiFi MAC randomization is off (DHCP reservations need stable MACs).
+2. **The "primary interface" concept becomes the primary *connection*** — exactly one NM connection profile carries `connection.required-for-network-online=true` at a time. host-agent owns the pin; the user can flip it from the dashboard.
+3. **First-run Step 1 branches on link state.** Ethernet + DHCP = silent confirm. No carrier or WiFi-only = SSID picker with password entry, hidden-network affordance, inline retry on bad password / DHCP fail. Ethernet recommended but not required — the warning surfaces honestly ("discovery-based smart-home apps work much better on Ethernet"), not as `.local`-doesn't-work FUD.
+
+**Why each landed where it did:**
+
+- **NetworkManager over systemd-networkd:** WiFi is a first-class supported case (laptop-in-the-pantry is the canonical install). networkd doesn't do WiFi — it does IP-layer config after a separately-managed `wpa_supplicant` brings the link up. That's two daemons and our own integration code for scan/connect/state, with no DBus surface for SSID listing. NM absorbs the whole stack (supplicant integration, credential storage, roaming, hidden SSIDs, captive-portal detection) and exposes a clean DBus API the host-agent can drive in Go. Footprint argument (~30 MB) is irrelevant at malmo's hardware target.
+- **Split-brain rejected:** "NM for WiFi, networkd for ethernet" was briefly on the table. Two daemons fight over the routing table, DNS resolution, and `network-online.target`. Standard practice and the right call: one daemon owns the network stack.
+- **Ethernet is recommended, not required:** the failure mode for WiFi is `lan: true` smart-home discovery (macvlan + multicast unreliability on consumer APs), *not* mDNS — `.local` works fine on WiFi (the Apple ecosystem depends on it). The wizard's WiFi warning text reflects the actual cause; "WiFi breaks `.local`" would have been wrong and confused users whose phones happily resolve `malmo.local` over WiFi.
+
+**Sharp edges:**
+
+- **WiFi MAC stability matters for DHCP reservations.** NM's default would randomize per-SSID; we override. Tinkerers who want randomization can flip it per-connection from the network panel.
+- **`lan: true` apps on a WiFi-primary box install but are flagged `discovery-on-wifi-degraded`** — per-app warning, not a global block. Users with no ethernet jack still get Home Assistant; they just see honest framing about the limitation.
+- **Captive portals are explicitly out of scope.** The first-run wizard can't navigate one; the failure mode is "stuck on DHCP" with a hint. Acceptable for the target install context (home network), not for hotels/dorms.
+- **Enterprise WPA (802.1X) deferred.** Out of scope for v1; comes back when there's a credible university-pilot use case.
+
+**Affected docs:** `BOOT.md` (# `network-online.target` section rewritten; new # NetworkManager-owns-the-network-stack subsection; NM unmanaged-devices list, dnsmasq-off, MAC-stability notes); `FIRST_RUN.md` (Step 1 rewritten with link-state branching, SSID picker UX, honest ethernet-recommendation framing); `BRAIN_HOST_PROTOCOL.md` (Network configuration bullet expanded; new Pattern A endpoint sketch for `/v1/network/*` over NM DBus; SSE on `/v1/network/events`; WiFi credentials live in NM's store, not the brain; new locked decision); `NEXT.md` (Tier 1 "Wifi + first-run network setup" item closed); `CLAUDE.md` (load-bearing decision added).
+
+---
+
 ## 2026-05-17 — App store as a signed static catalog; app update UX; pre-update snapshot as the v1 migration safety net
 
 **Previously:** Three connected gaps — (1) no spec for how the app catalog reaches the box or what the box trusts; mentions of "third-party stores" in `APP_MANIFEST.md` without an infra shape; (2) `UPDATES.md` had the update *mechanics* for apps but not the *interface* (Tier 2 in `NEXT.md`); (3) app-driven schema migrations had no rollback story — image-only revert leaves old code running against migrated data, and hooks (the intended fix) were deferred.
