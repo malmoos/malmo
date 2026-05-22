@@ -1,0 +1,17 @@
+# Go
+/bin/
+*.test
+*.out
+
+# malmo dev state (instance dirs, sqlite, generated compose)
+/.dev/
+
+# Node / Vite
+web-ui/node_modules/
+web-ui/dist/
+web-ui/.vite/
+*.tsbuildinfo
+
+# Editor / OS
+.DS_Store
+*.swp

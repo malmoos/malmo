@@ -1,0 +1,14 @@
+id: whoami
+manifest_version: 1
+name: Whoami
+version: "1.10"
+description:
+  short: "Tiny HTTP server that echoes request info — a routing smoke test."
+compose_file: compose.yml
+main_service: whoami
+main_port: 80
+preferred_slugs: [whoami, hello]
+
+permissions:
+  internet: false
+  lan: false

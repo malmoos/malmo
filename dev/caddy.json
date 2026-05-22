@@ -1,0 +1,13 @@
+{
+  "admin": { "listen": "0.0.0.0:2019" },
+  "apps": {
+    "http": {
+      "servers": {
+        "malmo": {
+          "listen": [":80"],
+          "routes": []
+        }
+      }
+    }
+  }
+}
