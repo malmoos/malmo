@@ -3,11 +3,11 @@ import { ref } from "vue";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/vue-query";
 import { api, waitForJob, type ApiError, type CatalogEntry, type Instance, type Job } from "./api";
 import { useEvents } from "./useEvents";
-import { useAuth, logout } from "./auth";
-
+// Login/logout are intentionally hidden in v1 (single-user dev phase). The
+// auth machinery is wired end-to-end (`logout`, `useAuth`, Login.vue) — we
+// just don't surface the controls yet. Re-enable when multi-user lands.
 useEvents();
 const qc = useQueryClient();
-const { currentUser } = useAuth();
 
 const catalog = useQuery({
   queryKey: ["catalog"],
@@ -66,9 +66,6 @@ const installCustom = useMutation({
     <header>
       <h1>malmo</h1>
       <span class="tag">dev dashboard</span>
-      <div class="spacer" />
-      <span class="who">{{ currentUser?.username }}</span>
-      <button class="link" @click="logout()">Sign out</button>
     </header>
 
     <section>
@@ -146,10 +143,6 @@ const installCustom = useMutation({
 body { margin: 0; background: #f6f6f7; }
 main { max-width: 720px; margin: 0 auto; padding: 2rem 1rem; }
 header { display: flex; align-items: baseline; gap: 0.75rem; margin-bottom: 1.5rem; }
-header .spacer { flex: 1; }
-header .who { font-size: 0.85rem; color: #555; }
-header .link { background: none; border: none; color: #2b6cb0; cursor: pointer; font-size: 0.85rem; padding: 0; }
-header .link:hover { text-decoration: underline; }
 h1 { margin: 0; font-size: 1.6rem; }
 .tag { font-size: 0.75rem; color: #888; border: 1px solid #ddd; border-radius: 999px; padding: 2px 8px; }
 h2 { font-size: 1rem; text-transform: uppercase; letter-spacing: 0.04em; color: #666; margin: 1.5rem 0 0.5rem; }
