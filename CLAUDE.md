@@ -97,6 +97,19 @@ Every change ships with documentation — a code change is not complete until it
 - **The doc map is load-bearing.** Keep `docs/README.md` and `docs/progress/README.md` (the indexes) current in the same change. A doc not linked from the map is a bug.
 - **Root `README.md`** is the front door (pitch + quickstart); keep its quickstart accurate when the dev workflow changes.
 
+## Go code discipline
+
+Small set of rules. Codified now so we don't have to back them out later.
+
+- **Consumer-side interfaces.** Interfaces live in the package that *uses* them, not the package that implements them. `lifecycle.DockerDriver` lives in `internal/lifecycle/`, not in a hypothetical `internal/docker/`. Provider packages export concrete types only. Exception: a single interface shared by three or more consumers can move to the provider, but default to consumer-side until that's true.
+- **Layer boundaries.** `internal/lifecycle` is the transaction owner; only `cmd/brain` and `internal/api` may import it. `internal/store` is the persistence boundary; only `internal/lifecycle`, `internal/api`, and `cmd/brain` may import it. Anything else reaching in is breaking the model — push the call through the right seam instead.
+- **`log/slog` is the only logger.** No `"log"` imports, no `fmt.Println` for diagnostics. Structured fields, not interpolated strings: `slog.Info("app installed", "instance_id", id)`, not `slog.Info(fmt.Sprintf("installed %s", id))`. The default handler is set in `cmd/brain/main.go`; use `slog.Default()` (i.e. the package-level functions) — don't thread `*slog.Logger` through constructors.
+- **Standard structured fields.** Use these key names so journalctl/jq filters stay stable: `instance_id`, `manifest_id`, `slug`, `service`, `image`, `host`, `upstream`, `step`, `err`, `output`. Adding a new recurring field? Add it here.
+- **Typed errors at boundaries, not everywhere.** Define a sentinel/typed error only when a *consumer* needs to discriminate (HTTP status, retry decision, UI text). `store.ErrNotFound` exists because the API maps it to 404. Don't pre-declare error types speculatively.
+- **No premature abstraction.** Don't introduce an interface, factory, or DI container until at least two concrete consumers exist. CLAUDE.md says this generally; it bites hardest in Go where every extra interface is import-graph weight.
+- **`internal/` for everything except `cmd/`.** No `pkg/`. Anything inside `internal/` is private to this module by Go's own rules — no public API surface to maintain.
+- **Tests in the same package by default.** Use `package foo_test` only when the test genuinely needs to exercise the public surface (catches accidental privacy regressions). Fakes live in `*_test.go` until a second package needs them; then promote to `internal/foo/footest`.
+
 ## Load-bearing decisions (don't relitigate without cause)
 
 - **Debian base, single-node, BYO x86, Docker apps, custom YAML manifest, ISO install.**

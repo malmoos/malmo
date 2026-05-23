@@ -7,7 +7,7 @@ package main
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -33,12 +33,14 @@ func main() {
 
 	// Remove a stale socket from a previous run.
 	if err := os.RemoveAll(sockPath); err != nil {
-		log.Fatalf("host-agent: remove stale socket: %v", err)
+		slog.Error("remove stale socket", "sock", sockPath, "err", err)
+		os.Exit(1)
 	}
 
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
-		log.Fatalf("host-agent: listen on %s: %v", sockPath, err)
+		slog.Error("listen", "sock", sockPath, "err", err)
+		os.Exit(1)
 	}
 	defer ln.Close()
 	// 0660 root:malmo in prod; in dev we just make it group-accessible.
@@ -55,10 +57,11 @@ func main() {
 	mux.HandleFunc("GET /v1/discovery/state", a.discoveryState)
 	mux.HandleFunc("GET /v1/system/status", a.systemStatus)
 
-	log.Printf("host-agent (fake) listening on %s", sockPath)
+	slog.Info("host-agent (fake) listening", "sock", sockPath)
 	srv := &http.Server{Handler: logRequests(mux)}
 	if err := srv.Serve(ln); err != nil {
-		log.Fatalf("host-agent: serve: %v", err)
+		slog.Error("serve", "err", err)
+		os.Exit(1)
 	}
 }
 
@@ -77,7 +80,7 @@ func (a *agent) publish(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	a.published[req.Slug] = protocol.PublishedName{Slug: req.Slug, Name: name, State: "established"}
 	a.mu.Unlock()
-	log.Printf("publish %s -> %s (fake established)", req.Slug, name)
+	slog.Info("publish", "slug", req.Slug, "name", name, "state", "established")
 	writeJSON(w, http.StatusOK, protocol.PublishResponse{Name: name, State: "established"})
 }
 
@@ -89,7 +92,7 @@ func (a *agent) unpublish(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	delete(a.published, req.Slug) // idempotent: unknown slug -> 200
 	a.mu.Unlock()
-	log.Printf("unpublish %s", req.Slug)
+	slog.Info("unpublish", "slug", req.Slug)
 	writeJSON(w, http.StatusOK, struct{}{})
 }
 

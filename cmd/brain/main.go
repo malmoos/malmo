@@ -5,10 +5,11 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/malmo/malmo/internal/api"
@@ -23,14 +24,15 @@ import (
 
 func main() {
 	cfg := loadConfig()
+	installLogger(cfg.logLevel, cfg.logFormat)
 
 	if err := os.MkdirAll(cfg.stateDir, 0o755); err != nil {
-		log.Fatalf("create state dir: %v", err)
+		fatal("create state dir", "err", err)
 	}
 
 	st, err := store.Open(filepath.Join(cfg.stateDir, "malmo.db"))
 	if err != nil {
-		log.Fatalf("open store: %v", err)
+		fatal("open store", "err", err)
 	}
 	defer st.Close()
 
@@ -45,20 +47,58 @@ func main() {
 	// Startup reconcile: converge Docker + routing to SQLite desired state and
 	// re-assert Caddy routes lost when EnsureIngress reset the server block.
 	if err := life.Reconcile(ctx); err != nil {
-		log.Printf("startup reconcile: %v", err)
+		slog.Warn("startup reconcile failed", "err", err)
 	}
 	cancel()
 
 	if status, err := host.SystemStatus(context.Background()); err != nil {
-		log.Printf("host-agent not reachable at %s (host ops will fail): %v", cfg.agentSock, err)
+		slog.Warn("host-agent not reachable; host ops will fail",
+			"sock", cfg.agentSock, "err", err)
 	} else {
-		log.Printf("host-agent ok: %s (v%s)", status.Hostname, status.AgentVersion)
+		slog.Info("host-agent ready",
+			"hostname", status.Hostname, "agent_version", status.AgentVersion)
 	}
 
 	srv := api.NewServer(st, cat, life, bus)
 	httpSrv := &http.Server{Addr: cfg.listen, Handler: srv.Handler()}
-	log.Printf("malmo-brain listening on %s (state=%s catalog=%s)", cfg.listen, cfg.stateDir, cfg.catalogDir)
-	log.Fatal(httpSrv.ListenAndServe())
+	slog.Info("malmo-brain listening",
+		"listen", cfg.listen, "state_dir", cfg.stateDir, "catalog_dir", cfg.catalogDir)
+	if err := httpSrv.ListenAndServe(); err != nil {
+		fatal("http server", "err", err)
+	}
+}
+
+// installLogger replaces the default slog handler with a TextHandler at the
+// configured level. Single-process appliance → setting the default once and
+// using slog.Default() everywhere beats threading a *slog.Logger through every
+// constructor.
+func installLogger(level, format string) {
+	var lvl slog.Level
+	switch strings.ToLower(level) {
+	case "debug":
+		lvl = slog.LevelDebug
+	case "warn":
+		lvl = slog.LevelWarn
+	case "error":
+		lvl = slog.LevelError
+	default:
+		lvl = slog.LevelInfo
+	}
+	opts := &slog.HandlerOptions{Level: lvl}
+	var h slog.Handler
+	if strings.ToLower(format) == "json" {
+		h = slog.NewJSONHandler(os.Stderr, opts)
+	} else {
+		h = slog.NewTextHandler(os.Stderr, opts)
+	}
+	slog.SetDefault(slog.New(h))
+}
+
+// fatal is the slog equivalent of log.Fatalf: structured Error + exit(1).
+// Used only for startup failures we genuinely can't recover from.
+func fatal(msg string, args ...any) {
+	slog.Error(msg, args...)
+	os.Exit(1)
 }
 
 type config struct {
@@ -68,6 +108,8 @@ type config struct {
 	agentSock   string
 	caddyAdmin  string
 	caddyListen string
+	logLevel    string
+	logFormat   string
 }
 
 func loadConfig() config {
@@ -78,6 +120,8 @@ func loadConfig() config {
 		agentSock:   env("MALMO_AGENT_SOCK", protocol.SocketPath),
 		caddyAdmin:  env("MALMO_CADDY_ADMIN", "http://localhost:2019"),
 		caddyListen: env("MALMO_CADDY_LISTEN", ":80"),
+		logLevel:    env("MALMO_LOG_LEVEL", "info"),
+		logFormat:   env("MALMO_LOG_FORMAT", "text"),
 	}
 }
 

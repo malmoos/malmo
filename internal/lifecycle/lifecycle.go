@@ -7,7 +7,7 @@ package lifecycle
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,10 +68,10 @@ func (m *Manager) SetHealthTiming(wait, poll time.Duration) {
 // should still let the API come up.
 func (m *Manager) EnsureIngress(ctx context.Context, caddyListen string) {
 	if err := m.docker.NetworkCreate(ctx, ingressNetwork, false); err != nil {
-		log.Printf("ensure ingress network: %v", err)
+		slog.Warn("ensure ingress network", "err", err)
 	}
 	if err := m.caddy.EnsureServer(ctx, caddyListen); err != nil {
-		log.Printf("ensure caddy server (continuing; routes will retry): %v", err)
+		slog.Warn("ensure caddy server (routes will retry)", "err", err)
 	}
 }
 
@@ -144,7 +144,8 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 
 	// From here, failures roll back.
 	rollback := func(cause error) (store.Instance, error) {
-		log.Printf("install %s failed: %v — rolling back", id, cause)
+		slog.Warn("install failed, rolling back",
+			"instance_id", id, "manifest_id", man.ID, "err", cause)
 		_ = m.teardown(context.Background(), inst, true)
 		_ = m.store.Delete(id)
 		return store.Instance{}, cause
@@ -192,14 +193,16 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	step("publishing_mdns")
 	pub, err := m.host.Publish(ctx, slug)
 	if err != nil {
-		log.Printf("mDNS publish failed (continuing): %v", err)
+		slog.Warn("mDNS publish failed (continuing)",
+			"instance_id", id, "slug", slug, "err", err)
 	} else {
 		_ = m.store.SetMDNSName(id, pub.Name)
 		inst.MDNSName = pub.Name
 	}
 	step("registering_route")
 	if err := m.caddy.AddSplashRoute(ctx, id, host, man.Name, "starting"); err != nil {
-		log.Printf("caddy splash route failed (continuing): %v", err)
+		slog.Warn("caddy splash route failed (continuing)",
+			"instance_id", id, "host", host, "err", err)
 	}
 
 	// 9. docker compose up -d.
@@ -217,7 +220,8 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 		_ = m.store.SetState(id, "failed")
 		inst.State = "failed"
 		m.emitState(inst, "installing")
-		log.Printf("install %s: main_service not healthy: %v", id, err)
+		slog.Warn("main_service not healthy",
+			"instance_id", id, "service", man.MainService, "err", err)
 		return store.Instance{}, fmt.Errorf("%s did not become healthy: %w", man.Name, err)
 	}
 
@@ -225,7 +229,8 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	step("flipping_route")
 	upstream := fmt.Sprintf("malmo-%s-%s:%d", id, man.MainService, man.MainPort)
 	if err := m.caddy.AddRoute(ctx, id, host, upstream); err != nil {
-		log.Printf("caddy upstream flip failed (continuing): %v", err)
+		slog.Warn("caddy upstream flip failed (continuing)",
+			"instance_id", id, "host", host, "upstream", upstream, "err", err)
 	}
 
 	// 12. Mark running.
@@ -237,7 +242,8 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	m.bus.Publish(events.AppInstalled, map[string]any{
 		"instance_id": id, "name": man.Name, "slug": slug, "url": "http://" + host,
 	})
-	log.Printf("installed %s (%s) at http://%s -> %s", man.Name, id, host, upstream)
+	slog.Info("app installed",
+		"instance_id", id, "name", man.Name, "url", "http://"+host, "upstream", upstream)
 	return inst, nil
 }
 
@@ -290,7 +296,7 @@ func (m *Manager) Uninstall(ctx context.Context, id string) error {
 		return err
 	}
 	m.bus.Publish(events.AppUninstalled, map[string]any{"instance_id": id})
-	log.Printf("uninstalled %s (%s)", inst.Name, id)
+	slog.Info("app uninstalled", "instance_id", id, "name", inst.Name)
 	return nil
 }
 
@@ -299,14 +305,15 @@ func (m *Manager) Uninstall(ctx context.Context, id string) error {
 func (m *Manager) teardown(ctx context.Context, inst store.Instance, removeDir bool) error {
 	if _, err := os.Stat(m.composeFile(inst.ID)); err == nil {
 		if out, err := m.docker.ComposeDown(ctx, m.instanceDir(inst.ID), "malmo-"+inst.ID); err != nil {
-			log.Printf("compose down %s: %v\n%s", inst.ID, err, out)
+			slog.Warn("teardown: compose down",
+				"instance_id", inst.ID, "err", err, "output", out)
 		}
 	}
 	if err := m.caddy.RemoveRoute(ctx, inst.ID); err != nil {
-		log.Printf("caddy remove route %s: %v", inst.ID, err)
+		slog.Warn("teardown: caddy remove route", "instance_id", inst.ID, "err", err)
 	}
 	if err := m.host.Unpublish(ctx, inst.Slug); err != nil {
-		log.Printf("mDNS unpublish %s: %v", inst.Slug, err)
+		slog.Warn("teardown: mDNS unpublish", "slug", inst.Slug, "err", err)
 	}
 	_ = m.docker.NetworkRemove(ctx, "malmo-app-"+inst.ID)
 	if removeDir {
@@ -345,18 +352,22 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		switch inst.State {
 		case "running":
 			if !actual[inst.ID] {
-				log.Printf("reconcile: %s should be running but has no containers — starting", inst.ID)
+				slog.Info("reconcile: starting drifted instance",
+					"instance_id", inst.ID, "reason", "no containers")
 				if out, err := m.docker.ComposeUp(ctx, m.instanceDir(inst.ID), "malmo-"+inst.ID); err != nil {
-					log.Printf("reconcile: compose up %s: %v\n%s", inst.ID, err, out)
+					slog.Warn("reconcile: compose up",
+						"instance_id", inst.ID, "err", err, "output", out)
 					continue
 				}
 			}
 			m.reassertRouting(ctx, inst)
 		case "stopped":
 			if actual[inst.ID] {
-				log.Printf("reconcile: %s should be stopped but has containers — stopping", inst.ID)
+				slog.Info("reconcile: stopping drifted instance",
+					"instance_id", inst.ID, "reason", "containers up but state=stopped")
 				if out, err := m.docker.ComposeStop(ctx, m.instanceDir(inst.ID), "malmo-"+inst.ID); err != nil {
-					log.Printf("reconcile: compose stop %s: %v\n%s", inst.ID, err, out)
+					slog.Warn("reconcile: compose stop",
+						"instance_id", inst.ID, "err", err, "output", out)
 				}
 			}
 		}
@@ -364,7 +375,8 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 
 	for id := range actual {
 		if !seen[id] {
-			log.Printf("reconcile: orphan containers for %s (no SQLite row) — tearing down", id)
+			slog.Info("reconcile: tearing down orphan",
+				"instance_id", id, "reason", "no SQLite row")
 			m.teardownOrphan(ctx, id)
 		}
 	}
@@ -377,16 +389,19 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 func (m *Manager) reassertRouting(ctx context.Context, inst store.Instance) {
 	man, err := m.loadInstanceManifest(inst.ID)
 	if err != nil {
-		log.Printf("reconcile: load manifest for %s: %v — skipping routing", inst.ID, err)
+		slog.Warn("reconcile: load manifest, skipping routing",
+			"instance_id", inst.ID, "err", err)
 		return
 	}
 	if _, err := m.host.Publish(ctx, inst.Slug); err != nil {
-		log.Printf("reconcile: mDNS publish %s: %v", inst.Slug, err)
+		slog.Warn("reconcile: mDNS publish",
+			"instance_id", inst.ID, "slug", inst.Slug, "err", err)
 	}
 	upstream := fmt.Sprintf("malmo-%s-%s:%d", inst.ID, man.MainService, man.MainPort)
 	host := inst.Slug + ".malmo.local"
 	if err := m.caddy.AddRoute(ctx, inst.ID, host, upstream); err != nil {
-		log.Printf("reconcile: caddy route %s: %v", inst.ID, err)
+		slog.Warn("reconcile: caddy route",
+			"instance_id", inst.ID, "host", host, "upstream", upstream, "err", err)
 	}
 }
 
@@ -395,11 +410,13 @@ func (m *Manager) teardownOrphan(ctx context.Context, id string) {
 	// by label and drop the per-app network directly.
 	if _, err := os.Stat(m.composeFile(id)); err == nil {
 		if out, err := m.docker.ComposeDown(ctx, m.instanceDir(id), "malmo-"+id); err != nil {
-			log.Printf("reconcile: compose down orphan %s: %v\n%s", id, err, out)
+			slog.Warn("reconcile: compose down orphan",
+				"instance_id", id, "err", err, "output", out)
 		}
 	} else {
 		if err := m.docker.RemoveContainersByInstance(ctx, id); err != nil {
-			log.Printf("reconcile: remove orphan containers for %s: %v", id, err)
+			slog.Warn("reconcile: remove orphan containers",
+				"instance_id", id, "err", err)
 		}
 	}
 	_ = m.caddy.RemoveRoute(ctx, id)
