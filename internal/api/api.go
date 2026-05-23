@@ -15,6 +15,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
 	"github.com/malmo/malmo/internal/admission"
+	"github.com/malmo/malmo/internal/audit"
 	"github.com/malmo/malmo/internal/auth"
 	"github.com/malmo/malmo/internal/catalog"
 	"github.com/malmo/malmo/internal/events"
@@ -31,6 +32,7 @@ type Server struct {
 	bus     *events.Bus
 	auth    *auth.Manager
 	host    *hostclient.Client
+	auditor *audit.Recorder
 	jobs    *Jobs
 }
 
@@ -41,10 +43,11 @@ func NewServer(
 	bus *events.Bus,
 	authMgr *auth.Manager,
 	host *hostclient.Client,
+	auditor *audit.Recorder,
 ) *Server {
 	return &Server{
 		store: st, catalog: cat, life: life, bus: bus,
-		auth: authMgr, host: host, jobs: newJobs(),
+		auth: authMgr, host: host, auditor: auditor, jobs: newJobs(),
 	}
 }
 
@@ -187,8 +190,16 @@ func (s *Server) installApp(ctx context.Context, in *struct {
 	if manifestID == "" {
 		return nil, huma.Error422UnprocessableEntity("manifest_id is required")
 	}
+	jobCtx := ctx // capture for audit inside the job goroutine
 	job := s.jobs.run("app-install", func(job *Job) (map[string]any, error) {
 		inst, err := s.life.Install(context.Background(), manifestID, job.setStep)
+		target := audit.Target{Kind: "app"}
+		meta := map[string]any{"manifest_id": manifestID}
+		if err == nil {
+			target.ID = inst.ID
+			meta["slug"] = inst.Slug
+		}
+		s.auditor.Record(jobCtx, audit.ActionAppInstall, target, meta, err == nil)
 		if err != nil {
 			return nil, err
 		}
@@ -222,8 +233,16 @@ func (s *Server) installCustomApp(ctx context.Context, in *struct {
 		return nil, huma.Error422UnprocessableEntity(err.Error())
 	}
 
+	jobCtx := ctx
 	job := s.jobs.run("app-install", func(job *Job) (map[string]any, error) {
 		inst, err := s.life.InstallCustom(context.Background(), spec, job.setStep)
+		target := audit.Target{Kind: "app"}
+		meta := map[string]any{"name": spec.Name}
+		if err == nil {
+			target.ID = inst.ID
+			meta["slug"] = inst.Slug
+		}
+		s.auditor.Record(jobCtx, audit.ActionAppCustomCreate, target, meta, err == nil)
 		if err != nil {
 			return nil, err
 		}
@@ -239,9 +258,12 @@ func (s *Server) uninstallApp(ctx context.Context, in *struct {
 	if _, err := s.store.Get(id); errors.Is(err, store.ErrNotFound) {
 		return nil, huma.Error404NotFound("no such app")
 	}
+	jobCtx := ctx
 	job := s.jobs.run("app-uninstall", func(job *Job) (map[string]any, error) {
 		job.setStep("tearing_down")
-		if err := s.life.Uninstall(context.Background(), id); err != nil {
+		err := s.life.Uninstall(context.Background(), id)
+		s.auditor.Record(jobCtx, audit.ActionAppUninstall, audit.Target{Kind: "app", ID: id}, nil, err == nil)
+		if err != nil {
 			return nil, err
 		}
 		return map[string]any{"instance_id": id}, nil

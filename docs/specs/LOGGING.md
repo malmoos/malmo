@@ -149,15 +149,31 @@ audit_events
 
 The exact action vocabulary, metadata schema per action type, retention policy (forever? configurable?), and hash-chain decision are deferred to `NEXT.md`. The skeleton above is enough for v1 if we treat `action` as a controlled string and `metadata` as opaque JSON.
 
+### v1 action vocabulary
+
+The following `action` strings are the pinned v1 set. Defined as exported consts in `internal/audit` so call sites never hard-code strings. Additions require a new entry here.
+
+| Action | When |
+|--------|------|
+| `setup.complete` | First admin bootstrapped via `/v1/setup`. |
+| `login.success` | Dashboard password login succeeded. |
+| `login.failure` | Dashboard password login failed (bad credentials). |
+| `logout` | Session revoked via `/v1/logout`. |
+| `app.install` | Catalog (Door-1) app installed. |
+| `app.uninstall` | App uninstalled. |
+| `app.custom.create` | User-pasted (Door-2) compose installed. |
+
+SSH/SMB/sudo ingestion (`ssh.login.success`, `ssh.login.failure`, `smb.login.*`, `sudo.invoke`, `su.invoke`) is deferred — see "What this doc deliberately doesn't pin" and `NEXT.md`.
+
 ### Write path
 
-A single function in brain: `audit.Record(ctx, actor, action, target, metadata, success)`. Called from:
+A single function in brain: `audit.Record(ctx, action, target, metadata, success)`. Reads actor (Identity) and client IP from request context; falls back to `actor_role = 'system'` when no identity is present. On INSERT failure, logs at Error level and returns — never propagates to the caller. Called from:
 
-- `auth` package — login success/failure, logout, password change, recovery-code use, role elevation.
-- `users` package — user create / delete / rename / role change.
-- `apps` package — install / uninstall / update / start / stop.
-- `shares` package — grant / revoke, SMB opt-in / opt-out.
-- `tier2` package — Tailscale up/down, SMB enable/disable, etc.
+- `api` package — login success/failure, logout, setup.complete.
+- `api` package (app handlers) — install, custom-app create, uninstall.
+- Future: `users` package — user create / delete / rename / role change.
+- Future: `shares` package — grant / revoke, SMB opt-in / opt-out.
+- Future: `tier2` package — Tailscale up/down, SMB enable/disable, etc.
 
 Each call is one SQLite `INSERT`. Append-only is enforced at the database, not just by brain code:
 
@@ -266,7 +282,6 @@ Worth being explicit:
 
 ## What this doc deliberately doesn't pin
 
-- **Audit action vocabulary.** The exact set of `action` strings, organized into a stable enum. Tracked in `NEXT.md`.
 - **Audit metadata schema per action type.** "Free-form JSON" works for v1; a typed schema per action type is a v2 hardening. Tracked in `NEXT.md`.
 - **Hash-chain / tamper-evidence on audit events.** Append-only via brain invariant in v1; cryptographic chain deferred. Tracked in `NEXT.md`.
 - **Centralized log shipping** (off-box). Out of scope — no off-box surface at all in v1.

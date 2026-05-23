@@ -113,7 +113,28 @@ func (s *Store) migrate() error {
 			created_at   INTEGER NOT NULL,
 			last_seen_at INTEGER NOT NULL,
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-		);`)
+		);
+		CREATE TABLE IF NOT EXISTS audit_events (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts            INTEGER NOT NULL,
+			actor_user_id TEXT    NULL REFERENCES users(id) ON DELETE SET NULL,
+			actor_role    TEXT    NOT NULL,
+			action        TEXT    NOT NULL,
+			target_kind   TEXT    NULL,
+			target_id     TEXT    NULL,
+			source_ip     TEXT    NULL,
+			success       INTEGER NOT NULL,
+			metadata      TEXT    NULL
+		);
+		CREATE TRIGGER IF NOT EXISTS audit_events_no_update
+			BEFORE UPDATE ON audit_events
+			WHEN NOT (NEW.actor_user_id IS NULL AND OLD.actor_user_id IS NOT NULL
+			          AND NEW.ts = OLD.ts AND NEW.actor_role = OLD.actor_role
+			          AND NEW.action = OLD.action AND NEW.success = OLD.success)
+			BEGIN SELECT RAISE(ABORT, 'audit_events is append-only'); END;
+		CREATE TRIGGER IF NOT EXISTS audit_events_no_delete
+			BEFORE DELETE ON audit_events
+			BEGIN SELECT RAISE(ABORT, 'audit_events is append-only'); END;`)
 	return err
 }
 
@@ -376,6 +397,142 @@ func scanUser(row scanner) (User, error) {
 	}
 	u.CreatedAt = time.Unix(created, 0)
 	return u, nil
+}
+
+// AuditEvent is one row in the append-only audit log (LOGGING.md # Schema sketch).
+// actor_user_id is NULL for system events; actor_role is 'system' in that case.
+type AuditEvent struct {
+	ID          int64
+	TS          int64  // unix epoch ms
+	ActorUserID string // empty when NULL
+	ActorRole   string // "admin" | "member" | "system"
+	Action      string
+	TargetKind  string // empty when NULL
+	TargetID    string // empty when NULL
+	SourceIP    string // empty when NULL
+	Success     bool
+	Metadata    string // JSON text, empty when NULL
+}
+
+// InsertAuditEvent appends one row. The table's triggers prevent UPDATE/DELETE.
+func (s *Store) InsertAuditEvent(e AuditEvent) error {
+	var actorUserID any
+	if e.ActorUserID != "" {
+		actorUserID = e.ActorUserID
+	}
+	var targetKind, targetID, sourceIP, metadata any
+	if e.TargetKind != "" {
+		targetKind = e.TargetKind
+	}
+	if e.TargetID != "" {
+		targetID = e.TargetID
+	}
+	if e.SourceIP != "" {
+		sourceIP = e.SourceIP
+	}
+	if e.Metadata != "" {
+		metadata = e.Metadata
+	}
+	success := 0
+	if e.Success {
+		success = 1
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO audit_events
+		 (ts, actor_user_id, actor_role, action, target_kind, target_id, source_ip, success, metadata)
+		 VALUES (?,?,?,?,?,?,?,?,?)`,
+		e.TS, actorUserID, e.ActorRole, e.Action,
+		targetKind, targetID, sourceIP, success, metadata)
+	return err
+}
+
+// AuditFilter controls which rows ListAuditEvents returns.
+type AuditFilter struct {
+	// ActorUserID, when set, restricts to rows where actor_user_id = this value
+	// OR (target_kind = 'user' AND target_id = this value). Used for member
+	// visibility. Empty means "no restriction" (admin view).
+	ActorUserID string
+	AfterID     int64 // cursor: return rows with id < AfterID (0 = from newest)
+	Limit       int
+}
+
+// ListAuditEvents returns rows newest-first, respecting the visibility filter.
+func (s *Store) ListAuditEvents(f AuditFilter) ([]AuditEvent, error) {
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+
+	var rows *sql.Rows
+	var err error
+	if f.ActorUserID != "" {
+		// Member view: own actions or events targeting self.
+		if f.AfterID > 0 {
+			rows, err = s.db.Query(
+				`SELECT id, ts, actor_user_id, actor_role, action, target_kind, target_id,
+				        source_ip, success, metadata
+				 FROM audit_events
+				 WHERE id < ?
+				   AND (actor_user_id = ? OR (target_kind = 'user' AND target_id = ?))
+				 ORDER BY id DESC LIMIT ?`,
+				f.AfterID, f.ActorUserID, f.ActorUserID, limit)
+		} else {
+			rows, err = s.db.Query(
+				`SELECT id, ts, actor_user_id, actor_role, action, target_kind, target_id,
+				        source_ip, success, metadata
+				 FROM audit_events
+				 WHERE actor_user_id = ? OR (target_kind = 'user' AND target_id = ?)
+				 ORDER BY id DESC LIMIT ?`,
+				f.ActorUserID, f.ActorUserID, limit)
+		}
+	} else {
+		// Admin view: all rows.
+		if f.AfterID > 0 {
+			rows, err = s.db.Query(
+				`SELECT id, ts, actor_user_id, actor_role, action, target_kind, target_id,
+				        source_ip, success, metadata
+				 FROM audit_events WHERE id < ? ORDER BY id DESC LIMIT ?`,
+				f.AfterID, limit)
+		} else {
+			rows, err = s.db.Query(
+				`SELECT id, ts, actor_user_id, actor_role, action, target_kind, target_id,
+				        source_ip, success, metadata
+				 FROM audit_events ORDER BY id DESC LIMIT ?`,
+				limit)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AuditEvent
+	for rows.Next() {
+		e, err := scanAuditEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func scanAuditEvent(row scanner) (AuditEvent, error) {
+	var e AuditEvent
+	var actorUserID, targetKind, targetID, sourceIP, metadata sql.NullString
+	var success int
+	err := row.Scan(
+		&e.ID, &e.TS, &actorUserID, &e.ActorRole, &e.Action,
+		&targetKind, &targetID, &sourceIP, &success, &metadata)
+	if err != nil {
+		return AuditEvent{}, fmt.Errorf("scan audit_event: %w", err)
+	}
+	e.ActorUserID = actorUserID.String
+	e.TargetKind = targetKind.String
+	e.TargetID = targetID.String
+	e.SourceIP = sourceIP.String
+	e.Metadata = metadata.String
+	e.Success = success != 0
+	return e, nil
 }
 
 // isUniqueErr matches modernc.org/sqlite's UNIQUE-constraint error without

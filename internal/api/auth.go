@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/malmo/malmo/internal/audit"
 	"github.com/malmo/malmo/internal/auth"
 	"github.com/malmo/malmo/internal/store"
 )
@@ -31,12 +33,13 @@ var publicPaths = map[string]bool{
 }
 
 // authMiddleware rejects unauthenticated requests with 401 except for the
-// public allowlist above. On success, it attaches the resolved Identity to
-// the request context so handlers can read it via auth.FromContext.
+// public allowlist above. On success, it attaches the resolved Identity and
+// client IP to the request context.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := audit.WithClientIP(r.Context(), clientIP(r))
 		if isPublic(r) {
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 		token := auth.TokenFromRequest(r)
@@ -45,8 +48,28 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			writeUnauthenticated(w)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(auth.WithIdentity(r.Context(), id)))
+		ctx = auth.WithIdentity(ctx, id)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// clientIP extracts the request's originating IP. X-Forwarded-For first hop
+// takes precedence (set by Caddy in production); falls back to RemoteAddr.
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// X-Forwarded-For may be "client, proxy1, proxy2"; take the first token.
+		if idx := strings.IndexByte(xff, ','); idx >= 0 {
+			xff = xff[:idx]
+		}
+		if ip := strings.TrimSpace(xff); ip != "" {
+			return ip
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 func isPublic(r *http.Request) bool {
@@ -106,6 +129,11 @@ func (s *Server) registerAuth(api huma.API) {
 		OperationID: "me", Method: "GET", Path: "/api/v1/me",
 		Summary: "Identity of the current session",
 	}, s.me)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "list-audit", Method: "GET", Path: "/api/v1/audit",
+		Summary: "Paginated audit log; admins see all rows, members see their own",
+	}, s.listAudit)
 }
 
 // --- handlers ------------------------------------------------------------
@@ -193,6 +221,7 @@ func (s *Server) setup(ctx context.Context, in *struct {
 	// AUTH.md # Recovery: recovery code is shown exactly once. The brain
 	// stores only the hash; this is the user's single chance to record it.
 	out.Body.RecoveryCode = recoveryCode
+	s.auditor.Record(ctx, audit.ActionSetupComplete, audit.Target{Kind: "user", ID: u.ID}, nil, true)
 	return out, nil
 }
 
@@ -221,6 +250,7 @@ func (s *Server) login(ctx context.Context, in *struct {
 		return nil, huma.Error502BadGateway("host-agent verify failed", vErr)
 	}
 	if lookupErr != nil || !valid {
+		s.auditor.Record(ctx, audit.ActionLoginFailure, audit.Target{}, map[string]any{"username": username}, false)
 		return nil, huma.Error401Unauthorized("invalid credentials")
 	}
 
@@ -228,6 +258,10 @@ func (s *Server) login(ctx context.Context, in *struct {
 	if err != nil {
 		return nil, huma.Error500InternalServerError("issue session", err)
 	}
+
+	// Attach identity to ctx so the audit row carries the actor.
+	idCtx := auth.WithIdentity(ctx, auth.Identity{User: u, Session: sess})
+	s.auditor.Record(idCtx, audit.ActionLoginSuccess, audit.Target{Kind: "user", ID: u.ID}, nil, true)
 
 	out := &struct {
 		SetCookie string `header:"Set-Cookie"`
@@ -247,6 +281,7 @@ func (s *Server) logout(ctx context.Context, _ *struct{}) (*struct {
 }, error) {
 	if id, ok := auth.FromContext(ctx); ok {
 		_ = s.auth.Revoke(id.Session.Token)
+		s.auditor.Record(ctx, audit.ActionLogout, audit.Target{Kind: "user", ID: id.User.ID}, nil, true)
 	}
 	out := &struct {
 		SetCookie string `header:"Set-Cookie"`
@@ -262,6 +297,75 @@ func (s *Server) me(ctx context.Context, _ *struct{}) (*struct{ Body UserDTO }, 
 		return nil, huma.Error401Unauthorized("unauthenticated")
 	}
 	return &struct{ Body UserDTO }{Body: userDTO(id.User)}, nil
+}
+
+// AuditEventDTO is the wire representation of one audit_events row.
+type AuditEventDTO struct {
+	ID          int64  `json:"id"`
+	TS          int64  `json:"ts"`
+	ActorUserID string `json:"actor_user_id,omitempty"`
+	ActorRole   string `json:"actor_role"`
+	Action      string `json:"action"`
+	TargetKind  string `json:"target_kind,omitempty"`
+	TargetID    string `json:"target_id,omitempty"`
+	SourceIP    string `json:"source_ip,omitempty"`
+	Success     bool   `json:"success"`
+	Metadata    string `json:"metadata,omitempty"`
+}
+
+func auditEventDTO(e store.AuditEvent) AuditEventDTO {
+	return AuditEventDTO{
+		ID: e.ID, TS: e.TS,
+		ActorUserID: e.ActorUserID, ActorRole: e.ActorRole,
+		Action: e.Action, TargetKind: e.TargetKind, TargetID: e.TargetID,
+		SourceIP: e.SourceIP, Success: e.Success, Metadata: e.Metadata,
+	}
+}
+
+const maxAuditLimit = 200
+
+func (s *Server) listAudit(ctx context.Context, in *struct {
+	Limit   int   `query:"limit" default:"50"`
+	AfterID int64 `query:"after_id"`
+}) (*struct {
+	Body struct {
+		Events []AuditEventDTO `json:"events"`
+	}
+}, error) {
+	id, ok := auth.FromContext(ctx)
+	if !ok {
+		return nil, huma.Error401Unauthorized("unauthenticated")
+	}
+
+	limit := in.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > maxAuditLimit {
+		limit = maxAuditLimit
+	}
+
+	f := store.AuditFilter{AfterID: in.AfterID, Limit: limit}
+	// Members may only see their own events; admins see all.
+	if !id.IsAdmin() {
+		f.ActorUserID = id.User.ID
+	}
+
+	rows, err := s.store.ListAuditEvents(f)
+	if err != nil {
+		return nil, huma.Error500InternalServerError("audit query failed", err)
+	}
+
+	out := &struct {
+		Body struct {
+			Events []AuditEventDTO `json:"events"`
+		}
+	}{}
+	out.Body.Events = []AuditEventDTO{}
+	for _, e := range rows {
+		out.Body.Events = append(out.Body.Events, auditEventDTO(e))
+	}
+	return out, nil
 }
 
 // --- helpers -------------------------------------------------------------

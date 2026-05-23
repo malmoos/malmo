@@ -225,10 +225,10 @@ The architecture and the install/wizard/add-drive/eject mechanics are locked (`S
 
 ### Audit-log schema details
 
-`LOGGING.md` pins the `audit_events` table shape and write path. Open: the controlled vocabulary of `action` strings (full enum, grouped by domain — auth.*, users.*, apps.*, shares.*, tier2.*), the typed metadata schema per action type (free-form JSON works for v1 but becomes a UI rendering pain at scale), and whether to add a hash-chain / sequence-number integrity guarantee on top of the append-only invariant. None block v1; all become tech debt if we leave them.
+`LOGGING.md` pins the `audit_events` table shape, write path, and v1 action vocabulary. Open: the typed metadata schema per action type (free-form JSON works for v1 but becomes a UI rendering pain at scale), and whether to add a hash-chain / sequence-number integrity guarantee on top of the append-only invariant. Neither blocks v1; both become tech debt if left unresolved as the catalog grows.
 
 **Context:** `LOGGING.md`, `AUTH.md`, `APP_LIFECYCLE.md`.
-**Why Tier 3:** the UI works against free-form JSON in v1, but every new event type adds rendering work. Pin the schema before the catalog grows.
+**Why Tier 3:** the UI works against free-form JSON in v1, but every new event type adds rendering work. Pin the metadata schema before the catalog grows.
 
 ### Recovery dashboard spec (`RECOVERY.md`)
 

@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -11,7 +12,9 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/malmo/malmo/internal/audit"
 	"github.com/malmo/malmo/internal/auth"
 	"github.com/malmo/malmo/internal/catalog"
 	"github.com/malmo/malmo/internal/events"
@@ -32,6 +35,7 @@ type harness struct {
 	t    *testing.T
 	pwds map[string][]byte
 	pmu  *sync.Mutex
+	st   *store.Store
 }
 
 func newHarness(t *testing.T) *harness {
@@ -81,12 +85,12 @@ func newHarness(t *testing.T) *harness {
 
 	// life is nil — install/uninstall handlers aren't exercised here. The
 	// auth middleware fences them anyway; we only assert that fence.
-	srv := NewServer(st, cat, nil, bus, authMgr, host)
+	srv := NewServer(st, cat, nil, bus, authMgr, host, audit.New(st))
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
 	jar, _ := newJar()
-	return &harness{srv: ts, jar: jar, t: t, pwds: pwds, pmu: &pmu}
+	return &harness{srv: ts, jar: jar, t: t, pwds: pwds, pmu: &pmu, st: st}
 }
 
 func (h *harness) do(method, path string, body any) *http.Response {
@@ -290,7 +294,7 @@ func TestSetupRollsBackOnHostFailure(t *testing.T) {
 	t.Cleanup(func() { _ = hostHTTP.Close() })
 
 	srv := NewServer(st, catalog.New(t.TempDir()), nil, events.NewBus(),
-		auth.NewManager(st), hostclient.New(sock))
+		auth.NewManager(st), hostclient.New(sock), audit.New(st))
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
@@ -308,4 +312,228 @@ func TestSetupRollsBackOnHostFailure(t *testing.T) {
 		t.Fatal("user row survived host failure; rollback broken")
 	}
 	_ = h
+}
+
+func TestListAuditAdminSeesAll(t *testing.T) {
+	h := newHarness(t)
+	// Setup creates the first admin (records setup.complete) and leaves
+	// a valid session cookie in h.jar.
+	resp := h.do("POST", "/api/v1/setup", map[string]string{
+		"username": "alice", "password": "hunter2",
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("setup: %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Login records login.success.
+	resp = h.do("POST", "/api/v1/login", map[string]string{
+		"username": "alice", "password": "hunter2",
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("login: %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = h.do("GET", "/api/v1/audit", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /api/v1/audit = %d; want 200", resp.StatusCode)
+	}
+	body := decodeJSON[struct {
+		Events []AuditEventDTO `json:"events"`
+	}](t, resp)
+	if len(body.Events) < 2 {
+		t.Fatalf("admin audit: got %d events, want >= 2", len(body.Events))
+	}
+	// Newest first — last login.success should appear before setup.complete.
+	if body.Events[0].Action != "login.success" {
+		t.Errorf("first event action = %q, want login.success", body.Events[0].Action)
+	}
+}
+
+func TestListAuditRequiresAuth(t *testing.T) {
+	h := newHarness(t)
+	// Use the raw client (no cookie jar) to verify 401.
+	resp, err := http.Get(h.srv.URL + "/api/v1/audit")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 401 {
+		t.Fatalf("unauthenticated audit = %d; want 401", resp.StatusCode)
+	}
+}
+
+func TestClientIP(t *testing.T) {
+	cases := []struct {
+		remoteAddr string
+		xff        string
+		want       string
+	}{
+		{"192.168.1.1:54321", "", "192.168.1.1"},
+		{"192.168.1.1:54321", "10.0.0.5", "10.0.0.5"},
+		{"192.168.1.1:54321", "10.0.0.5, 172.16.0.1", "10.0.0.5"},
+		{"[::1]:54321", "", "::1"},
+	}
+	for _, tc := range cases {
+		r := &http.Request{
+			RemoteAddr: tc.remoteAddr,
+			Header:     http.Header{},
+		}
+		if tc.xff != "" {
+			r.Header.Set("X-Forwarded-For", tc.xff)
+		}
+		got := clientIP(r)
+		if got != tc.want {
+			t.Errorf("remoteAddr=%q xff=%q: got %q, want %q", tc.remoteAddr, tc.xff, got, tc.want)
+		}
+	}
+}
+
+// addMember writes a member user directly into the store and seeds the fake
+// host-agent's password map. There's no create-user API yet (Tier-A item 2),
+// so tests that need a second user bypass the wire.
+func (h *harness) addMember(id, username, password string) {
+	h.t.Helper()
+	if err := h.st.CreateUser(store.User{
+		ID: id, Username: username, Role: store.RoleMember, CreatedAt: time.Now(),
+	}); err != nil {
+		h.t.Fatalf("create member: %v", err)
+	}
+	hash, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	h.pmu.Lock()
+	h.pwds[username] = hash
+	h.pmu.Unlock()
+}
+
+func TestListAuditMemberVisibility(t *testing.T) {
+	h := newHarness(t)
+
+	// Admin bootstrap records setup.complete (target = admin user).
+	resp := h.do("POST", "/api/v1/setup", map[string]string{
+		"username": "alice", "password": "hunter2",
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("setup: %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	alice, err := h.st.GetUserByUsername("alice")
+	if err != nil {
+		t.Fatalf("lookup alice: %v", err)
+	}
+	// Admin installs an app — synthesized directly since the lifecycle is nil
+	// in the harness. Bob must not see this row (actor=alice, target=app).
+	if err := h.st.InsertAuditEvent(store.AuditEvent{
+		TS: time.Now().UnixMilli(), ActorUserID: alice.ID, ActorRole: "admin",
+		Action: "app.install", TargetKind: "app", TargetID: "inst_xyz", Success: true,
+	}); err != nil {
+		t.Fatalf("seed admin row: %v", err)
+	}
+
+	const bobID = "u_bob"
+	h.addMember(bobID, "bob", "bobpass")
+
+	// Switch sessions: logout admin, login as bob (records login.success
+	// with actor=bob, target=user:bob).
+	h.do("POST", "/api/v1/logout", nil).Body.Close()
+	resp = h.do("POST", "/api/v1/login", map[string]string{
+		"username": "bob", "password": "bobpass",
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("bob login: %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = h.do("GET", "/api/v1/audit", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("bob GET /audit: %d", resp.StatusCode)
+	}
+	body := decodeJSON[struct {
+		Events []AuditEventDTO `json:"events"`
+	}](t, resp)
+
+	if len(body.Events) == 0 {
+		t.Fatal("bob should see at least their own login.success")
+	}
+	for _, e := range body.Events {
+		actorIsBob := e.ActorUserID == bobID
+		targetIsBob := e.TargetKind == "user" && e.TargetID == bobID
+		if !actorIsBob && !targetIsBob {
+			t.Errorf("bob sees unrelated event: action=%s actor=%q target=%s/%s",
+				e.Action, e.ActorUserID, e.TargetKind, e.TargetID)
+		}
+	}
+}
+
+func TestListAuditLimitClamped(t *testing.T) {
+	h := newHarness(t)
+	resp := h.do("POST", "/api/v1/setup", map[string]string{
+		"username": "alice", "password": "hunter2",
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("setup: %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	for i := 0; i < 250; i++ {
+		if err := h.st.InsertAuditEvent(store.AuditEvent{
+			TS: int64(i), ActorRole: "system", Action: "login.success", Success: true,
+		}); err != nil {
+			t.Fatalf("seed row %d: %v", i, err)
+		}
+	}
+
+	resp = h.do("GET", "/api/v1/audit?limit=500", nil)
+	defer resp.Body.Close()
+	body := decodeJSON[struct {
+		Events []AuditEventDTO `json:"events"`
+	}](t, resp)
+	if len(body.Events) != maxAuditLimit {
+		t.Fatalf("limit=500 with 250+ rows returned %d events, want %d (clamped)",
+			len(body.Events), maxAuditLimit)
+	}
+}
+
+func TestListAuditCursorPagination(t *testing.T) {
+	h := newHarness(t)
+	resp := h.do("POST", "/api/v1/setup", map[string]string{
+		"username": "alice", "password": "hunter2",
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("setup: %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	for i := 0; i < 5; i++ {
+		_ = h.st.InsertAuditEvent(store.AuditEvent{
+			TS: int64(i), ActorRole: "system", Action: "login.success", Success: true,
+		})
+	}
+
+	resp = h.do("GET", "/api/v1/audit?limit=3", nil)
+	page1 := decodeJSON[struct {
+		Events []AuditEventDTO `json:"events"`
+	}](t, resp)
+	if len(page1.Events) != 3 {
+		t.Fatalf("page 1: %d events, want 3", len(page1.Events))
+	}
+	cursor := page1.Events[2].ID
+
+	resp = h.do("GET", fmt.Sprintf("/api/v1/audit?limit=3&after_id=%d", cursor), nil)
+	page2 := decodeJSON[struct {
+		Events []AuditEventDTO `json:"events"`
+	}](t, resp)
+	for _, e := range page2.Events {
+		if e.ID >= cursor {
+			t.Errorf("page 2 event id %d should be < cursor %d", e.ID, cursor)
+		}
+	}
+	// setup.complete + 5 seeded = 6 admin-visible rows. Page 1 returns
+	// ids 6,5,4 (cursor=4); page 2 returns ids 3,2,1.
+	if len(page2.Events) != 3 {
+		t.Fatalf("page 2: %d events, want 3", len(page2.Events))
+	}
 }
