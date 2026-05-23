@@ -345,6 +345,20 @@ func (s *Store) UpdateRole(id, role string) error {
 	return nil
 }
 
+// UpdateRecoveryHash replaces the recovery_hash for a user in-place. Used by
+// /v1/recover to rotate the old code after a successful redemption. Returns
+// ErrNotFound when no such user exists.
+func (s *Store) UpdateRecoveryHash(userID, newHash string) error {
+	res, err := s.db.Exec(`UPDATE users SET recovery_hash=? WHERE id=?`, newHash, userID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // CountAdmins returns the number of users with role="admin".
 func (s *Store) CountAdmins() (int, error) {
 	var n int

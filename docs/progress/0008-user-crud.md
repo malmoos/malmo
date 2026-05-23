@@ -144,3 +144,9 @@ L3 tests (real store + real in-process host-agent over unix socket):
 - Session revocation on password change (requires `DeleteSessionsForUser`
   call after `SetPassword`).
 - Real gpasswd in host-agent (lands with host-agent real impl).
+
+---
+
+**Update 2026-05-24:** Recovery-code redemption endpoint (`POST /api/v1/recover`)
+landed in 0009. The `DeleteSessionsForUser` call on password change (noted above)
+is still deferred.

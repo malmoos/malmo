@@ -25,6 +25,7 @@ import (
 var publicPaths = map[string]bool{
 	"/api/v1/setup":      true,
 	"/api/v1/login":      true,
+	"/api/v1/recover":    true,
 	"/api/v1/auth/state": true,
 	// huma exposes these by default; leave them public so curl/devtools work.
 	"/openapi.json": true,
@@ -119,6 +120,11 @@ func (s *Server) registerAuth(api huma.API) {
 		OperationID: "login", Method: "POST", Path: "/api/v1/login",
 		Summary: "Authenticate against PAM via host-agent; mint a session",
 	}, s.login)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "recover", Method: "POST", Path: "/api/v1/recover",
+		Summary: "Redeem a recovery code to reset password and rotate the code (public)",
+	}, s.recover)
 
 	huma.Register(api, huma.Operation{
 		OperationID: "logout", Method: "POST", Path: "/api/v1/logout",
@@ -271,6 +277,110 @@ func (s *Server) login(ctx context.Context, in *struct {
 	}{}
 	out.SetCookie = s.auth.Cookie(sess.Token).String()
 	out.Body.User = userDTO(u)
+	return out, nil
+}
+
+// recover redeems a recovery code to reset the admin's password and rotate the
+// code. It is public — the recovery code IS the credential. No session is
+// issued; the user must log in normally after recovery.
+//
+// Ordering rationale (AUTH.md # Using the recovery code, CLAUDE.md "brain
+// commits first"):
+//
+//  1. Look up the user + verify the supplied code (constant-time bcrypt even on
+//     unknown username to avoid leaking which usernames have recovery codes).
+//  2. Generate a new code+hash.
+//  3. Store the new hash in the brain (brain commits first — it is the durable
+//     side; host-agent is reconstructible).
+//  4. Call host-agent SetPassword. If it fails, restore the old hash so the
+//     next attempt can still use the same recovery code. Also revoke all
+//     existing sessions so a stolen session doesn't outlive the password reset.
+//  5. Return the new recovery code (shown once, like /setup).
+//
+// We do NOT restore old hash on session-revocation failure — DeleteSessionsForUser
+// is a best-effort call; stale sessions age out naturally.
+func (s *Server) recover(ctx context.Context, in *struct {
+	Body struct {
+		Username     string `json:"username"`
+		RecoveryCode string `json:"recovery_code"`
+		NewPassword  string `json:"new_password"`
+	}
+}) (*struct {
+	Body struct {
+		NewRecoveryCode string `json:"new_recovery_code"`
+	}
+}, error) {
+	username := strings.TrimSpace(in.Body.Username)
+	suppliedCode := in.Body.RecoveryCode
+	newPassword := in.Body.NewPassword
+
+	if username == "" || suppliedCode == "" || newPassword == "" {
+		return nil, huma.Error422UnprocessableEntity("username, recovery_code, and new_password are required")
+	}
+
+	// Look up the user. We always run bcrypt.CompareHashAndPassword regardless
+	// of whether the lookup succeeded, to avoid leaking which usernames exist
+	// (mirrors the login handler's constant-time-ish approach).
+	u, lookupErr := s.store.GetUserByUsername(username)
+
+	// Compute bcrypt comparison target — use a dummy hash on unknown user so
+	// the cost is paid either way.
+	dummyHash := "$2a$10$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	hashToCheck := dummyHash
+	if lookupErr == nil {
+		hashToCheck = u.RecoveryHash
+	}
+	codeErr := bcrypt.CompareHashAndPassword([]byte(hashToCheck), []byte(suppliedCode))
+
+	if lookupErr != nil || codeErr != nil {
+		s.auditor.Record(ctx, audit.ActionRecoverFailure,
+			audit.Target{},
+			map[string]any{"username": username},
+			false)
+		return nil, huma.Error401Unauthorized("invalid recovery code")
+	}
+
+	// Generate fresh code + hash before touching any state.
+	newCode, newHash, err := newRecoveryCode()
+	if err != nil {
+		return nil, huma.Error500InternalServerError("generate recovery code", err)
+	}
+
+	// Brain commits first — store the new hash so the brain is always the
+	// durable record; host-agent state is reconstructible.
+	if err := s.store.UpdateRecoveryHash(u.ID, newHash); err != nil {
+		return nil, huma.Error500InternalServerError("update recovery hash", err)
+	}
+
+	// Call host-agent to reset the OS password. On failure, restore the old
+	// hash so the user can retry with the same recovery code.
+	if err := s.host.SetPassword(ctx, u.Username, newPassword); err != nil {
+		// Best-effort rollback: restore old hash so the code is still valid.
+		_ = s.store.UpdateRecoveryHash(u.ID, u.RecoveryHash)
+		s.auditor.Record(ctx, audit.ActionRecoverFailure,
+			audit.Target{Kind: "user", ID: u.ID},
+			map[string]any{"step": "set_password"},
+			false)
+		return nil, huma.Error502BadGateway("host-agent set-password failed", err)
+	}
+
+	// Revoke all existing sessions — password has changed, stale sessions must
+	// not outlive the reset (AUTH.md # Invalidation).
+	_ = s.store.DeleteSessionsForUser(u.ID)
+
+	s.auditor.Record(ctx, audit.ActionRecoverSuccess,
+		audit.Target{Kind: "user", ID: u.ID},
+		nil,
+		true)
+
+	out := &struct {
+		Body struct {
+			NewRecoveryCode string `json:"new_recovery_code"`
+		}
+	}{}
+	// AUTH.md # Recovery: new code is shown exactly once. Brain stores only the
+	// hash; this is the user's single chance to record it.
+	out.Body.NewRecoveryCode = newCode
 	return out, nil
 }
 

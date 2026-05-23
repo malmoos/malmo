@@ -485,6 +485,275 @@ func TestListAuditMemberVisibility(t *testing.T) {
 	}
 }
 
+// --- recover tests -------------------------------------------------------
+
+// setupAdminWithCode bootstraps an admin and returns the recovery code.
+func setupAdminWithCode(t *testing.T, h *harness, username, password string) string {
+	t.Helper()
+	resp := h.do("POST", "/api/v1/setup", map[string]string{
+		"username": username, "password": password,
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("setup: %d", resp.StatusCode)
+	}
+	body := decodeJSON[struct {
+		User         UserDTO `json:"user"`
+		RecoveryCode string  `json:"recovery_code"`
+	}](t, resp)
+	return body.RecoveryCode
+}
+
+func TestRecoverHappyPath(t *testing.T) {
+	h := newHarness(t)
+	code := setupAdminWithCode(t, h, "andrei", "oldpass")
+
+	// Log out so we start without a session.
+	h.do("POST", "/api/v1/logout", nil).Body.Close()
+
+	resp := h.do("POST", "/api/v1/recover", map[string]string{
+		"username":      "andrei",
+		"recovery_code": code,
+		"new_password":  "newpass99",
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("recover: %d", resp.StatusCode)
+	}
+	body := decodeJSON[struct {
+		NewRecoveryCode string `json:"new_recovery_code"`
+	}](t, resp)
+
+	// New recovery code must be a fresh 24-char hex string, distinct from old.
+	if len(body.NewRecoveryCode) != 24 {
+		t.Fatalf("new recovery code len = %d; want 24", len(body.NewRecoveryCode))
+	}
+	if body.NewRecoveryCode == code {
+		t.Fatal("new recovery code is same as old — rotation did not happen")
+	}
+
+	// No session should have been issued; /me must 401.
+	resp = h.do("GET", "/api/v1/me", nil)
+	if resp.StatusCode != 401 {
+		t.Fatalf("me after recover = %d; want 401 (no session issued)", resp.StatusCode)
+	}
+
+	// Old password must no longer work.
+	resp = h.do("POST", "/api/v1/login", map[string]string{
+		"username": "andrei", "password": "oldpass",
+	})
+	if resp.StatusCode != 401 {
+		t.Fatalf("old password still works after recovery = %d; want 401", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// New password must work.
+	resp = h.do("POST", "/api/v1/login", map[string]string{
+		"username": "andrei", "password": "newpass99",
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("new password login = %d; want 200", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Old recovery code must be rejected now.
+	resp = h.do("POST", "/api/v1/recover", map[string]string{
+		"username":      "andrei",
+		"recovery_code": code,
+		"new_password":  "anotherpass",
+	})
+	if resp.StatusCode != 401 {
+		t.Fatalf("old code after rotation = %d; want 401", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+func TestRecoverWrongCode(t *testing.T) {
+	h := newHarness(t)
+	setupAdminWithCode(t, h, "andrei", "oldpass")
+
+	resp := h.do("POST", "/api/v1/recover", map[string]string{
+		"username":      "andrei",
+		"recovery_code": "000000000000000000000000", // wrong but valid length
+		"new_password":  "newpass99",
+	})
+	if resp.StatusCode != 401 {
+		t.Fatalf("wrong code = %d; want 401", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+func TestRecoverUnknownUser(t *testing.T) {
+	h := newHarness(t)
+	setupAdminWithCode(t, h, "andrei", "oldpass")
+
+	// Unknown username should return 401, same as wrong code — no leakage.
+	resp := h.do("POST", "/api/v1/recover", map[string]string{
+		"username":      "ghost",
+		"recovery_code": "000000000000000000000000",
+		"new_password":  "newpass99",
+	})
+	if resp.StatusCode != 401 {
+		t.Fatalf("unknown user = %d; want 401", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+func TestRecoverMissingFields(t *testing.T) {
+	h := newHarness(t)
+	// No setup needed — 422 fires before any store lookup.
+
+	cases := []map[string]string{
+		{"username": "andrei", "recovery_code": "abc123"},                     // missing new_password
+		{"username": "andrei", "new_password": "newpass"},                    // missing recovery_code
+		{"recovery_code": "abc123", "new_password": "newpass"},               // missing username
+		{},                                                                    // all missing
+	}
+	for _, body := range cases {
+		resp := h.do("POST", "/api/v1/recover", body)
+		if resp.StatusCode != 422 {
+			t.Errorf("body %v: got %d; want 422", body, resp.StatusCode)
+		}
+		resp.Body.Close()
+	}
+}
+
+func TestRecoverHostFailureRestoresOldHash(t *testing.T) {
+	// Spin up a store + a broken host-agent (set-password always 500).
+	st, err := store.Open(filepath.Join(t.TempDir(), "rec.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	// First: bootstrap the admin using a working host-agent so the user row and
+	// OS password exist. We do this with a temporary real harness.
+	var savedCode string
+	{
+		h := newHarness(t)
+		// We only need the harness's store for comparison; use a fresh store for
+		// the broken-host harness below.
+		savedCode = setupAdminWithCode(t, h, "andrei", "hunter2")
+		// Copy the user from h.st into our dedicated st.
+		u, lerr := h.st.GetUserByUsername("andrei")
+		if lerr != nil {
+			t.Fatalf("lookup andrei: %v", lerr)
+		}
+		if cerr := st.CreateFirstAdmin(u); cerr != nil {
+			t.Fatalf("seed user: %v", cerr)
+		}
+	}
+
+	// Broken host-agent: set-password always fails.
+	sock := filepath.Join(t.TempDir(), "agent-bad.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/auth/set-password", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"code":"boom","message":"nope"}`, 500)
+	})
+	hostHTTP := &http.Server{Handler: mux}
+	go func() { _ = hostHTTP.Serve(ln) }()
+	t.Cleanup(func() { _ = hostHTTP.Close() })
+
+	srv := NewServer(st, nil, nil, nil, auth.NewManager(st), hostclient.New(sock), audit.New(st))
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	resp, err2 := http.Post(ts.URL+"/api/v1/recover", "application/json",
+		bytes.NewReader([]byte(`{"username":"andrei","recovery_code":"`+savedCode+`","new_password":"newpass"}`)))
+	if err2 != nil {
+		t.Fatalf("recover post: %v", err2)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 502 {
+		t.Fatalf("broken host recover = %d; want 502", resp.StatusCode)
+	}
+
+	// The original recovery hash must have been restored — old code still valid.
+	u, lerr := st.GetUserByUsername("andrei")
+	if lerr != nil {
+		t.Fatalf("lookup after failure: %v", lerr)
+	}
+	if bcrypt.CompareHashAndPassword([]byte(u.RecoveryHash), []byte(savedCode)) != nil {
+		t.Fatal("old recovery hash was not restored after host failure")
+	}
+}
+
+func TestRecoverSessionsAreRevoked(t *testing.T) {
+	h := newHarness(t)
+	code := setupAdminWithCode(t, h, "andrei", "oldpass")
+	// setup leaves a session in the jar; /me should work.
+	resp := h.do("GET", "/api/v1/me", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("me before recover = %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Perform recovery using a separate fresh jar so our existing session
+	// survives in h.jar. Then verify the old session cookie no longer works.
+	recoverBody, _ := json.Marshal(map[string]string{
+		"username":      "andrei",
+		"recovery_code": code,
+		"new_password":  "newpass99",
+	})
+	recReq, _ := http.NewRequest("POST", h.srv.URL+"/api/v1/recover", bytes.NewReader(recoverBody))
+	recReq.Header.Set("Content-Type", "application/json")
+	recResp, err := http.DefaultClient.Do(recReq)
+	if err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	recResp.Body.Close()
+	if recResp.StatusCode != 200 {
+		t.Fatalf("recover = %d; want 200", recResp.StatusCode)
+	}
+
+	// The old session cookie in h.jar should now be revoked.
+	resp = h.do("GET", "/api/v1/me", nil)
+	if resp.StatusCode != 401 {
+		t.Fatalf("me after session revocation = %d; want 401", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+func TestRecoverAuditsFailureOnWrongCode(t *testing.T) {
+	h := newHarness(t)
+	setupAdminWithCode(t, h, "andrei", "oldpass")
+
+	// Attempt recovery with wrong code.
+	resp := h.do("POST", "/api/v1/recover", map[string]string{
+		"username":      "andrei",
+		"recovery_code": "000000000000000000000000",
+		"new_password":  "newpass",
+	})
+	if resp.StatusCode != 401 {
+		t.Fatalf("wrong code = %d; want 401", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Admin must see a recover.failure audit row.
+	resp = h.do("GET", "/api/v1/audit", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("audit = %d", resp.StatusCode)
+	}
+	body := decodeJSON[struct {
+		Events []AuditEventDTO `json:"events"`
+	}](t, resp)
+
+	found := false
+	for _, e := range body.Events {
+		if e.Action == "recover.failure" {
+			found = true
+			if e.Success {
+				t.Error("recover.failure event has success=true")
+			}
+		}
+	}
+	if !found {
+		t.Error("no recover.failure audit row found")
+	}
+}
+
 func TestListAuditLimitClamped(t *testing.T) {
 	h := newHarness(t)
 	resp := h.do("POST", "/api/v1/setup", map[string]string{

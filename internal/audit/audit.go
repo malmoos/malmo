@@ -29,6 +29,10 @@ const (
 	ActionUserDelete        = "user.delete"
 	ActionUserPasswordReset = "user.password.reset"
 	ActionUserPasswordChange = "user.password.change"
+
+	// Recovery-code redemption (AUTH.md # Using the recovery code).
+	ActionRecoverSuccess = "recover.success"
+	ActionRecoverFailure = "recover.failure"
 )
 
 // Target describes the object the action acts on. Both fields are optional.
