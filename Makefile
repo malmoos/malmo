@@ -12,9 +12,10 @@ export MALMO_AGENT_SOCK := $(AGENT_SOCK)
 export MALMO_STATE_DIR := $(STATE_DIR)
 export MALMO_CATALOG_DIR := ./catalog
 
-.PHONY: build host-agent brain run-agent run-brain net caddy caddy-down ui openapi clean help
+.PHONY: build host-agent brain run-agent run-brain net caddy caddy-down ui dev openapi clean help
 
 help:
+	@echo "make dev         - all three foreground procs in one terminal (recommended)"
 	@echo "make build       - compile brain + host-agent"
 	@echo "make net         - create the malmo-ingress docker network"
 	@echo "make caddy       - start the dev Caddy reverse proxy (container)"
@@ -24,7 +25,8 @@ help:
 	@echo "make caddy-down  - stop the dev Caddy"
 	@echo "make clean       - stop apps, remove dev state"
 	@echo ""
-	@echo "Typical: 4 terminals -> make caddy ; make run-agent ; make run-brain ; make ui"
+	@echo "One-terminal: make dev   (Caddy started detached; Ctrl-C stops the rest)"
+	@echo "Four terminals: make caddy ; make run-agent ; make run-brain ; make ui"
 
 build: host-agent brain
 
@@ -54,6 +56,19 @@ run-brain: brain net
 # WEB_UI.md specifies pnpm; npm is used here until pnpm is set up on the box.
 ui:
 	cd web-ui && npm install && npm run dev
+
+# One-terminal dev loop. Pure bash: backgrounds the three foreground procs,
+# prefixes their output with [agent]/[brain]/[ui], and the trap kills the
+# whole process group on Ctrl-C. Caddy is started detached because it's
+# already a long-running container — no point supervising it here.
+dev: build caddy
+	@mkdir -p $(STATE_DIR)
+	@cd web-ui && [ -d node_modules ] || npm install
+	@trap 'kill 0' INT TERM EXIT; \
+	  ($(DEV_DIR)/host-agent 2>&1 | sed -u 's/^/[agent] /') & \
+	  ($(DEV_DIR)/brain      2>&1 | sed -u 's/^/[brain] /') & \
+	  (cd web-ui && npm run dev 2>&1 | sed -u 's/^/[ui]    /') & \
+	  wait
 
 # Emit the OpenAPI schema (BRAIN_UI_PROTOCOL.md CI hook). The running brain
 # serves it; this just fetches it.

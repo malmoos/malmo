@@ -19,17 +19,32 @@ This guide covers the inner loop.
 - **Go 1.23+.** If `go` isn't on your `PATH`, the `Makefile` falls back to
   `~/.local/go/bin/go`.
 
-## Start the stack (4 terminals)
+## Start the stack
+
+**One terminal (recommended):**
 
 ```bash
-make caddy        # 1. dev reverse proxy (Caddy container)
+make dev          # starts Caddy detached, then backgrounds agent + brain + ui
+                  # with their output prefixed [agent]/[brain]/[ui].
+                  # Ctrl-C kills all three.
+```
+
+No extra tools — pure bash supervisor with a `trap` that kills the process
+group on signal.
+
+**Four terminals (no extra tools):**
+
+```bash
+make caddy        # 1. dev reverse proxy (Caddy container, detached)
 make run-agent    # 2. fake host-agent (UNIX socket at .dev/agent.sock)
 make run-brain    # 3. malmo-brain (:8080, native)
 make ui           # 4. dashboard (Vite, :5173)
 ```
 
-`make help` lists all targets. Then open <http://localhost:5173>, install
-**Whoami** from the catalog, and watch it appear as `running`.
+`make help` lists all targets. Either way, open <http://localhost:5173>. On
+first run the **Setup** page asks you to create the first admin and shows a
+recovery code once — save it. Then install **Whoami** from the catalog and
+watch it appear as `running`.
 
 ## How the pieces talk
 
