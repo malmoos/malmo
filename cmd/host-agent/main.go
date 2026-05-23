@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/malmo/malmo/internal/protocol"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const agentVersion = "0.0.1-fake"
@@ -22,6 +23,10 @@ const agentVersion = "0.0.1-fake"
 type agent struct {
 	mu        sync.Mutex
 	published map[string]protocol.PublishedName
+	// passwords holds bcrypt hashes keyed by username. In the real host-agent
+	// this is /etc/shadow via PAM; the fake stores it in memory so tests and
+	// the dev loop can exercise the protocol without touching the host.
+	passwords map[string][]byte
 	startedAt time.Time
 }
 
@@ -48,6 +53,7 @@ func main() {
 
 	a := &agent{
 		published: map[string]protocol.PublishedName{},
+		passwords: map[string][]byte{},
 		startedAt: time.Now(),
 	}
 
@@ -56,6 +62,9 @@ func main() {
 	mux.HandleFunc("POST /v1/discovery/unpublish", a.unpublish)
 	mux.HandleFunc("GET /v1/discovery/state", a.discoveryState)
 	mux.HandleFunc("GET /v1/system/status", a.systemStatus)
+	mux.HandleFunc("POST /v1/auth/verify-password", a.verifyPassword)
+	mux.HandleFunc("POST /v1/auth/set-password", a.setPassword)
+	mux.HandleFunc("POST /v1/auth/delete-user", a.deleteUser)
 
 	slog.Info("host-agent (fake) listening", "sock", sockPath)
 	srv := &http.Server{Handler: logRequests(mux)}
@@ -119,6 +128,52 @@ func (a *agent) systemStatus(w http.ResponseWriter, r *http.Request) {
 		DiskPressure: false,
 		AgentVersion: agentVersion,
 	})
+}
+
+func (a *agent) verifyPassword(w http.ResponseWriter, r *http.Request) {
+	var req protocol.VerifyPasswordRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	a.mu.Lock()
+	hash, ok := a.passwords[req.User]
+	a.mu.Unlock()
+	valid := ok && bcrypt.CompareHashAndPassword(hash, []byte(req.Password)) == nil
+	// Per BRAIN_HOST_PROTOCOL.md: never reveal *why* verification failed.
+	writeJSON(w, http.StatusOK, protocol.VerifyPasswordResponse{Valid: valid})
+}
+
+func (a *agent) setPassword(w http.ResponseWriter, r *http.Request) {
+	var req protocol.SetPasswordRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.User == "" || req.Password == "" {
+		writeErr(w, http.StatusBadRequest, "bad-request", "user and password are required")
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.MinCost)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "hash-failed", err.Error())
+		return
+	}
+	a.mu.Lock()
+	a.passwords[req.User] = hash
+	a.mu.Unlock()
+	slog.Info("set-password", "user", req.User)
+	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+func (a *agent) deleteUser(w http.ResponseWriter, r *http.Request) {
+	var req protocol.DeleteUserRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	a.mu.Lock()
+	delete(a.passwords, req.User) // idempotent
+	a.mu.Unlock()
+	slog.Info("delete-user", "user", req.User)
+	writeJSON(w, http.StatusOK, struct{}{})
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {

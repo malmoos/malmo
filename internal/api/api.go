@@ -15,8 +15,10 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
 	"github.com/malmo/malmo/internal/admission"
+	"github.com/malmo/malmo/internal/auth"
 	"github.com/malmo/malmo/internal/catalog"
 	"github.com/malmo/malmo/internal/events"
+	"github.com/malmo/malmo/internal/hostclient"
 	"github.com/malmo/malmo/internal/lifecycle"
 	"github.com/malmo/malmo/internal/manifest"
 	"github.com/malmo/malmo/internal/store"
@@ -27,24 +29,39 @@ type Server struct {
 	catalog *catalog.Catalog
 	life    *lifecycle.Manager
 	bus     *events.Bus
+	auth    *auth.Manager
+	host    *hostclient.Client
 	jobs    *Jobs
 }
 
-func NewServer(st *store.Store, cat *catalog.Catalog, life *lifecycle.Manager, bus *events.Bus) *Server {
-	return &Server{store: st, catalog: cat, life: life, bus: bus, jobs: newJobs()}
+func NewServer(
+	st *store.Store,
+	cat *catalog.Catalog,
+	life *lifecycle.Manager,
+	bus *events.Bus,
+	authMgr *auth.Manager,
+	host *hostclient.Client,
+) *Server {
+	return &Server{
+		store: st, catalog: cat, life: life, bus: bus,
+		auth: authMgr, host: host, jobs: newJobs(),
+	}
 }
 
 // Handler builds the mux: huma-registered REST routes + the raw SSE endpoint.
+// The chain is CORS → auth → mux. CORS handles OPTIONS preflight (no auth
+// needed); auth gates everything else except the small public allowlist.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	api := humago.New(mux, huma.DefaultConfig("malmo brain", "0.0.1"))
 	s.register(api)
+	s.registerAuth(api)
 
 	// SSE is registered raw (huma streaming adds no value here and the raw
 	// handler keeps the wire format curl-debuggable per BRAIN_UI_PROTOCOL.md).
 	mux.HandleFunc("GET /api/v1/events", s.events)
 
-	return withCORS(mux)
+	return withCORS(s.authMiddleware(mux))
 }
 
 func (s *Server) register(api huma.API) {

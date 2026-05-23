@@ -91,6 +91,22 @@ Plain HTTP. The brain blocks on the response. Errors come back as HTTP status + 
 
 **`/v1/auth/verify-password` is hit on every dashboard login** (brain delegates PAM verification rather than storing a password hash itself — see `AUTH.md` # Identity primitive). Implementation: host-agent runs PAM `authenticate()` with the supplied credentials, returns `valid: true|false`. The endpoint never reveals *why* a verification failed (wrong password vs. unknown user vs. locked account) — only the binary result, mirroring PAM's own posture. Rate-limiting lives in the brain; this endpoint just answers truthfully.
 
+**Credential mutation endpoints** — siblings to `verify-password`, used by the dashboard's user-management flows (`/v1/setup`, password reset, remove member). Pattern A, same `user` field naming:
+
+```
+POST /v1/auth/set-password
+  { "user": "cindy", "password": "..." }
+  → 200 OK  {}
+```
+
+```
+POST /v1/auth/delete-user
+  { "user": "cindy" }
+  → 200 OK  {}
+```
+
+`set-password` is **upsert**: it creates the user if missing (real impl: `useradd` + `passwd` + Samba sync as one atomic op via `AUTH.md` # Password change) and otherwise just updates the password. The brain stays oblivious to "is this a create or an update" — single endpoint, single round-trip during `/v1/setup`. `delete-user` is idempotent: unknown user returns 200. Neither endpoint returns the credential after the call; the brain holds no password material.
+
 **Network endpoints (NetworkManager-backed).** host-agent exposes Pattern A routes that wrap NetworkManager's DBus surface:
 
 ```

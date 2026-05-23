@@ -44,6 +44,25 @@ func (c *Client) Unpublish(ctx context.Context, slug string) error {
 	return c.do(ctx, "POST", "/v1/discovery/unpublish", protocol.UnpublishRequest{Slug: slug}, nil)
 }
 
+// VerifyPassword asks host-agent whether (user, password) is valid.
+// Returned bool is the only signal — host-agent deliberately doesn't
+// distinguish wrong-password from unknown-user. See BRAIN_HOST_PROTOCOL.md.
+func (c *Client) VerifyPassword(ctx context.Context, user, password string) (bool, error) {
+	var out protocol.VerifyPasswordResponse
+	err := c.do(ctx, "POST", "/v1/auth/verify-password", protocol.VerifyPasswordRequest{User: user, Password: password}, &out)
+	return out.Valid, err
+}
+
+// SetPassword upserts the user's password (creates the user if missing).
+func (c *Client) SetPassword(ctx context.Context, user, password string) error {
+	return c.do(ctx, "POST", "/v1/auth/set-password", protocol.SetPasswordRequest{User: user, Password: password}, nil)
+}
+
+// DeleteUser removes the user. Idempotent: unknown user returns nil.
+func (c *Client) DeleteUser(ctx context.Context, user string) error {
+	return c.do(ctx, "POST", "/v1/auth/delete-user", protocol.DeleteUserRequest{User: user}, nil)
+}
+
 func (c *Client) SystemStatus(ctx context.Context) (protocol.SystemStatus, error) {
 	var out protocol.SystemStatus
 	err := c.do(ctx, "GET", "/v1/system/status", nil, &out)

@@ -34,6 +34,10 @@ Orientation:
 
 See [`progress/README.md`](progress/README.md) for the index. Latest:
 
+- [`0006-auth-and-users.md`](progress/0006-auth-and-users.md)
+  — first-admin bootstrap, password login, opaque cookie sessions, auth
+  middleware gating all mutations, and a UI router that picks setup / login /
+  dashboard from auth state.
 - [`0005-brain-test-pyramid.md`](progress/0005-brain-test-pyramid.md)
   — DockerDriver refactor + Layers 1–3 of the brain test plan; per-PR
   `go test ./...` runs in <1s with no Docker daemon.

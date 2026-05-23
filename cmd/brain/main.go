@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/malmo/malmo/internal/api"
+	"github.com/malmo/malmo/internal/auth"
 	"github.com/malmo/malmo/internal/caddy"
 	"github.com/malmo/malmo/internal/catalog"
 	"github.com/malmo/malmo/internal/events"
@@ -59,7 +60,8 @@ func main() {
 			"hostname", status.Hostname, "agent_version", status.AgentVersion)
 	}
 
-	srv := api.NewServer(st, cat, life, bus)
+	authMgr := auth.NewManager(st)
+	srv := api.NewServer(st, cat, life, bus, authMgr, host)
 	httpSrv := &http.Server{Addr: cfg.listen, Handler: srv.Handler()}
 	slog.Info("malmo-brain listening",
 		"listen", cfg.listen, "state_dir", cfg.stateDir, "catalog_dir", cfg.catalogDir)

@@ -4,10 +4,20 @@
 
 export class ApiError extends Error {
   code: string;
-  constructor(code: string, message: string) {
+  status: number;
+  constructor(code: string, message: string, status: number) {
     super(message);
     this.code = code;
+    this.status = status;
   }
+}
+
+// onUnauthenticated is called whenever any request returns 401. The auth
+// composable wires this to drop currentUser so the router falls back to the
+// login view without each call site having to handle 401 itself.
+let onUnauthenticated: (() => void) | null = null;
+export function setUnauthenticatedHandler(fn: () => void) {
+  onUnauthenticated = fn;
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -19,7 +29,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ code: "unknown", message: res.statusText }));
-    throw new ApiError(err.code ?? "unknown", err.message ?? res.statusText);
+    if (res.status === 401 && onUnauthenticated) onUnauthenticated();
+    throw new ApiError(err.code ?? "unknown", err.message ?? res.statusText, res.status);
   }
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
 }
@@ -31,6 +42,22 @@ export const api = {
 };
 
 // --- wire types (hand-rolled in v1; generated client is a follow-up) ------
+
+export interface User {
+  id: string;
+  username: string;
+  role: string;
+  created_at: number;
+}
+
+export interface AuthState {
+  has_users: boolean;
+}
+
+export interface SetupResult {
+  user: User;
+  recovery_code: string;
+}
 
 export interface CatalogEntry {
   id: string;

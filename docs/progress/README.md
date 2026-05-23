@@ -38,3 +38,4 @@ Ordered follow-ups. Update as they land.
 | [0003](0003-door-2-and-admission.md) | Door-2 custom apps + admission policy | done |
 | [0004](0004-image-digest-pinning.md) | Image digest pinning (TOFU + catalog verify) | done |
 | [0005](0005-brain-test-pyramid.md) | Brain test pyramid: DockerDriver refactor + Layers 1–3 | done |
+| [0006](0006-auth-and-users.md) | Auth + initial user model (setup, login, sessions, middleware, UI router) | done |

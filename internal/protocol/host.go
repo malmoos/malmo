@@ -45,6 +45,32 @@ type DiscoveryState struct {
 	Interfaces []string        `json:"interfaces"`
 }
 
+// VerifyPasswordRequest is POST /v1/auth/verify-password. host-agent delegates
+// to PAM authenticate() in prod; the fake checks a bcrypt hash. The endpoint
+// never distinguishes wrong-password from unknown-user from locked-account.
+type VerifyPasswordRequest struct {
+	User     string `json:"user"`
+	Password string `json:"password"`
+}
+
+type VerifyPasswordResponse struct {
+	Valid bool `json:"valid"`
+}
+
+// SetPasswordRequest is POST /v1/auth/set-password. Upsert: creates the user
+// if missing (real impl: useradd + passwd as one atomic op), otherwise just
+// updates the password.
+type SetPasswordRequest struct {
+	User     string `json:"user"`
+	Password string `json:"password"`
+}
+
+// DeleteUserRequest is POST /v1/auth/delete-user. Idempotent: unknown user
+// returns 200.
+type DeleteUserRequest struct {
+	User string `json:"user"`
+}
+
 // Error is the JSON error body shape on non-2xx responses.
 type Error struct {
 	Code    string `json:"code"`
