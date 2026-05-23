@@ -38,7 +38,7 @@ func main() {
 	host := hostclient.New(cfg.agentSock)
 	cd := caddy.New(cfg.caddyAdmin)
 	bus := events.NewBus()
-	life := lifecycle.NewManager(st, cat, host, cd, bus, cfg.stateDir)
+	life := lifecycle.NewManager(st, cat, host, cd, lifecycle.NewCLIDocker(), bus, cfg.stateDir)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	life.EnsureIngress(ctx, cfg.caddyListen)

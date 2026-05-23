@@ -57,8 +57,67 @@ func (s *Store) migrate() error {
 			state       TEXT NOT NULL,
 			mdns_name   TEXT NOT NULL DEFAULT '',
 			created_at  INTEGER NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS instance_images (
+			instance_id TEXT NOT NULL,
+			service     TEXT NOT NULL,
+			image       TEXT NOT NULL,
+			digest      TEXT NOT NULL,
+			PRIMARY KEY (instance_id, service),
+			FOREIGN KEY (instance_id) REFERENCES instances(id) ON DELETE CASCADE
 		);`)
 	return err
+}
+
+// InstanceImage is the resolved image pin for one service in one instance
+// (APP_LIFECYCLE.md # image digest pinning).
+type InstanceImage struct {
+	Service string
+	Image   string // original `image:tag` reference from the author's compose
+	Digest  string // `sha256:…`
+}
+
+// SetInstanceImages replaces the pinned images for an instance in one
+// transaction. Called once per install (and later, per update) after digests
+// have been resolved.
+func (s *Store) SetInstanceImages(instanceID string, images []InstanceImage) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM instance_images WHERE instance_id=?`, instanceID); err != nil {
+		return err
+	}
+	for _, img := range images {
+		if _, err := tx.Exec(
+			`INSERT INTO instance_images (instance_id, service, image, digest) VALUES (?,?,?,?)`,
+			instanceID, img.Service, img.Image, img.Digest); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetInstanceImages returns the pinned images for an instance, ordered by
+// service name.
+func (s *Store) GetInstanceImages(instanceID string) ([]InstanceImage, error) {
+	rows, err := s.db.Query(
+		`SELECT service, image, digest FROM instance_images
+		 WHERE instance_id=? ORDER BY service`, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []InstanceImage
+	for rows.Next() {
+		var i InstanceImage
+		if err := rows.Scan(&i.Service, &i.Image, &i.Digest); err != nil {
+			return nil, err
+		}
+		out = append(out, i)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) Create(i Instance) error {

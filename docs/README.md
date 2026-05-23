@@ -34,6 +34,12 @@ Orientation:
 
 See [`progress/README.md`](progress/README.md) for the index. Latest:
 
+- [`0005-brain-test-pyramid.md`](progress/0005-brain-test-pyramid.md)
+  — DockerDriver refactor + Layers 1–3 of the brain test plan; per-PR
+  `go test ./...` runs in <1s with no Docker daemon.
+- [`0004-image-digest-pinning.md`](progress/0004-image-digest-pinning.md)
+  — TOFU digest pinning + Door-1 catalog verify; installs are now byte-
+  deterministic from second `up` onward.
 - [`0003-door-2-and-admission.md`](progress/0003-door-2-and-admission.md)
   — paste-a-compose (Door-2) installs + the shared compose admission policy.
 - [`0002-reconcile-and-health-wait.md`](progress/0002-reconcile-and-health-wait.md)
@@ -46,3 +52,6 @@ See [`progress/README.md`](progress/README.md) for the index. Latest:
 
 - [`dev/running-locally.md`](dev/running-locally.md) — run the whole stack
   natively (no VM), and the two-loop dev model.
+- [`dev/testing-brain.md`](dev/testing-brain.md) — six-layer test plan for
+  `malmo-brain` (unit → store → lifecycle-with-fakes → API → integration
+  → e2e). Companion to `specs/TESTING.md`, which covers boot-level lanes.

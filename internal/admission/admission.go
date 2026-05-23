@@ -49,6 +49,14 @@ func Check(ctx context.Context, composeBytes []byte) error {
 	if err := validateSyntax(ctx, composeBytes); err != nil {
 		return err
 	}
+	return CheckStructure(ctx, composeBytes)
+}
+
+// CheckStructure runs only the structural rejection rules — no daemon needed.
+// Used by unit tests and as the admission seam in lifecycle tests, where
+// shelling out to `docker compose config -q` would turn pure unit tests into
+// flaky integration tests.
+func CheckStructure(_ context.Context, composeBytes []byte) error {
 	var doc composeDoc
 	if err := yaml.Unmarshal(composeBytes, &doc); err != nil {
 		return reject("compose is not valid YAML: %v", err)
@@ -56,12 +64,28 @@ func Check(ctx context.Context, composeBytes []byte) error {
 	if len(doc.Services) == 0 {
 		return reject("compose declares no services")
 	}
-	for name, svc := range doc.Services {
-		if err := checkService(name, svc); err != nil {
+	// Iterate in sorted order so rejection messages are stable across runs;
+	// without this, table-driven tests would be flaky on the "first failing
+	// service" message.
+	names := make([]string, 0, len(doc.Services))
+	for n := range doc.Services {
+		names = append(names, n)
+	}
+	sortStrings(names)
+	for _, name := range names {
+		if err := checkService(name, doc.Services[name]); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j-1] > s[j]; j-- {
+			s[j-1], s[j] = s[j], s[j-1]
+		}
+	}
 }
 
 func checkService(name string, svc rawService) error {

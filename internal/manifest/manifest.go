@@ -20,6 +20,14 @@ type Manifest struct {
 	MainPort        int         `yaml:"main_port"`
 	PreferredSlugs  []string    `yaml:"preferred_slugs"`
 	Permissions     Permissions `yaml:"permissions"`
+
+	// Images is the optional catalog-promised image→sha256 map
+	// (APP_STORE.md # Trust model — catalog's `images` map). Keyed by the exact
+	// `image:` reference used in the compose (e.g. `traefik/whoami:v1.10.3`),
+	// value is the `sha256:…` digest CI resolved at catalog-build time.
+	// Absent ⇒ TOFU at install (Door-2 always, Door-1 until the catalog
+	// publishes a digest).
+	Images map[string]string `yaml:"images,omitempty"`
 }
 
 type Permissions struct {

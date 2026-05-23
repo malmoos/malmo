@@ -9,16 +9,13 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/malmo/malmo/internal/admission"
-	"github.com/malmo/malmo/internal/caddy"
 	"github.com/malmo/malmo/internal/catalog"
 	"github.com/malmo/malmo/internal/events"
-	"github.com/malmo/malmo/internal/hostclient"
 	"github.com/malmo/malmo/internal/manifest"
 	"github.com/malmo/malmo/internal/store"
 
@@ -35,21 +32,42 @@ var reservedSlugs = map[string]bool{
 type Manager struct {
 	store    *store.Store
 	catalog  *catalog.Catalog
-	host     *hostclient.Client
-	caddy    *caddy.Client
+	host     HostDriver
+	caddy    CaddyDriver
+	docker   DockerDriver
+	admit    Admitter
 	bus      *events.Bus
 	stateDir string // e.g. ./.dev/state -> instances under <stateDir>/instances/<id>
+
+	// healthWait is overridable in tests; production uses healthWaitTimeout.
+	healthWait time.Duration
+	// healthPoll is the inter-poll interval; production uses 2s.
+	healthPoll time.Duration
 }
 
-func NewManager(st *store.Store, cat *catalog.Catalog, host *hostclient.Client, cd *caddy.Client, bus *events.Bus, stateDir string) *Manager {
-	return &Manager{store: st, catalog: cat, host: host, caddy: cd, bus: bus, stateDir: stateDir}
+func NewManager(st *store.Store, cat *catalog.Catalog, host HostDriver, cd CaddyDriver, docker DockerDriver, bus *events.Bus, stateDir string) *Manager {
+	return &Manager{
+		store: st, catalog: cat, host: host, caddy: cd, docker: docker,
+		admit: admission.Check, bus: bus, stateDir: stateDir,
+		healthWait: healthWaitTimeout, healthPoll: 2 * time.Second,
+	}
+}
+
+// SetAdmitter overrides the default compose admitter (admission.Check). Tests
+// use admission.CheckStructure to skip `docker compose config -q`.
+func (m *Manager) SetAdmitter(a Admitter) { m.admit = a }
+
+// SetHealthTiming overrides the default 120s wait / 2s poll cadence. Tests use
+// short timings to keep scenarios fast.
+func (m *Manager) SetHealthTiming(wait, poll time.Duration) {
+	m.healthWait, m.healthPoll = wait, poll
 }
 
 // EnsureIngress creates the shared ingress network and the Caddy server block.
 // Called once at brain startup. Best-effort: dev runs without Docker/Caddy
 // should still let the API come up.
 func (m *Manager) EnsureIngress(ctx context.Context, caddyListen string) {
-	if err := createNetwork(ctx, ingressNetwork, false); err != nil {
+	if err := m.docker.NetworkCreate(ctx, ingressNetwork, false); err != nil {
 		log.Printf("ensure ingress network: %v", err)
 	}
 	if err := m.caddy.EnsureServer(ctx, caddyListen); err != nil {
@@ -104,7 +122,7 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	// for BOTH doors and writes no state on rejection (APP_LIFECYCLE.md #
 	// admission policy).
 	step("admitting_compose")
-	if err := admission.Check(ctx, composeBytes); err != nil {
+	if err := m.admit(ctx, composeBytes); err != nil {
 		return store.Instance{}, err
 	}
 
@@ -138,9 +156,22 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 		return rollback(fmt.Errorf("instance dir: %w", err))
 	}
 
-	// 5. Generate override + .env.
+	// 5. Pull images, resolve digests, verify against the catalog promise
+	// (Door-1) or TOFU (Door-2), and persist (APP_LIFECYCLE.md # image digest
+	// pinning). Runs before the override is written so we generate it once
+	// with `image: name@sha256:…` pins rather than write-then-rewrite.
+	step("resolving_digests")
+	pins, err := resolveImages(ctx, m.docker, man, composeBytes)
+	if err != nil {
+		return rollback(fmt.Errorf("resolve digests: %w", err))
+	}
+	if err := m.store.SetInstanceImages(id, toInstanceImages(pins)); err != nil {
+		return rollback(fmt.Errorf("persist digests: %w", err))
+	}
+
+	// 6. Generate override (with pins) + .env.
 	step("generating_override")
-	if err := m.writeOverride(id, man, composeBytes); err != nil {
+	if err := m.writeOverride(id, man, composeBytes, pins); err != nil {
 		return rollback(fmt.Errorf("override: %w", err))
 	}
 	if err := m.writeEnv(id, slug); err != nil {
@@ -150,7 +181,7 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	// 7. Create per-app network.
 	step("creating_network")
 	appNet := "malmo-app-" + id
-	if err := createNetwork(ctx, appNet, !man.Permissions.Internet); err != nil {
+	if err := m.docker.NetworkCreate(ctx, appNet, !man.Permissions.Internet); err != nil {
 		return rollback(fmt.Errorf("create network: %w", err))
 	}
 
@@ -173,7 +204,7 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 
 	// 9. docker compose up -d.
 	step("compose_up")
-	if out, err := m.compose(ctx, id, "up", "-d"); err != nil {
+	if out, err := m.docker.ComposeUp(ctx, m.instanceDir(id), "malmo-"+id); err != nil {
 		return rollback(fmt.Errorf("compose up: %w\n%s", err, out))
 	}
 
@@ -181,7 +212,7 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	// instance dir is kept for inspection and the route flips to a "failed"
 	// splash (APP_LIFECYCLE.md install transaction, steps 10-11 failure).
 	step("waiting_healthy")
-	if err := m.waitHealthy(ctx, id, man.MainService, healthWaitTimeout); err != nil {
+	if err := m.waitHealthy(ctx, id, man.MainService, m.healthWait); err != nil {
 		_ = m.caddy.AddSplashRoute(ctx, id, host, man.Name, "failed")
 		_ = m.store.SetState(id, "failed")
 		inst.State = "failed"
@@ -220,7 +251,7 @@ func (m *Manager) waitHealthy(ctx context.Context, id, mainService string, timeo
 	deadline := time.Now().Add(timeout)
 	var last string
 	for {
-		running, health, err := inspectMainService(ctx, id, mainService)
+		running, health, err := m.docker.Inspect(ctx, id, mainService)
 		if err == nil {
 			last = health
 			if running && (health == "none" || health == "healthy") {
@@ -238,32 +269,9 @@ func (m *Manager) waitHealthy(ctx context.Context, id, mainService string, timeo
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(2 * time.Second):
+		case <-time.After(m.healthPoll):
 		}
 	}
-}
-
-// inspectMainService returns (running, healthStatus) for the main_service
-// container. healthStatus is "none" when the image declares no healthcheck.
-func inspectMainService(ctx context.Context, id, mainService string) (bool, string, error) {
-	cid, err := exec.CommandContext(ctx, "docker", "ps", "-q",
-		"--filter", "label=malmo.instance_id="+id,
-		"--filter", "label=com.docker.compose.service="+mainService).Output()
-	container := strings.TrimSpace(string(cid))
-	if err != nil || container == "" {
-		return false, "", fmt.Errorf("main_service container not found")
-	}
-	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f",
-		`{{.State.Running}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}`,
-		container).Output()
-	if err != nil {
-		return false, "", err
-	}
-	parts := strings.Fields(strings.TrimSpace(string(out)))
-	if len(parts) < 2 {
-		return false, "", fmt.Errorf("unexpected inspect output: %q", out)
-	}
-	return parts[0] == "true", parts[1], nil
 }
 
 // Uninstall tears down an instance (APP_LIFECYCLE.md: compose down -v, remove
@@ -290,7 +298,7 @@ func (m *Manager) Uninstall(ctx context.Context, id string) error {
 // a partial install can always be cleaned up.
 func (m *Manager) teardown(ctx context.Context, inst store.Instance, removeDir bool) error {
 	if _, err := os.Stat(m.composeFile(inst.ID)); err == nil {
-		if out, err := m.compose(ctx, inst.ID, "down", "-v"); err != nil {
+		if out, err := m.docker.ComposeDown(ctx, m.instanceDir(inst.ID), "malmo-"+inst.ID); err != nil {
 			log.Printf("compose down %s: %v\n%s", inst.ID, err, out)
 		}
 	}
@@ -300,7 +308,7 @@ func (m *Manager) teardown(ctx context.Context, inst store.Instance, removeDir b
 	if err := m.host.Unpublish(ctx, inst.Slug); err != nil {
 		log.Printf("mDNS unpublish %s: %v", inst.Slug, err)
 	}
-	_ = removeNetwork(ctx, "malmo-app-"+inst.ID)
+	_ = m.docker.NetworkRemove(ctx, "malmo-app-"+inst.ID)
 	if removeDir {
 		_ = os.RemoveAll(m.instanceDir(inst.ID))
 	}
@@ -326,7 +334,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("reconcile: list desired: %w", err)
 	}
-	actual, err := dockerManagedInstances(ctx)
+	actual, err := m.docker.PSManaged(ctx)
 	if err != nil {
 		return fmt.Errorf("reconcile: list actual: %w", err)
 	}
@@ -338,7 +346,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		case "running":
 			if !actual[inst.ID] {
 				log.Printf("reconcile: %s should be running but has no containers — starting", inst.ID)
-				if out, err := m.compose(ctx, inst.ID, "up", "-d"); err != nil {
+				if out, err := m.docker.ComposeUp(ctx, m.instanceDir(inst.ID), "malmo-"+inst.ID); err != nil {
 					log.Printf("reconcile: compose up %s: %v\n%s", inst.ID, err, out)
 					continue
 				}
@@ -347,7 +355,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		case "stopped":
 			if actual[inst.ID] {
 				log.Printf("reconcile: %s should be stopped but has containers — stopping", inst.ID)
-				if out, err := m.compose(ctx, inst.ID, "stop"); err != nil {
+				if out, err := m.docker.ComposeStop(ctx, m.instanceDir(inst.ID), "malmo-"+inst.ID); err != nil {
 					log.Printf("reconcile: compose stop %s: %v\n%s", inst.ID, err, out)
 				}
 			}
@@ -386,18 +394,16 @@ func (m *Manager) teardownOrphan(ctx context.Context, id string) {
 	// Prefer compose if the instance dir survived; otherwise remove containers
 	// by label and drop the per-app network directly.
 	if _, err := os.Stat(m.composeFile(id)); err == nil {
-		if out, err := m.compose(ctx, id, "down", "-v"); err != nil {
+		if out, err := m.docker.ComposeDown(ctx, m.instanceDir(id), "malmo-"+id); err != nil {
 			log.Printf("reconcile: compose down orphan %s: %v\n%s", id, err, out)
 		}
 	} else {
-		ids, _ := exec.CommandContext(ctx, "docker", "ps", "-aq",
-			"--filter", "label=malmo.instance_id="+id).Output()
-		for _, cid := range strings.Fields(string(ids)) {
-			_ = exec.CommandContext(ctx, "docker", "rm", "-f", cid).Run()
+		if err := m.docker.RemoveContainersByInstance(ctx, id); err != nil {
+			log.Printf("reconcile: remove orphan containers for %s: %v", id, err)
 		}
 	}
 	_ = m.caddy.RemoveRoute(ctx, id)
-	_ = removeNetwork(ctx, "malmo-app-"+id)
+	_ = m.docker.NetworkRemove(ctx, "malmo-app-"+id)
 }
 
 func (m *Manager) loadInstanceManifest(id string) (*manifest.Manifest, error) {
@@ -406,28 +412,6 @@ func (m *Manager) loadInstanceManifest(id string) (*manifest.Manifest, error) {
 		return nil, err
 	}
 	return manifest.Parse(b)
-}
-
-// dockerManagedInstances returns instance_id -> hasRunningContainer for every
-// malmo-managed container (running or stopped).
-func dockerManagedInstances(ctx context.Context) (map[string]bool, error) {
-	out, err := exec.CommandContext(ctx, "docker", "ps", "-a",
-		"--filter", "label=malmo.managed=true",
-		"--format", `{{.Label "malmo.instance_id"}} {{.State}}`).Output()
-	if err != nil {
-		return nil, err
-	}
-	res := map[string]bool{}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line == "" {
-			continue
-		}
-		parts := strings.Fields(line)
-		id := parts[0]
-		running := len(parts) > 1 && parts[1] == "running"
-		res[id] = res[id] || running
-	}
-	return res, nil
 }
 
 func (m *Manager) allocateSlug(man *manifest.Manifest) (string, error) {
@@ -476,12 +460,17 @@ func (m *Manager) writeInstanceDir(id string, man *manifest.Manifest, composeByt
 
 // writeOverride generates compose.override.yml per APP_LIFECYCLE.md "override
 // file contents": cap_drop ALL, no-new-privileges, forced restart, network
-// attachment. main_service additionally joins the ingress network with a
-// per-instance alias so Caddy can reach exactly this instance.
-func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes []byte) error {
+// attachment, plus the `image: name@sha256:…` pin per service (digest pinning
+// — APP_LIFECYCLE.md). main_service additionally joins the ingress network
+// with a per-instance alias so Caddy can reach exactly this instance.
+func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes []byte, pins []servicePin) error {
 	svcNames, err := composeServices(composeBytes)
 	if err != nil {
 		return err
+	}
+	pinBySvc := make(map[string]string, len(pins))
+	for _, p := range pins {
+		pinBySvc[p.Service] = p.PinnedRef()
 	}
 	appNet := "malmo-app-" + id
 	services := map[string]any{}
@@ -492,7 +481,7 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 				"aliases": []string{fmt.Sprintf("malmo-%s-%s", id, man.MainService)},
 			}
 		}
-		services[svc] = map[string]any{
+		entry := map[string]any{
 			"cap_drop":     []string{"ALL"},
 			"security_opt": []string{"no-new-privileges:true"},
 			"restart":      "unless-stopped",
@@ -506,6 +495,10 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 				"malmo.manifest_id": man.ID,
 			},
 		}
+		if ref, ok := pinBySvc[svc]; ok {
+			entry["image"] = ref
+		}
+		services[svc] = entry
 	}
 	override := map[string]any{
 		"services": services,
@@ -530,43 +523,6 @@ func (m *Manager) writeEnv(id, slug string) error {
 		"",
 	}, "\n")
 	return os.WriteFile(filepath.Join(m.instanceDir(id), ".env"), []byte(env), 0o644)
-}
-
-func (m *Manager) compose(ctx context.Context, id string, args ...string) (string, error) {
-	dir := m.instanceDir(id)
-	base := []string{
-		"compose",
-		"-f", "compose.yml",
-		"-f", "compose.override.yml",
-		"--env-file", ".env",
-		"-p", "malmo-" + id,
-	}
-	cmd := exec.CommandContext(ctx, "docker", append(base, args...)...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	return string(out), err
-}
-
-// --- docker network helpers (Docker API in spec; CLI here for skeleton) ---
-
-func createNetwork(ctx context.Context, name string, internal bool) error {
-	args := []string{"network", "create"}
-	if internal {
-		args = append(args, "--internal")
-	}
-	args = append(args, name)
-	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
-	if err != nil && strings.Contains(string(out), "already exists") {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, out)
-	}
-	return nil
-}
-
-func removeNetwork(ctx context.Context, name string) error {
-	return exec.CommandContext(ctx, "docker", "network", "rm", name).Run()
 }
 
 func composeServices(composeBytes []byte) ([]string, error) {
