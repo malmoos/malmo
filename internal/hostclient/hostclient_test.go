@@ -58,6 +58,23 @@ func startFakeAuthAgent(t *testing.T) string {
 		_ = json.NewEncoder(w).Encode(struct{}{})
 	})
 
+	roles := map[string]string{}
+	mux.HandleFunc("POST /v1/auth/set-role", func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.SetRoleRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Role != "admin" && req.Role != "member" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(protocol.Error{Code: "bad-request", Message: "role must be admin or member"})
+			return
+		}
+		mu.Lock()
+		roles[req.User] = req.Role
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(struct{}{})
+	})
+	_ = roles
+
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() {
@@ -66,6 +83,21 @@ func startFakeAuthAgent(t *testing.T) string {
 		_ = srv.Shutdown(ctx)
 	})
 	return sock
+}
+
+func TestSetRole(t *testing.T) {
+	c := New(startFakeAuthAgent(t))
+	ctx := context.Background()
+
+	if err := c.SetRole(ctx, "alice", "admin"); err != nil {
+		t.Fatalf("SetRole admin: %v", err)
+	}
+	if err := c.SetRole(ctx, "alice", "member"); err != nil {
+		t.Fatalf("SetRole member: %v", err)
+	}
+	if err := c.SetRole(ctx, "alice", "superuser"); err == nil {
+		t.Fatal("SetRole(bogus role) = nil; want error")
+	}
 }
 
 func TestAuthEndpoints(t *testing.T) {

@@ -1,0 +1,319 @@
+package api
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"strings"
+	"time"
+
+	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/malmo/malmo/internal/audit"
+	"github.com/malmo/malmo/internal/auth"
+	"github.com/malmo/malmo/internal/store"
+)
+
+func (s *Server) registerMeRoutes(api huma.API) {
+	huma.Register(api, huma.Operation{
+		OperationID: "change-my-password", Method: "POST", Path: "/api/v1/me/password",
+		Summary: "Self-service password change (any authenticated user)", DefaultStatus: 204,
+	}, s.changeMyPassword)
+}
+
+func (s *Server) registerUsers(api huma.API) {
+	huma.Register(api, huma.Operation{
+		OperationID: "list-users", Method: "GET", Path: "/api/v1/users",
+		Summary: "List all dashboard users (admin only)",
+	}, s.listUsers)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "create-user", Method: "POST", Path: "/api/v1/users",
+		Summary: "Create a new user (admin only)",
+	}, s.createUser)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "update-user-role", Method: "PATCH", Path: "/api/v1/users/{id}",
+		Summary: "Change a user's role (admin only)",
+	}, s.updateUserRole)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "delete-user", Method: "DELETE", Path: "/api/v1/users/{id}",
+		Summary: "Delete a user (admin only)", DefaultStatus: 204,
+	}, s.deleteUser)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "reset-user-password", Method: "POST", Path: "/api/v1/users/{id}/password",
+		Summary: "Admin-set password reset (admin only)", DefaultStatus: 204,
+	}, s.resetUserPassword)
+}
+
+func (s *Server) listUsers(ctx context.Context, _ *struct{}) (*struct {
+	Body struct {
+		Users []UserDTO `json:"users"`
+	}
+}, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	users, err := s.store.ListUsers()
+	if err != nil {
+		return nil, huma.Error500InternalServerError("list users failed", err)
+	}
+	out := &struct {
+		Body struct {
+			Users []UserDTO `json:"users"`
+		}
+	}{}
+	out.Body.Users = []UserDTO{}
+	for _, u := range users {
+		out.Body.Users = append(out.Body.Users, userDTO(u))
+	}
+	return out, nil
+}
+
+func (s *Server) createUser(ctx context.Context, in *struct {
+	Body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Role     string `json:"role,omitempty"`
+	}
+}) (*struct{ Body UserDTO }, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+
+	username := strings.TrimSpace(in.Body.Username)
+	password := in.Body.Password
+	if username == "" || password == "" {
+		return nil, huma.Error422UnprocessableEntity("username and password are required")
+	}
+
+	role := in.Body.Role
+	if role == "" {
+		role = store.RoleMember
+	}
+	if role != store.RoleAdmin && role != store.RoleMember {
+		return nil, huma.Error422UnprocessableEntity("role must be admin or member")
+	}
+
+	u := store.User{
+		ID: newID(), Username: username, Role: role, CreatedAt: time.Now(),
+	}
+	meta := map[string]any{"username": username, "role": role}
+	if err := s.store.CreateUser(u); err != nil {
+		s.auditor.Record(ctx, audit.ActionUserCreate, audit.Target{Kind: "user"}, meta, false)
+		if errors.Is(err, store.ErrConflict) {
+			return nil, huma.Error409Conflict("username already exists")
+		}
+		return nil, huma.Error500InternalServerError("create user failed", err)
+	}
+
+	if err := s.host.SetPassword(ctx, username, password); err != nil {
+		// Roll back the store row so the admin can retry with a valid host.
+		if delErr := s.store.DeleteUser(u.ID); delErr != nil {
+			slog.Error("rollback create user failed", "user_id", u.ID, "err", delErr)
+		}
+		s.auditor.Record(ctx, audit.ActionUserCreate, audit.Target{Kind: "user"}, meta, false)
+		return nil, huma.Error502BadGateway("host-agent set-password failed", err)
+	}
+
+	s.auditor.Record(ctx, audit.ActionUserCreate, audit.Target{Kind: "user", ID: u.ID}, meta, true)
+	return &struct{ Body UserDTO }{Body: userDTO(u)}, nil
+}
+
+func (s *Server) updateUserRole(ctx context.Context, in *struct {
+	ID   string `path:"id"`
+	Body struct {
+		Role string `json:"role"`
+	}
+}) (*struct{ Body UserDTO }, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+
+	role := in.Body.Role
+	if role != store.RoleAdmin && role != store.RoleMember {
+		return nil, huma.Error422UnprocessableEntity("role must be admin or member")
+	}
+
+	actor, _ := auth.FromContext(ctx)
+	targetID := in.ID
+	tgt := audit.Target{Kind: "user", ID: targetID}
+
+	// No self-demote.
+	if actor.User.ID == targetID && role != store.RoleAdmin {
+		s.auditor.Record(ctx, audit.ActionUserRoleChange, tgt, map[string]any{"new_role": role}, false)
+		return nil, huma.Error409Conflict("cannot demote yourself")
+	}
+
+	target, err := s.store.GetUser(targetID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, huma.Error404NotFound("no such user")
+	}
+	if err != nil {
+		return nil, huma.Error500InternalServerError("get user failed", err)
+	}
+	meta := map[string]any{"old_role": target.Role, "new_role": role}
+
+	// Last-admin guard: if demoting the only admin, reject.
+	if target.Role == store.RoleAdmin && role == store.RoleMember {
+		n, err := s.store.CountAdmins()
+		if err != nil {
+			return nil, huma.Error500InternalServerError("count admins failed", err)
+		}
+		if n <= 1 {
+			s.auditor.Record(ctx, audit.ActionUserRoleChange, tgt, meta, false)
+			return nil, huma.Error409Conflict("cannot demote the last admin")
+		}
+	}
+
+	// Brain commits first; on host failure we restore the previous role so the
+	// two sides stay aligned (USERS_AND_GROUPS.md: "if either side fails, both
+	// roll back"). Mirror of createUser's brain-commit-then-rollback pattern.
+	if err := s.store.UpdateRole(targetID, role); err != nil {
+		s.auditor.Record(ctx, audit.ActionUserRoleChange, tgt, meta, false)
+		return nil, huma.Error500InternalServerError("update role failed", err)
+	}
+	if err := s.host.SetRole(ctx, target.Username, role); err != nil {
+		if rbErr := s.store.UpdateRole(targetID, target.Role); rbErr != nil {
+			slog.Error("rollback update role failed", "user_id", targetID, "err", rbErr)
+		}
+		s.auditor.Record(ctx, audit.ActionUserRoleChange, tgt, meta, false)
+		return nil, huma.Error502BadGateway("host-agent set-role failed", err)
+	}
+
+	s.auditor.Record(ctx, audit.ActionUserRoleChange, tgt, meta, true)
+
+	target.Role = role
+	return &struct{ Body UserDTO }{Body: userDTO(target)}, nil
+}
+
+func (s *Server) deleteUser(ctx context.Context, in *struct {
+	ID string `path:"id"`
+}) (*struct{}, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+
+	actor, _ := auth.FromContext(ctx)
+	targetID := in.ID
+	tgt := audit.Target{Kind: "user", ID: targetID}
+
+	// Self-delete check fires before the last-admin guard on purpose: an admin
+	// who wants to remove their own account always has to go through another
+	// admin, even if there are several. Forces a second pair of eyes on the
+	// "lose the only way in" move.
+	if actor.User.ID == targetID {
+		s.auditor.Record(ctx, audit.ActionUserDelete, tgt, nil, false)
+		return nil, huma.Error409Conflict("cannot delete yourself")
+	}
+
+	target, err := s.store.GetUser(targetID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, huma.Error404NotFound("no such user")
+	}
+	if err != nil {
+		return nil, huma.Error500InternalServerError("get user failed", err)
+	}
+	meta := map[string]any{"username": target.Username}
+
+	// Last-admin guard.
+	if target.Role == store.RoleAdmin {
+		n, err := s.store.CountAdmins()
+		if err != nil {
+			return nil, huma.Error500InternalServerError("count admins failed", err)
+		}
+		if n <= 1 {
+			s.auditor.Record(ctx, audit.ActionUserDelete, tgt, meta, false)
+			return nil, huma.Error409Conflict("cannot delete the last admin")
+		}
+	}
+
+	// Brain commits first (FK cascades sessions); on host failure we restore
+	// the row so the two sides stay aligned. Cascaded sessions don't come back —
+	// the user has to log in again, which is acceptable for a rare error path.
+	if err := s.store.DeleteUser(targetID); err != nil {
+		s.auditor.Record(ctx, audit.ActionUserDelete, tgt, meta, false)
+		return nil, huma.Error500InternalServerError("delete user failed", err)
+	}
+	if err := s.host.DeleteUser(ctx, target.Username); err != nil {
+		if rbErr := s.store.CreateUser(target); rbErr != nil {
+			slog.Error("rollback delete user failed", "user_id", targetID, "err", rbErr)
+		}
+		s.auditor.Record(ctx, audit.ActionUserDelete, tgt, meta, false)
+		return nil, huma.Error502BadGateway("host-agent delete-user failed", err)
+	}
+
+	s.auditor.Record(ctx, audit.ActionUserDelete, tgt, meta, true)
+	return nil, nil
+}
+
+func (s *Server) changeMyPassword(ctx context.Context, in *struct {
+	Body struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+}) (*struct{}, error) {
+	id, ok := auth.FromContext(ctx)
+	if !ok {
+		return nil, huma.Error401Unauthorized("unauthenticated")
+	}
+
+	if in.Body.CurrentPassword == "" || in.Body.NewPassword == "" {
+		return nil, huma.Error422UnprocessableEntity("current_password and new_password are required")
+	}
+
+	tgt := audit.Target{Kind: "user", ID: id.User.ID}
+	valid, err := s.host.VerifyPassword(ctx, id.User.Username, in.Body.CurrentPassword)
+	if err != nil {
+		s.auditor.Record(ctx, audit.ActionUserPasswordChange, tgt, nil, false)
+		return nil, huma.Error502BadGateway("host-agent verify failed", err)
+	}
+	if !valid {
+		s.auditor.Record(ctx, audit.ActionUserPasswordChange, tgt, nil, false)
+		return nil, huma.Error401Unauthorized("current password is incorrect")
+	}
+
+	if err := s.host.SetPassword(ctx, id.User.Username, in.Body.NewPassword); err != nil {
+		s.auditor.Record(ctx, audit.ActionUserPasswordChange, tgt, nil, false)
+		return nil, huma.Error502BadGateway("host-agent set-password failed", err)
+	}
+
+	s.auditor.Record(ctx, audit.ActionUserPasswordChange, tgt, nil, true)
+	return nil, nil
+}
+
+func (s *Server) resetUserPassword(ctx context.Context, in *struct {
+	ID   string `path:"id"`
+	Body struct {
+		Password string `json:"password"`
+	}
+}) (*struct{}, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+
+	password := in.Body.Password
+	if password == "" {
+		return nil, huma.Error422UnprocessableEntity("password is required")
+	}
+
+	target, err := s.store.GetUser(in.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, huma.Error404NotFound("no such user")
+	}
+	if err != nil {
+		return nil, huma.Error500InternalServerError("get user failed", err)
+	}
+	tgt := audit.Target{Kind: "user", ID: target.ID}
+	meta := map[string]any{"username": target.Username}
+
+	if err := s.host.SetPassword(ctx, target.Username, password); err != nil {
+		s.auditor.Record(ctx, audit.ActionUserPasswordReset, tgt, meta, false)
+		return nil, huma.Error502BadGateway("host-agent set-password failed", err)
+	}
+
+	s.auditor.Record(ctx, audit.ActionUserPasswordReset, tgt, meta, true)
+	return nil, nil
+}

@@ -71,6 +71,13 @@ type DeleteUserRequest struct {
 	User string `json:"user"`
 }
 
+// SetRoleRequest is POST /v1/auth/set-role. Updates the user's Linux group
+// membership (malmo-admin) to match the new role. Role must be "admin" or "member".
+type SetRoleRequest struct {
+	User string `json:"user"`
+	Role string `json:"role"`
+}
+
 // Error is the JSON error body shape on non-2xx responses.
 type Error struct {
 	Code    string `json:"code"`

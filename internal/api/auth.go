@@ -368,6 +368,16 @@ func (s *Server) listAudit(ctx context.Context, in *struct {
 	return out, nil
 }
 
+// requireAdmin returns 403 when the acting identity is missing or not an admin.
+// Call as the first line of every admin-only handler.
+func requireAdmin(ctx context.Context) error {
+	id, ok := auth.FromContext(ctx)
+	if !ok || !id.IsAdmin() {
+		return huma.Error403Forbidden("admin role required")
+	}
+	return nil
+}
+
 // --- helpers -------------------------------------------------------------
 
 // newID returns a random opaque identifier for new user rows. We don't reuse

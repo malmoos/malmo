@@ -27,6 +27,9 @@ type agent struct {
 	// this is /etc/shadow via PAM; the fake stores it in memory so tests and
 	// the dev loop can exercise the protocol without touching the host.
 	passwords map[string][]byte
+	// roles holds the last role set for each user. Real impl flips Linux group
+	// membership (malmo-admin) via gpasswd; the fake is in-memory only.
+	roles     map[string]string
 	startedAt time.Time
 }
 
@@ -54,6 +57,7 @@ func main() {
 	a := &agent{
 		published: map[string]protocol.PublishedName{},
 		passwords: map[string][]byte{},
+		roles:     map[string]string{},
 		startedAt: time.Now(),
 	}
 
@@ -64,6 +68,7 @@ func main() {
 	mux.HandleFunc("GET /v1/system/status", a.systemStatus)
 	mux.HandleFunc("POST /v1/auth/verify-password", a.verifyPassword)
 	mux.HandleFunc("POST /v1/auth/set-password", a.setPassword)
+	mux.HandleFunc("POST /v1/auth/set-role", a.setRole)
 	mux.HandleFunc("POST /v1/auth/delete-user", a.deleteUser)
 
 	slog.Info("host-agent (fake) listening", "sock", sockPath)
@@ -161,6 +166,26 @@ func (a *agent) setPassword(w http.ResponseWriter, r *http.Request) {
 	a.passwords[req.User] = hash
 	a.mu.Unlock()
 	slog.Info("set-password", "user", req.User)
+	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+func (a *agent) setRole(w http.ResponseWriter, r *http.Request) {
+	var req protocol.SetRoleRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.User == "" {
+		writeErr(w, http.StatusBadRequest, "bad-request", "user is required")
+		return
+	}
+	if req.Role != "admin" && req.Role != "member" {
+		writeErr(w, http.StatusBadRequest, "bad-request", "role must be admin or member")
+		return
+	}
+	a.mu.Lock()
+	a.roles[req.User] = req.Role
+	a.mu.Unlock()
+	slog.Info("set-role", "user", req.User, "role", req.Role)
 	writeJSON(w, http.StatusOK, struct{}{})
 }
 

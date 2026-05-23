@@ -552,6 +552,49 @@ func TestAuditEventsAfterIDCursor(t *testing.T) {
 	}
 }
 
+func TestUpdateRoleAndCountAdmins(t *testing.T) {
+	s := open(t)
+	if err := s.CreateUser(sampleUser("u1", "alice", RoleAdmin)); err != nil {
+		t.Fatalf("CreateUser alice: %v", err)
+	}
+	if err := s.CreateUser(sampleUser("u2", "bob", RoleMember)); err != nil {
+		t.Fatalf("CreateUser bob: %v", err)
+	}
+
+	n, err := s.CountAdmins()
+	if err != nil || n != 1 {
+		t.Fatalf("CountAdmins = %d, %v; want 1, nil", n, err)
+	}
+
+	// Promote bob to admin.
+	if err := s.UpdateRole("u2", RoleAdmin); err != nil {
+		t.Fatalf("UpdateRole promote: %v", err)
+	}
+	n, _ = s.CountAdmins()
+	if n != 2 {
+		t.Fatalf("CountAdmins after promote = %d; want 2", n)
+	}
+
+	// Demote alice to member.
+	if err := s.UpdateRole("u1", RoleMember); err != nil {
+		t.Fatalf("UpdateRole demote: %v", err)
+	}
+	n, _ = s.CountAdmins()
+	if n != 1 {
+		t.Fatalf("CountAdmins after demote = %d; want 1", n)
+	}
+
+	// ErrNotFound on unknown id.
+	if err := s.UpdateRole("ghost", RoleAdmin); err != ErrNotFound {
+		t.Fatalf("UpdateRole(ghost) = %v, want ErrNotFound", err)
+	}
+
+	// Invalid role rejected.
+	if err := s.UpdateRole("u1", "superuser"); err == nil {
+		t.Fatal("UpdateRole(bogus role) = nil; want error")
+	}
+}
+
 // Users have string IDs (TEXT in the schema); actor_user_id must round-trip
 // non-integer-shaped values byte-identically. Guards against the schema
 // regressing to INTEGER, which silently works for short ids like "u1"

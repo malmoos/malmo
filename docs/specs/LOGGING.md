@@ -162,6 +162,11 @@ The following `action` strings are the pinned v1 set. Defined as exported consts
 | `app.install` | Catalog (Door-1) app installed. |
 | `app.uninstall` | App uninstalled. |
 | `app.custom.create` | User-pasted (Door-2) compose installed. |
+| `user.create` | Admin created a new user via `POST /api/v1/users`. |
+| `user.role.change` | Admin changed a user's role via `PATCH /api/v1/users/:id`. |
+| `user.delete` | Admin deleted a user via `DELETE /api/v1/users/:id`. |
+| `user.password.reset` | Admin reset another user's password via `POST /api/v1/users/:id/password`. |
+| `user.password.change` | User changed their own password via `POST /api/v1/me/password` (success and failure both audited). |
 
 SSH/SMB/sudo ingestion (`ssh.login.success`, `ssh.login.failure`, `smb.login.*`, `sudo.invoke`, `su.invoke`) is deferred — see "What this doc deliberately doesn't pin" and `NEXT.md`.
 

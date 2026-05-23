@@ -58,6 +58,11 @@ func (c *Client) SetPassword(ctx context.Context, user, password string) error {
 	return c.do(ctx, "POST", "/v1/auth/set-password", protocol.SetPasswordRequest{User: user, Password: password}, nil)
 }
 
+// SetRole updates the user's Linux group membership to match role ("admin" or "member").
+func (c *Client) SetRole(ctx context.Context, user, role string) error {
+	return c.do(ctx, "POST", "/v1/auth/set-role", protocol.SetRoleRequest{User: user, Role: role}, nil)
+}
+
 // DeleteUser removes the user. Idempotent: unknown user returns nil.
 func (c *Client) DeleteUser(ctx context.Context, user string) error {
 	return c.do(ctx, "POST", "/v1/auth/delete-user", protocol.DeleteUserRequest{User: user}, nil)

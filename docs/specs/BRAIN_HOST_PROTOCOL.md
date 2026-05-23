@@ -100,12 +100,19 @@ POST /v1/auth/set-password
 ```
 
 ```
+POST /v1/auth/set-role
+  { "user": "cindy", "role": "admin" }   # role ∈ {"admin","member"}
+  → 200 OK  {}
+  → 400 Bad Request  { "code": "bad-request", "message": "role must be admin or member" }
+```
+
+```
 POST /v1/auth/delete-user
   { "user": "cindy" }
   → 200 OK  {}
 ```
 
-`set-password` is **upsert**: it creates the user if missing (real impl: `useradd` + `passwd` + Samba sync as one atomic op via `AUTH.md` # Password change) and otherwise just updates the password. The brain stays oblivious to "is this a create or an update" — single endpoint, single round-trip during `/v1/setup`. `delete-user` is idempotent: unknown user returns 200. Neither endpoint returns the credential after the call; the brain holds no password material.
+`set-password` is **upsert**: it creates the user if missing (real impl: `useradd` + `passwd` + Samba sync as one atomic op via `AUTH.md` # Password change) and otherwise just updates the password. The brain stays oblivious to "is this a create or an update" — single endpoint, single round-trip during `/v1/setup`. `set-role` updates Linux group membership (`malmo-admin`) to match the new role (real impl: `gpasswd -a`/`-d`); the fake host-agent stores the role in memory only. `delete-user` is idempotent: unknown user returns 200. None of these endpoints return credential material; the brain holds no password material.
 
 **Network endpoints (NetworkManager-backed).** host-agent exposes Pattern A routes that wrap NetworkManager's DBus surface:
 

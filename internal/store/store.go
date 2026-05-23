@@ -330,6 +330,28 @@ func (s *Store) DeleteUser(id string) error {
 	return nil
 }
 
+// UpdateRole changes a user's role. Returns ErrNotFound when no such user exists.
+func (s *Store) UpdateRole(id, role string) error {
+	if role != RoleAdmin && role != RoleMember {
+		return fmt.Errorf("invalid role %q", role)
+	}
+	res, err := s.db.Exec(`UPDATE users SET role=? WHERE id=?`, role, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// CountAdmins returns the number of users with role="admin".
+func (s *Store) CountAdmins() (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM users WHERE role='admin'`).Scan(&n)
+	return n, err
+}
+
 // HasAnyUser is the bootstrap probe: /v1/auth/state uses it to route the UI
 // between /setup and /login.
 func (s *Store) HasAnyUser() (bool, error) {

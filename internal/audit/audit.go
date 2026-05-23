@@ -15,13 +15,20 @@ import (
 
 // v1 action vocabulary (LOGGING.md # Write path).
 const (
-	ActionSetupComplete  = "setup.complete"
-	ActionLoginSuccess   = "login.success"
-	ActionLoginFailure   = "login.failure"
-	ActionLogout         = "logout"
-	ActionAppInstall     = "app.install"
-	ActionAppUninstall   = "app.uninstall"
+	ActionSetupComplete   = "setup.complete"
+	ActionLoginSuccess    = "login.success"
+	ActionLoginFailure    = "login.failure"
+	ActionLogout          = "logout"
+	ActionAppInstall      = "app.install"
+	ActionAppUninstall    = "app.uninstall"
 	ActionAppCustomCreate = "app.custom.create"
+
+	// User management actions (USERS_AND_GROUPS.md).
+	ActionUserCreate        = "user.create"
+	ActionUserRoleChange    = "user.role.change"
+	ActionUserDelete        = "user.delete"
+	ActionUserPasswordReset = "user.password.reset"
+	ActionUserPasswordChange = "user.password.change"
 )
 
 // Target describes the object the action acts on. Both fields are optional.

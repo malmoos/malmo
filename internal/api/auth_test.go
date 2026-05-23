@@ -56,6 +56,7 @@ func newHarness(t *testing.T) *harness {
 		t.Fatalf("listen: %v", err)
 	}
 	mux := http.NewServeMux()
+	roles := map[string]string{}
 	mux.HandleFunc("POST /v1/auth/set-password", func(w http.ResponseWriter, r *http.Request) {
 		var req protocol.SetPasswordRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -73,6 +74,22 @@ func newHarness(t *testing.T) *harness {
 		pmu.Unlock()
 		valid := ok && bcrypt.CompareHashAndPassword(h, []byte(req.Password)) == nil
 		_ = json.NewEncoder(w).Encode(protocol.VerifyPasswordResponse{Valid: valid})
+	})
+	mux.HandleFunc("POST /v1/auth/set-role", func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.SetRoleRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		pmu.Lock()
+		roles[req.User] = req.Role
+		pmu.Unlock()
+		_ = json.NewEncoder(w).Encode(struct{}{})
+	})
+	mux.HandleFunc("POST /v1/auth/delete-user", func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.DeleteUserRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		pmu.Lock()
+		delete(pwds, req.User)
+		pmu.Unlock()
+		_ = json.NewEncoder(w).Encode(struct{}{})
 	})
 	hostHTTP := &http.Server{Handler: mux}
 	go func() { _ = hostHTTP.Serve(ln) }()
