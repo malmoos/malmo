@@ -58,6 +58,7 @@ func (h *harness) loginAs(username, password string) {
 func TestListUsersAdminOnly(t *testing.T) {
 	h := newHarness(t)
 	h.setupAdmin("alice", "pass1")
+	// list-users has no elevation gate; skip elevate here.
 
 	const bobID = "u_bob001"
 	h.addMember(bobID, "bob", "bobpass")
@@ -101,6 +102,7 @@ func TestListUsersRequiresAuth(t *testing.T) {
 func TestCreateUserHappyPath(t *testing.T) {
 	h := newHarness(t)
 	h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
 
 	resp := h.do("POST", "/api/v1/users", map[string]string{
 		"username": "bob", "password": "bobpass", "role": "member",
@@ -128,6 +130,7 @@ func TestCreateUserHappyPath(t *testing.T) {
 func TestCreateUserDefaultsToMember(t *testing.T) {
 	h := newHarness(t)
 	h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
 
 	resp := h.do("POST", "/api/v1/users", map[string]string{
 		"username": "charlie", "password": "charliepass",
@@ -144,6 +147,7 @@ func TestCreateUserDefaultsToMember(t *testing.T) {
 func TestCreateUserDuplicateUsername409(t *testing.T) {
 	h := newHarness(t)
 	h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
 
 	h.do("POST", "/api/v1/users", map[string]string{
 		"username": "bob", "password": "p1",
@@ -161,6 +165,7 @@ func TestCreateUserDuplicateUsername409(t *testing.T) {
 func TestCreateUserInvalidRole422(t *testing.T) {
 	h := newHarness(t)
 	h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
 
 	resp := h.do("POST", "/api/v1/users", map[string]string{
 		"username": "bob", "password": "p1", "role": "superuser",
@@ -190,6 +195,14 @@ func TestCreateUserRollsBackOnHostFailure(t *testing.T) {
 	// Spin up a harness where set-password always 500s.
 	h := newHarnessWithBrokenSetPassword(t)
 	h.setupAdminDirect("alice")
+	// setupAdminDirect seeds the password as a placeholder; elevate uses
+	// verify-password which works in this harness (only set-password is broken).
+	// We need to seed a real bcrypt hash so verify-password succeeds.
+	hash, _ := bcrypt.GenerateFromPassword([]byte("alicepass"), bcrypt.MinCost)
+	h.pmu.Lock()
+	h.pwds["alice"] = hash
+	h.pmu.Unlock()
+	h.elevate("alicepass")
 
 	resp := h.do("POST", "/api/v1/users", map[string]string{
 		"username": "bob", "password": "p",
@@ -215,6 +228,7 @@ func TestCreateUserRollsBackOnHostFailure(t *testing.T) {
 func TestUpdateRoleHappyPath(t *testing.T) {
 	h := newHarness(t)
 	h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
 	h.do("POST", "/api/v1/users", map[string]string{
 		"username": "bob", "password": "bobpass", "role": "member",
 	}).Body.Close()
@@ -242,6 +256,7 @@ func TestUpdateRoleHappyPath(t *testing.T) {
 func TestUpdateRoleLastAdminGuard(t *testing.T) {
 	h := newHarness(t)
 	alice := h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
 
 	resp := h.do("PATCH", fmt.Sprintf("/api/v1/users/%s", alice.ID), map[string]string{
 		"role": "member",
@@ -255,6 +270,7 @@ func TestUpdateRoleLastAdminGuard(t *testing.T) {
 func TestUpdateRoleNoSelfDemote(t *testing.T) {
 	h := newHarness(t)
 	alice := h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
 
 	// Add a second admin so the last-admin guard doesn't fire.
 	h.do("POST", "/api/v1/users", map[string]string{
@@ -289,6 +305,7 @@ func TestUpdateRoleMemberForbidden(t *testing.T) {
 func TestUpdateRoleNotFound(t *testing.T) {
 	h := newHarness(t)
 	h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
 
 	resp := h.do("PATCH", "/api/v1/users/u_ghost", map[string]string{"role": "member"})
 	if resp.StatusCode != 404 {
@@ -302,6 +319,7 @@ func TestUpdateRoleNotFound(t *testing.T) {
 func TestDeleteUserHappyPath(t *testing.T) {
 	h := newHarness(t)
 	h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
 	resp := h.do("POST", "/api/v1/users", map[string]string{
 		"username": "bob", "password": "p",
 	})
@@ -322,6 +340,7 @@ func TestDeleteUserHappyPath(t *testing.T) {
 func TestDeleteUserLastAdminGuard(t *testing.T) {
 	h := newHarness(t)
 	alice := h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
 
 	resp := h.do("DELETE", fmt.Sprintf("/api/v1/users/%s", alice.ID), nil)
 	if resp.StatusCode != 409 {
@@ -333,6 +352,7 @@ func TestDeleteUserLastAdminGuard(t *testing.T) {
 func TestDeleteUserNoSelfDelete(t *testing.T) {
 	h := newHarness(t)
 	alice := h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
 
 	// Add second admin so last-admin guard doesn't fire.
 	h.do("POST", "/api/v1/users", map[string]string{
@@ -363,6 +383,7 @@ func TestDeleteUserMemberForbidden(t *testing.T) {
 func TestDeleteUserNotFound(t *testing.T) {
 	h := newHarness(t)
 	h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
 
 	resp := h.do("DELETE", "/api/v1/users/u_ghost", nil)
 	if resp.StatusCode != 404 {
@@ -376,6 +397,7 @@ func TestDeleteUserNotFound(t *testing.T) {
 func TestResetUserPasswordHappyPath(t *testing.T) {
 	h := newHarness(t)
 	h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
 	resp := h.do("POST", "/api/v1/users", map[string]string{
 		"username": "bob", "password": "oldpass",
 	})
@@ -413,6 +435,7 @@ func TestResetUserPasswordHappyPath(t *testing.T) {
 func TestResetUserPasswordNotFound(t *testing.T) {
 	h := newHarness(t)
 	h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
 	resp := h.do("POST", "/api/v1/users/u_does_not_exist/password", map[string]string{
 		"password": "anything",
 	})
@@ -529,6 +552,7 @@ func TestChangeMyPasswordAuditsFailure(t *testing.T) {
 func TestCreateUserAuditEvent(t *testing.T) {
 	h := newHarness(t)
 	h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
 
 	resp := h.do("POST", "/api/v1/users", map[string]string{
 		"username": "bob", "password": "p",
@@ -551,6 +575,7 @@ func TestCreateUserAuditEvent(t *testing.T) {
 func TestDeleteUserAuditEvent(t *testing.T) {
 	h := newHarness(t)
 	h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
 	resp := h.do("POST", "/api/v1/users", map[string]string{"username": "bob", "password": "p"})
 	bob := decodeJSON[UserDTO](t, resp)
 
@@ -572,6 +597,13 @@ func TestDeleteUserAuditEvent(t *testing.T) {
 func TestUpdateRoleRollsBackOnHostFailure(t *testing.T) {
 	h := newHarnessWithBrokenSetRole(t)
 	h.setupAdminDirect("alice")
+	// Seed a real password so elevate's verify-password succeeds.
+	hash, _ := bcrypt.GenerateFromPassword([]byte("alicepass"), bcrypt.MinCost)
+	h.pmu.Lock()
+	h.pwds["alice"] = hash
+	h.pmu.Unlock()
+	h.elevate("alicepass")
+
 	bob := store.User{
 		ID: "u_bob", Username: "bob", Role: store.RoleMember, CreatedAt: time.Now(),
 	}

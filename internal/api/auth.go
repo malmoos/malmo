@@ -140,6 +140,11 @@ func (s *Server) registerAuth(api huma.API) {
 		OperationID: "list-audit", Method: "GET", Path: "/api/v1/audit",
 		Summary: "Paginated audit log; admins see all rows, members see their own",
 	}, s.listAudit)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "elevate", Method: "POST", Path: "/api/v1/auth/elevate",
+		Summary: "Re-verify password and enter the 5-minute elevation window (auth required)",
+	}, s.elevate)
 }
 
 // --- handlers ------------------------------------------------------------
@@ -478,12 +483,71 @@ func (s *Server) listAudit(ctx context.Context, in *struct {
 	return out, nil
 }
 
+// elevate re-verifies the caller's password and marks the session elevated for
+// ElevationWindow. Body: {password}. Returns {elevated_until: <unix>} on
+// success. Audits both success and failure per the elevation-class rule
+// (CLAUDE.md # Go code discipline).
+func (s *Server) elevate(ctx context.Context, in *struct {
+	Body struct {
+		Password string `json:"password"`
+	}
+}) (*struct {
+	Body struct {
+		ElevatedUntil int64 `json:"elevated_until"`
+	}
+}, error) {
+	id, ok := auth.FromContext(ctx)
+	if !ok {
+		return nil, huma.Error401Unauthorized("unauthenticated")
+	}
+	if in.Body.Password == "" {
+		return nil, huma.Error422UnprocessableEntity("password is required")
+	}
+
+	valid, err := s.host.VerifyPassword(ctx, id.User.Username, in.Body.Password)
+	if err != nil {
+		return nil, huma.Error502BadGateway("host-agent verify failed", err)
+	}
+	if !valid {
+		s.auditor.Record(ctx, audit.ActionElevateFailure,
+			audit.Target{Kind: "user", ID: id.User.ID}, nil, false)
+		return nil, huma.Error401Unauthorized("invalid password")
+	}
+
+	if err := s.auth.Elevate(id.Session.Token); err != nil {
+		return nil, huma.Error500InternalServerError("elevate failed", err)
+	}
+
+	until := s.auth.Clock().Add(auth.ElevationWindow)
+	s.auditor.Record(ctx, audit.ActionElevateSuccess,
+		audit.Target{Kind: "user", ID: id.User.ID}, nil, true)
+
+	out := &struct {
+		Body struct {
+			ElevatedUntil int64 `json:"elevated_until"`
+		}
+	}{}
+	out.Body.ElevatedUntil = until.Unix()
+	return out, nil
+}
+
 // requireAdmin returns 403 when the acting identity is missing or not an admin.
 // Call as the first line of every admin-only handler.
 func requireAdmin(ctx context.Context) error {
 	id, ok := auth.FromContext(ctx)
 	if !ok || !id.IsAdmin() {
 		return huma.Error403Forbidden("admin role required")
+	}
+	return nil
+}
+
+// requireElevated returns 403 with title "elevation_required" when the session
+// is not in the 5-minute elevation window (USERS_AND_GROUPS.md # Elevation in
+// the UI). Call AFTER requireAdmin so members see admin_required, not this.
+func requireElevated(ctx context.Context) error {
+	id, ok := auth.FromContext(ctx)
+	if !ok || !id.IsElevated() {
+		return huma.NewError(http.StatusForbidden, "elevation_required")
 	}
 	return nil
 }

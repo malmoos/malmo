@@ -33,6 +33,10 @@ const (
 	// Recovery-code redemption (AUTH.md # Using the recovery code).
 	ActionRecoverSuccess = "recover.success"
 	ActionRecoverFailure = "recover.failure"
+
+	// Elevation window (USERS_AND_GROUPS.md # Elevation in the UI).
+	ActionElevateSuccess = "auth.elevate.success"
+	ActionElevateFailure = "auth.elevate.failure"
 )
 
 // Target describes the object the action acts on. Both fields are optional.

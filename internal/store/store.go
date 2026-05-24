@@ -46,10 +46,12 @@ const (
 // Sessions). `last_seen_at` is updated on each authenticated request so the
 // session can age out independently of issue time.
 type Session struct {
-	Token      string
-	UserID     string
-	CreatedAt  time.Time
-	LastSeenAt time.Time
+	Token         string
+	UserID        string
+	CreatedAt     time.Time
+	LastSeenAt    time.Time
+	ExpiresAt     time.Time // absolute hard cap (90 days from issue)
+	ElevatedUntil time.Time // zero value means not elevated
 }
 
 // ErrConflict signals a uniqueness collision (duplicate username, second
@@ -108,10 +110,12 @@ func (s *Store) migrate() error {
 			created_at    INTEGER NOT NULL
 		);
 		CREATE TABLE IF NOT EXISTS sessions (
-			token        TEXT PRIMARY KEY,
-			user_id      TEXT NOT NULL,
-			created_at   INTEGER NOT NULL,
-			last_seen_at INTEGER NOT NULL,
+			token          TEXT PRIMARY KEY,
+			user_id        TEXT NOT NULL,
+			created_at     INTEGER NOT NULL,
+			last_seen_at   INTEGER NOT NULL,
+			expires_at     INTEGER NOT NULL DEFAULT 0,
+			elevated_until INTEGER NOT NULL DEFAULT 0,
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		);
 		CREATE TABLE IF NOT EXISTS audit_events (
@@ -135,7 +139,55 @@ func (s *Store) migrate() error {
 		CREATE TRIGGER IF NOT EXISTS audit_events_no_delete
 			BEFORE DELETE ON audit_events
 			BEGIN SELECT RAISE(ABORT, 'audit_events is append-only'); END;`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Idempotent migrations: add new columns to sessions if they don't exist.
+	// SQLite doesn't support IF NOT EXISTS on ALTER TABLE; we detect existence
+	// by probing PRAGMA table_info and skip if the column is already there.
+	for _, col := range []struct {
+		name string
+		stmt string
+	}{
+		{"expires_at", "ALTER TABLE sessions ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0"},
+		{"elevated_until", "ALTER TABLE sessions ADD COLUMN elevated_until INTEGER NOT NULL DEFAULT 0"},
+	} {
+		var count int
+		rows, qErr := s.db.Query(`PRAGMA table_info(sessions)`)
+		if qErr != nil {
+			return qErr
+		}
+		for rows.Next() {
+			var cid int
+			var cname, ctype string
+			var notnull, pk int
+			var dfltVal any
+			if sErr := rows.Scan(&cid, &cname, &ctype, &notnull, &dfltVal, &pk); sErr != nil {
+				_ = rows.Close()
+				return sErr
+			}
+			if cname == col.name {
+				count++
+			}
+		}
+		_ = rows.Close()
+		if count == 0 {
+			if _, err := s.db.Exec(col.stmt); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Backfill expires_at = created_at + 90 days for rows that have the default 0.
+	const ninetyDays = 90 * 24 * 60 * 60 // seconds
+	if _, err := s.db.Exec(
+		`UPDATE sessions SET expires_at = created_at + ? WHERE expires_at = 0`, ninetyDays,
+	); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // InstanceImage is the resolved image pin for one service in one instance
@@ -377,8 +429,10 @@ func (s *Store) HasAnyUser() (bool, error) {
 // CreateSession persists a freshly issued session. Caller picks the token.
 func (s *Store) CreateSession(sess Session) error {
 	_, err := s.db.Exec(
-		`INSERT INTO sessions (token, user_id, created_at, last_seen_at) VALUES (?,?,?,?)`,
-		sess.Token, sess.UserID, sess.CreatedAt.Unix(), sess.LastSeenAt.Unix())
+		`INSERT INTO sessions (token, user_id, created_at, last_seen_at, expires_at, elevated_until)
+		 VALUES (?,?,?,?,?,?)`,
+		sess.Token, sess.UserID, sess.CreatedAt.Unix(), sess.LastSeenAt.Unix(),
+		sess.ExpiresAt.Unix(), sess.ElevatedUntil.Unix())
 	return err
 }
 
@@ -386,10 +440,11 @@ func (s *Store) CreateSession(sess Session) error {
 // middleware maps that to 401.
 func (s *Store) GetSession(token string) (Session, error) {
 	var sess Session
-	var created, lastSeen int64
+	var created, lastSeen, expiresAt, elevatedUntil int64
 	err := s.db.QueryRow(
-		`SELECT token, user_id, created_at, last_seen_at FROM sessions WHERE token=?`, token,
-	).Scan(&sess.Token, &sess.UserID, &created, &lastSeen)
+		`SELECT token, user_id, created_at, last_seen_at, expires_at, elevated_until
+		 FROM sessions WHERE token=?`, token,
+	).Scan(&sess.Token, &sess.UserID, &created, &lastSeen, &expiresAt, &elevatedUntil)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, ErrNotFound
 	}
@@ -398,7 +453,17 @@ func (s *Store) GetSession(token string) (Session, error) {
 	}
 	sess.CreatedAt = time.Unix(created, 0)
 	sess.LastSeenAt = time.Unix(lastSeen, 0)
+	sess.ExpiresAt = time.Unix(expiresAt, 0)
+	sess.ElevatedUntil = time.Unix(elevatedUntil, 0)
 	return sess, nil
+}
+
+// SetElevatedUntil marks a session elevated until the given time. Used by the
+// POST /api/v1/auth/elevate handler (USERS_AND_GROUPS.md # Elevation in the UI).
+func (s *Store) SetElevatedUntil(token string, until time.Time) error {
+	_, err := s.db.Exec(
+		`UPDATE sessions SET elevated_until=? WHERE token=?`, until.Unix(), token)
+	return err
 }
 
 // TouchSession updates last_seen_at — called by the auth middleware on every
@@ -419,6 +484,32 @@ func (s *Store) DeleteSession(token string) error {
 func (s *Store) DeleteSessionsForUser(userID string) error {
 	_, err := s.db.Exec(`DELETE FROM sessions WHERE user_id=?`, userID)
 	return err
+}
+
+// ListSessionsForUser returns all sessions for a user, ordered by created_at.
+// Used in tests to inspect session state without knowing the token.
+func (s *Store) ListSessionsForUser(userID string) ([]Session, error) {
+	rows, err := s.db.Query(
+		`SELECT token, user_id, created_at, last_seen_at, expires_at, elevated_until
+		 FROM sessions WHERE user_id=? ORDER BY created_at`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Session
+	for rows.Next() {
+		var sess Session
+		var created, lastSeen, expiresAt, elevatedUntil int64
+		if err := rows.Scan(&sess.Token, &sess.UserID, &created, &lastSeen, &expiresAt, &elevatedUntil); err != nil {
+			return nil, err
+		}
+		sess.CreatedAt = time.Unix(created, 0)
+		sess.LastSeenAt = time.Unix(lastSeen, 0)
+		sess.ExpiresAt = time.Unix(expiresAt, 0)
+		sess.ElevatedUntil = time.Unix(elevatedUntil, 0)
+		out = append(out, sess)
+	}
+	return out, rows.Err()
 }
 
 func scanUser(row scanner) (User, error) {

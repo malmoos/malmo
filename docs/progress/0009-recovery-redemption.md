@@ -90,5 +90,5 @@ Seven new tests:
 ## What's next
 
 - Recovery code generation on admin promotion (`PATCH /api/v1/users/:id`).
-- Session revocation on self-service password change (`POST /api/v1/me/password`).
+- Session revocation on self-service password change — landed in 0010.
 - Forced password change flag + login-flow routing.

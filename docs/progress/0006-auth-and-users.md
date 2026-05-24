@@ -169,15 +169,9 @@ code must be shown first. `setupComplete()` (called by the ack button) flips
 
 Ordered, roughly by leverage:
 
-1. **Audit events table + writes** (`LOGGING.md`) — login / logout / setup /
-   install / uninstall are the obvious first rows. Removes the "we have the
-   seam but not the table" deviation.
-2. **Multi-user CRUD UI + endpoints** — add member, change role, delete
-   user. Brings the dashboard up to `USERS_AND_GROUPS.md`'s minimum.
-3. **Recovery-code redemption flow** — `/v1/recover` endpoint + UI that
-   accepts the code, lets the admin reset their password, rotates the code.
-4. **Session expiry + 5-min elevation re-prompt** (`AUTH.md` § Sessions).
-5. **Real PAM in host-agent** — swap the bcrypt map for
-   `pam_start`/`pam_authenticate`. Brain doesn't change.
-6. **Per-protocol opt-in** (SSH / SMB) as a service allowlist per account,
-   per `USERS_AND_GROUPS.md`.
+1. **Audit events table + writes** (`LOGGING.md`) — landed in 0007.
+2. **Multi-user CRUD UI + endpoints** — landed in 0008.
+3. **Recovery-code redemption flow** — landed in 0009 (`POST /api/v1/recover`).
+4. **Session expiry + 5-min elevation re-prompt** — landed in 0010 (`AUTH.md` # Sessions, `USERS_AND_GROUPS.md` # Elevation). All four Tier-A auth items now done.
+5. **Real PAM in host-agent** — swap the bcrypt map for `pam_start`/`pam_authenticate`. Brain doesn't change.
+6. **Per-protocol opt-in** (SSH / SMB) as a service allowlist per account, per `USERS_AND_GROUPS.md`.

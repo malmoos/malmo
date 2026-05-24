@@ -408,6 +408,18 @@ func TestClientIP(t *testing.T) {
 	}
 }
 
+// elevate calls POST /api/v1/auth/elevate with the given password, asserting
+// success. Call after setupAdmin or loginAs to enter the elevation window.
+func (h *harness) elevate(password string) {
+	h.t.Helper()
+	resp := h.do("POST", "/api/v1/auth/elevate", map[string]string{"password": password})
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		h.t.Fatalf("elevate: %d %s", resp.StatusCode, body)
+	}
+	resp.Body.Close()
+}
+
 // addMember writes a member user directly into the store and seeds the fake
 // host-agent's password map. There's no create-user API yet (Tier-A item 2),
 // so tests that need a second user bypass the wire.
@@ -822,4 +834,154 @@ func TestListAuditCursorPagination(t *testing.T) {
 	if len(page2.Events) != 3 {
 		t.Fatalf("page 2: %d events, want 3", len(page2.Events))
 	}
+}
+
+// --- Elevate endpoint tests -----------------------------------------------
+
+func TestElevateHappyPath(t *testing.T) {
+	h := newHarness(t)
+	h.do("POST", "/api/v1/setup", map[string]string{
+		"username": "alice", "password": "hunter2",
+	}).Body.Close()
+
+	resp := h.do("POST", "/api/v1/auth/elevate", map[string]string{
+		"password": "hunter2",
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("elevate: %d", resp.StatusCode)
+	}
+	body := decodeJSON[struct {
+		ElevatedUntil int64 `json:"elevated_until"`
+	}](t, resp)
+	if body.ElevatedUntil == 0 {
+		t.Fatal("elevated_until is zero")
+	}
+
+	// Audit row: auth.elevate.success
+	resp = h.do("GET", "/api/v1/audit", nil)
+	audit := decodeJSON[struct {
+		Events []AuditEventDTO `json:"events"`
+	}](t, resp)
+	found := false
+	for _, e := range audit.Events {
+		if e.Action == "auth.elevate.success" && e.Success {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("no auth.elevate.success audit row found")
+	}
+}
+
+func TestElevateWrongPasswordFails(t *testing.T) {
+	h := newHarness(t)
+	h.do("POST", "/api/v1/setup", map[string]string{
+		"username": "alice", "password": "hunter2",
+	}).Body.Close()
+
+	resp := h.do("POST", "/api/v1/auth/elevate", map[string]string{
+		"password": "wrongpass",
+	})
+	if resp.StatusCode != 401 {
+		t.Fatalf("elevate with wrong password = %d; want 401", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Audit row: auth.elevate.failure
+	resp = h.do("GET", "/api/v1/audit", nil)
+	body := decodeJSON[struct {
+		Events []AuditEventDTO `json:"events"`
+	}](t, resp)
+	found := false
+	for _, e := range body.Events {
+		if e.Action == "auth.elevate.failure" && !e.Success {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("no auth.elevate.failure audit row found")
+	}
+}
+
+func TestElevateRequiresAuth(t *testing.T) {
+	h := newHarness(t)
+	h.do("POST", "/api/v1/setup", map[string]string{
+		"username": "alice", "password": "hunter2",
+	}).Body.Close()
+	// Clear session.
+	jar, _ := newJar()
+	h.jar = jar
+
+	resp := h.do("POST", "/api/v1/auth/elevate", map[string]string{"password": "hunter2"})
+	if resp.StatusCode != 401 {
+		t.Fatalf("unauthenticated elevate = %d; want 401", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+func TestSessionIdleExpiry(t *testing.T) {
+	h := newHarness(t)
+	h.do("POST", "/api/v1/setup", map[string]string{
+		"username": "alice", "password": "hunter2",
+	}).Body.Close()
+
+	// Set the auth manager's clock forward past the idle window. We need to
+	// reach into the server's auth manager clock — do this by pulling the
+	// session token from the jar and using the store directly.
+	alice, _ := h.st.GetUserByUsername("alice")
+	sessions, err := h.st.ListSessionsForUser(alice.ID)
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(sessions) == 0 {
+		t.Fatal("no sessions for alice")
+	}
+	// Move last_seen_at back by 31 days so the session appears idle-expired.
+	oldTime := sessions[0].LastSeenAt.Add(-31 * 24 * time.Hour)
+	if err := h.st.TouchSession(sessions[0].Token, oldTime); err != nil {
+		t.Fatalf("touch session: %v", err)
+	}
+
+	resp := h.do("GET", "/api/v1/me", nil)
+	if resp.StatusCode != 401 {
+		t.Fatalf("me after idle expiry = %d; want 401", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+// --- Elevation window gates user-CRUD ------------------------------------
+
+func TestUserCRUDRequiresElevation(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+	// Add a member to have a target for patch/delete.
+	h.addMember("u_bob", "bob", "bobpass")
+	bob, _ := h.st.GetUserByUsername("bob")
+
+	// Without elevation all these should return 403.
+	cases := []struct {
+		method string
+		path   string
+		body   any
+	}{
+		{"POST", "/api/v1/users", map[string]string{"username": "eve", "password": "x"}},
+		{"PATCH", "/api/v1/users/" + bob.ID, map[string]string{"role": "admin"}},
+		{"DELETE", "/api/v1/users/" + bob.ID, nil},
+		{"POST", "/api/v1/users/" + bob.ID + "/password", map[string]string{"password": "x"}},
+	}
+	for _, tc := range cases {
+		resp := h.do(tc.method, tc.path, tc.body)
+		if resp.StatusCode != 403 {
+			t.Errorf("%s %s without elevation = %d; want 403", tc.method, tc.path, resp.StatusCode)
+		}
+		resp.Body.Close()
+	}
+
+	// After elevation, POST /users should succeed.
+	h.elevate("pass1")
+	resp := h.do("POST", "/api/v1/users", map[string]string{"username": "eve", "password": "x"})
+	if resp.StatusCode != 200 {
+		t.Fatalf("POST /users after elevate = %d; want 200", resp.StatusCode)
+	}
+	resp.Body.Close()
 }

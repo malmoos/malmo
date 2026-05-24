@@ -206,3 +206,119 @@ func TestContextRoundTrip(t *testing.T) {
 		t.Fatalf("round-trip = %+v", got)
 	}
 }
+
+// --- Session expiry tests --------------------------------------------------
+
+func TestValidateRejectsIdleExpiredSession(t *testing.T) {
+	m, s, u, _ := fixture(t)
+	sess, _ := m.Issue(u.ID)
+
+	// Advance clock past the idle window.
+	m.Clock = func() time.Time { return sess.CreatedAt.Add(SessionIdleWindow + time.Second) }
+
+	if _, err := m.Validate(sess.Token); err != ErrInvalidSession {
+		t.Fatalf("idle-expired session: Validate = %v, want ErrInvalidSession", err)
+	}
+	// Row must have been deleted.
+	if _, err := s.GetSession(sess.Token); err == nil {
+		t.Fatal("expired session row not deleted")
+	}
+}
+
+func TestValidateRejectsHardCapExpiredSession(t *testing.T) {
+	m, s, u, _ := fixture(t)
+	sess, _ := m.Issue(u.ID)
+
+	// Advance clock past the hard cap (but keep bumping last_seen_at by
+	// validating every 29 days to defeat the idle window check).
+	// Simulate: last_seen_at is only 1 day old, but expires_at is in the past.
+	m.Clock = func() time.Time { return sess.CreatedAt.Add(SessionHardCap + time.Second) }
+
+	if _, err := m.Validate(sess.Token); err != ErrInvalidSession {
+		t.Fatalf("hard-cap-expired session: Validate = %v, want ErrInvalidSession", err)
+	}
+	// Row must have been deleted.
+	if _, err := s.GetSession(sess.Token); err == nil {
+		t.Fatal("hard-cap-expired session row not deleted")
+	}
+}
+
+func TestValidateStillValidBeforeExpiry(t *testing.T) {
+	m, _, u, _ := fixture(t)
+	sess, _ := m.Issue(u.ID)
+
+	// Just under the idle window — should still be valid.
+	m.Clock = func() time.Time { return sess.CreatedAt.Add(SessionIdleWindow - time.Second) }
+
+	if _, err := m.Validate(sess.Token); err != nil {
+		t.Fatalf("valid session rejected early: %v", err)
+	}
+}
+
+func TestIssueSetExpiresAt(t *testing.T) {
+	m, s, u, _ := fixture(t)
+	now := m.Clock()
+	sess, _ := m.Issue(u.ID)
+
+	persisted, _ := s.GetSession(sess.Token)
+	want := now.Add(SessionHardCap)
+	if persisted.ExpiresAt.Unix() != want.Unix() {
+		t.Fatalf("ExpiresAt = %v, want %v", persisted.ExpiresAt, want)
+	}
+}
+
+// --- Elevation tests -------------------------------------------------------
+
+func TestElevateAndIsElevated(t *testing.T) {
+	m, s, u, _ := fixture(t)
+	now := m.Clock()
+	sess, _ := m.Issue(u.ID)
+
+	if err := m.Elevate(sess.Token); err != nil {
+		t.Fatalf("Elevate: %v", err)
+	}
+
+	// Re-read from store to get the updated ElevatedUntil.
+	persisted, _ := s.GetSession(sess.Token)
+	wantUntil := now.Add(ElevationWindow)
+	if persisted.ElevatedUntil.Unix() != wantUntil.Unix() {
+		t.Fatalf("ElevatedUntil = %v, want %v", persisted.ElevatedUntil, wantUntil)
+	}
+
+	// Validate picks up the fresh ElevatedUntil; IsElevated() should be true.
+	id, err := m.Validate(sess.Token)
+	if err != nil {
+		t.Fatalf("Validate after Elevate: %v", err)
+	}
+	if !id.IsElevated() {
+		t.Fatal("IsElevated() = false immediately after Elevate")
+	}
+}
+
+func TestIsElevatedFalseAfterWindowExpires(t *testing.T) {
+	m, _, u, _ := fixture(t)
+	sess, _ := m.Issue(u.ID)
+	if err := m.Elevate(sess.Token); err != nil {
+		t.Fatalf("Elevate: %v", err)
+	}
+
+	// Advance clock past the elevation window (but stay within session lifetimes).
+	m.Clock = func() time.Time { return sess.CreatedAt.Add(ElevationWindow + time.Second) }
+
+	id, err := m.Validate(sess.Token)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if id.IsElevated() {
+		t.Fatal("IsElevated() = true after window expired")
+	}
+}
+
+func TestIsElevatedFalseWithoutElevate(t *testing.T) {
+	m, _, u, _ := fixture(t)
+	sess, _ := m.Issue(u.ID)
+	id, _ := m.Validate(sess.Token)
+	if id.IsElevated() {
+		t.Fatal("IsElevated() = true without prior Elevate call")
+	}
+}

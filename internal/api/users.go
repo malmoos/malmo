@@ -82,6 +82,9 @@ func (s *Server) createUser(ctx context.Context, in *struct {
 	if err := requireAdmin(ctx); err != nil {
 		return nil, err
 	}
+	if err := requireElevated(ctx); err != nil {
+		return nil, err
+	}
 
 	username := strings.TrimSpace(in.Body.Username)
 	password := in.Body.Password
@@ -129,6 +132,9 @@ func (s *Server) updateUserRole(ctx context.Context, in *struct {
 	}
 }) (*struct{ Body UserDTO }, error) {
 	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	if err := requireElevated(ctx); err != nil {
 		return nil, err
 	}
 
@@ -193,6 +199,9 @@ func (s *Server) deleteUser(ctx context.Context, in *struct {
 	ID string `path:"id"`
 }) (*struct{}, error) {
 	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	if err := requireElevated(ctx); err != nil {
 		return nil, err
 	}
 
@@ -280,6 +289,9 @@ func (s *Server) changeMyPassword(ctx context.Context, in *struct {
 		return nil, huma.Error502BadGateway("host-agent set-password failed", err)
 	}
 
+	// Revoke all sessions for this user — password has changed (AUTH.md # Invalidation).
+	_ = s.store.DeleteSessionsForUser(id.User.ID)
+
 	s.auditor.Record(ctx, audit.ActionUserPasswordChange, tgt, nil, true)
 	return nil, nil
 }
@@ -291,6 +303,9 @@ func (s *Server) resetUserPassword(ctx context.Context, in *struct {
 	}
 }) (*struct{}, error) {
 	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	if err := requireElevated(ctx); err != nil {
 		return nil, err
 	}
 
