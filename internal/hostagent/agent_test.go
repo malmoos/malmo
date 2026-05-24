@@ -143,6 +143,78 @@ func TestSetPasswordAndVerifyWithFakeVerifier(t *testing.T) {
 	}
 }
 
+// --- stub user manager ---
+
+type stubUserMgr struct {
+	calls       []struct{ user, password string }
+	roleCalls   []struct{ user, role string }
+	deleteCalls []string
+	err         error
+	roleErr     error
+	deleteErr   error
+}
+
+func (s *stubUserMgr) UpsertPassword(user, password string) error {
+	s.calls = append(s.calls, struct{ user, password string }{user, password})
+	return s.err
+}
+
+func (s *stubUserMgr) SetRole(user, role string) error {
+	s.roleCalls = append(s.roleCalls, struct{ user, role string }{user, role})
+	return s.roleErr
+}
+
+func (s *stubUserMgr) DeleteUser(user string) error {
+	s.deleteCalls = append(s.deleteCalls, user)
+	return s.deleteErr
+}
+
+func TestSetPassword_DelegatesToUserMgrWhenSet(t *testing.T) {
+	mgr := &stubUserMgr{}
+	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a.UserMgr = mgr
+	mux := http.NewServeMux()
+	a.Mount(mux)
+
+	w := post(t, mux, "/v1/auth/set-password", protocol.SetPasswordRequest{
+		User: "cindy", Password: "s3cret",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	if len(mgr.calls) != 1 || mgr.calls[0].user != "cindy" || mgr.calls[0].password != "s3cret" {
+		t.Errorf("UpsertPassword not called as expected: %+v", mgr.calls)
+	}
+
+	// In-memory bcrypt map must NOT be populated when UserMgr is wired —
+	// /etc/shadow (via PAM) is the source of truth.
+	a.mu.Lock()
+	_, present := a.passwords["cindy"]
+	a.mu.Unlock()
+	if present {
+		t.Error("in-memory bcrypt map written when UserMgr is wired; should be skipped")
+	}
+}
+
+func TestSetPassword_UserMgrError_Returns500(t *testing.T) {
+	mgr := &stubUserMgr{err: errors.New("useradd: group 'malmo' does not exist")}
+	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a.UserMgr = mgr
+	mux := http.NewServeMux()
+	a.Mount(mux)
+
+	w := post(t, mux, "/v1/auth/set-password", protocol.SetPasswordRequest{
+		User: "cindy", Password: "pw",
+	})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", w.Code)
+	}
+	// Body must NOT leak the underlying system error.
+	if bytes.Contains(w.Body.Bytes(), []byte("useradd")) || bytes.Contains(w.Body.Bytes(), []byte("malmo")) {
+		t.Errorf("response leaked system detail: %s", w.Body.String())
+	}
+}
+
 func TestSetPasswordMissingFields(t *testing.T) {
 	_, mux := newTestAgent(&stubVerifier{})
 	w := post(t, mux, "/v1/auth/set-password", protocol.SetPasswordRequest{
@@ -154,6 +226,50 @@ func TestSetPasswordMissingFields(t *testing.T) {
 }
 
 // --- set-role tests ---
+
+func TestSetRole_DelegatesToUserMgrWhenSet(t *testing.T) {
+	mgr := &stubUserMgr{}
+	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a.UserMgr = mgr
+	mux := http.NewServeMux()
+	a.Mount(mux)
+
+	w := post(t, mux, "/v1/auth/set-role", protocol.SetRoleRequest{
+		User: "cindy", Role: "admin",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	if len(mgr.roleCalls) != 1 || mgr.roleCalls[0].user != "cindy" || mgr.roleCalls[0].role != "admin" {
+		t.Errorf("SetRole not called as expected: %+v", mgr.roleCalls)
+	}
+
+	// In-memory roles map must NOT be populated when UserMgr is wired.
+	a.mu.Lock()
+	_, present := a.roles["cindy"]
+	a.mu.Unlock()
+	if present {
+		t.Error("in-memory roles map written when UserMgr is wired; should be skipped")
+	}
+}
+
+func TestSetRole_UserMgrError_Returns500(t *testing.T) {
+	mgr := &stubUserMgr{roleErr: errors.New("gpasswd: group sudo does not exist")}
+	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a.UserMgr = mgr
+	mux := http.NewServeMux()
+	a.Mount(mux)
+
+	w := post(t, mux, "/v1/auth/set-role", protocol.SetRoleRequest{
+		User: "cindy", Role: "admin",
+	})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", w.Code)
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte("gpasswd")) || bytes.Contains(w.Body.Bytes(), []byte("sudo")) {
+		t.Errorf("response leaked system detail: %s", w.Body.String())
+	}
+}
 
 func TestSetRole_HappyPath(t *testing.T) {
 	_, mux := newTestAgent(&stubVerifier{})
@@ -209,6 +325,54 @@ func TestDeleteUser_IdempotentOnUnknownUser(t *testing.T) {
 	w := post(t, mux, "/v1/auth/delete-user", protocol.DeleteUserRequest{User: "nobody"})
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200 (idempotent), got %d", w.Code)
+	}
+}
+
+func TestDeleteUser_EmptyUser_Returns400(t *testing.T) {
+	_, mux := newTestAgent(&stubVerifier{})
+	w := post(t, mux, "/v1/auth/delete-user", protocol.DeleteUserRequest{User: ""})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", w.Code)
+	}
+}
+
+func TestDeleteUser_DelegatesToUserMgrWhenSet(t *testing.T) {
+	mgr := &stubUserMgr{}
+	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a.UserMgr = mgr
+	// Seed the in-memory map to prove the wired path does NOT touch it.
+	a.passwords["cindy"] = []byte("seed")
+	mux := http.NewServeMux()
+	a.Mount(mux)
+
+	w := post(t, mux, "/v1/auth/delete-user", protocol.DeleteUserRequest{User: "cindy"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	if len(mgr.deleteCalls) != 1 || mgr.deleteCalls[0] != "cindy" {
+		t.Errorf("DeleteUser not called as expected: %+v", mgr.deleteCalls)
+	}
+	a.mu.Lock()
+	_, present := a.passwords["cindy"]
+	a.mu.Unlock()
+	if !present {
+		t.Error("in-memory passwords map was modified when UserMgr is wired; should be skipped")
+	}
+}
+
+func TestDeleteUser_UserMgrError_Returns500(t *testing.T) {
+	mgr := &stubUserMgr{deleteErr: errors.New("userdel: user 'cindy' is currently used by process 4242")}
+	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a.UserMgr = mgr
+	mux := http.NewServeMux()
+	a.Mount(mux)
+
+	w := post(t, mux, "/v1/auth/delete-user", protocol.DeleteUserRequest{User: "cindy"})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", w.Code)
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte("userdel")) || bytes.Contains(w.Body.Bytes(), []byte("4242")) {
+		t.Errorf("response leaked system detail: %s", w.Body.String())
 	}
 }
 

@@ -1,8 +1,9 @@
 // Command host-agent-real is the production host-agent binary. It uses real
-// PAM for password verification (POST /v1/auth/verify-password) and the Avahi
-// DBus API for publish/unpublish (POST /v1/discovery/publish|unpublish), but
-// keeps set-password / set-role / delete-user as an in-memory fake — those
-// three operations are not yet wired to the system.
+// PAM for password verification (POST /v1/auth/verify-password), the Avahi
+// DBus API for publish/unpublish (POST /v1/discovery/publish|unpublish),
+// useradd+chpasswd for set-password (POST /v1/auth/set-password), gpasswd
+// for set-role (POST /v1/auth/set-role), and userdel -r -f for delete-user
+// (POST /v1/auth/delete-user). All auth ops now hit the real system.
 //
 // Build requirements:
 //   - Linux only
@@ -25,16 +26,11 @@ import (
 	"github.com/malmo/malmo/internal/hostagent"
 	"github.com/malmo/malmo/internal/hostagent/avahipublisher"
 	"github.com/malmo/malmo/internal/hostagent/pamverifier"
+	"github.com/malmo/malmo/internal/hostagent/usermgr"
 	"github.com/malmo/malmo/internal/protocol"
 )
 
 func main() {
-	// Loud warning: three auth operations are still fake even in this real binary.
-	// Brain's bootstrap path (POST /setup → SetPassword) does NOT write to
-	// /etc/shadow. Tracked as Tier-B follow-up:
-	// docs/progress/0011-host-agent-pam-verify.md.
-	slog.Warn("host-agent-real: set-password/set-role/delete-user are NOT wired to the system (fake in-memory) — see docs/progress/0011-host-agent-pam-verify.md")
-
 	pub := &avahipublisher.DBusPublisher{HostSuffix: ".malmo.local"}
 
 	sockPath := os.Getenv("MALMO_AGENT_SOCK")
@@ -57,11 +53,14 @@ func main() {
 	_ = os.Chmod(sockPath, 0o660)
 
 	// verifyPassword uses real PAM; Avahi A records are published via DBus;
-	// all other auth ops stay in-memory.
+	// set-password writes to /etc/shadow via useradd+chpasswd; set-role
+	// flips sudo group membership via gpasswd; delete-user shells out to
+	// userdel -r -f (see docs/progress/0017-host-agent-delete-user.md).
 	a := hostagent.New(
 		&pamverifier.PAMVerifier{Service: "malmo"},
 		pub,
 	)
+	a.UserMgr = &usermgr.LinuxUserManager{}
 
 	mux := http.NewServeMux()
 	a.Mount(mux)

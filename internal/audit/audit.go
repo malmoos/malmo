@@ -16,6 +16,7 @@ import (
 // v1 action vocabulary (LOGGING.md # Write path).
 const (
 	ActionSetupComplete   = "setup.complete"
+	ActionSetupFailure    = "setup.failure"
 	ActionLoginSuccess    = "login.success"
 	ActionLoginFailure    = "login.failure"
 	ActionLogout          = "logout"

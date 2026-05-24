@@ -113,12 +113,38 @@ func (s *Server) createUser(ctx context.Context, in *struct {
 	}
 
 	if err := s.host.SetPassword(ctx, username, password); err != nil {
-		// Roll back the store row so the admin can retry with a valid host.
+		// Best-effort host cleanup before rolling back the store row:
+		// covers the sliver where UpsertPassword created the Linux account
+		// (useradd) but failed at chpasswd. Idempotent on the host side
+		// (`docs/progress/0017-host-agent-delete-user.md`).
+		if delErr := s.host.DeleteUser(ctx, username); delErr != nil {
+			slog.Error("rollback host delete-user failed", "username", username, "err", delErr)
+		}
 		if delErr := s.store.DeleteUser(u.ID); delErr != nil {
 			slog.Error("rollback create user failed", "user_id", u.ID, "err", delErr)
 		}
 		s.auditor.Record(ctx, audit.ActionUserCreate, audit.Target{Kind: "user"}, meta, false)
 		return nil, huma.Error502BadGateway("host-agent set-password failed", err)
+	}
+
+	// Sync the new user's role to the host so admin creation also flips Linux
+	// group membership in one round-trip. Called for both roles (admin and
+	// member) so the brain-host contract stays uniform: after every user
+	// mutation the host knows the canonical role. The provider's member path
+	// is a no-op when the user isn't already in the admin group.
+	if err := s.host.SetRole(ctx, username, role); err != nil {
+		// Best-effort host cleanup: the Linux account already exists from the
+		// successful SetPassword above, so a bare store rollback would leave
+		// it orphaned with a working PAM password
+		// (`docs/progress/0017-host-agent-delete-user.md`).
+		if delErr := s.host.DeleteUser(ctx, username); delErr != nil {
+			slog.Error("rollback host delete-user failed", "username", username, "err", delErr)
+		}
+		if delErr := s.store.DeleteUser(u.ID); delErr != nil {
+			slog.Error("rollback create user failed", "user_id", u.ID, "err", delErr)
+		}
+		s.auditor.Record(ctx, audit.ActionUserCreate, audit.Target{Kind: "user"}, meta, false)
+		return nil, huma.Error502BadGateway("host-agent set-role failed", err)
 	}
 
 	s.auditor.Record(ctx, audit.ActionUserCreate, audit.Target{Kind: "user", ID: u.ID}, meta, true)

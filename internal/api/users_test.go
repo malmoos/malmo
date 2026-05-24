@@ -221,6 +221,15 @@ func TestCreateUserRollsBackOnHostFailure(t *testing.T) {
 			t.Fatal("bob user row survived host failure; rollback broken")
 		}
 	}
+	// Best-effort host cleanup: covers the useradd-succeeded-then-chpasswd-
+	// failed sliver inside UpsertPassword
+	// (docs/progress/0017-host-agent-delete-user.md).
+	h.pmu.Lock()
+	got := append([]string(nil), (*h.deleteCalls)...)
+	h.pmu.Unlock()
+	if len(got) != 1 || got[0] != "bob" {
+		t.Fatalf("rollback did not call host.DeleteUser(%q) exactly once; got %v", "bob", got)
+	}
 }
 
 // --- Update role (PATCH /api/v1/users/:id) ---
@@ -626,6 +635,47 @@ func TestUpdateRoleRollsBackOnHostFailure(t *testing.T) {
 	}
 }
 
+// TestCreateUserRollsBackOnSetRoleFailure: SetPassword succeeds but SetRole
+// 500s. createUser must roll the brain row back so admins can retry.
+func TestCreateUserRollsBackOnSetRoleFailure(t *testing.T) {
+	h := newHarnessWithBrokenSetRole(t)
+	h.setupAdminDirect("alice")
+	// Seed a real password so elevate's verify-password succeeds.
+	hash, _ := bcrypt.GenerateFromPassword([]byte("alicepass"), bcrypt.MinCost)
+	h.pmu.Lock()
+	h.pwds["alice"] = hash
+	h.pmu.Unlock()
+	h.elevate("alicepass")
+
+	resp := h.do("POST", "/api/v1/users", map[string]string{
+		"username": "bob", "password": "bobpass", "role": "member",
+	})
+	if resp.StatusCode != 502 {
+		t.Fatalf("createUser with broken set-role = %d; want 502", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Brain row must be gone.
+	users, err := h.st.ListUsers()
+	if err != nil {
+		t.Fatalf("list users: %v", err)
+	}
+	for _, u := range users {
+		if u.Username == "bob" {
+			t.Fatal("bob row survived set-role failure; rollback broken")
+		}
+	}
+	// Best-effort host cleanup: SetPassword already created the Linux
+	// account, so without this call the user would be orphaned on the host
+	// (docs/progress/0017-host-agent-delete-user.md).
+	h.pmu.Lock()
+	got := append([]string(nil), (*h.deleteCalls)...)
+	h.pmu.Unlock()
+	if len(got) != 1 || got[0] != "bob" {
+		t.Fatalf("rollback did not call host.DeleteUser(%q) exactly once; got %v", "bob", got)
+	}
+}
+
 // --- harness helpers for broken-host tests ---
 
 func newHarnessWithBrokenSetPassword(t *testing.T) *harness {
@@ -670,7 +720,13 @@ func newHarnessWithBrokenSetPassword(t *testing.T) *harness {
 	mux.HandleFunc("POST /v1/auth/set-role", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(struct{}{})
 	})
+	deleteCalls := []string{}
 	mux.HandleFunc("POST /v1/auth/delete-user", func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.DeleteUserRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		pmu.Lock()
+		deleteCalls = append(deleteCalls, req.User)
+		pmu.Unlock()
 		_ = json.NewEncoder(w).Encode(struct{}{})
 	})
 
@@ -687,7 +743,7 @@ func newHarnessWithBrokenSetPassword(t *testing.T) *harness {
 	t.Cleanup(ts.Close)
 
 	jar, _ := newJar()
-	return &harness{srv: ts, jar: jar, t: t, pwds: pwds, pmu: &pmu, st: st}
+	return &harness{srv: ts, jar: jar, t: t, pwds: pwds, pmu: &pmu, st: st, deleteCalls: &deleteCalls}
 }
 
 // newHarnessWithBrokenSetRole returns a harness whose host-agent always 500s
@@ -730,7 +786,13 @@ func newHarnessWithBrokenSetRole(t *testing.T) *harness {
 	mux.HandleFunc("POST /v1/auth/set-role", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"code":"boom","message":"nope"}`, 500)
 	})
+	deleteCalls := []string{}
 	mux.HandleFunc("POST /v1/auth/delete-user", func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.DeleteUserRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		pmu.Lock()
+		deleteCalls = append(deleteCalls, req.User)
+		pmu.Unlock()
 		_ = json.NewEncoder(w).Encode(struct{}{})
 	})
 
@@ -747,7 +809,7 @@ func newHarnessWithBrokenSetRole(t *testing.T) *harness {
 	t.Cleanup(ts.Close)
 
 	jar, _ := newJar()
-	return &harness{srv: ts, jar: jar, t: t, pwds: pwds, pmu: &pmu, st: st}
+	return &harness{srv: ts, jar: jar, t: t, pwds: pwds, pmu: &pmu, st: st, deleteCalls: &deleteCalls}
 }
 
 // setupAdminDirect inserts an admin row directly into the store (bypassing

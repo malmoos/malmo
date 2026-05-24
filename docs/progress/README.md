@@ -46,3 +46,7 @@ Ordered follow-ups. Update as they land.
 | [0011](0011-host-agent-pam-verify.md) | Real PAM-based password verification in host-agent-real | done |
 | [0013](0013-avahi-dbus-publisher.md) | Avahi DBus publisher — per-app A records via EntryGroup.AddAddress | done |
 | [0014](0014-caddy-routing-verified.md) | Caddy subdomain routing verified (Host-header routing end-to-end, path-based confirmed absent) | done |
+| [0015](0015-host-agent-set-password.md) | Real set-password in host-agent-real (useradd + chpasswd; /etc/shadow is now the source of truth) | done |
+| [0016](0016-host-agent-set-role.md) | Real set-role in host-agent-real (gpasswd) + brain bootstrap wires SetRole into /setup and createUser | done |
+| [0017](0017-host-agent-delete-user.md) | Real delete-user in host-agent-real (userdel -r -f) + close orphan-on-rollback gap in /setup and createUser | done |
+| [0018](0018-nspawn-usermgr-lane.md) | nspawn fast-lane wiring for usermgrtest (bootstrap.sh + run-usermgr-tests.sh + make test-usermgr-nspawn) | done |

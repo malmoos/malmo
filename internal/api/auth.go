@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -201,7 +202,9 @@ func (s *Server) setup(ctx context.Context, in *struct {
 		ID: newID(), Username: username, Role: store.RoleAdmin,
 		RecoveryHash: recoveryHash, CreatedAt: time.Now(),
 	}
+	meta := map[string]any{"username": username}
 	if err := s.store.CreateFirstAdmin(u); err != nil {
+		s.auditor.Record(ctx, audit.ActionSetupFailure, audit.Target{Kind: "user"}, meta, false)
 		if errors.Is(err, store.ErrConflict) {
 			return nil, huma.Error409Conflict("setup has already completed; use /api/v1/login")
 		}
@@ -210,13 +213,47 @@ func (s *Server) setup(ctx context.Context, in *struct {
 
 	if err := s.host.SetPassword(ctx, username, password); err != nil {
 		// Roll back so /v1/setup can be retried instead of being permanently
-		// wedged by a half-completed bootstrap.
-		_ = s.store.DeleteUser(u.ID)
+		// wedged by a half-completed bootstrap. Best-effort host cleanup
+		// closes the sliver where useradd succeeded but chpasswd failed —
+		// without it the next /setup attempt would race a real Linux account
+		// (`docs/progress/0017-host-agent-delete-user.md`). Idempotent on the
+		// host side, so safe even when nothing was created.
+		if delErr := s.host.DeleteUser(ctx, username); delErr != nil {
+			slog.Error("rollback host delete-user failed", "username", username, "err", delErr)
+		}
+		if delErr := s.store.DeleteUser(u.ID); delErr != nil {
+			// Silent failure here wedges the box permanently: the next
+			// /setup attempt hits CreateFirstAdmin's 409 ("setup has
+			// already completed") with no log trace. Mirror createUser.
+			slog.Error("rollback setup user failed", "user_id", u.ID, "err", delErr)
+		}
+		s.auditor.Record(ctx, audit.ActionSetupFailure, audit.Target{Kind: "user"}, meta, false)
 		return nil, huma.Error502BadGateway("host-agent set-password failed", err)
+	}
+
+	// Add the first admin to the sudo group (USERS_AND_GROUPS.md:32 — "The
+	// first admin is added to `sudo` at account creation"). With the fake
+	// host-agent this is a no-op record; with host-agent-real it shells out
+	// to `gpasswd -a <user> sudo`. On failure, roll the brain row back so
+	// /v1/setup stays retryable.
+	if err := s.host.SetRole(ctx, username, store.RoleAdmin); err != nil {
+		// Best-effort host cleanup: by this point UpsertPassword has created
+		// the real Linux account, so a bare store rollback would leave an
+		// orphan with a usable /etc/shadow entry and PAM would still
+		// authenticate it (`docs/progress/0017-host-agent-delete-user.md`).
+		if delErr := s.host.DeleteUser(ctx, username); delErr != nil {
+			slog.Error("rollback host delete-user failed", "username", username, "err", delErr)
+		}
+		if delErr := s.store.DeleteUser(u.ID); delErr != nil {
+			slog.Error("rollback setup user failed", "user_id", u.ID, "err", delErr)
+		}
+		s.auditor.Record(ctx, audit.ActionSetupFailure, audit.Target{Kind: "user"}, meta, false)
+		return nil, huma.Error502BadGateway("host-agent set-role failed", err)
 	}
 
 	sess, err := s.auth.Issue(u.ID)
 	if err != nil {
+		s.auditor.Record(ctx, audit.ActionSetupFailure, audit.Target{Kind: "user", ID: u.ID}, meta, false)
 		return nil, huma.Error500InternalServerError("issue session", err)
 	}
 

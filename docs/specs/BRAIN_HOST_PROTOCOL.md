@@ -112,7 +112,7 @@ POST /v1/auth/delete-user
   → 200 OK  {}
 ```
 
-`set-password` is **upsert**: it creates the user if missing (real impl: `useradd` + `passwd` + Samba sync as one atomic op via `AUTH.md` # Password change) and otherwise just updates the password. The brain stays oblivious to "is this a create or an update" — single endpoint, single round-trip during `/v1/setup`. `set-role` updates Linux group membership (`malmo-admin`) to match the new role (real impl: `gpasswd -a`/`-d`); the fake host-agent stores the role in memory only. `delete-user` is idempotent: unknown user returns 200. None of these endpoints return credential material; the brain holds no password material.
+`set-password` is **upsert**: it creates the user if missing (real impl: `useradd` + `passwd` + Samba sync as one atomic op via `AUTH.md` # Password change) and otherwise just updates the password. The brain stays oblivious to "is this a create or an update" — single endpoint, single round-trip during `/v1/setup`. `set-role` updates Linux group membership in the `sudo` group to match the new role — admin → in `sudo`, member → not in `sudo` (real impl: `gpasswd -a`/`-d`; idempotent on both ends); see `USERS_AND_GROUPS.md` # Roles for the owning policy. The fake host-agent stores the role in memory only. `delete-user` is idempotent: unknown user returns 200 (real impl: `userdel -r -f` — `-r` removes the home dir, `-f` forces removal even with a live session; see `docs/progress/0017-host-agent-delete-user.md` for the session-termination matrix). None of these endpoints return credential material; the brain holds no password material.
 
 **Network endpoints (NetworkManager-backed).** host-agent exposes Pattern A routes that wrap NetworkManager's DBus surface:
 

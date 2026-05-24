@@ -36,6 +36,12 @@ type harness struct {
 	pwds map[string][]byte
 	pmu  *sync.Mutex
 	st   *store.Store
+	// deleteCalls records every username passed to the host-agent
+	// /v1/auth/delete-user mock. Guarded by pmu. Lets rollback tests assert
+	// that the brain called host.DeleteUser on a failed mutation path
+	// (closes the 0015/0016 orphan-on-rollback gap; see
+	// docs/progress/0017-host-agent-delete-user.md).
+	deleteCalls *[]string
 }
 
 func newHarness(t *testing.T) *harness {
@@ -83,11 +89,13 @@ func newHarness(t *testing.T) *harness {
 		pmu.Unlock()
 		_ = json.NewEncoder(w).Encode(struct{}{})
 	})
+	deleteCalls := []string{}
 	mux.HandleFunc("POST /v1/auth/delete-user", func(w http.ResponseWriter, r *http.Request) {
 		var req protocol.DeleteUserRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		pmu.Lock()
 		delete(pwds, req.User)
+		deleteCalls = append(deleteCalls, req.User)
 		pmu.Unlock()
 		_ = json.NewEncoder(w).Encode(struct{}{})
 	})
@@ -107,7 +115,7 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(ts.Close)
 
 	jar, _ := newJar()
-	return &harness{srv: ts, jar: jar, t: t, pwds: pwds, pmu: &pmu, st: st}
+	return &harness{srv: ts, jar: jar, t: t, pwds: pwds, pmu: &pmu, st: st, deleteCalls: &deleteCalls}
 }
 
 func (h *harness) do(method, path string, body any) *http.Response {
@@ -306,6 +314,16 @@ func TestSetupRollsBackOnHostFailure(t *testing.T) {
 	mux.HandleFunc("POST /v1/auth/set-password", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"code":"boom","message":"nope"}`, 500)
 	})
+	var delCalls []string
+	var delMu sync.Mutex
+	mux.HandleFunc("POST /v1/auth/delete-user", func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.DeleteUserRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		delMu.Lock()
+		delCalls = append(delCalls, req.User)
+		delMu.Unlock()
+		_ = json.NewEncoder(w).Encode(struct{}{})
+	})
 	hostHTTP := &http.Server{Handler: mux}
 	go func() { _ = hostHTTP.Serve(ln) }()
 	t.Cleanup(func() { _ = hostHTTP.Close() })
@@ -328,7 +346,106 @@ func TestSetupRollsBackOnHostFailure(t *testing.T) {
 	if has, _ := st.HasAnyUser(); has {
 		t.Fatal("user row survived host failure; rollback broken")
 	}
+	// Best-effort host cleanup must have fired: covers the sliver where
+	// useradd succeeded but chpasswd failed inside UpsertPassword. See
+	// docs/progress/0017-host-agent-delete-user.md.
+	delMu.Lock()
+	got := append([]string(nil), delCalls...)
+	delMu.Unlock()
+	if len(got) != 1 || got[0] != "andrei" {
+		t.Fatalf("rollback did not call host.DeleteUser(%q) exactly once; got %v", "andrei", got)
+	}
+
+	events, _ := st.ListAuditEvents(store.AuditFilter{Limit: 10})
+	var found bool
+	for _, e := range events {
+		if e.Action == "setup.failure" && !e.Success {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("setup.failure audit event not recorded on set-password failure")
+	}
 	_ = h
+}
+
+// TestSetupRollsBackOnSetRoleFailure: SetPassword succeeds, SetRole 500s.
+// /setup must roll the brain row back so the bootstrap can be retried.
+// USERS_AND_GROUPS.md:32 — first admin is added to sudo at account creation;
+// if that step fails the user shouldn't survive in a half-bootstrapped state.
+func TestSetupRollsBackOnSetRoleFailure(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "rb.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	sock := filepath.Join(t.TempDir(), "agent.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/auth/set-password", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(struct{}{})
+	})
+	mux.HandleFunc("POST /v1/auth/set-role", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"code":"boom","message":"nope"}`, 500)
+	})
+	var delCalls []string
+	var delMu sync.Mutex
+	mux.HandleFunc("POST /v1/auth/delete-user", func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.DeleteUserRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		delMu.Lock()
+		delCalls = append(delCalls, req.User)
+		delMu.Unlock()
+		_ = json.NewEncoder(w).Encode(struct{}{})
+	})
+	hostHTTP := &http.Server{Handler: mux}
+	go func() { _ = hostHTTP.Serve(ln) }()
+	t.Cleanup(func() { _ = hostHTTP.Close() })
+
+	srv := NewServer(st, catalog.New(t.TempDir()), nil, events.NewBus(),
+		auth.NewManager(st), hostclient.New(sock), audit.New(st))
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Post(ts.URL+"/api/v1/setup", "application/json",
+		bytes.NewReader([]byte(`{"username":"andrei","password":"hunter2"}`)))
+	if err != nil {
+		t.Fatalf("setup post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 502 {
+		t.Fatalf("setup with broken set-role = %d; want 502", resp.StatusCode)
+	}
+	if has, _ := st.HasAnyUser(); has {
+		t.Fatal("user row survived set-role failure; rollback broken")
+	}
+	// Best-effort host cleanup: SetPassword already created the Linux
+	// account, so without this call the user would be orphaned on the host
+	// (docs/progress/0017-host-agent-delete-user.md).
+	delMu.Lock()
+	got := append([]string(nil), delCalls...)
+	delMu.Unlock()
+	if len(got) != 1 || got[0] != "andrei" {
+		t.Fatalf("rollback did not call host.DeleteUser(%q) exactly once; got %v", "andrei", got)
+	}
+
+	// Failure must be auditable per CLAUDE.md elevation-class rule.
+	events, _ := st.ListAuditEvents(store.AuditFilter{Limit: 10})
+	var found bool
+	for _, e := range events {
+		if e.Action == "setup.failure" && !e.Success {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("setup.failure audit event not recorded")
+	}
 }
 
 func TestListAuditAdminSeesAll(t *testing.T) {

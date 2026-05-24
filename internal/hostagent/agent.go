@@ -32,20 +32,37 @@ type Publisher interface {
 	Unpublish(slug string) error
 }
 
+// UserManager is a consumer-side interface for the system-level user account
+// operations behind /v1/auth/set-password (and, later, /set-role and
+// /delete-user). Provider packages (usermgr.LinuxUserManager) export concrete
+// types only.
+//
+// UpsertPassword is upsert: creates the user if missing, otherwise updates the
+// password. SetRole updates Linux group membership to match the role
+// (admin → in `sudo`, member → not in `sudo`); idempotent. See
+// BRAIN_HOST_PROTOCOL.md # Credential mutation endpoints and
+// USERS_AND_GROUPS.md # Roles.
+type UserManager interface {
+	UpsertPassword(user, password string) error
+	SetRole(user, role string) error
+	DeleteUser(user string) error
+}
+
 // Agent is the HTTP handler set for host-agent. It holds both the
 // PasswordVerifier (swapped per binary) and the in-memory fake maps used by
-// setPassword / setRole / deleteUser in both binaries — those three ops are not
-// yet wired to the real system even in cmd/host-agent-real.
+// setPassword / setRole / deleteUser when UserMgr is nil (the fake binary).
+// cmd/host-agent-real wires UserMgr so all three delegate to /etc/passwd via
+// usermgr.LinuxUserManager.
 type Agent struct {
 	mu       sync.Mutex
 	// published is a write-through cache of announced names, keyed by slug.
 	// Updated on every successful Publish/Unpublish call so GET /v1/discovery/state
 	// can answer without requiring the Publisher to expose a listing method.
 	published map[string]protocol.PublishedName
-	// passwords is the in-memory bcrypt map used by setPassword/deleteUser.
-	// In cmd/host-agent it is also used by FakeVerifier.
-	// In cmd/host-agent-real, PAMVerifier bypasses it for verify, but
-	// setPassword still writes here (fake — NOT reflected to /etc/shadow).
+	// passwords is the in-memory bcrypt map used by setPassword/deleteUser
+	// when UserMgr is nil (the fake binary). FakeVerifier reads from it.
+	// In cmd/host-agent-real, UserMgr is wired and these handlers bypass
+	// the map entirely — /etc/shadow is the source of truth there.
 	passwords map[string][]byte
 	roles     map[string]string
 	startedAt time.Time
@@ -57,6 +74,13 @@ type Agent struct {
 	// Publisher handles POST /v1/discovery/publish and /v1/discovery/unpublish.
 	// Swapped per binary: FakePublisher (fake) vs avahipublisher.FilePublisher (real).
 	Publisher Publisher
+
+	// UserMgr, when non-nil, takes over POST /v1/auth/set-password,
+	// /v1/auth/set-role, and /v1/auth/delete-user: handlers delegate to the
+	// manager instead of writing to the in-memory maps. cmd/host-agent leaves
+	// this nil (fake path); cmd/host-agent-real wires usermgr.LinuxUserManager
+	// so /etc/passwd + /etc/shadow + /etc/group become the source of truth.
+	UserMgr UserManager
 }
 
 // New constructs an Agent with the given PasswordVerifier and Publisher.
@@ -176,13 +200,16 @@ func (a *Agent) verifyPassword(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, protocol.VerifyPasswordResponse{Valid: ok})
 }
 
-// setPassword stores a bcrypt hash in the in-memory map.
+// setPassword is upsert per BRAIN_HOST_PROTOCOL.md: creates the user if
+// missing, otherwise updates the password.
 //
-// NOTE: in cmd/host-agent-real this does NOT update /etc/shadow or PAM.
-// It is a fake that keeps the fake binary's tests working and lets the
-// bootstrap flow (POST /setup → SetPassword) exercise the protocol.
-// Real system integration is tracked as a Tier-B follow-up in
-// docs/progress/0011-host-agent-pam-verify.md.
+// When UserMgr is non-nil (cmd/host-agent-real), delegates to UpsertPassword
+// which writes to /etc/shadow via useradd+chpasswd. When nil (cmd/host-agent),
+// writes a bcrypt hash to the in-memory map used by FakeVerifier so the fake
+// binary's tests and the bootstrap flow (POST /setup → SetPassword) still work.
+//
+// Never reveals system-level failure detail in the HTTP response body — same
+// posture as verify-password. The structured log captures the underlying error.
 func (a *Agent) setPassword(w http.ResponseWriter, r *http.Request) {
 	var req protocol.SetPasswordRequest
 	if !decode(w, r, &req) {
@@ -192,6 +219,18 @@ func (a *Agent) setPassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad-request", "user and password are required")
 		return
 	}
+
+	if a.UserMgr != nil {
+		if err := a.UserMgr.UpsertPassword(req.User, req.Password); err != nil {
+			slog.Error("set-password: user-manager error", "user", req.User, "err", err)
+			writeErr(w, http.StatusInternalServerError, "set-password-failed", "set-password failed")
+			return
+		}
+		slog.Info("set-password", "user", req.User)
+		writeJSON(w, http.StatusOK, struct{}{})
+		return
+	}
+
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.MinCost)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "hash-failed", err.Error())
@@ -204,10 +243,12 @@ func (a *Agent) setPassword(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, struct{}{})
 }
 
-// setRole stores the role in the in-memory map.
+// setRole updates Linux group membership to match the role.
 //
-// NOTE: in cmd/host-agent-real this does NOT update Linux group membership.
-// Tracked as a Tier-B follow-up in docs/progress/0011-host-agent-pam-verify.md.
+// When UserMgr is non-nil (cmd/host-agent-real), delegates to SetRole which
+// runs `gpasswd -a/-d <user> sudo`. When nil (cmd/host-agent), records the
+// role in the in-memory map. Body never leaks system detail on error — same
+// opaque-error posture as verify-password / set-password.
 func (a *Agent) setRole(w http.ResponseWriter, r *http.Request) {
 	var req protocol.SetRoleRequest
 	if !decode(w, r, &req) {
@@ -221,6 +262,18 @@ func (a *Agent) setRole(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad-request", "role must be admin or member")
 		return
 	}
+
+	if a.UserMgr != nil {
+		if err := a.UserMgr.SetRole(req.User, req.Role); err != nil {
+			slog.Error("set-role: user-manager error", "user", req.User, "role", req.Role, "err", err)
+			writeErr(w, http.StatusInternalServerError, "set-role-failed", "set-role failed")
+			return
+		}
+		slog.Info("set-role", "user", req.User, "role", req.Role)
+		writeJSON(w, http.StatusOK, struct{}{})
+		return
+	}
+
 	a.mu.Lock()
 	a.roles[req.User] = req.Role
 	a.mu.Unlock()
@@ -228,15 +281,31 @@ func (a *Agent) setRole(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, struct{}{})
 }
 
-// deleteUser removes the user from the in-memory maps.
-//
-// NOTE: in cmd/host-agent-real this does NOT delete the Linux user account.
-// Tracked as a Tier-B follow-up in docs/progress/0011-host-agent-pam-verify.md.
+// deleteUser removes the user. When UserMgr is wired (cmd/host-agent-real),
+// delegates to UserMgr.DeleteUser (userdel -r -f); otherwise drops the entry
+// from the in-memory fake maps. Idempotent per BRAIN_HOST_PROTOCOL.md # Auth
+// endpoints: unknown user returns 200.
 func (a *Agent) deleteUser(w http.ResponseWriter, r *http.Request) {
 	var req protocol.DeleteUserRequest
 	if !decode(w, r, &req) {
 		return
 	}
+	if req.User == "" {
+		writeErr(w, http.StatusBadRequest, "bad-request", "user is required")
+		return
+	}
+
+	if a.UserMgr != nil {
+		if err := a.UserMgr.DeleteUser(req.User); err != nil {
+			slog.Error("delete-user: user-manager error", "user", req.User, "err", err)
+			writeErr(w, http.StatusInternalServerError, "delete-user-failed", "delete-user failed")
+			return
+		}
+		slog.Info("delete-user", "user", req.User)
+		writeJSON(w, http.StatusOK, struct{}{})
+		return
+	}
+
 	a.mu.Lock()
 	delete(a.passwords, req.User)
 	delete(a.roles, req.User)
