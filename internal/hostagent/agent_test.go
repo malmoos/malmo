@@ -25,7 +25,7 @@ func (s *stubVerifier) Verify(_, _ string) (bool, error) {
 // --- helpers ---
 
 func newTestAgent(v PasswordVerifier) (*Agent, *http.ServeMux) {
-	a := New(v)
+	a := New(v, NewFakePublisher(".malmo.local"))
 	mux := http.NewServeMux()
 	a.Mount(mux)
 	return a, mux
@@ -111,7 +111,7 @@ func TestVerifyPasswordVerifierError_ReturnsValidFalseNotFiveHundred(t *testing.
 // --- set-password / fake-map tests ---
 
 func TestSetPasswordAndVerifyWithFakeVerifier(t *testing.T) {
-	a := New(nil) // verifier set after construction
+	a := New(nil, NewFakePublisher(".malmo.local")) // verifier set after construction
 	a.Verifier = NewFakeVerifier(a)
 	mux := http.NewServeMux()
 	a.Mount(mux)
@@ -178,7 +178,7 @@ func TestSetRole_InvalidRole(t *testing.T) {
 // --- delete-user tests ---
 
 func TestDeleteUser_RemovesFromFakeMap(t *testing.T) {
-	a := New(nil)
+	a := New(nil, NewFakePublisher(".malmo.local"))
 	a.Verifier = NewFakeVerifier(a)
 	mux := http.NewServeMux()
 	a.Mount(mux)
@@ -210,6 +210,26 @@ func TestDeleteUser_IdempotentOnUnknownUser(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200 (idempotent), got %d", w.Code)
 	}
+}
+
+// --- stub publisher ---
+
+type stubPublisher struct {
+	publishErr   error
+	unpublishErr error
+	published    []string
+}
+
+func (s *stubPublisher) Publish(slug string) (string, error) {
+	if s.publishErr != nil {
+		return "", s.publishErr
+	}
+	s.published = append(s.published, slug)
+	return slug + ".malmo.local", nil
+}
+
+func (s *stubPublisher) Unpublish(slug string) error {
+	return s.unpublishErr
 }
 
 // --- discovery / system tests ---
@@ -244,5 +264,61 @@ func TestPublishUnpublish_RoundTrip(t *testing.T) {
 	w = post(t, mux, "/v1/discovery/unpublish", protocol.UnpublishRequest{Slug: "whoami"})
 	if w.Code != http.StatusOK {
 		t.Fatalf("unpublish: want 200, got %d", w.Code)
+	}
+}
+
+// TestPublish_DelegatesToPublisher verifies that the publish handler calls the
+// injected Publisher and surfaces errors as 500.
+func TestPublish_DelegatesToPublisher(t *testing.T) {
+	pub := &stubPublisher{}
+	a := New(&stubVerifier{}, pub)
+	mux := http.NewServeMux()
+	a.Mount(mux)
+
+	w := post(t, mux, "/v1/discovery/publish", protocol.PublishRequest{Slug: "photos"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("publish: want 200, got %d", w.Code)
+	}
+	pr := decodeBody[protocol.PublishResponse](t, w)
+	if pr.Name != "photos.malmo.local" {
+		t.Errorf("name: want photos.malmo.local, got %q", pr.Name)
+	}
+	if pr.State != "established" {
+		t.Errorf("state: want established, got %q", pr.State)
+	}
+	if len(pub.published) != 1 || pub.published[0] != "photos" {
+		t.Errorf("publisher not called with slug: %v", pub.published)
+	}
+}
+
+// TestPublish_PublisherError_Returns500 verifies that a Publisher failure
+// returns 500 rather than silently succeeding.
+func TestPublish_PublisherError_Returns500(t *testing.T) {
+	pub := &stubPublisher{publishErr: errors.New("disk full")}
+	a := New(&stubVerifier{}, pub)
+	mux := http.NewServeMux()
+	a.Mount(mux)
+
+	w := post(t, mux, "/v1/discovery/publish", protocol.PublishRequest{Slug: "notes"})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("publish with broken publisher: want 500, got %d", w.Code)
+	}
+}
+
+// TestFakePublisher_MatchesCurrentBehavior verifies FakePublisher returns the
+// expected name and doesn't error on valid slugs or Unpublish.
+func TestFakePublisher_MatchesCurrentBehavior(t *testing.T) {
+	fp := NewFakePublisher(".malmo.local")
+
+	name, err := fp.Publish("whoami")
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if name != "whoami.malmo.local" {
+		t.Errorf("name: want whoami.malmo.local, got %q", name)
+	}
+
+	if err := fp.Unpublish("whoami"); err != nil {
+		t.Fatalf("Unpublish: %v", err)
 	}
 }

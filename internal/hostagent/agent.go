@@ -23,12 +23,24 @@ type PasswordVerifier interface {
 	Verify(user, password string) (bool, error)
 }
 
+// Publisher is a consumer-side interface for writing/removing Avahi service
+// files. Lives here because the publish/unpublish HTTP handlers are the
+// consumers. Provider packages (FakePublisher, avahipublisher.FilePublisher)
+// export concrete types only.
+type Publisher interface {
+	Publish(slug string) (name string, err error)
+	Unpublish(slug string) error
+}
+
 // Agent is the HTTP handler set for host-agent. It holds both the
 // PasswordVerifier (swapped per binary) and the in-memory fake maps used by
 // setPassword / setRole / deleteUser in both binaries — those three ops are not
 // yet wired to the real system even in cmd/host-agent-real.
 type Agent struct {
 	mu       sync.Mutex
+	// published is a write-through cache of announced names, keyed by slug.
+	// Updated on every successful Publish/Unpublish call so GET /v1/discovery/state
+	// can answer without requiring the Publisher to expose a listing method.
 	published map[string]protocol.PublishedName
 	// passwords is the in-memory bcrypt map used by setPassword/deleteUser.
 	// In cmd/host-agent it is also used by FakeVerifier.
@@ -41,16 +53,24 @@ type Agent struct {
 	// Verifier handles POST /v1/auth/verify-password.
 	// Swapped per binary: FakeVerifier (fake) vs PAMVerifier (real).
 	Verifier PasswordVerifier
+
+	// Publisher handles POST /v1/discovery/publish and /v1/discovery/unpublish.
+	// Swapped per binary: FakePublisher (fake) vs avahipublisher.FilePublisher (real).
+	Publisher Publisher
 }
 
-// New constructs an Agent with the given PasswordVerifier.
-func New(v PasswordVerifier) *Agent {
+// New constructs an Agent with the given PasswordVerifier and Publisher.
+// Either may be nil at construction time and set later (useful for the
+// FakeVerifier pointer-back pattern), but both must be non-nil before
+// Mount is called and requests arrive.
+func New(v PasswordVerifier, pub Publisher) *Agent {
 	return &Agent{
 		published: map[string]protocol.PublishedName{},
 		passwords: map[string][]byte{},
 		roles:     map[string]string{},
 		startedAt: time.Now(),
 		Verifier:  v,
+		Publisher: pub,
 	}
 }
 
@@ -75,7 +95,14 @@ func (a *Agent) publish(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad-request", "slug is required")
 		return
 	}
-	name := req.Slug + ".malmo.local"
+	name, err := a.Publisher.Publish(req.Slug)
+	if err != nil {
+		slog.Error("publish: publisher error", "slug", req.Slug, "err", err)
+		writeErr(w, http.StatusInternalServerError, "publish-failed", err.Error())
+		return
+	}
+	// Write-through cache: keep the in-memory map in sync so GET /v1/discovery/state
+	// can answer without requiring the Publisher to expose a listing method.
 	a.mu.Lock()
 	a.published[req.Slug] = protocol.PublishedName{Slug: req.Slug, Name: name, State: "established"}
 	a.mu.Unlock()
@@ -88,6 +115,12 @@ func (a *Agent) unpublish(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
+	if err := a.Publisher.Unpublish(req.Slug); err != nil {
+		slog.Error("unpublish: publisher error", "slug", req.Slug, "err", err)
+		writeErr(w, http.StatusInternalServerError, "unpublish-failed", err.Error())
+		return
+	}
+	// Keep write-through cache in sync.
 	a.mu.Lock()
 	delete(a.published, req.Slug)
 	a.mu.Unlock()

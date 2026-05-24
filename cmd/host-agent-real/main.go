@@ -1,17 +1,18 @@
 // Command host-agent-real is the production host-agent binary. It uses real
-// PAM for password verification (POST /v1/auth/verify-password) but keeps
-// set-password / set-role / delete-user as an in-memory fake — those three
-// operations are not yet wired to the system.
+// PAM for password verification (POST /v1/auth/verify-password) and real Avahi
+// static-file writes for publish/unpublish (POST /v1/discovery/publish|unpublish),
+// but keeps set-password / set-role / delete-user as an in-memory fake — those
+// three operations are not yet wired to the system.
 //
 // Build requirements:
 //   - Linux only
 //   - CGO enabled
 //   - libpam0g-dev installed (apt install libpam0g-dev)
 //   - /etc/pam.d/malmo present (copy dev/pam/malmo)
-//   - Must run as root (pam_unix.so requires privilege)
+//   - Must run as root (pam_unix.so requires privilege; Avahi service dir write)
 //
-// See docs/progress/0011-host-agent-pam-verify.md for the full context and
-// known gaps.
+// See docs/progress/0011-host-agent-pam-verify.md and
+// docs/progress/0012-host-agent-avahi-files.md for full context and known gaps.
 package main
 
 import (
@@ -21,12 +22,13 @@ import (
 	"os"
 
 	"github.com/malmo/malmo/internal/hostagent"
+	"github.com/malmo/malmo/internal/hostagent/avahipublisher"
 	"github.com/malmo/malmo/internal/hostagent/pamverifier"
 	"github.com/malmo/malmo/internal/protocol"
 )
 
 func main() {
-	// Loud warning: three operations are still fake even in this real binary.
+	// Loud warning: three auth operations are still fake even in this real binary.
 	// Brain's bootstrap path (POST /setup → SetPassword) does NOT write to
 	// /etc/shadow. Tracked as Tier-B follow-up:
 	// docs/progress/0011-host-agent-pam-verify.md.
@@ -51,8 +53,15 @@ func main() {
 	// 0660 root:malmo — brain's container UID is in the malmo group.
 	_ = os.Chmod(sockPath, 0o660)
 
-	// verifyPassword uses real PAM; all other auth ops stay in-memory.
-	a := hostagent.New(&pamverifier.PAMVerifier{Service: "malmo"})
+	// verifyPassword uses real PAM; Avahi service files are written to disk;
+	// all other auth ops stay in-memory.
+	a := hostagent.New(
+		&pamverifier.PAMVerifier{Service: "malmo"},
+		&avahipublisher.FilePublisher{
+			Dir:        "/etc/avahi/services",
+			HostSuffix: ".malmo.local",
+		},
+	)
 
 	mux := http.NewServeMux()
 	a.Mount(mux)

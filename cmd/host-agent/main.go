@@ -34,7 +34,7 @@ func main() {
 	defer ln.Close()
 	_ = os.Chmod(sockPath, 0o660)
 
-	a := hostagent.New(nil) // verifier wired after construction
+	a := hostagent.New(nil, hostagent.NewFakePublisher(".malmo.local")) // verifier wired after construction
 	a.Verifier = hostagent.NewFakeVerifier(a)
 
 	mux := http.NewServeMux()

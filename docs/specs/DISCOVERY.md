@@ -37,6 +37,8 @@ Mechanism: the install reconciler writes a static service file at `/etc/avahi/se
 
 The static-file approach is preferred over `avahi-publish` (which runs as a long-lived process per name) because Avahi already handles re-announcement, IP-change reannouncement, and link-up reannouncement for service-file entries. One reconciler write, durable across daemon restarts.
 
+**Implementation note on the XML schema.** Avahi's static-file format requires at least one `<service>` element alongside `<host-name>`. We use the project-specific service type `_malmo-app._tcp` (port 0) as the required dummy — this satisfies the schema without publishing a browsable `_http._tcp` entry that would surface in Finder / iOS Files sidebars (see §3 below). The type name is not a registered IANA service type and will not appear in standard Bonjour browsers. See `docs/progress/0012-host-agent-avahi-files.md` for full rationale.
+
 ### 3. Service records (Bonjour browsing)
 
 For the box itself: `_device-info._tcp` with `model=malmo` so it appears with a recognizable icon in Finder. Samba publishes its own `_smb._tcp` and TimeMachine records (`STORAGE.md`).
