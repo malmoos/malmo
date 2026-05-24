@@ -51,6 +51,12 @@ func main() {
 	if err := life.Reconcile(ctx); err != nil {
 		slog.Warn("startup reconcile failed", "err", err)
 	}
+	// Catch-all 404: ensure the tail route is present after reconcile has
+	// re-populated per-app routes at index 0. Best-effort — Caddy being
+	// transiently unreachable here doesn't block the brain from serving.
+	if err := cd.EnsureCatchAll(ctx); err != nil {
+		slog.Warn("caddy: ensure catch-all failed; continuing", "err", err)
+	}
 	cancel()
 
 	if status, err := host.SystemStatus(context.Background()); err != nil {

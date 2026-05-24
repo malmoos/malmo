@@ -137,6 +137,42 @@ binary listens on. Note: because `set-password` is still fake, dashboard login
 will fail until real `useradd`/`passwd` integration lands — use
 `cmd/host-agent` (fake) for all normal dev work.
 
+## Verifying routing
+
+malmo uses **Host-header-based subdomain routing** — each installed app gets a
+virtual host (`<slug>.malmo.local`), never a path prefix. This keeps apps in
+separate browser origins (same-origin policy enforcement — see `SPEC.md`).
+
+**Dev port wrinkle:** in dev, Caddy listens on `:8088` because host port 80 is
+typically taken on a laptop. In production it's `:80`. The `.local` mDNS names
+resolve to port 80, so LAN browser testing via `<slug>.malmo.local` doesn't
+work from another device against the dev stack — the port mismatch breaks it.
+The test script and the ad-hoc recipe below both work around this with `--resolve`
+or an explicit `-H Host:` header.
+
+**Quick ad-hoc check** (after installing whoami from the catalog):
+
+```bash
+# Host-header method — should return the whoami echo page
+curl -H "Host: whoami.malmo.local" http://localhost:8088/
+
+# --resolve variant — same effect, avoids quoting issues in scripts
+curl --resolve "whoami.malmo.local:8088:127.0.0.1" http://whoami.malmo.local:8088/
+
+# Path-based — should NOT return 200 (route does not exist)
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8088/whoami/
+```
+
+**Automated end-to-end test** (installs whoami, exercises positive/negative
+routing, then uninstalls — requires `make dev` already running):
+
+```bash
+make test-caddy
+```
+
+The script (`dev/test-caddy-routing.sh`) boots a `caddytest` admin user on
+first run and reuses it on subsequent runs. Reset with `make clean && make dev`.
+
 ## Debugging the wire protocols
 
 Both protocols are plain HTTP/JSON and curl-debuggable by design:

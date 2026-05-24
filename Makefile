@@ -12,7 +12,7 @@ export MALMO_AGENT_SOCK := $(AGENT_SOCK)
 export MALMO_STATE_DIR := $(STATE_DIR)
 export MALMO_CATALOG_DIR := ./catalog
 
-.PHONY: build host-agent brain host-agent-real test test-all run-agent run-brain net caddy caddy-down ui dev openapi clean help
+.PHONY: build host-agent brain host-agent-real test test-all test-caddy run-agent run-brain net caddy caddy-down ui dev openapi clean help
 
 # msteinert/pam v2.1.0 uses RTLD_NEXT, a GNU extension that requires
 # _GNU_SOURCE at C compile time. Apply globally; harmless to non-cgo builds.
@@ -28,6 +28,7 @@ help:
 	@echo "make ui          - run the Vite dev server (web-ui/)"
 	@echo "make caddy-down  - stop the dev Caddy"
 	@echo "make clean       - stop apps, remove dev state"
+	@echo "make test-caddy  - end-to-end Caddy routing test (requires make dev)"
 	@echo ""
 	@echo "One-terminal: make dev   (Caddy started detached; Ctrl-C stops the rest)"
 	@echo "Four terminals: make caddy ; make run-agent ; make run-brain ; make ui"
@@ -55,6 +56,12 @@ test-nopam:
 # running on the host. No sudo needed (default DBus policy allows it).
 test-avahi:
 	$(GO) test -tags avahitest ./internal/hostagent/avahipublisher/
+
+# End-to-end Caddy routing verification. Assumes `make dev` is running.
+# Tests Host-header routing, confirms path-based routing does NOT work,
+# and verifies route withdrawal after uninstall.
+test-caddy:
+	./dev/test-caddy-routing.sh
 
 net:
 	@docker network inspect malmo-ingress >/dev/null 2>&1 || docker network create malmo-ingress

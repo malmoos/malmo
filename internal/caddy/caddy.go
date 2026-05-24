@@ -10,9 +10,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"time"
 )
+
+// catchAllBody is the HTML returned by the catch-all 404 route for any
+// unmatched hostname. Kept as a raw string so the Go source is readable;
+// serialised to a single JSON string value when sent to the Caddy admin API.
+const catchAllBody = `<!doctype html><html><head><meta charset="utf-8"><title>404 — malmo</title><style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:6rem auto;padding:0 1rem;color:#222}h1{margin:0 0 .5rem;font-size:1.5rem}p{color:#555;line-height:1.5}a{color:#06c}</style></head><body><h1>404 — No app at this hostname</h1><p>The address you tried doesn't match any installed app on this malmo box.</p><p><a href="http://malmo.local">Go to the dashboard</a></p></body></html>`
 
 type Client struct {
 	admin string
@@ -66,7 +73,12 @@ func (c *Client) upsertRoute(ctx context.Context, instanceID, host string, handl
 		"match":  []any{map[string]any{"host": []string{host}}},
 		"handle": handle,
 	}
-	return c.post(ctx, "/config/apps/http/servers/malmo/routes", route)
+	// Caddy admin API insert semantics: PUT to /routes/<N> inserts at that
+	// index, pushing existing items down. POST to /routes/<N> appends
+	// regardless of the trailing index (verified 2026-05-24). Using PUT/0
+	// keeps the catch-all (which initially sits at index 0, then index 1+
+	// after the first install) last in evaluation order.
+	return c.put(ctx, "/config/apps/http/servers/malmo/routes/0", route)
 }
 
 func splashHTML(appName, state string) string {
@@ -101,6 +113,44 @@ func (c *Client) RemoveRoute(ctx context.Context, instanceID string) error {
 	return nil
 }
 
+// catchAllRoute returns the map[string]any that represents the catch-all 404
+// route. The @id makes it addressable via /id/malmo-catchall so EnsureCatchAll
+// can probe for its presence idempotently.
+func catchAllRoute() map[string]any {
+	return map[string]any{
+		"@id":   "malmo-catchall",
+		"match": []any{map[string]any{}},
+		"handle": []any{map[string]any{
+			"handler":     "static_response",
+			"status_code": 404,
+			"headers":     map[string]any{"Content-Type": []any{"text/html; charset=utf-8"}},
+			"body":        catchAllBody,
+		}},
+	}
+}
+
+// EnsureCatchAll installs the catch-all 404 route if it is not already present.
+// Called at brain startup after EnsureServer resets the route list — it
+// appends the catch-all at the tail of routes[] so all per-app routes inserted
+// at index 0 naturally sort before it. Idempotent: probes /id/malmo-catchall
+// first and returns nil immediately if found.
+func (c *Client) EnsureCatchAll(ctx context.Context) error {
+	status, err := c.get(ctx, "/id/malmo-catchall")
+	if err != nil {
+		return fmt.Errorf("caddy: probe catch-all: %w", err)
+	}
+	if status == http.StatusOK {
+		slog.Info("caddy: catch-all already present")
+		return nil
+	}
+	// Not found (404 or any non-200) — install it by appending to routes[].
+	if err := c.post(ctx, "/config/apps/http/servers/malmo/routes", catchAllRoute()); err != nil {
+		return fmt.Errorf("caddy: install catch-all: %w", err)
+	}
+	slog.Info("caddy: catch-all installed")
+	return nil
+}
+
 // EnsureServer resets the "malmo" server's route list to empty at brain
 // startup, giving the reconciler a clean slate to rebuild routes from desired
 // state. It PATCHes only the routes array, so it never touches the server's
@@ -117,6 +167,27 @@ func (c *Client) post(ctx context.Context, path string, body any) error {
 
 func (c *Client) patch(ctx context.Context, path string, body any) error {
 	return c.send(ctx, "PATCH", path, body)
+}
+
+func (c *Client) put(ctx context.Context, path string, body any) error {
+	return c.send(ctx, "PUT", path, body)
+}
+
+// get issues a GET to the Caddy admin API and returns the HTTP status code.
+// It never returns an error for non-2xx responses — only for transport failures.
+// This lets EnsureCatchAll distinguish "not found" (404) from "unreachable".
+func (c *Client) get(ctx context.Context, path string) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", c.admin+path, nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("caddy admin unreachable: %w", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	return resp.StatusCode, nil
 }
 
 func (c *Client) send(ctx context.Context, method, path string, body any) error {

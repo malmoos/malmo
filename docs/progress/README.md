@@ -45,3 +45,4 @@ Ordered follow-ups. Update as they land.
 | [0010](0010-session-expiry-elevation.md) | Session expiry (idle + hard cap) + 5-minute elevation window | done |
 | [0011](0011-host-agent-pam-verify.md) | Real PAM-based password verification in host-agent-real | done |
 | [0013](0013-avahi-dbus-publisher.md) | Avahi DBus publisher — per-app A records via EntryGroup.AddAddress | done |
+| [0014](0014-caddy-routing-verified.md) | Caddy subdomain routing verified (Host-header routing end-to-end, path-based confirmed absent) | done |
