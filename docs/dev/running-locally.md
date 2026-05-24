@@ -28,9 +28,19 @@ This guide covers the inner loop.
   sudo apt install libpam0g-dev
   ```
 
+  You also need `CGO_CFLAGS=-D_GNU_SOURCE` because `msteinert/pam` v2.1.0
+  uses `RTLD_NEXT` (a GNU extension) without setting `_GNU_SOURCE` itself.
+  The `Makefile` exports this globally; if you run `go` directly, prefix:
+
+  ```bash
+  CGO_CFLAGS=-D_GNU_SOURCE go test ./...
+  # or use the Makefile targets:
+  make test          # full suite, needs libpam0g-dev
+  make test-nopam    # skip pamverifier, no libpam0g-dev needed
+  ```
+
   macOS devs: skip — `host-agent-real` is Linux-only by design (it talks to
-  `/etc/shadow` via Linux PAM). Test with `go test $(go list ./... | grep -v
-  pamverifier)` or just run the fake.
+  `/etc/shadow` via Linux PAM). Use `make test-nopam` or just run the fake.
 
 ## Start the stack
 

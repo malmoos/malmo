@@ -48,8 +48,10 @@ func (p *PAMVerifier) Verify(user, password string) (bool, error) {
 	}
 
 	if err := tx.Authenticate(0); err != nil {
-		// pam.ErrAuthentication = wrong credentials — not a transport error.
-		if errors.Is(err, pam.ErrAuthentication) {
+		// pam.ErrAuth = wrong credentials — not a transport error. Collapse
+		// ErrUserUnknown into the same bucket so the brain can't distinguish
+		// "unknown user" from "wrong password" by timing or response.
+		if errors.Is(err, pam.ErrAuth) || errors.Is(err, pam.ErrUserUnknown) {
 			return false, nil
 		}
 		return false, err
