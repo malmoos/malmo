@@ -26,6 +26,8 @@ Runs systemd userspace in a Linux namespace. No initramfs, no kernel boot, no TP
 
 Implementation: a `nspawn` test harness that mounts a built malmo rootfs, boots it with synthetic disks (loopback files), and runs assertion scripts inside. Each test is a separate nspawn instance, run in parallel where possible.
 
+**PAM verify coverage:** real `verifyPassword` test coverage (via `PAMVerifier` in `host-agent-real`) requires `/etc/pam.d/malmo` installed in the nspawn rootfs plus a provisioned test user (`useradd malmo-pamtest && chpasswd`). The `pam_linux_test.go` skeleton (`-tags pamtest`) is the entry point; it lands with this lane's full build-out, not earlier.
+
 ## Medium lane — QEMU + swtpm (per-PR or per-merge, ~10 minutes)
 
 Full VM boot with a software TPM (`swtpm`). Mature stack — `systemd`'s own CI runs this way.

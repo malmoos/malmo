@@ -3,6 +3,11 @@
 *.test
 *.out
 
+# Build artifacts — cmd binaries built at repo root
+/host-agent
+/host-agent-real
+/brain
+
 # malmo dev state (instance dirs, sqlite, generated compose)
 /.dev/
 

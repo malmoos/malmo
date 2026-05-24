@@ -18,6 +18,19 @@ This guide covers the inner loop.
 - **Node 20+** (`web-ui/.nvmrc` pins 20).
 - **Go 1.23+.** If `go` isn't on your `PATH`, the `Makefile` falls back to
   `~/.local/go/bin/go`.
+- **`libpam0g-dev`** (Linux only). Required to build/test the
+  `internal/hostagent/pamverifier` package and `cmd/host-agent-real`. Without
+  it, `go test ./...` will fail on those targets with `fatal error:
+  security/pam_appl.h: No such file or directory`. The fake binary
+  (`cmd/host-agent`) and everything else build without it.
+
+  ```bash
+  sudo apt install libpam0g-dev
+  ```
+
+  macOS devs: skip — `host-agent-real` is Linux-only by design (it talks to
+  `/etc/shadow` via Linux PAM). Test with `go test $(go list ./... | grep -v
+  pamverifier)` or just run the fake.
 
 ## Start the stack
 
@@ -88,6 +101,31 @@ Override defaults with env vars: `MALMO_LISTEN`, `MALMO_STATE_DIR`,
 make clean        # stop the dev Caddy, remove malmo app containers + networks,
                   # wipe .dev/state
 ```
+
+## Running host-agent-real
+
+`cmd/host-agent-real` is the production binary: it uses real PAM for
+`verify-password` while `set-password`, `set-role`, and `delete-user` remain
+in-memory fakes (tracked in `docs/progress/0011-host-agent-pam-verify.md`).
+
+**Prerequisites:**
+
+```bash
+apt install libpam0g-dev      # PAM headers for CGO
+sudo cp dev/pam/malmo /etc/pam.d/malmo
+```
+
+**Build and run:**
+
+```bash
+go build ./cmd/host-agent-real
+sudo ./cmd/host-agent-real    # must run as root — pam_unix.so requires privilege
+```
+
+Point the brain at it by setting `MALMO_AGENT_SOCK` to the same path the real
+binary listens on. Note: because `set-password` is still fake, dashboard login
+will fail until real `useradd`/`passwd` integration lands — use
+`cmd/host-agent` (fake) for all normal dev work.
 
 ## Debugging the wire protocols
 

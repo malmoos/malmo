@@ -43,3 +43,4 @@ Ordered follow-ups. Update as they land.
 | [0008](0008-user-crud.md) | User CRUD (admin list/create/patch-role/delete/reset-password + self-service password change) | done |
 | [0009](0009-recovery-redemption.md) | Recovery-code redemption (`POST /api/v1/recover`) | done |
 | [0010](0010-session-expiry-elevation.md) | Session expiry (idle + hard cap) + 5-minute elevation window | done |
+| [0011](0011-host-agent-pam-verify.md) | Real PAM-based password verification in host-agent-real | done |

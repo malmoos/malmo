@@ -242,7 +242,7 @@ The password exists in PAM and is valid; the services just don't accept any user
 
 For the operations that need host privilege:
 
-- **Dashboard login (every login):** brain → host-agent `verify_password(user, password)` → PAM `authenticate()` → yes/no. The brain mints a session on yes; rate-limits on no.
+- **Dashboard login (every login):** brain → host-agent `verify_password(user, password)` → PAM `authenticate()` → yes/no. The brain mints a session on yes; rate-limits on no. The PAM service name is `malmo`; the stack lives at `/etc/pam.d/malmo`.
 - **Password change** (Settings → My account → password, or recovery-code flow): brain → host-agent → `passwd <user>` + Samba sync (one atomic operation).
 - **SSH/SMB opt-in toggles:** brain → host-agent → add user to `AllowUsers` / `valid users` allowlist + service reload. Optional `authorized_keys` write.
 - **Tier-2 admin operations:** brain → host-agent → edit config, `systemctl` restart.

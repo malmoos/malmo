@@ -1,0 +1,242 @@
+// Package hostagent contains the shared HTTP handler layer for both
+// cmd/host-agent (fake) and cmd/host-agent-real. It speaks the real
+// BRAIN_HOST_PROTOCOL.md wire format over a UNIX socket.
+package hostagent
+
+import (
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/malmo/malmo/internal/protocol"
+	"golang.org/x/crypto/bcrypt"
+)
+
+const AgentVersion = "0.0.1-fake"
+
+// PasswordVerifier is a consumer-side interface: it lives here because this is
+// the package that calls it (the verifyPassword handler). Provider packages
+// (FakeVerifier, PAMVerifier) export concrete types only.
+type PasswordVerifier interface {
+	Verify(user, password string) (bool, error)
+}
+
+// Agent is the HTTP handler set for host-agent. It holds both the
+// PasswordVerifier (swapped per binary) and the in-memory fake maps used by
+// setPassword / setRole / deleteUser in both binaries — those three ops are not
+// yet wired to the real system even in cmd/host-agent-real.
+type Agent struct {
+	mu       sync.Mutex
+	published map[string]protocol.PublishedName
+	// passwords is the in-memory bcrypt map used by setPassword/deleteUser.
+	// In cmd/host-agent it is also used by FakeVerifier.
+	// In cmd/host-agent-real, PAMVerifier bypasses it for verify, but
+	// setPassword still writes here (fake — NOT reflected to /etc/shadow).
+	passwords map[string][]byte
+	roles     map[string]string
+	startedAt time.Time
+
+	// Verifier handles POST /v1/auth/verify-password.
+	// Swapped per binary: FakeVerifier (fake) vs PAMVerifier (real).
+	Verifier PasswordVerifier
+}
+
+// New constructs an Agent with the given PasswordVerifier.
+func New(v PasswordVerifier) *Agent {
+	return &Agent{
+		published: map[string]protocol.PublishedName{},
+		passwords: map[string][]byte{},
+		roles:     map[string]string{},
+		startedAt: time.Now(),
+		Verifier:  v,
+	}
+}
+
+// Mount registers all routes on mux.
+func (a *Agent) Mount(mux *http.ServeMux) {
+	mux.HandleFunc("POST /v1/discovery/publish", a.publish)
+	mux.HandleFunc("POST /v1/discovery/unpublish", a.unpublish)
+	mux.HandleFunc("GET /v1/discovery/state", a.discoveryState)
+	mux.HandleFunc("GET /v1/system/status", a.systemStatus)
+	mux.HandleFunc("POST /v1/auth/verify-password", a.verifyPassword)
+	mux.HandleFunc("POST /v1/auth/set-password", a.setPassword)
+	mux.HandleFunc("POST /v1/auth/set-role", a.setRole)
+	mux.HandleFunc("POST /v1/auth/delete-user", a.deleteUser)
+}
+
+func (a *Agent) publish(w http.ResponseWriter, r *http.Request) {
+	var req protocol.PublishRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.Slug == "" {
+		writeErr(w, http.StatusBadRequest, "bad-request", "slug is required")
+		return
+	}
+	name := req.Slug + ".malmo.local"
+	a.mu.Lock()
+	a.published[req.Slug] = protocol.PublishedName{Slug: req.Slug, Name: name, State: "established"}
+	a.mu.Unlock()
+	slog.Info("publish", "slug", req.Slug, "name", name, "state", "established")
+	writeJSON(w, http.StatusOK, protocol.PublishResponse{Name: name, State: "established"})
+}
+
+func (a *Agent) unpublish(w http.ResponseWriter, r *http.Request) {
+	var req protocol.UnpublishRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	a.mu.Lock()
+	delete(a.published, req.Slug)
+	a.mu.Unlock()
+	slog.Info("unpublish", "slug", req.Slug)
+	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+func (a *Agent) discoveryState(w http.ResponseWriter, r *http.Request) {
+	a.mu.Lock()
+	names := make([]protocol.PublishedName, 0, len(a.published))
+	for _, n := range a.published {
+		names = append(names, n)
+	}
+	a.mu.Unlock()
+	writeJSON(w, http.StatusOK, protocol.DiscoveryState{
+		Publisher:  "avahi-fake",
+		HostName:   "malmo",
+		RenamedTo:  nil,
+		Published:  names,
+		Interfaces: []string{"eth0"},
+	})
+}
+
+func (a *Agent) systemStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, protocol.SystemStatus{
+		Hostname:     "malmo-dev",
+		UptimeS:      int64(time.Since(a.startedAt).Seconds()),
+		DiskPressure: false,
+		AgentVersion: AgentVersion,
+	})
+}
+
+// verifyPassword delegates to a.Verifier so the verification strategy
+// (fake bcrypt map vs. real PAM) is swapped per binary.
+//
+// Per BRAIN_HOST_PROTOCOL.md: the response is always {valid: bool} — we never
+// reveal *why* verification failed (wrong password, unknown user, locked
+// account, PAM config error). Even a Verifier transport/config error returns
+// {valid: false} rather than a 5xx so the brain's rate-limiter sees a clean
+// false and the brain never leaks the distinction.
+func (a *Agent) verifyPassword(w http.ResponseWriter, r *http.Request) {
+	var req protocol.VerifyPasswordRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	ok, err := a.Verifier.Verify(req.User, req.Password)
+	if err != nil {
+		slog.Error("verify-password: verifier error", "user", req.User, "err", err)
+		// Never reveal why — return false, not 5xx. See doc comment above.
+		writeJSON(w, http.StatusOK, protocol.VerifyPasswordResponse{Valid: false})
+		return
+	}
+	writeJSON(w, http.StatusOK, protocol.VerifyPasswordResponse{Valid: ok})
+}
+
+// setPassword stores a bcrypt hash in the in-memory map.
+//
+// NOTE: in cmd/host-agent-real this does NOT update /etc/shadow or PAM.
+// It is a fake that keeps the fake binary's tests working and lets the
+// bootstrap flow (POST /setup → SetPassword) exercise the protocol.
+// Real system integration is tracked as a Tier-B follow-up in
+// docs/progress/0011-host-agent-pam-verify.md.
+func (a *Agent) setPassword(w http.ResponseWriter, r *http.Request) {
+	var req protocol.SetPasswordRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.User == "" || req.Password == "" {
+		writeErr(w, http.StatusBadRequest, "bad-request", "user and password are required")
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.MinCost)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "hash-failed", err.Error())
+		return
+	}
+	a.mu.Lock()
+	a.passwords[req.User] = hash
+	a.mu.Unlock()
+	slog.Info("set-password", "user", req.User)
+	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+// setRole stores the role in the in-memory map.
+//
+// NOTE: in cmd/host-agent-real this does NOT update Linux group membership.
+// Tracked as a Tier-B follow-up in docs/progress/0011-host-agent-pam-verify.md.
+func (a *Agent) setRole(w http.ResponseWriter, r *http.Request) {
+	var req protocol.SetRoleRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.User == "" {
+		writeErr(w, http.StatusBadRequest, "bad-request", "user is required")
+		return
+	}
+	if req.Role != "admin" && req.Role != "member" {
+		writeErr(w, http.StatusBadRequest, "bad-request", "role must be admin or member")
+		return
+	}
+	a.mu.Lock()
+	a.roles[req.User] = req.Role
+	a.mu.Unlock()
+	slog.Info("set-role", "user", req.User, "role", req.Role)
+	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+// deleteUser removes the user from the in-memory maps.
+//
+// NOTE: in cmd/host-agent-real this does NOT delete the Linux user account.
+// Tracked as a Tier-B follow-up in docs/progress/0011-host-agent-pam-verify.md.
+func (a *Agent) deleteUser(w http.ResponseWriter, r *http.Request) {
+	var req protocol.DeleteUserRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	a.mu.Lock()
+	delete(a.passwords, req.User)
+	delete(a.roles, req.User)
+	a.mu.Unlock()
+	slog.Info("delete-user", "user", req.User)
+	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+// --- HTTP helpers ---
+
+func decode(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad-json", err.Error())
+		return false
+	}
+	return true
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeErr(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, protocol.Error{Code: code, Message: msg})
+}
+
+// LogRequests is a minimal middleware that lets the binary log requests if desired.
+// Currently a no-op (mirrors the fake's original stub); exported so cmd/ can
+// wrap with its own logger if needed.
+func LogRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r)
+	})
+}
