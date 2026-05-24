@@ -49,9 +49,15 @@ import (
 
 // Avahi DBus constants from <avahi-common/defs.h>.
 const (
-	avahiInterfaceUnspec int32  = -1
-	avahiProtoUnspec     int32  = -1
-	avahiPublishFlagNone uint32 = 0
+	avahiInterfaceUnspec int32 = -1
+	avahiProtoUnspec     int32 = -1
+
+	// AddAddress publish flag. NO_REVERSE = don't publish the reverse PTR
+	// record. Avahi already owns 192.168.x.x → <hostname>.local via the host's
+	// own address registration; re-publishing the reverse for a second name
+	// triggers "Local name collision" because the PTR is unique by IP.
+	// Forward A record collisions are handled by Avahi's own probing.
+	avahiPublishFlagsAlias uint32 = 16
 )
 
 // avahiService and avahiServer are the DBus service/path/interface constants.
@@ -231,7 +237,7 @@ func (p *DBusPublisher) addAddress(groupPath dbus.ObjectPath, hostname, ip strin
 	return group.Call(avahiEntryGroupIface+".AddAddress", 0,
 		avahiInterfaceUnspec,
 		avahiProtoUnspec,
-		avahiPublishFlagNone,
+		avahiPublishFlagsAlias,
 		hostname,
 		ip,
 	).Err

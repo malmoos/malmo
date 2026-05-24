@@ -51,6 +51,11 @@ test:
 test-nopam:
 	$(GO) test $$($(GO) list ./... | grep -v pamverifier)
 
+# Integration tests for the Avahi DBus publisher. Requires avahi-daemon
+# running on the host. No sudo needed (default DBus policy allows it).
+test-avahi:
+	$(GO) test -tags avahitest ./internal/hostagent/avahipublisher/
+
 net:
 	@docker network inspect malmo-ingress >/dev/null 2>&1 || docker network create malmo-ingress
 

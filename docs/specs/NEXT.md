@@ -313,7 +313,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - TPM-fail-and-admin-forgot-password rescue path. With `PermitRootLogin no` and no console root password, the LUKS recovery passphrase boots the box but leaves no clear next step. `USERS_AND_GROUPS.md` # Known gaps, `STORAGE.md`.
 - Demotion doesn't kill live `sudo` capability — existing SSH sessions retain group membership until logout. Acceptable for the household trust model; revisit if threat model changes. `USERS_AND_GROUPS.md` # Known gaps.
 - `malmo-shared` membership management UI — how an admin removes a user from household-shared content without deleting the account. Folds into shared-folder management UX (Tier 2). `USERS_AND_GROUPS.md`, `STORAGE.md`.
-- Account deletion flow — what happens to `/home/<user>/`, per-user Tier-3 instances, audit-event rows that reference the user (tombstone vs. purge). `USERS_AND_GROUPS.md`, `AUTH.md`, `LOGGING.md`.
+- Account deletion flow — what happens to `/home/<user>/` and per-user Tier-3 instances when an account is removed. (Audit-row handling is settled: FK `SET NULL` on `audit_events.actor_user_id` keeps history with a null actor.) `USERS_AND_GROUPS.md`, `AUTH.md`.
 - Account suspension — disable login without deleting data (kid grounded, ex-roommate archived). `AUTH.md`, `USERS_AND_GROUPS.md`.
 - Multi-admin invitation flow — UI affordance for "make a second admin." Today implicit (admin creates a member then promotes them). `AUTH.md`, `USERS_AND_GROUPS.md`.
 - Dashboard login brute-force throttling / lockout — `LOGGING.md` notes journald caps sshd spam, but the brain's own login endpoint has no rate-limit story. `AUTH.md`.
