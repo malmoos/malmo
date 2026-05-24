@@ -347,6 +347,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 
 	seen := map[string]bool{}
+	var avahiTotal, avahiOK, avahiFail int
 	for _, inst := range desired {
 		seen[inst.ID] = true
 		switch inst.State {
@@ -360,7 +361,15 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 					continue
 				}
 			}
-			m.reassertRouting(ctx, inst)
+			// Re-assert Caddy + mDNS. Track Avahi replay outcome for the
+			// startup summary log (covers both "brain restart while host-agent
+			// was running" and "both restart together" cases).
+			avahiTotal++
+			if ok := m.reassertRouting(ctx, inst); ok {
+				avahiOK++
+			} else {
+				avahiFail++
+			}
 		case "stopped":
 			if actual[inst.ID] {
 				slog.Info("reconcile: stopping drifted instance",
@@ -371,6 +380,9 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 				}
 			}
 		}
+	}
+	if avahiTotal > 0 {
+		slog.Info("avahi replay", "total", avahiTotal, "ok", avahiOK, "failed", avahiFail)
 	}
 
 	for id := range actual {
@@ -384,18 +396,20 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 }
 
 // reassertRouting re-publishes mDNS and re-registers the Caddy route for a
-// running instance. Best-effort: a missing manifest or unreachable Caddy logs
-// and continues, matching install's degrade-don't-block posture.
-func (m *Manager) reassertRouting(ctx context.Context, inst store.Instance) {
+// running instance. Returns true if the Avahi publish succeeded, false
+// otherwise. Best-effort: failures are logged and do not block startup.
+func (m *Manager) reassertRouting(ctx context.Context, inst store.Instance) bool {
 	man, err := m.loadInstanceManifest(inst.ID)
 	if err != nil {
 		slog.Warn("reconcile: load manifest, skipping routing",
 			"instance_id", inst.ID, "err", err)
-		return
+		return false
 	}
+	avahiOK := true
 	if _, err := m.host.Publish(ctx, inst.Slug); err != nil {
 		slog.Warn("reconcile: mDNS publish",
 			"instance_id", inst.ID, "slug", inst.Slug, "err", err)
+		avahiOK = false
 	}
 	upstream := fmt.Sprintf("malmo-%s-%s:%d", inst.ID, man.MainService, man.MainPort)
 	host := inst.Slug + ".malmo.local"
@@ -403,6 +417,7 @@ func (m *Manager) reassertRouting(ctx context.Context, inst store.Instance) {
 		slog.Warn("reconcile: caddy route",
 			"instance_id", inst.ID, "host", host, "upstream", upstream, "err", err)
 	}
+	return avahiOK
 }
 
 func (m *Manager) teardownOrphan(ctx context.Context, id string) {

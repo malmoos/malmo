@@ -1,18 +1,19 @@
 // Command host-agent-real is the production host-agent binary. It uses real
-// PAM for password verification (POST /v1/auth/verify-password) and real Avahi
-// static-file writes for publish/unpublish (POST /v1/discovery/publish|unpublish),
-// but keeps set-password / set-role / delete-user as an in-memory fake — those
+// PAM for password verification (POST /v1/auth/verify-password) and the Avahi
+// DBus API for publish/unpublish (POST /v1/discovery/publish|unpublish), but
+// keeps set-password / set-role / delete-user as an in-memory fake — those
 // three operations are not yet wired to the system.
 //
 // Build requirements:
 //   - Linux only
-//   - CGO enabled
+//   - CGO enabled (for PAM)
 //   - libpam0g-dev installed (apt install libpam0g-dev)
 //   - /etc/pam.d/malmo present (copy dev/pam/malmo)
-//   - Must run as root (pam_unix.so requires privilege; Avahi service dir write)
+//   - avahi-daemon running with the system DBus accessible
+//   - Must run as root (pam_unix.so requires privilege)
 //
 // See docs/progress/0011-host-agent-pam-verify.md and
-// docs/progress/0012-host-agent-avahi-files.md for full context and known gaps.
+// docs/progress/0013-avahi-dbus-publisher.md for full context and known gaps.
 package main
 
 import (
@@ -34,6 +35,8 @@ func main() {
 	// docs/progress/0011-host-agent-pam-verify.md.
 	slog.Warn("host-agent-real: set-password/set-role/delete-user are NOT wired to the system (fake in-memory) — see docs/progress/0011-host-agent-pam-verify.md")
 
+	pub := &avahipublisher.DBusPublisher{HostSuffix: ".malmo.local"}
+
 	sockPath := os.Getenv("MALMO_AGENT_SOCK")
 	if sockPath == "" {
 		sockPath = protocol.SocketPath
@@ -53,14 +56,11 @@ func main() {
 	// 0660 root:malmo — brain's container UID is in the malmo group.
 	_ = os.Chmod(sockPath, 0o660)
 
-	// verifyPassword uses real PAM; Avahi service files are written to disk;
+	// verifyPassword uses real PAM; Avahi A records are published via DBus;
 	// all other auth ops stay in-memory.
 	a := hostagent.New(
 		&pamverifier.PAMVerifier{Service: "malmo"},
-		&avahipublisher.FilePublisher{
-			Dir:        "/etc/avahi/services",
-			HostSuffix: ".malmo.local",
-		},
+		pub,
 	)
 
 	mux := http.NewServeMux()
@@ -70,6 +70,8 @@ func main() {
 	srv := &http.Server{Handler: hostagent.LogRequests(mux)}
 	if err := srv.Serve(ln); err != nil {
 		slog.Error("serve", "err", err)
+		_ = pub.Close()
 		os.Exit(1)
 	}
+	_ = pub.Close()
 }

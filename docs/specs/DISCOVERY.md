@@ -33,11 +33,31 @@ Three categories of records, all driven by the brain via host-agent:
 
 For each installed app with slug `<slug>`: `<slug>.malmo.local A <lan-ip>`.
 
-Mechanism: the install reconciler writes a static service file at `/etc/avahi/services/app-<slug>.service` (XML, declares the alias) as part of the same transaction that writes the Caddy site block. Avahi watches that directory and announces on file create. Uninstall removes the file; Avahi withdraws the announcement.
+**Mechanism: Avahi DBus `EntryGroup.AddAddress`.** The install reconciler calls
+`org.freedesktop.Avahi.Server.EntryGroupNew`, then
+`org.freedesktop.Avahi.EntryGroup.AddAddress` with the slug hostname and the
+box's local IPv4, then `Commit`. Uninstall calls `EntryGroup.Free`, which
+withdraws the announcement.
 
-The static-file approach is preferred over `avahi-publish` (which runs as a long-lived process per name) because Avahi already handles re-announcement, IP-change reannouncement, and link-up reannouncement for service-file entries. One reconciler write, durable across daemon restarts.
+Static service files (`/etc/avahi/services/*.service`) were the original plan
+but were verified not to work for this use case on 2026-05-24: Avahi static
+files announce *services*, not bare A-record aliases. Even with the corrected
+XML (`<host-name>` inside `<service>`), `avahi-resolve -n <slug>.malmo.local`
+timed out — Avahi will not publish a standalone A record from a static file.
+DBus `EntryGroup.AddAddress` is the only programmatic path. See
+`DECISIONS.md` entry 2026-05-24 and `docs/progress/0013-avahi-dbus-publisher.md`.
 
-**Implementation note on the XML schema.** Avahi's static-file format requires at least one `<service>` element alongside `<host-name>`. We use the project-specific service type `_malmo-app._tcp` (port 0) as the required dummy — this satisfies the schema without publishing a browsable `_http._tcp` entry that would surface in Finder / iOS Files sidebars (see §3 below). The type name is not a registered IANA service type and will not appear in standard Bonjour browsers. See `docs/progress/0012-host-agent-avahi-files.md` for full rationale.
+**Restart durability.** DBus entry groups are process-local: they are lost when
+host-agent restarts. The brain re-publishes all running instances at startup via
+the existing startup reconcile (`lifecycle.Reconcile`), which already calls
+`host.Publish` for every instance in the `running` state. This covers both
+"brain restart while host-agent was running" and "both restart together."
+
+**Known gap:** mid-life host-agent restart while the brain is running is not
+covered. The brain does not currently detect that host-agent restarted (only
+that it is reachable). A future mitigation is to poll `GET /v1/system/status`
+for `uptime_s` decreasing and replay on detection. Tracked in
+`docs/progress/0013-avahi-dbus-publisher.md`.
 
 ### 3. Service records (Bonjour browsing)
 
@@ -51,8 +71,8 @@ This is the load-bearing rule. Install transaction (`APP_LIFECYCLE.md`):
 
 1. Write compose project.
 2. Write Caddy site block.
-3. Write Avahi service file.
-4. Reload Caddy + signal Avahi (file-watch handles the latter automatically).
+3. Call Avahi DBus `EntryGroup.AddAddress` + `Commit`.
+4. Reload Caddy; Avahi multicasts immediately on Commit.
 5. Wait for both to be live (Caddy reload returns; Avahi announcement multicasts).
 6. Mark app `ready`.
 

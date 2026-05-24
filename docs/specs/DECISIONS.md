@@ -21,6 +21,24 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-05-24 — Per-app A records via Avahi DBus, not static service files
+
+**Previously:** `DISCOVERY.md` and `docs/progress/0012-host-agent-avahi-files.md` specified that per-app A records are published by writing `/etc/avahi/services/app-<slug>.service` XML files. The rationale was that static files survive daemon restarts without replay, avoiding the need for host-agent to track groups across restarts.
+
+**Now:** Per-app A records are published via `org.freedesktop.Avahi.EntryGroup.AddAddress` (DBus). Static service files are withdrawn as the mechanism for this use case.
+
+**Why:** Tested against a real Avahi 2026-05-24. Static service files announce *services*, not bare A-record aliases. File loaded without error (`avahi-daemon` logged "Service ... successfully established") but `avahi-resolve -n <slug>.malmo.local` timed out — Avahi does not synthesize an A record for a `<host-name>` inside a service-group file without first owning that hostname through its own probing/announcing cycle. The XML schema reference allows the field but the runtime does not act on it. `EntryGroup.AddAddress` is the only documented programmatic path for publishing a raw A record on behalf of an arbitrary hostname.
+
+The restart-durability argument for static files was correct in principle but moot in practice: static files cannot do the job at all.
+
+**New tradeoff:** DBus entry groups are process-local. They are lost on host-agent restart. The brain re-publishes all running instances via the startup reconcile (`lifecycle.Reconcile`), which already calls `host.Publish` per running instance. Mid-life host-agent restart while the brain is running is a known gap — tracked in `docs/progress/0013-avahi-dbus-publisher.md`.
+
+**Forward consequences:** brain owns more replay logic; the nspawn CI lane (future slice) is the place to verify "Avahi accepted our AddAddress" end-to-end.
+
+**Affected docs:** `DISCOVERY.md` (§ "Per-app A records" rewritten; install-transaction list updated); `docs/progress/0013-avahi-dbus-publisher.md` (new, replaces `0012`); `docs/progress/README.md` (index updated).
+
+---
+
 ## 2026-05-18 — Avahi + per-app mDNS records as the LAN discovery model; `.local` is a desktop story
 
 **Previously:** `MALMO_NETWORK.md` committed to subdomain URLs (`photos.malmo.local`) and a two-scheme model (`.local` HTTP default, opt-in `<box-id>.malmo.network` HTTPS) but never specified *how* those `.local` names resolve on the LAN. No publisher daemon chosen, no record-publication mechanism, no handling of multi-app subdomains, no acknowledgement that `.local` doesn't work on Android. Implicit assumption: "we'll figure out mDNS later."

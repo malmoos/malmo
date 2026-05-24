@@ -1,111 +1,302 @@
-// Package avahipublisher writes static Avahi service files that register
-// per-app .local DNS-A aliases. Pure Go — no CGO, no DBus.
+//go:build linux
+
+// Package avahipublisher publishes per-app A-record aliases via the Avahi DBus
+// API. It replaces the earlier static-file approach (0012 false start) which
+// could not publish raw A records — Avahi static files announce *services*, not
+// bare hostname aliases. See DECISIONS.md entry 2026-05-24 and
+// docs/progress/0013-avahi-dbus-publisher.md for the full story.
 //
-// File approach rationale (DISCOVERY.md §2 "Per-app A records"):
-//   - Avahi watches /etc/avahi/services/ and announces new files automatically.
-//   - Re-announcement on IP change and link-up is handled by Avahi itself —
-//     one reconciler write is durable across daemon restarts (unlike avahi-publish,
-//     which would require a long-lived process per name).
-//   - DBus rejected: EntryGroup.StateChanged would require the brain to replay
-//     registrations on host-agent restart — static files survive restarts for free.
+// # Mechanism
 //
-// Service type rationale:
-//   - Avahi's static-file schema requires at least one <service> element to
-//     publish a <host-name> A record.
-//   - We use _malmo-app._tcp (a project-specific dummy type) to avoid surfacing
-//     a browsable _http._tcp service in Finder / iOS Files sidebars.
-//     See DISCOVERY.md §3 ("For individual apps: not in v1") and
-//     docs/progress/0012-host-agent-avahi-files.md for full rationale.
+// For each app slug the publisher:
+//  1. Calls org.freedesktop.Avahi.Server.EntryGroupNew to get a fresh group.
+//  2. Calls org.freedesktop.Avahi.EntryGroup.AddAddress with the slug hostname
+//     and the box's local IPv4 address.
+//  3. Calls org.freedesktop.Avahi.EntryGroup.Commit to start the announcement.
+//
+// Groups are stored in p.groups[slug]. Unpublish calls EntryGroup.Free, which
+// withdraws the announcement and releases the DBus object.
+//
+// # Restart durability
+//
+// DBus groups are lost when host-agent restarts. The brain re-publishes all
+// running instances at startup via lifecycle.Reconcile (which already calls
+// m.host.Publish per running instance). Mid-life host-agent restart while the
+// brain is running is a known gap — see progress/0013.
+//
+// # Local-IP detection
+//
+// First non-loopback, non-link-local (169.254.x.x) IPv4 address on any
+// interface. Works for single-primary-interface boxes; multi-homed / dual-stack
+// will need a future tweak (see Known Gaps in the progress doc).
+//
+// # Non-Linux builds
+//
+// dbus_other.go provides a stub DBusPublisher for !linux that returns
+// "not supported on this OS" from every method. The fake binary (cmd/host-agent)
+// never instantiates DBusPublisher; this exists so the package compiles on macOS.
 package avahipublisher
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
-	"regexp"
+	"net"
+	"sync"
+
+	"github.com/godbus/dbus/v5"
 )
 
-// slugRE is the valid slug pattern — same character class the catalog/manifest
-// layer enforces. Defensive: rejects path-traversal attempts before we ever
-// touch the filesystem.
-var slugRE = regexp.MustCompile(`^[a-z0-9-]+$`)
+// Avahi DBus constants from <avahi-common/defs.h>.
+const (
+	avahiInterfaceUnspec int32  = -1
+	avahiProtoUnspec     int32  = -1
+	avahiPublishFlagNone uint32 = 0
+)
 
-// FilePublisher writes /etc/avahi/services/app-<slug>.service XML files.
-type FilePublisher struct {
-	// Dir is the Avahi service-file directory (production: "/etc/avahi/services").
-	Dir string
-	// HostSuffix is appended to the slug to form the .local hostname
+// avahiService and avahiServer are the DBus service/path/interface constants.
+const (
+	avahiService         = "org.freedesktop.Avahi"
+	avahiServerPath      = dbus.ObjectPath("/")
+	avahiServerIface     = "org.freedesktop.Avahi.Server"
+	avahiEntryGroupIface = "org.freedesktop.Avahi.EntryGroup"
+)
+
+// ErrCollision is returned by Publish when Avahi reports a name collision for
+// the requested hostname. Callers that need to react differently (e.g. slug
+// rename) can check with errors.Is.
+var ErrCollision = errors.New("avahipublisher: name collision")
+
+// DBusPublisher publishes per-app A-record aliases via Avahi's DBus API.
+// Zero value is not usable — construct via &DBusPublisher{HostSuffix: ...}.
+// Safe for concurrent use.
+type DBusPublisher struct {
+	// HostSuffix is appended to each slug to form the announced hostname
 	// (production: ".malmo.local").
 	HostSuffix string
+
+	// localIP may be set in tests (via a subtype or field override); otherwise
+	// it is detected lazily on the first Publish call and cached.
+	localIP string
+
+	mu     sync.Mutex
+	conn   *dbus.Conn
+	groups map[string]dbus.ObjectPath // slug → Avahi EntryGroup object path
 }
 
-// Publish writes the Avahi service file for the given slug and returns the
-// published hostname (e.g. "myapp.malmo.local").
+// Publish announces <slug><HostSuffix> as an A record pointing at the box's
+// local IPv4 address. Returns the announced hostname on success.
 //
-// The file is written with mode 0644 (Avahi reads it as root but we don't need
-// tighter permissions; group-readable aids diagnostic inspection).
+// If the slug is already published (e.g. replay on brain restart), the old
+// group is freed first and a fresh one is committed — idempotent.
 //
-// Slug validation: rejects anything not matching [a-z0-9-]+ to prevent
-// path-traversal injection into the service-file name.
-//
-// Note: file-write success implies "established" in the BRAIN_HOST_PROTOCOL.md
-// sense — Avahi will pick up the file and multicast within <1 s on a healthy
-// LAN. We do not subscribe to DBus EntryGroup.StateChanged; see known gaps in
-// docs/progress/0012-host-agent-avahi-files.md.
-func (p *FilePublisher) Publish(slug string) (string, error) {
+// Returns ErrCollision if Avahi rejects the name due to a conflict.
+func (p *DBusPublisher) Publish(slug string) (string, error) {
 	if !slugRE.MatchString(slug) {
 		return "", fmt.Errorf("avahipublisher: invalid slug %q (must match [a-z0-9-]+)", slug)
 	}
 
-	name := slug + p.HostSuffix
-	xml := buildXML(slug, name)
-	path := p.filePath(slug)
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-	if err := os.WriteFile(path, []byte(xml), 0o644); err != nil {
-		return "", fmt.Errorf("avahipublisher: write %s: %w", path, err)
+	if err := p.ensureConn(); err != nil {
+		return "", err
 	}
 
-	slog.Info("avahi publish", "slug", slug, "name", name, "file", path)
-	return name, nil
+	localIP, err := p.ensureLocalIP()
+	if err != nil {
+		return "", err
+	}
+
+	// If already published, free the old group first (idempotent replay).
+	if old, ok := p.groups[slug]; ok {
+		_ = p.freeGroup(old)
+		delete(p.groups, slug)
+	}
+
+	hostname := slug + p.HostSuffix
+
+	groupPath, err := p.newEntryGroup()
+	if err != nil {
+		return "", fmt.Errorf("avahipublisher: EntryGroupNew: %w", err)
+	}
+
+	if err := p.addAddress(groupPath, hostname, localIP); err != nil {
+		_ = p.freeGroup(groupPath)
+		if isCollision(err) {
+			return "", fmt.Errorf("%w: %s", ErrCollision, hostname)
+		}
+		return "", fmt.Errorf("avahipublisher: AddAddress(%s, %s): %w", hostname, localIP, err)
+	}
+
+	if err := p.commitGroup(groupPath); err != nil {
+		_ = p.freeGroup(groupPath)
+		return "", fmt.Errorf("avahipublisher: Commit(%s): %w", hostname, err)
+	}
+
+	if p.groups == nil {
+		p.groups = make(map[string]dbus.ObjectPath)
+	}
+	p.groups[slug] = groupPath
+	slog.Info("avahi publish", "slug", slug, "name", hostname, "ip", localIP)
+	return hostname, nil
 }
 
-// Unpublish removes the Avahi service file for the given slug.
-// Idempotent: if the file is already gone, returns nil.
-func (p *FilePublisher) Unpublish(slug string) error {
+// Unpublish withdraws the A record for the given slug.
+// Idempotent: if the slug was never published (or already unpublished), returns nil.
+func (p *DBusPublisher) Unpublish(slug string) error {
 	if !slugRE.MatchString(slug) {
 		return fmt.Errorf("avahipublisher: invalid slug %q (must match [a-z0-9-]+)", slug)
 	}
 
-	path := p.filePath(slug)
-	err := os.Remove(path)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("avahipublisher: remove %s: %w", path, err)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	groupPath, ok := p.groups[slug]
+	if !ok {
+		return nil // already gone — idempotent
 	}
 
-	slog.Info("avahi unpublish", "slug", slug, "file", path)
+	if err := p.freeGroup(groupPath); err != nil {
+		return fmt.Errorf("avahipublisher: Free(%s): %w", slug, err)
+	}
+	delete(p.groups, slug)
+	slog.Info("avahi unpublish", "slug", slug)
 	return nil
 }
 
-// filePath returns the canonical path for the slug's service file.
-func (p *FilePublisher) filePath(slug string) string {
-	return filepath.Join(p.Dir, "app-"+slug+".service")
+// Close frees all entry groups and closes the DBus connection.
+// Should be called (via defer) when host-agent shuts down.
+func (p *DBusPublisher) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for slug, groupPath := range p.groups {
+		if err := p.freeGroup(groupPath); err != nil {
+			slog.Warn("avahi close: free group", "slug", slug, "err", err)
+		}
+	}
+	p.groups = nil
+
+	if p.conn != nil {
+		err := p.conn.Close()
+		p.conn = nil
+		return err
+	}
+	return nil
 }
 
-// buildXML renders the Avahi service-file XML for the given slug and hostname.
-func buildXML(slug, hostName string) string {
-	return fmt.Sprintf(`<?xml version="1.0" standalone='no'?>
-<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
-<service-group>
-  <name replace-wildcards="no">app-%s</name>
-  <host-name>%s</host-name>
-  <service>
-    <!-- Dummy required by Avahi's schema; project-specific type so it
-         doesn't surface in Finder / iOS Files browser. See DISCOVERY.md §3
-         and docs/progress/0012-host-agent-avahi-files.md for rationale. -->
-    <type>_malmo-app._tcp</type>
-    <port>0</port>
-  </service>
-</service-group>
-`, slug, hostName)
+// --- internal helpers (all called with p.mu held) ---
+
+// ensureConn connects to the system bus if not already connected.
+func (p *DBusPublisher) ensureConn() error {
+	if p.conn != nil {
+		return nil
+	}
+	conn, err := dbus.ConnectSystemBus()
+	if err != nil {
+		return fmt.Errorf("avahipublisher: connect system bus: %w", err)
+	}
+	p.conn = conn
+	return nil
+}
+
+// ensureLocalIP returns the cached local IPv4, detecting it on first call.
+func (p *DBusPublisher) ensureLocalIP() (string, error) {
+	if p.localIP != "" {
+		return p.localIP, nil
+	}
+	ip, err := detectLocalIPv4()
+	if err != nil {
+		return "", err
+	}
+	p.localIP = ip
+	return ip, nil
+}
+
+// newEntryGroup calls org.freedesktop.Avahi.Server.EntryGroupNew and returns
+// the resulting object path.
+func (p *DBusPublisher) newEntryGroup() (dbus.ObjectPath, error) {
+	server := p.conn.Object(avahiService, avahiServerPath)
+	var groupPath dbus.ObjectPath
+	if err := server.Call(avahiServerIface+".EntryGroupNew", 0).Store(&groupPath); err != nil {
+		return "", err
+	}
+	return groupPath, nil
+}
+
+// addAddress calls org.freedesktop.Avahi.EntryGroup.AddAddress on the given group.
+func (p *DBusPublisher) addAddress(groupPath dbus.ObjectPath, hostname, ip string) error {
+	group := p.conn.Object(avahiService, groupPath)
+	return group.Call(avahiEntryGroupIface+".AddAddress", 0,
+		avahiInterfaceUnspec,
+		avahiProtoUnspec,
+		avahiPublishFlagNone,
+		hostname,
+		ip,
+	).Err
+}
+
+// commitGroup calls org.freedesktop.Avahi.EntryGroup.Commit.
+func (p *DBusPublisher) commitGroup(groupPath dbus.ObjectPath) error {
+	group := p.conn.Object(avahiService, groupPath)
+	return group.Call(avahiEntryGroupIface+".Commit", 0).Err
+}
+
+// freeGroup calls org.freedesktop.Avahi.EntryGroup.Free, withdrawing the
+// announcement. Best-effort: errors are returned but not fatal on shutdown.
+func (p *DBusPublisher) freeGroup(groupPath dbus.ObjectPath) error {
+	group := p.conn.Object(avahiService, groupPath)
+	return group.Call(avahiEntryGroupIface+".Free", 0).Err
+}
+
+// isCollision reports whether the DBus error is an Avahi name-collision error.
+func isCollision(err error) bool {
+	if err == nil {
+		return false
+	}
+	var dbusErr dbus.Error
+	if errors.As(err, &dbusErr) {
+		return dbusErr.Name == "org.freedesktop.Avahi.CollisionFailure"
+	}
+	return false
+}
+
+// detectLocalIPv4 returns the first non-loopback, non-link-local IPv4 address
+// found on any interface. It prefers RFC1918 addresses (10/8, 172.16-31/12,
+// 192.168/16) but falls back to any non-loopback non-link-local match.
+//
+// Limitation: on multi-homed boxes this picks whichever interface enumerates
+// first. A future tweak could prefer the interface NetworkManager reports as
+// the primary LAN connection. Single-primary-interface boxes (the v1 target)
+// are not affected.
+func detectLocalIPv4() (string, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "", fmt.Errorf("avahipublisher: list interfaces: %w", err)
+	}
+	for _, addr := range addrs {
+		var ip net.IP
+		switch v := addr.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		}
+		if ip == nil {
+			continue
+		}
+		ip4 := ip.To4()
+		if ip4 == nil {
+			continue // IPv6
+		}
+		if ip4.IsLoopback() {
+			continue
+		}
+		if ip4.IsLinkLocalUnicast() { // 169.254.x.x
+			continue
+		}
+		return ip4.String(), nil
+	}
+	return "", fmt.Errorf("avahipublisher: no usable local IPv4 address found (loopback and link-local excluded)")
 }

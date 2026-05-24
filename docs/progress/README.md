@@ -44,4 +44,4 @@ Ordered follow-ups. Update as they land.
 | [0009](0009-recovery-redemption.md) | Recovery-code redemption (`POST /api/v1/recover`) | done |
 | [0010](0010-session-expiry-elevation.md) | Session expiry (idle + hard cap) + 5-minute elevation window | done |
 | [0011](0011-host-agent-pam-verify.md) | Real PAM-based password verification in host-agent-real | done |
-| [0012](0012-host-agent-avahi-files.md) | Real Avahi service-file writes in host-agent-real | done |
+| [0013](0013-avahi-dbus-publisher.md) | Avahi DBus publisher — per-app A records via EntryGroup.AddAddress | done |
