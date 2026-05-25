@@ -2,7 +2,10 @@ package hostagent
 
 import (
 	"fmt"
+	"sync"
+	"time"
 
+	"github.com/malmo/malmo/internal/protocol"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -64,4 +67,37 @@ func (f *FakePublisher) Publish(slug string) (string, error) {
 
 func (f *FakePublisher) Unpublish(_ string) error {
 	return nil
+}
+
+// FakeHealthSource implements HealthSource with a settable findings list,
+// used by cmd/host-agent and by brain integration tests that need to seed
+// specific findings (e.g. "data-drive-missing") and assert the brain raises
+// the matching health issue.
+type FakeHealthSource struct {
+	mu       sync.Mutex
+	findings []protocol.Finding
+}
+
+// NewFakeHealthSource returns an empty source (storage looks healthy).
+func NewFakeHealthSource() *FakeHealthSource {
+	return &FakeHealthSource{}
+}
+
+// Set replaces the current findings list. Pass nil to clear (which the
+// handler reports as an empty list, i.e. "storage looks healthy").
+func (f *FakeHealthSource) Set(findings []protocol.Finding) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.findings = append(f.findings[:0:0], findings...)
+}
+
+func (f *FakeHealthSource) Read() (protocol.StorageHealth, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]protocol.Finding, len(f.findings))
+	copy(out, f.findings)
+	return protocol.StorageHealth{
+		CheckedAt: time.Now().UTC().Format(time.RFC3339),
+		Findings:  out,
+	}, nil
 }

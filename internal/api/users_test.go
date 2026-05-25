@@ -738,7 +738,7 @@ func newHarnessWithBrokenSetPassword(t *testing.T) *harness {
 	cat := catalog.New(t.TempDir())
 	bus := events.NewBus()
 	authMgr := auth.NewManager(st)
-	srv := NewServer(st, cat, nil, bus, authMgr, host, audit.New(st))
+	srv := NewServer(st, cat, nil, bus, authMgr, host, audit.New(st), nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
@@ -804,7 +804,7 @@ func newHarnessWithBrokenSetRole(t *testing.T) *harness {
 	cat := catalog.New(t.TempDir())
 	bus := events.NewBus()
 	authMgr := auth.NewManager(st)
-	srv := NewServer(st, cat, nil, bus, authMgr, host, audit.New(st))
+	srv := NewServer(st, cat, nil, bus, authMgr, host, audit.New(st), nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 

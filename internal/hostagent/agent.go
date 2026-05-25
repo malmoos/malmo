@@ -32,6 +32,20 @@ type Publisher interface {
 	Unpublish(slug string) error
 }
 
+// HealthSource is a consumer-side interface for reading the latest storage
+// findings written by malmo-storage-verify (BOOT.md # The storage-ready
+// target). Provider packages return concrete types: FakeHealthSource for the
+// fake binary, healthsource.FilesystemHealthSource (which reads
+// /run/malmo/health/storage.json) for cmd/host-agent-real.
+//
+// Read must always return a usable StorageHealth — missing report = empty
+// findings, malformed report = a single "health-report-malformed" finding.
+// host-agent never propagates "I couldn't read the file" as an HTTP error;
+// the brain needs a clean payload to drive its health registry.
+type HealthSource interface {
+	Read() (protocol.StorageHealth, error)
+}
+
 // UserManager is a consumer-side interface for the system-level user account
 // operations behind /v1/auth/set-password (and, later, /set-role and
 // /delete-user). Provider packages (usermgr.LinuxUserManager) export concrete
@@ -75,6 +89,12 @@ type Agent struct {
 	// Swapped per binary: FakePublisher (fake) vs avahipublisher.FilePublisher (real).
 	Publisher Publisher
 
+	// Health, when non-nil, backs GET /v1/health/storage. Swapped per binary:
+	// FakeHealthSource (fake) vs healthsource.FilesystemHealthSource (real).
+	// When nil, the handler returns an empty findings list — useful for the
+	// fake binary in dev where no storage-verify reporter is running.
+	Health HealthSource
+
 	// UserMgr, when non-nil, takes over POST /v1/auth/set-password,
 	// /v1/auth/set-role, and /v1/auth/delete-user: handlers delegate to the
 	// manager instead of writing to the in-memory maps. cmd/host-agent leaves
@@ -108,6 +128,7 @@ func (a *Agent) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/auth/set-password", a.setPassword)
 	mux.HandleFunc("POST /v1/auth/set-role", a.setRole)
 	mux.HandleFunc("POST /v1/auth/delete-user", a.deleteUser)
+	mux.HandleFunc("GET /v1/health/storage", a.storageHealth)
 }
 
 func (a *Agent) publish(w http.ResponseWriter, r *http.Request) {
@@ -175,6 +196,34 @@ func (a *Agent) systemStatus(w http.ResponseWriter, r *http.Request) {
 		DiskPressure: false,
 		AgentVersion: AgentVersion,
 	})
+}
+
+// storageHealth returns the latest storage findings written by
+// malmo-storage-verify. When Health is nil (fake binary with no source wired),
+// the response is an empty findings list — the brain treats that as "storage
+// looks healthy" per BOOT.md # The storage-ready target.
+//
+// Even when the source returns an error, the handler returns 200 with the
+// payload the source produced (the source synthesizes a
+// "health-report-malformed" finding on parse error and an empty list on
+// missing file). The contract: 200 always, payload always parseable. The
+// brain's polling loop must never have to retry on a 5xx for this endpoint.
+func (a *Agent) storageHealth(w http.ResponseWriter, r *http.Request) {
+	if a.Health == nil {
+		writeJSON(w, http.StatusOK, protocol.StorageHealth{
+			CheckedAt: time.Now().UTC().Format(time.RFC3339),
+			Findings:  []protocol.Finding{},
+		})
+		return
+	}
+	sh, err := a.Health.Read()
+	if err != nil {
+		slog.Error("storage-health: source error", "err", err)
+	}
+	if sh.Findings == nil {
+		sh.Findings = []protocol.Finding{}
+	}
+	writeJSON(w, http.StatusOK, sh)
 }
 
 // verifyPassword delegates to a.Verifier so the verification strategy

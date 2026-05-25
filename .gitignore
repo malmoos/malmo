@@ -7,6 +7,7 @@
 /host-agent
 /host-agent-real
 /brain
+/malmo-storage-verify
 
 # malmo dev state (instance dirs, sqlite, generated compose)
 /.dev/

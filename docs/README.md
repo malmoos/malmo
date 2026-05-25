@@ -32,22 +32,22 @@ Orientation:
 
 ## Progress
 
-See [`progress/README.md`](progress/README.md) for the index. Latest:
+See [`progress/README.md`](progress/README.md) for the full index. Latest:
 
+- [`0019-boot-pipeline-units.md`](progress/0019-boot-pipeline-units.md)
+  — boot pipeline slice #1: `malmo-storage-ready.target`,
+  `malmo-storage-verify` reporter, host-agent `GET /v1/health/storage`,
+  brain `internal/health` registry, `GET /api/v1/health`. Userspace half of
+  `BOOT.md`; initramfs/LUKS/TPM + boot-ordering tests are follow-ups.
+- [`0018-nspawn-usermgr-lane.md`](progress/0018-nspawn-usermgr-lane.md)
+  — nspawn fast-lane harness for usermgr integration tests against a real
+  `/etc/passwd` rootfs.
+- [`0011`–`0017`](progress/README.md) — host-agent-real auth surface
+  (PAM verify, set-password, set-role, delete-user) + Avahi DBus publisher
+  + Caddy subdomain routing verified end-to-end.
 - [`0006-auth-and-users.md`](progress/0006-auth-and-users.md)
   — first-admin bootstrap, password login, opaque cookie sessions, auth
-  middleware gating all mutations, and a UI router that picks setup / login /
-  dashboard from auth state.
-- [`0005-brain-test-pyramid.md`](progress/0005-brain-test-pyramid.md)
-  — DockerDriver refactor + Layers 1–3 of the brain test plan; per-PR
-  `go test ./...` runs in <1s with no Docker daemon.
-- [`0004-image-digest-pinning.md`](progress/0004-image-digest-pinning.md)
-  — TOFU digest pinning + Door-1 catalog verify; installs are now byte-
-  deterministic from second `up` onward.
-- [`0003-door-2-and-admission.md`](progress/0003-door-2-and-admission.md)
-  — paste-a-compose (Door-2) installs + the shared compose admission policy.
-- [`0002-reconcile-and-health-wait.md`](progress/0002-reconcile-and-health-wait.md)
-  — startup reconcile pass + health-wait and splash→real route flip.
+  middleware gating all mutations.
 - [`0001-walking-skeleton.md`](progress/0001-walking-skeleton.md) — first
   vertical slice: install/uninstall an app end-to-end through the real
   architecture spine.

@@ -50,3 +50,4 @@ Ordered follow-ups. Update as they land.
 | [0016](0016-host-agent-set-role.md) | Real set-role in host-agent-real (gpasswd) + brain bootstrap wires SetRole into /setup and createUser | done |
 | [0017](0017-host-agent-delete-user.md) | Real delete-user in host-agent-real (userdel -r -f) + close orphan-on-rollback gap in /setup and createUser | done |
 | [0018](0018-nspawn-usermgr-lane.md) | nspawn fast-lane wiring for usermgrtest (bootstrap.sh + run-usermgr-tests.sh + make test-usermgr-nspawn) | done |
+| [0019](0019-boot-pipeline-units.md) | Boot pipeline: storage-ready target, malmo-storage-verify reporter, brain health registry + `GET /api/v1/health` | done |

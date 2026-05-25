@@ -110,7 +110,7 @@ func newHarness(t *testing.T) *harness {
 
 	// life is nil — install/uninstall handlers aren't exercised here. The
 	// auth middleware fences them anyway; we only assert that fence.
-	srv := NewServer(st, cat, nil, bus, authMgr, host, audit.New(st))
+	srv := NewServer(st, cat, nil, bus, authMgr, host, audit.New(st), nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
@@ -329,7 +329,7 @@ func TestSetupRollsBackOnHostFailure(t *testing.T) {
 	t.Cleanup(func() { _ = hostHTTP.Close() })
 
 	srv := NewServer(st, catalog.New(t.TempDir()), nil, events.NewBus(),
-		auth.NewManager(st), hostclient.New(sock), audit.New(st))
+		auth.NewManager(st), hostclient.New(sock), audit.New(st), nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
@@ -408,7 +408,7 @@ func TestSetupRollsBackOnSetRoleFailure(t *testing.T) {
 	t.Cleanup(func() { _ = hostHTTP.Close() })
 
 	srv := NewServer(st, catalog.New(t.TempDir()), nil, events.NewBus(),
-		auth.NewManager(st), hostclient.New(sock), audit.New(st))
+		auth.NewManager(st), hostclient.New(sock), audit.New(st), nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
@@ -785,7 +785,7 @@ func TestRecoverHostFailureRestoresOldHash(t *testing.T) {
 	go func() { _ = hostHTTP.Serve(ln) }()
 	t.Cleanup(func() { _ = hostHTTP.Close() })
 
-	srv := NewServer(st, nil, nil, nil, auth.NewManager(st), hostclient.New(sock), audit.New(st))
+	srv := NewServer(st, nil, nil, nil, auth.NewManager(st), hostclient.New(sock), audit.New(st), nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 

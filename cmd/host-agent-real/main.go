@@ -2,8 +2,10 @@
 // PAM for password verification (POST /v1/auth/verify-password), the Avahi
 // DBus API for publish/unpublish (POST /v1/discovery/publish|unpublish),
 // useradd+chpasswd for set-password (POST /v1/auth/set-password), gpasswd
-// for set-role (POST /v1/auth/set-role), and userdel -r -f for delete-user
-// (POST /v1/auth/delete-user). All auth ops now hit the real system.
+// for set-role (POST /v1/auth/set-role), userdel -r -f for delete-user
+// (POST /v1/auth/delete-user), and reads /run/malmo/health/storage.json
+// for the storage findings exposed at GET /v1/health/storage. All host ops
+// now hit the real system.
 //
 // Build requirements:
 //   - Linux only
@@ -25,6 +27,7 @@ import (
 
 	"github.com/malmo/malmo/internal/hostagent"
 	"github.com/malmo/malmo/internal/hostagent/avahipublisher"
+	"github.com/malmo/malmo/internal/hostagent/healthsource"
 	"github.com/malmo/malmo/internal/hostagent/pamverifier"
 	"github.com/malmo/malmo/internal/hostagent/usermgr"
 	"github.com/malmo/malmo/internal/protocol"
@@ -61,6 +64,7 @@ func main() {
 		pub,
 	)
 	a.UserMgr = &usermgr.LinuxUserManager{}
+	a.Health = healthsource.New(healthsource.DefaultPath)
 
 	mux := http.NewServeMux()
 	a.Mount(mux)

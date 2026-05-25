@@ -74,6 +74,17 @@ func (c *Client) SystemStatus(ctx context.Context) (protocol.SystemStatus, error
 	return out, err
 }
 
+// StorageHealth returns the latest storage findings recorded by
+// malmo-storage-verify (BOOT.md # The storage-ready target). host-agent
+// always returns 200 with a parseable payload — see the contract on
+// hostagent.HealthSource — so a transport error here is genuinely "host-agent
+// unreachable," not "storage looks bad."
+func (c *Client) StorageHealth(ctx context.Context) (protocol.StorageHealth, error) {
+	var out protocol.StorageHealth
+	err := c.do(ctx, "GET", "/v1/health/storage", nil, &out)
+	return out, err
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
 	var buf bytes.Buffer
 	if body != nil {

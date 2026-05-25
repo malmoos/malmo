@@ -18,6 +18,7 @@ import (
 	"github.com/malmo/malmo/internal/caddy"
 	"github.com/malmo/malmo/internal/catalog"
 	"github.com/malmo/malmo/internal/events"
+	"github.com/malmo/malmo/internal/health"
 	"github.com/malmo/malmo/internal/hostclient"
 	"github.com/malmo/malmo/internal/lifecycle"
 	"github.com/malmo/malmo/internal/protocol"
@@ -69,7 +70,18 @@ func main() {
 
 	authMgr := auth.NewManager(st)
 	auditor := audit.New(st)
-	srv := api.NewServer(st, cat, life, bus, authMgr, host, auditor)
+	healthMgr := health.NewManager()
+
+	// Pull the boot-time storage findings (BOOT.md # The storage-ready
+	// target) once at startup and reconcile them into the health registry,
+	// then keep refreshing on a slow poll. Failure here is non-fatal — the
+	// brain runs degraded just like everything else.
+	pollCtx, pollCancel := context.WithCancel(context.Background())
+	defer pollCancel()
+	pullStorageHealth(pollCtx, host, healthMgr)
+	go storageHealthPollLoop(pollCtx, host, healthMgr, cfg.healthPollPeriod)
+
+	srv := api.NewServer(st, cat, life, bus, authMgr, host, auditor, healthMgr)
 	httpSrv := &http.Server{Addr: cfg.listen, Handler: srv.Handler()}
 	slog.Info("malmo-brain listening",
 		"listen", cfg.listen, "state_dir", cfg.stateDir, "catalog_dir", cfg.catalogDir)
@@ -112,27 +124,39 @@ func fatal(msg string, args ...any) {
 }
 
 type config struct {
-	listen      string
-	stateDir    string
-	catalogDir  string
-	agentSock   string
-	caddyAdmin  string
-	caddyListen string
-	logLevel    string
-	logFormat   string
+	listen           string
+	stateDir         string
+	catalogDir       string
+	agentSock        string
+	caddyAdmin       string
+	caddyListen      string
+	logLevel         string
+	logFormat        string
+	healthPollPeriod time.Duration
 }
 
 func loadConfig() config {
 	return config{
-		listen:      env("MALMO_LISTEN", ":8080"),
-		stateDir:    env("MALMO_STATE_DIR", "./.dev/state"),
-		catalogDir:  env("MALMO_CATALOG_DIR", "./catalog"),
-		agentSock:   env("MALMO_AGENT_SOCK", protocol.SocketPath),
-		caddyAdmin:  env("MALMO_CADDY_ADMIN", "http://localhost:2019"),
-		caddyListen: env("MALMO_CADDY_LISTEN", ":80"),
-		logLevel:    env("MALMO_LOG_LEVEL", "info"),
-		logFormat:   env("MALMO_LOG_FORMAT", "text"),
+		listen:           env("MALMO_LISTEN", ":8080"),
+		stateDir:         env("MALMO_STATE_DIR", "./.dev/state"),
+		catalogDir:       env("MALMO_CATALOG_DIR", "./catalog"),
+		agentSock:        env("MALMO_AGENT_SOCK", protocol.SocketPath),
+		caddyAdmin:       env("MALMO_CADDY_ADMIN", "http://localhost:2019"),
+		caddyListen:      env("MALMO_CADDY_LISTEN", ":80"),
+		logLevel:         env("MALMO_LOG_LEVEL", "info"),
+		logFormat:        env("MALMO_LOG_FORMAT", "text"),
+		healthPollPeriod: envDuration("MALMO_HEALTH_POLL", 60*time.Second),
 	}
+}
+
+func envDuration(k string, def time.Duration) time.Duration {
+	if v := os.Getenv(k); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+		slog.Warn("invalid duration, using default", "var", k, "value", v, "default", def)
+	}
+	return def
 }
 
 func env(k, def string) string {
@@ -140,4 +164,41 @@ func env(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// pullStorageHealth fetches the current storage findings from host-agent and
+// reconciles them into the health registry. Non-blocking: if host-agent isn't
+// reachable yet, we log and return — the brain still starts. The poll loop
+// will catch up once host-agent comes online.
+func pullStorageHealth(ctx context.Context, host *hostclient.Client, healthMgr *health.Manager) {
+	c, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	sh, err := host.StorageHealth(c)
+	if err != nil {
+		slog.Warn("storage health: host-agent unreachable; skipping",
+			"err", err)
+		return
+	}
+	raised, cleared := healthMgr.ApplyStorageFindings(sh)
+	if raised > 0 || cleared > 0 {
+		slog.Info("storage health: reconciled",
+			"raised", raised, "cleared", cleared, "active_findings", len(sh.Findings))
+	}
+}
+
+// storageHealthPollLoop keeps the health registry in sync with what
+// host-agent reports. 60s is the loose-by-design cadence — storage findings
+// don't change often, and the dashboard's view of "active issues" gets a
+// refresh on every dashboard load via the same registry.
+func storageHealthPollLoop(ctx context.Context, host *hostclient.Client, healthMgr *health.Manager, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			pullStorageHealth(ctx, host, healthMgr)
+		}
+	}
 }

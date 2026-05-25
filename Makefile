@@ -12,7 +12,7 @@ export MALMO_AGENT_SOCK := $(AGENT_SOCK)
 export MALMO_STATE_DIR := $(STATE_DIR)
 export MALMO_CATALOG_DIR := ./catalog
 
-.PHONY: build host-agent brain host-agent-real test test-all test-caddy test-avahi test-usermgr test-usermgr-nspawn run-agent run-brain net caddy caddy-down ui dev openapi clean help
+.PHONY: build host-agent brain host-agent-real test test-all test-caddy test-avahi test-health test-usermgr test-usermgr-nspawn run-agent run-brain net caddy caddy-down ui dev openapi clean help
 
 # msteinert/pam v2.1.0 uses RTLD_NEXT, a GNU extension that requires
 # _GNU_SOURCE at C compile time. Apply globally; harmless to non-cgo builds.
@@ -29,6 +29,7 @@ help:
 	@echo "make caddy-down  - stop the dev Caddy"
 	@echo "make clean       - stop apps, remove dev state"
 	@echo "make test-caddy  - end-to-end Caddy routing test (requires make dev)"
+	@echo "make test-health - end-to-end storage-health pipeline (self-contained, ~3s)"
 	@echo "make test-usermgr-nspawn - run usermgrtest in systemd-nspawn (needs sudo)"
 	@echo ""
 	@echo "One-terminal: make dev   (Caddy started detached; Ctrl-C stops the rest)"
@@ -78,6 +79,13 @@ test-usermgr-nspawn:
 # and verifies route withdrawal after uninstall.
 test-caddy:
 	./dev/test-caddy-routing.sh
+
+# Self-contained end-to-end test of the storage-health pipeline
+# (docs/progress/0019). Builds the three binaries, spins up the fake
+# host-agent + brain in a tempdir, exercises six cases through the real
+# wire format, and tears down. ~3 seconds. No daemons required.
+test-health:
+	./dev/test-health.sh
 
 net:
 	@docker network inspect malmo-ingress >/dev/null 2>&1 || docker network create malmo-ingress

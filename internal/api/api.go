@@ -19,6 +19,7 @@ import (
 	"github.com/malmo/malmo/internal/auth"
 	"github.com/malmo/malmo/internal/catalog"
 	"github.com/malmo/malmo/internal/events"
+	"github.com/malmo/malmo/internal/health"
 	"github.com/malmo/malmo/internal/hostclient"
 	"github.com/malmo/malmo/internal/lifecycle"
 	"github.com/malmo/malmo/internal/manifest"
@@ -33,6 +34,7 @@ type Server struct {
 	auth    *auth.Manager
 	host    *hostclient.Client
 	auditor *audit.Recorder
+	health  *health.Manager
 	jobs    *Jobs
 }
 
@@ -44,10 +46,12 @@ func NewServer(
 	authMgr *auth.Manager,
 	host *hostclient.Client,
 	auditor *audit.Recorder,
+	healthMgr *health.Manager,
 ) *Server {
 	return &Server{
 		store: st, catalog: cat, life: life, bus: bus,
-		auth: authMgr, host: host, auditor: auditor, jobs: newJobs(),
+		auth: authMgr, host: host, auditor: auditor,
+		health: healthMgr, jobs: newJobs(),
 	}
 }
 
@@ -61,6 +65,7 @@ func (s *Server) Handler() http.Handler {
 	s.registerAuth(api)
 	s.registerUsers(api)
 	s.registerMeRoutes(api)
+	s.registerHealth(api)
 
 	// SSE is registered raw (huma streaming adds no value here and the raw
 	// handler keeps the wire format curl-debuggable per BRAIN_UI_PROTOCOL.md).

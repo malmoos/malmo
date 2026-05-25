@@ -486,3 +486,70 @@ func TestFakePublisher_MatchesCurrentBehavior(t *testing.T) {
 		t.Fatalf("Unpublish: %v", err)
 	}
 }
+
+// --- /v1/health/storage ---
+
+// TestStorageHealth_NoSourceReturnsEmpty verifies the contract that a nil
+// Health source produces an empty findings list — "storage looks healthy" per
+// BOOT.md — rather than a 5xx the brain would have to retry on.
+func TestStorageHealth_NoSourceReturnsEmpty(t *testing.T) {
+	_, mux := newTestAgent(&stubVerifier{})
+
+	w := get(t, mux, "/v1/health/storage")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d", w.Code)
+	}
+	sh := decodeBody[protocol.StorageHealth](t, w)
+	if sh.Findings == nil {
+		t.Fatal("findings must be a non-nil slice (empty is fine)")
+	}
+	if len(sh.Findings) != 0 {
+		t.Errorf("findings: want empty, got %v", sh.Findings)
+	}
+	if sh.CheckedAt == "" {
+		t.Error("checked_at must be set even with no source")
+	}
+}
+
+// TestStorageHealth_FromFakeSource verifies that findings set on the fake
+// source flow through the handler verbatim.
+func TestStorageHealth_FromFakeSource(t *testing.T) {
+	a, mux := newTestAgent(&stubVerifier{})
+	src := NewFakeHealthSource()
+	src.Set([]protocol.Finding{
+		{ID: "data-drive-missing", Details: "enrolled abc-123 not attached"},
+	})
+	a.Health = src
+
+	w := get(t, mux, "/v1/health/storage")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d", w.Code)
+	}
+	sh := decodeBody[protocol.StorageHealth](t, w)
+	if len(sh.Findings) != 1 || sh.Findings[0].ID != "data-drive-missing" {
+		t.Fatalf("findings: want data-drive-missing, got %v", sh.Findings)
+	}
+}
+
+// TestStorageHealth_AlwaysReturns200OnSourceError verifies the contract that
+// even a source error produces a parseable 200 payload — the brain's polling
+// loop must never have to retry on a 5xx.
+type erroringHealthSource struct{}
+
+func (erroringHealthSource) Read() (protocol.StorageHealth, error) {
+	return protocol.StorageHealth{}, errors.New("simulated source failure")
+}
+
+func TestStorageHealth_AlwaysReturns200OnSourceError(t *testing.T) {
+	a, mux := newTestAgent(&stubVerifier{})
+	a.Health = erroringHealthSource{}
+
+	w := get(t, mux, "/v1/health/storage")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200 even on source error, got %d", w.Code)
+	}
+	sh := decodeBody[protocol.StorageHealth](t, w)
+	if sh.Findings == nil {
+		t.Fatal("findings must be non-nil slice")
+	}
+}

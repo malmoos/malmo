@@ -3,6 +3,13 @@
 // operations are canned (no Avahi, no LUKS, no apt, no PAM). This is the
 // binary used in the inner dev loop (make dev / make run-agent).
 // See docs/dev/running-locally.md for the real binary (cmd/host-agent-real).
+//
+// Env vars:
+//   MALMO_AGENT_SOCK  — UNIX socket path (default protocol.SocketPath)
+//   MALMO_HEALTH_PATH — when set, serve GET /v1/health/storage from this
+//                       file (read via the same FilesystemHealthSource the
+//                       real binary uses). When unset, the endpoint returns
+//                       an empty findings list ("storage looks healthy").
 package main
 
 import (
@@ -12,6 +19,7 @@ import (
 	"os"
 
 	"github.com/malmo/malmo/internal/hostagent"
+	"github.com/malmo/malmo/internal/hostagent/healthsource"
 	"github.com/malmo/malmo/internal/protocol"
 )
 
@@ -36,6 +44,10 @@ func main() {
 
 	a := hostagent.New(nil, hostagent.NewFakePublisher(".malmo.local")) // verifier wired after construction
 	a.Verifier = hostagent.NewFakeVerifier(a)
+	if healthPath := os.Getenv("MALMO_HEALTH_PATH"); healthPath != "" {
+		a.Health = healthsource.New(healthPath)
+		slog.Info("host-agent (fake) wired to storage health file", "path", healthPath)
+	}
 
 	mux := http.NewServeMux()
 	a.Mount(mux)

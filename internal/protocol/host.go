@@ -78,6 +78,31 @@ type SetRoleRequest struct {
 	Role string `json:"role"`
 }
 
+// StorageHealth is GET /v1/health/storage. host-agent reads the latest
+// findings written by malmo-storage-verify (BOOT.md # The storage-ready target)
+// at /run/malmo/health/storage.json and returns them to the brain, which
+// converts findings into typed health issues per HEALTH.md.
+//
+// An empty Findings slice means storage looks healthy — not "no report yet."
+// A missing report file at the host-agent end is reported as empty Findings;
+// a malformed report is reported as a single Finding with ID
+// "health-report-malformed" so the brain has something to surface rather than
+// silently passing.
+type StorageHealth struct {
+	CheckedAt string    `json:"checked_at"`
+	Findings  []Finding `json:"findings"`
+}
+
+// Finding is one anomaly the reporter detected. ID is a stable string drawn
+// from the typed taxonomy in HEALTH.md # Storage (e.g. "data-drive-missing",
+// "canary-mismatch"). The brain looks the ID up in its registry to derive
+// category, severity, tier, and the blocks_* flags — the reporter does not
+// re-declare those, so the source of truth stays in one place.
+type Finding struct {
+	ID      string `json:"id"`
+	Details string `json:"details,omitempty"`
+}
+
 // Error is the JSON error body shape on non-2xx responses.
 type Error struct {
 	Code    string `json:"code"`
