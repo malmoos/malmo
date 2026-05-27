@@ -12,7 +12,7 @@ export MALMO_AGENT_SOCK := $(AGENT_SOCK)
 export MALMO_STATE_DIR := $(STATE_DIR)
 export MALMO_CATALOG_DIR := ./catalog
 
-.PHONY: build host-agent brain host-agent-real test test-all test-caddy test-avahi test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn run-agent run-brain net caddy caddy-down ui dev openapi clean help
+.PHONY: build host-agent brain host-agent-real test test-all test-caddy test-avahi test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev openapi clean help
 
 # msteinert/pam v2.1.0 uses RTLD_NEXT, a GNU extension that requires
 # _GNU_SOURCE at C compile time. Apply globally; harmless to non-cgo builds.
@@ -32,6 +32,7 @@ help:
 	@echo "make test-health - end-to-end storage-health pipeline (self-contained, ~3s)"
 	@echo "make test-usermgr-nspawn - run usermgrtest in systemd-nspawn (needs sudo)"
 	@echo "make test-boot-chain-nspawn - boot dist/systemd units in nspawn + assert shape (needs sudo)"
+	@echo "make test-medium-qemu - QEMU+swtpm boot with real kernel + TPM (needs sudo; first run ~5 min)"
 	@echo ""
 	@echo "One-terminal: make dev   (Caddy started detached; Ctrl-C stops the rest)"
 	@echo "Four terminals: make caddy ; make run-agent ; make run-brain ; make ui"
@@ -82,6 +83,16 @@ test-usermgr-nspawn:
 # See docs/progress/0020-nspawn-boot-chain-lane.md.
 test-boot-chain-nspawn:
 	sudo -E ./dev/test-nspawn/run-boot-chain-tests.sh
+
+# Medium-lane test: QEMU+swtpm boot of a mkosi-built bookworm image
+# with a real kernel, real systemd userspace, and an emulated TPM.
+# Proves the scaffolding for the TESTING.md # Medium lane is operational.
+# First run builds the image (~3-5 min); subsequent runs ~1-2 min.
+# Requires mkosi v22+, swtpm, qemu-system-x86, ovmf — bootstrap.sh
+# prints an install pointer if anything is missing.
+# See docs/progress/0021-qemu-medium-lane-scaffolding.md.
+test-medium-qemu:
+	sudo -E ./dev/test-qemu/run-medium-tests.sh
 
 # End-to-end Caddy routing verification. Assumes `make dev` is running.
 # Tests Host-header routing, confirms path-based routing does NOT work,
