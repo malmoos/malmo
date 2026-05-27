@@ -96,6 +96,7 @@ Every change ships with documentation — a code change is not complete until it
 - **Keep specs and reality in sync.** When the implementation realizes or diverges from a spec, update the matching `docs/specs/` doc in the same change (and add a `DECISIONS.md` entry if a locked decision flips).
 - **The doc map is load-bearing.** Keep `docs/README.md` and `docs/progress/README.md` (the indexes) current in the same change. A doc not linked from the map is a bug.
 - **Root `README.md`** is the front door (pitch + quickstart); keep its quickstart accurate when the dev workflow changes.
+- **No line wrapping in markdown.** Use continuous lines of text, not ~70 character breaks. Markdown viewers handle reflowing; hard-wrapped lines make diffs harder to read and are unnecessary.
 
 ## Go code discipline
 
