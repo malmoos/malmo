@@ -1,6 +1,7 @@
 package health
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -8,7 +9,7 @@ import (
 )
 
 func TestRaise_NewIssueReturnsTrue(t *testing.T) {
-	m := NewManager()
+	m := NewManager(nil)
 	if !m.Raise("data-drive-missing", "", "abc-123 absent") {
 		t.Fatal("first raise should return true (transition)")
 	}
@@ -18,7 +19,7 @@ func TestRaise_NewIssueReturnsTrue(t *testing.T) {
 }
 
 func TestRaise_IdempotentNoTransition(t *testing.T) {
-	m := NewManager()
+	m := NewManager(nil)
 	m.Raise("data-drive-missing", "", "abc-123 absent")
 	if m.Raise("data-drive-missing", "", "abc-123 still absent") {
 		t.Fatal("second raise of same issue must return false (no transition)")
@@ -26,7 +27,7 @@ func TestRaise_IdempotentNoTransition(t *testing.T) {
 }
 
 func TestRaise_PreservesRaisedAtAcrossReRaises(t *testing.T) {
-	m := NewManager()
+	m := NewManager(nil)
 	first := time.Date(2026, 5, 25, 8, 0, 0, 0, time.UTC)
 	second := time.Date(2026, 5, 25, 8, 1, 0, 0, time.UTC)
 	m.SetClock(func() time.Time { return first })
@@ -47,7 +48,7 @@ func TestRaise_PreservesRaisedAtAcrossReRaises(t *testing.T) {
 }
 
 func TestRaise_UnknownIDIsSkipped(t *testing.T) {
-	m := NewManager()
+	m := NewManager(nil)
 	if m.Raise("not-a-real-issue-id", "", "") {
 		t.Fatal("unknown ID should return false (no-op), got true")
 	}
@@ -57,7 +58,7 @@ func TestRaise_UnknownIDIsSkipped(t *testing.T) {
 }
 
 func TestClear_ReturnsTrueOnTransition(t *testing.T) {
-	m := NewManager()
+	m := NewManager(nil)
 	m.Raise("data-drive-missing", "", "")
 	if !m.Clear("data-drive-missing", "") {
 		t.Fatal("clear of active issue should return true")
@@ -68,7 +69,7 @@ func TestClear_ReturnsTrueOnTransition(t *testing.T) {
 }
 
 func TestList_ReturnsStableOrder(t *testing.T) {
-	m := NewManager()
+	m := NewManager(nil)
 	m.Raise("canary-mismatch", "", "")        // critical
 	m.Raise("data-drive-missing", "", "")     // error
 	m.Raise("health-report-malformed", "", "") // error
@@ -87,7 +88,7 @@ func TestList_ReturnsStableOrder(t *testing.T) {
 }
 
 func TestList_DefinitionMetadataApplied(t *testing.T) {
-	m := NewManager()
+	m := NewManager(nil)
 	m.Raise("data-drive-missing", "", "")
 
 	got := m.List()[0]
@@ -106,7 +107,7 @@ func TestList_DefinitionMetadataApplied(t *testing.T) {
 }
 
 func TestApplyStorageFindings_RaiseAndClear(t *testing.T) {
-	m := NewManager()
+	m := NewManager(nil)
 
 	// First poll: data drive missing.
 	raised, cleared := m.ApplyStorageFindings(protocol.StorageHealth{
@@ -136,7 +137,7 @@ func TestApplyStorageFindings_OnlyTouchesStorageCategory(t *testing.T) {
 	// storage findings payload must not clear it. Today no non-storage
 	// detector exists, but the contract is load-bearing for the moment
 	// network/version detectors land.
-	m := NewManager()
+	m := NewManager(nil)
 	// Pretend a network issue is active by writing directly through Raise
 	// after registering a definition for it.
 	m.mu.Lock()
@@ -161,7 +162,7 @@ func TestApplyStorageFindings_OnlyTouchesStorageCategory(t *testing.T) {
 // been raised. The pre-fix implementation snapshotted under the lock and
 // then dropped it before reconciling, which exposed this transient.
 func TestApplyStorageFindings_AtomicAcrossClearAndRaise(t *testing.T) {
-	m := NewManager()
+	m := NewManager(nil)
 	// Seed initial state: one storage issue active.
 	m.ApplyStorageFindings(protocol.StorageHealth{
 		Findings: []protocol.Finding{{ID: "data-drive-missing"}},
@@ -214,7 +215,7 @@ func TestApplyStorageFindings_AtomicAcrossClearAndRaise(t *testing.T) {
 }
 
 func TestApplyStorageFindings_UnknownIDsAreDropped(t *testing.T) {
-	m := NewManager()
+	m := NewManager(nil)
 	raised, cleared := m.ApplyStorageFindings(protocol.StorageHealth{
 		Findings: []protocol.Finding{
 			{ID: "data-drive-missing"},
@@ -233,7 +234,7 @@ func TestApplyStorageFindings_UnknownIDsAreDropped(t *testing.T) {
 }
 
 func TestApplyStorageFindings_ReplacesDetailsOnRefresh(t *testing.T) {
-	m := NewManager()
+	m := NewManager(nil)
 	m.ApplyStorageFindings(protocol.StorageHealth{
 		Findings: []protocol.Finding{{ID: "data-drive-missing", Details: "first"}},
 	})
@@ -243,5 +244,335 @@ func TestApplyStorageFindings_ReplacesDetailsOnRefresh(t *testing.T) {
 	got := m.List()
 	if len(got) != 1 || got[0].Details != "second" {
 		t.Errorf("Details: want refreshed to 'second', got %v", got)
+	}
+}
+
+// --- HealthStore integration tests ---
+
+// fakeStore is a HealthStore stub for tests that need to inspect calls without
+// a real SQLite database.
+type fakeStore struct {
+	issues  map[string]Issue // key: id+":"+instanceKey
+	upserts int
+	deletes int
+	listErr error
+}
+
+func newFakeStore() *fakeStore {
+	return &fakeStore{issues: map[string]Issue{}}
+}
+
+func (f *fakeStore) key(id, instanceKey string) string { return id + ":" + instanceKey }
+
+func (f *fakeStore) UpsertHealthIssue(h Issue) error {
+	f.upserts++
+	f.issues[f.key(h.ID, h.InstanceKey)] = h
+	return nil
+}
+
+func (f *fakeStore) DeleteHealthIssue(id, instanceKey string) error {
+	f.deletes++
+	delete(f.issues, f.key(id, instanceKey))
+	return nil
+}
+
+func (f *fakeStore) BatchUpsertAndDelete(upserts []Issue, deletes []IssueKey) error {
+	for _, h := range upserts {
+		f.upserts++
+		f.issues[f.key(h.ID, h.InstanceKey)] = h
+	}
+	for _, k := range deletes {
+		f.deletes++
+		delete(f.issues, f.key(k.ID, k.InstanceKey))
+	}
+	return nil
+}
+
+func (f *fakeStore) ListHealthIssues() ([]Issue, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	out := make([]Issue, 0, len(f.issues))
+	for _, iss := range f.issues {
+		out = append(out, iss)
+	}
+	return out, nil
+}
+
+func TestManager_RaisePersistsToStore(t *testing.T) {
+	fs := newFakeStore()
+	m := NewManager(fs)
+	m.Raise("data-drive-missing", "", "details")
+	if fs.upserts != 1 {
+		t.Fatalf("want 1 upsert on first raise, got %d", fs.upserts)
+	}
+	if _, ok := fs.issues["data-drive-missing:"]; !ok {
+		t.Error("upserted issue not in fake store")
+	}
+}
+
+func TestManager_ReRaisePersistsRefresh(t *testing.T) {
+	fs := newFakeStore()
+	m := NewManager(fs)
+	m.Raise("data-drive-missing", "", "first")
+	m.Raise("data-drive-missing", "", "second")
+	// Both first raise and re-raise should upsert (to keep last_checked_at current).
+	if fs.upserts != 2 {
+		t.Fatalf("want 2 upserts (new + refresh), got %d", fs.upserts)
+	}
+	if fs.issues["data-drive-missing:"].Details != "second" {
+		t.Errorf("store should have refreshed Details, got %q", fs.issues["data-drive-missing:"].Details)
+	}
+}
+
+func TestManager_ClearDeletesFromStore(t *testing.T) {
+	fs := newFakeStore()
+	m := NewManager(fs)
+	m.Raise("data-drive-missing", "", "")
+	m.Clear("data-drive-missing", "")
+	if fs.deletes != 1 {
+		t.Fatalf("want 1 delete on clear, got %d", fs.deletes)
+	}
+	if _, ok := fs.issues["data-drive-missing:"]; ok {
+		t.Error("issue should be gone from fake store after clear")
+	}
+}
+
+func TestManager_ClearNoTransitionNoDelete(t *testing.T) {
+	fs := newFakeStore()
+	m := NewManager(fs)
+	// Clear of an issue that was never raised: no delete call.
+	m.Clear("data-drive-missing", "")
+	if fs.deletes != 0 {
+		t.Fatalf("want 0 deletes for clear-of-nothing, got %d", fs.deletes)
+	}
+}
+
+func TestManager_LoadFromStore(t *testing.T) {
+	fs := newFakeStore()
+	// Pre-populate the fake store as if issues survived from a previous brain run.
+	_ = fs.UpsertHealthIssue(Issue{
+		ID: "data-drive-missing", InstanceKey: "",
+		Category: CategoryStorage, Severity: SeverityError, Tier: 1,
+		BlocksWrites: true, BlocksApps: true, BlocksUsers: true,
+		Summary: "pre-existing", Details: "from last boot",
+		RaisedAt:      time.Now().UTC(),
+		LastCheckedAt: time.Now().UTC(),
+	})
+	fs.upserts = 0 // reset counter after pre-population
+
+	m := NewManager(fs)
+	if err := m.LoadFromStore(); err != nil {
+		t.Fatalf("LoadFromStore: %v", err)
+	}
+	active := m.List()
+	if len(active) != 1 {
+		t.Fatalf("want 1 active issue after load, got %d", len(active))
+	}
+	if active[0].ID != "data-drive-missing" {
+		t.Errorf("ID: want data-drive-missing, got %s", active[0].ID)
+	}
+	if active[0].Details != "from last boot" {
+		t.Errorf("Details: want 'from last boot', got %q", active[0].Details)
+	}
+}
+
+func TestManager_LoadFromStore_NilStoreSafe(t *testing.T) {
+	m := NewManager(nil)
+	if err := m.LoadFromStore(); err != nil {
+		t.Fatalf("LoadFromStore with nil store: %v", err)
+	}
+	if len(m.List()) != 0 {
+		t.Error("nil-store load should leave registry empty")
+	}
+}
+
+func TestManager_LoadFromStore_StoreError(t *testing.T) {
+	fs := newFakeStore()
+	fs.listErr = errors.New("disk failure")
+	m := NewManager(fs)
+	if err := m.LoadFromStore(); err == nil {
+		t.Fatal("want error from LoadFromStore when store fails, got nil")
+	}
+}
+
+func TestManager_NilStore_RaiseAndClearSafe(t *testing.T) {
+	m := NewManager(nil)
+	// Must not panic when store is nil.
+	if !m.Raise("data-drive-missing", "", "") {
+		t.Error("Raise should return true on first raise")
+	}
+	if !m.Clear("data-drive-missing", "") {
+		t.Error("Clear should return true on transition")
+	}
+}
+
+// TestManager_ConcurrentRaiseClear_NoGhostInStore pins down the lock-through-store
+// fix: a concurrent Clear must not leave a ghost row that a concurrent Raise
+// re-inserts after the delete completes. With the lock held through store calls,
+// Raise and Clear are fully serialized — the winner's store state is final.
+func TestManager_ConcurrentRaiseClear_NoGhostInStore(t *testing.T) {
+	const iterations = 2000
+	fs := newFakeStore()
+	m := NewManager(fs)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < iterations; i++ {
+			m.Raise("data-drive-missing", "", "raising")
+			m.Clear("data-drive-missing", "")
+		}
+	}()
+	for i := 0; i < iterations; i++ {
+		m.Clear("data-drive-missing", "")
+		m.Raise("data-drive-missing", "", "raising")
+	}
+	<-done
+
+	// After all concurrent Raise/Clear pairs finish, in-memory and store must agree:
+	// if the issue is in m.active it must be in the store, and vice versa.
+	active := m.List()
+	_, inStore := fs.issues["data-drive-missing:"]
+	inMemory := len(active) > 0
+	if inMemory != inStore {
+		t.Fatalf("memory/store mismatch: in_memory=%v in_store=%v (ghost issue)", inMemory, inStore)
+	}
+}
+
+func TestManager_LoadFromStore_SkipsUnknownIDs(t *testing.T) {
+	fs := newFakeStore()
+	// Simulate a stale row from a previous brain version with a renamed issue ID.
+	_ = fs.UpsertHealthIssue(Issue{
+		ID: "old-issue-id-from-v0", InstanceKey: "",
+		Category: CategoryStorage, Severity: SeverityWarning, Tier: 1,
+		Summary:       "stale",
+		RaisedAt:      time.Now().UTC(),
+		LastCheckedAt: time.Now().UTC(),
+	})
+	_ = fs.UpsertHealthIssue(Issue{
+		ID: "data-drive-missing", InstanceKey: "",
+		Category: CategoryStorage, Severity: SeverityError, Tier: 1,
+		BlocksWrites: true, BlocksApps: true, BlocksUsers: true,
+		Summary:       "known",
+		RaisedAt:      time.Now().UTC(),
+		LastCheckedAt: time.Now().UTC(),
+	})
+	fs.upserts = 0
+
+	m := NewManager(fs)
+	if err := m.LoadFromStore(); err != nil {
+		t.Fatalf("LoadFromStore: %v", err)
+	}
+	active := m.List()
+	if len(active) != 1 {
+		t.Fatalf("want only the known issue loaded, got %d issues: %v", len(active), active)
+	}
+	if active[0].ID != "data-drive-missing" {
+		t.Errorf("wrong issue loaded: %s", active[0].ID)
+	}
+}
+
+func TestApplyStorageFindings_PersistsToStore(t *testing.T) {
+	fs := newFakeStore()
+	m := NewManager(fs)
+	m.ApplyStorageFindings(protocol.StorageHealth{
+		Findings: []protocol.Finding{{ID: "data-drive-missing", Details: "x"}},
+	})
+	if _, ok := fs.issues["data-drive-missing:"]; !ok {
+		t.Error("ApplyStorageFindings should upsert raised finding to store")
+	}
+
+	m.ApplyStorageFindings(protocol.StorageHealth{Findings: []protocol.Finding{}})
+	if _, ok := fs.issues["data-drive-missing:"]; ok {
+		t.Error("ApplyStorageFindings should delete cleared finding from store")
+	}
+	if fs.deletes != 1 {
+		t.Errorf("want 1 delete after clear, got %d", fs.deletes)
+	}
+}
+
+// fakeErrStore is a HealthStore that always fails writes, for testing
+// the store-write-failed signal.
+type fakeErrStore struct {
+	fakeStore
+	writeErr error
+}
+
+func (f *fakeErrStore) UpsertHealthIssue(h Issue) error { return f.writeErr }
+func (f *fakeErrStore) DeleteHealthIssue(id, instanceKey string) error { return f.writeErr }
+func (f *fakeErrStore) BatchUpsertAndDelete(upserts []Issue, deletes []IssueKey) error {
+	return f.writeErr
+}
+
+func TestManager_RaiseStoreError_RaisesStoreWriteFailed(t *testing.T) {
+	es := &fakeErrStore{writeErr: errors.New("disk full")}
+	es.issues = map[string]Issue{}
+	m := NewManager(es)
+	m.Raise("data-drive-missing", "", "missing")
+
+	active := m.List()
+	var found bool
+	for _, iss := range active {
+		if iss.ID == "store-write-failed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("want store-write-failed in active issues after store error, got %v", active)
+	}
+}
+
+func TestManager_RaiseStoreRecovers_ClearsStoreWriteFailed(t *testing.T) {
+	// First raise with a broken store.
+	es := &fakeErrStore{writeErr: errors.New("disk full")}
+	es.issues = map[string]Issue{}
+	m := NewManager(es)
+	m.Raise("data-drive-missing", "", "missing")
+
+	hasStoreFailure := func() bool {
+		for _, iss := range m.List() {
+			if iss.ID == "store-write-failed" {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasStoreFailure() {
+		t.Fatal("want store-write-failed after first broken-store raise")
+	}
+
+	// Swap to a working store and raise again — should clear store-write-failed.
+	fs := newFakeStore()
+	m.store = fs
+	m.Raise("canary-mismatch", "", "mismatch")
+
+	if hasStoreFailure() {
+		t.Error("store-write-failed should clear once a store write succeeds")
+	}
+}
+
+func TestManager_StoreWriteFailedIsNoPersist(t *testing.T) {
+	// store-write-failed must never be persisted, even when the store is healthy.
+	// Simulate by verifying UpsertHealthIssue is not called for it.
+	fs := newFakeStore()
+	m := NewManager(fs)
+
+	// Manually raise store-write-failed as if the store had failed.
+	m.mu.Lock()
+	m.raiseLocked("store-write-failed", "", "simulated")
+	m.mu.Unlock()
+
+	// Now Clear it; should not call store.Delete.
+	m.Clear("store-write-failed", "")
+	if fs.deletes != 0 {
+		t.Errorf("Clear of NoPersist issue must not call store.Delete, got %d deletes", fs.deletes)
+	}
+}
+
+func TestCategoryCapacityConstantExists(t *testing.T) {
+	// Regression guard: capacity must be in the Category type per HEALTH.md.
+	if CategoryCapacity != "capacity" {
+		t.Errorf("CategoryCapacity: want %q, got %q", "capacity", CategoryCapacity)
 	}
 }

@@ -38,6 +38,10 @@ const (
 	// Elevation window (USERS_AND_GROUPS.md # Elevation in the UI).
 	ActionElevateSuccess = "auth.elevate.success"
 	ActionElevateFailure = "auth.elevate.failure"
+
+	// Health issue transitions (HEALTH.md # Persistence, LOGGING.md).
+	ActionHealthIssueRaised  = "health.issue.raised"
+	ActionHealthIssueCleared = "health.issue.cleared"
 )
 
 // Target describes the object the action acts on. Both fields are optional.

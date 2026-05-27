@@ -6,8 +6,9 @@
 // strings, severity/category/tier/blocks_* flags are bound to the ID at
 // registration, not redeclared per raise.
 //
-// v1 scope: in-memory only. SQLite persistence (health_issues table per
-// HEALTH.md # Persistence) is a follow-up — see docs/progress/0019.
+// SQLite persistence: the Manager writes through a HealthStore on every
+// raise/clear so issues survive brain restarts. Pass nil for tests that don't
+// need persistence.
 package health
 
 import (
@@ -32,23 +33,29 @@ const (
 type Category string
 
 const (
-	CategoryStorage Category = "storage"
-	CategoryState   Category = "state"
-	CategoryNetwork Category = "network"
-	CategoryVersion Category = "version"
+	CategoryStorage  Category = "storage"
+	CategoryState    Category = "state"
+	CategoryNetwork  Category = "network"
+	CategoryVersion  Category = "version"
+	CategoryCapacity Category = "capacity"
 )
 
 // Definition binds an issue ID to its static metadata. Registered at brain
 // startup; the registry is the contract.
+//
+// NoPersist marks internal issues that must never be written to SQLite — used
+// for issues that exist precisely because the store itself is broken. Raise
+// and Clear skip the store for any definition with NoPersist: true.
 type Definition struct {
-	ID            string
-	Category      Category
-	Severity      Severity
-	Tier          int
-	BlocksWrites  bool
-	BlocksApps    bool
-	BlocksUsers   bool
-	Summary       string
+	ID           string
+	Category     Category
+	Severity     Severity
+	Tier         int
+	BlocksWrites bool
+	BlocksApps   bool
+	BlocksUsers  bool
+	Summary      string
+	NoPersist    bool
 }
 
 // Issue is the JSON shape returned by GET /api/v1/health and the in-memory
@@ -56,18 +63,40 @@ type Definition struct {
 // list is deferred to a follow-up (the dashboard needs it before this earns
 // its keep).
 type Issue struct {
-	ID             string    `json:"id"`
-	InstanceKey    string    `json:"instance_key,omitempty"`
-	Category       Category  `json:"category"`
-	Severity       Severity  `json:"severity"`
-	Tier           int       `json:"tier"`
-	BlocksWrites   bool      `json:"blocks_writes"`
-	BlocksApps     bool      `json:"blocks_apps"`
-	BlocksUsers    bool      `json:"blocks_users"`
-	Summary        string    `json:"summary"`
-	Details        string    `json:"details,omitempty"`
-	RaisedAt       time.Time `json:"raised_at"`
-	LastCheckedAt  time.Time `json:"last_checked_at"`
+	ID            string    `json:"id"`
+	InstanceKey   string    `json:"instance_key,omitempty"`
+	Category      Category  `json:"category"`
+	Severity      Severity  `json:"severity"`
+	Tier          int       `json:"tier"`
+	BlocksWrites  bool      `json:"blocks_writes"`
+	BlocksApps    bool      `json:"blocks_apps"`
+	BlocksUsers   bool      `json:"blocks_users"`
+	Summary       string    `json:"summary"`
+	Details       string    `json:"details,omitempty"`
+	RaisedAt      time.Time `json:"raised_at"`
+	LastCheckedAt time.Time `json:"last_checked_at"`
+}
+
+// IssueKey uniquely identifies one issue instance. Used in BatchUpsertAndDelete
+// to avoid exporting the internal issueKey map type.
+type IssueKey struct {
+	ID          string
+	InstanceKey string
+}
+
+// HealthStore persists health issues across brain restarts. The interface is
+// consumer-side (CLAUDE.md): health does not import store.
+type HealthStore interface {
+	// UpsertHealthIssue inserts or replaces one issue row (used by Raise).
+	UpsertHealthIssue(Issue) error
+	// DeleteHealthIssue removes one issue row (used by Clear).
+	DeleteHealthIssue(id, instanceKey string) error
+	// BatchUpsertAndDelete runs upserts and deletes in a single transaction.
+	// Used by ApplyStorageFindings so a crash mid-reconcile can't leave SQLite
+	// torn between old and new state.
+	BatchUpsertAndDelete(upserts []Issue, deletes []IssueKey) error
+	// ListHealthIssues returns all rows; used only at brain startup (LoadFromStore).
+	ListHealthIssues() ([]Issue, error)
 }
 
 // Manager holds the live issue set. Thread-safe.
@@ -76,6 +105,7 @@ type Manager struct {
 	definitions map[string]Definition
 	active      map[issueKey]Issue
 	now         func() time.Time
+	store       HealthStore // nil means no persistence (tests)
 }
 
 type issueKey struct {
@@ -84,18 +114,52 @@ type issueKey struct {
 }
 
 // NewManager returns a Manager pre-loaded with the v1 storage definitions
-// (HEALTH.md # Storage). Additional categories register as the brain learns
-// them.
-func NewManager() *Manager {
+// (HEALTH.md # Storage). Pass a non-nil store to persist issues across restarts;
+// pass nil for in-memory-only use (tests, dev builds without SQLite).
+func NewManager(store HealthStore) *Manager {
 	m := &Manager{
 		definitions: map[string]Definition{},
 		active:      map[issueKey]Issue{},
 		now:         func() time.Time { return time.Now().UTC() },
+		store:       store,
 	}
 	for _, d := range builtinDefinitions() {
 		m.definitions[d.ID] = d
 	}
 	return m
+}
+
+// LoadFromStore restores persisted issues into the in-memory registry at boot.
+// Call once after NewManager, before the brain starts serving requests. If the
+// store is nil or returns no rows, the registry starts empty (same as before
+// persistence existed). On store error the brain logs and continues — degraded
+// is better than refusing to start. Unknown IDs (issue renamed or removed in
+// a brain upgrade/downgrade) are skipped and logged; rows remain in SQLite
+// until the next Clear or a future cleanup sweep.
+func (m *Manager) LoadFromStore() error {
+	if m.store == nil {
+		return nil
+	}
+	issues, err := m.store.ListHealthIssues()
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var unknown []string
+	for _, iss := range issues {
+		if _, known := m.definitions[iss.ID]; !known {
+			unknown = append(unknown, iss.ID)
+			continue
+		}
+		k := issueKey{id: iss.ID, instanceKey: iss.InstanceKey}
+		m.active[k] = iss
+	}
+	if len(unknown) > 0 {
+		slog.Warn("health: skipped unknown issue IDs on load; rows left in store until next Clear",
+			"ids", unknown)
+	}
+	return nil
 }
 
 // SetClock swaps the time source — tests use this to assert RaisedAt /
@@ -120,14 +184,36 @@ func (m *Manager) SetClock(now func() time.Time) {
 func (m *Manager) Raise(id, instanceKey, details string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.raiseLocked(id, instanceKey, details)
+	transitioned := m.raiseLocked(id, instanceKey, details)
+	def := m.definitions[id]
+	if m.store != nil && !def.NoPersist {
+		if iss, ok := m.active[issueKey{id: id, instanceKey: instanceKey}]; ok {
+			if err := m.store.UpsertHealthIssue(iss); err != nil {
+				slog.Error("health: store upsert failed", "id", id, "err", err)
+				m.raiseLocked("store-write-failed", "", err.Error())
+			} else {
+				m.clearLocked("store-write-failed", "")
+			}
+		}
+	}
+	return transitioned
 }
 
 // Clear removes the issue if active. Returns true if a transition happened.
 func (m *Manager) Clear(id, instanceKey string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.clearLocked(id, instanceKey)
+	transitioned := m.clearLocked(id, instanceKey)
+	def := m.definitions[id]
+	if m.store != nil && transitioned && !def.NoPersist {
+		if err := m.store.DeleteHealthIssue(id, instanceKey); err != nil {
+			slog.Error("health: store delete failed", "id", id, "err", err)
+			m.raiseLocked("store-write-failed", "", err.Error())
+		} else {
+			m.clearLocked("store-write-failed", "")
+		}
+	}
+	return transitioned
 }
 
 // raiseLocked is the lock-held core of Raise, callable from reconcilers that
@@ -205,6 +291,9 @@ func (m *Manager) List() []Issue {
 // concurrent List() never sees a transient "all clear" between the clears
 // and the new raises.
 //
+// All SQLite writes go through a single BatchUpsertAndDelete call so a crash
+// mid-reconcile can't leave the store torn between old and new state.
+//
 // This is the entire bridge between the host-side reporter and the brain's
 // issue model. Periodic polling of GET /v1/health/storage drives the
 // reconciliation; transitions return as raised / cleared counts for the
@@ -212,33 +301,53 @@ func (m *Manager) List() []Issue {
 // logged at warn and dropped — that's a reporter-vs-brain version skew the
 // operator needs to see.
 func (m *Manager) ApplyStorageFindings(sh protocol.StorageHealth) (raised, cleared int) {
-	wantIDs := map[string]string{} // id → details
+	// wantKeys uses the full issueKey (id + instanceKey) so that when Finding
+	// grows an InstanceKey field, per-instance storage findings don't collapse.
+	// Today all findings carry instanceKey="" (Finding has no InstanceKey field),
+	// but the reconcile loop is correct for the future shape already.
+	wantKeys := map[issueKey]string{} // key → details
 	for _, f := range sh.Findings {
-		wantIDs[f.ID] = f.Details
+		wantKeys[issueKey{id: f.ID, instanceKey: ""}] = f.Details
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	var toUpsert []Issue
+	var toDelete []IssueKey
 	unknownIDs := []string{}
-	for id, details := range wantIDs {
-		if _, known := m.definitions[id]; !known {
-			unknownIDs = append(unknownIDs, id)
+
+	for k, details := range wantKeys {
+		if _, known := m.definitions[k.id]; !known {
+			unknownIDs = append(unknownIDs, k.id)
 			continue
 		}
-		if m.raiseLocked(id, "", details) {
+		if m.raiseLocked(k.id, k.instanceKey, details) {
 			raised++
+		}
+		// Upsert on every poll tick (not just transitions) to keep last_checked_at
+		// current in SQLite. At the current 60s cadence with a handful of findings
+		// this is negligible. If the poll interval shortens materially, consider
+		// moving last_checked_at updates to a lazy write (on List() or a background
+		// sweep) to avoid per-tick writes for stable issues.
+		if m.store != nil {
+			if iss, ok := m.active[issueKey{id: k.id, instanceKey: k.instanceKey}]; ok {
+				toUpsert = append(toUpsert, iss)
+			}
 		}
 	}
 	for k, iss := range m.active {
 		if iss.Category != CategoryStorage {
 			continue
 		}
-		if _, keep := wantIDs[k.id]; keep {
+		if _, keep := wantKeys[k]; keep {
 			continue
 		}
 		if m.clearLocked(k.id, k.instanceKey) {
 			cleared++
+			if m.store != nil {
+				toDelete = append(toDelete, IssueKey{ID: k.id, InstanceKey: k.instanceKey})
+			}
 		}
 	}
 
@@ -246,6 +355,17 @@ func (m *Manager) ApplyStorageFindings(sh protocol.StorageHealth) (raised, clear
 		slog.Warn("storage health: dropped unknown finding ids",
 			"ids", unknownIDs)
 	}
+
+	if m.store != nil && (len(toUpsert) > 0 || len(toDelete) > 0) {
+		if err := m.store.BatchUpsertAndDelete(toUpsert, toDelete); err != nil {
+			slog.Error("health: batch store write failed",
+				"upserts", len(toUpsert), "deletes", len(toDelete), "err", err)
+			m.raiseLocked("store-write-failed", "", err.Error())
+		} else {
+			m.clearLocked("store-write-failed", "")
+		}
+	}
+
 	return raised, cleared
 }
 
@@ -309,6 +429,17 @@ func builtinDefinitions() []Definition {
 			Severity: SeverityError, Tier: 2,
 			BlocksWrites: false, BlocksApps: false, BlocksUsers: false,
 			Summary: "malmo's storage report is unreadable; storage state is unknown.",
+		},
+		// Internal — raised when any store write fails persistently. NoPersist
+		// because it exists precisely when persistence is broken: writing it to
+		// SQLite would fail too. Surfaced on the dashboard so the operator knows
+		// health issues won't survive a restart until the store recovers.
+		{
+			ID: "store-write-failed", Category: CategoryState,
+			Severity: SeverityError, Tier: 2,
+			BlocksWrites: false, BlocksApps: false, BlocksUsers: false,
+			Summary: "malmo can't save health state; issues won't survive a restart.",
+			NoPersist: true,
 		},
 	}
 }

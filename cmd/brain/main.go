@@ -70,7 +70,13 @@ func main() {
 
 	authMgr := auth.NewManager(st)
 	auditor := audit.New(st)
-	healthMgr := health.NewManager()
+	healthMgr := health.NewManager(st)
+
+	// Restore persisted health issues before serving requests. Non-fatal:
+	// the brain starts with an empty registry on error (degraded, not dead).
+	if err := healthMgr.LoadFromStore(); err != nil {
+		slog.Warn("health: failed to restore issues from store; starting empty", "err", err)
+	}
 
 	// Pull the boot-time storage findings (BOOT.md # The storage-ready
 	// target) once at startup and reconcile them into the health registry,
@@ -78,8 +84,8 @@ func main() {
 	// brain runs degraded just like everything else.
 	pollCtx, pollCancel := context.WithCancel(context.Background())
 	defer pollCancel()
-	pullStorageHealth(pollCtx, host, healthMgr)
-	go storageHealthPollLoop(pollCtx, host, healthMgr, cfg.healthPollPeriod)
+	pullStorageHealth(pollCtx, host, healthMgr, auditor)
+	go storageHealthPollLoop(pollCtx, host, healthMgr, auditor, cfg.healthPollPeriod)
 
 	srv := api.NewServer(st, cat, life, bus, authMgr, host, auditor, healthMgr)
 	httpSrv := &http.Server{Addr: cfg.listen, Handler: srv.Handler()}
@@ -169,8 +175,9 @@ func env(k, def string) string {
 // pullStorageHealth fetches the current storage findings from host-agent and
 // reconciles them into the health registry. Non-blocking: if host-agent isn't
 // reachable yet, we log and return — the brain still starts. The poll loop
-// will catch up once host-agent comes online.
-func pullStorageHealth(ctx context.Context, host *hostclient.Client, healthMgr *health.Manager) {
+// will catch up once host-agent comes online. Audit records are emitted for
+// transitions (raise/clear counts > 0).
+func pullStorageHealth(ctx context.Context, host *hostclient.Client, healthMgr *health.Manager, auditor *audit.Recorder) {
 	c, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	sh, err := host.StorageHealth(c)
@@ -184,13 +191,23 @@ func pullStorageHealth(ctx context.Context, host *hostclient.Client, healthMgr *
 		slog.Info("storage health: reconciled",
 			"raised", raised, "cleared", cleared, "active_findings", len(sh.Findings))
 	}
+	if raised > 0 {
+		auditor.Record(ctx, audit.ActionHealthIssueRaised,
+			audit.Target{Kind: "health_issue"},
+			map[string]any{"count": raised}, true)
+	}
+	if cleared > 0 {
+		auditor.Record(ctx, audit.ActionHealthIssueCleared,
+			audit.Target{Kind: "health_issue"},
+			map[string]any{"count": cleared}, true)
+	}
 }
 
 // storageHealthPollLoop keeps the health registry in sync with what
 // host-agent reports. 60s is the loose-by-design cadence — storage findings
 // don't change often, and the dashboard's view of "active issues" gets a
 // refresh on every dashboard load via the same registry.
-func storageHealthPollLoop(ctx context.Context, host *hostclient.Client, healthMgr *health.Manager, interval time.Duration) {
+func storageHealthPollLoop(ctx context.Context, host *hostclient.Client, healthMgr *health.Manager, auditor *audit.Recorder, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -198,7 +215,7 @@ func storageHealthPollLoop(ctx context.Context, host *hostclient.Client, healthM
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			pullStorageHealth(ctx, host, healthMgr)
+			pullStorageHealth(ctx, host, healthMgr, auditor)
 		}
 	}
 }

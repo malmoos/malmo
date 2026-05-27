@@ -138,7 +138,22 @@ func (s *Store) migrate() error {
 			BEGIN SELECT RAISE(ABORT, 'audit_events is append-only'); END;
 		CREATE TRIGGER IF NOT EXISTS audit_events_no_delete
 			BEFORE DELETE ON audit_events
-			BEGIN SELECT RAISE(ABORT, 'audit_events is append-only'); END;`)
+			BEGIN SELECT RAISE(ABORT, 'audit_events is append-only'); END;
+		CREATE TABLE IF NOT EXISTS health_issues (
+			id              TEXT    NOT NULL,
+			instance_key    TEXT    NOT NULL DEFAULT '',
+			category        TEXT    NOT NULL,
+			severity        TEXT    NOT NULL,
+			tier            INTEGER NOT NULL,
+			blocks_writes   INTEGER NOT NULL,
+			blocks_apps     INTEGER NOT NULL,
+			blocks_users    INTEGER NOT NULL,
+			summary         TEXT    NOT NULL,
+			details         TEXT    NOT NULL DEFAULT '',
+			raised_at       INTEGER NOT NULL,
+			last_checked_at INTEGER NOT NULL,
+			PRIMARY KEY (id, instance_key)
+		);`)
 	if err != nil {
 		return err
 	}
