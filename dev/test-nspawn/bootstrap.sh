@@ -30,9 +30,17 @@ ROOTFS="${REPO_ROOT}/.dev/nspawn/rootfs"
 CANARY="${ROOTFS}/.malmo-nspawn-ready"
 IMAGE="${MALMO_NSPAWN_IMAGE:-debian:bookworm}"
 
-if [ -f "$CANARY" ]; then
+# Bumped to v2 when slice 0020 added systemd-sysv (needed for --boot in the
+# boot-chain lane). Older v1 rootfs lacks /sbin/init; force a rebuild rather
+# than silently failing inside the new lane.
+CANARY_VERSION="v2"
+
+if [ -f "$CANARY" ] && [ "$(cat "$CANARY")" = "$CANARY_VERSION" ]; then
     echo "nspawn rootfs already bootstrapped at $ROOTFS (sudo rm -rf to rebuild)"
     exit 0
+fi
+if [ -f "$CANARY" ]; then
+    echo "nspawn rootfs at $ROOTFS is stale (canary != $CANARY_VERSION); rebuilding"
 fi
 
 for tool in docker tar systemd-nspawn; do
@@ -58,6 +66,10 @@ docker export "$CID" | tar -x -C "$ROOTFS"
 # primary group at GID 3000 per FIRST_RUN.md # Identity & display names,
 # and install libpam-modules so chpasswd can update /etc/shadow via PAM.
 #
+# systemd-sysv is needed by the boot-chain lane (slice 0020): it provides
+# /sbin/init so `systemd-nspawn --boot` can find a PID 1. Cheap (~30 MB)
+# and harmless for the no-boot lanes.
+#
 # Running apt-get under nspawn rather than `docker run` keeps the seam
 # clean: the rootfs is only ever mutated through the same tool that
 # runs the tests.
@@ -66,11 +78,12 @@ systemd-nspawn --quiet -D "$ROOTFS" --pipe \
         set -e
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -qq
-        apt-get install -y -qq --no-install-recommends sudo libpam-modules
+        apt-get install -y -qq --no-install-recommends \
+            sudo libpam-modules systemd-sysv
         getent group malmo >/dev/null || groupadd -g 3000 malmo
         apt-get clean
         rm -rf /var/lib/apt/lists/*
     '
 
-touch "$CANARY"
+echo -n "$CANARY_VERSION" > "$CANARY"
 echo "nspawn rootfs ready at $ROOTFS"
