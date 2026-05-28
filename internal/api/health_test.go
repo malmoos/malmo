@@ -65,7 +65,7 @@ func newHealthHarness(t *testing.T) *healthHarness {
 	cat := catalog.New(t.TempDir())
 	bus := events.NewBus()
 	authMgr := auth.NewManager(st)
-	healthMgr := health.NewManager()
+	healthMgr := health.NewManager(nil)
 
 	apiSrv := NewServer(st, cat, nil, bus, authMgr, host, audit.New(st), healthMgr)
 	ts := httptest.NewServer(apiSrv.Handler())

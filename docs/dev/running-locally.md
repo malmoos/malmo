@@ -12,6 +12,61 @@ malmo's dev model is **two loops**:
 
 This guide covers the inner loop.
 
+## Who can contribute to what
+
+malmo's dev model splits cleanly along the inner/outer loop boundary, and that
+boundary is also the **macOS/Windows ↔ Linux** boundary. The Go code is
+deliberately build-tagged so the cross-platform surface compiles and runs
+anywhere; the Linux-only parts are the *real host integration*, which by design
+only exists on the Debian target.
+
+If you're on **macOS, Windows (WSL2), or any Linux**, you can build and work on
+everything in the first list with zero platform-specific setup. The second list
+needs a real Linux host (or the CI lanes that provide one).
+
+### Cross-platform — everyone can contribute (no VM, no Linux)
+
+The inner loop and the bulk of the codebase. `GOOS=darwin go build ./...`
+compiles clean; Docker Desktop covers Caddy and app containers.
+
+- **The brain** — all of `internal/`: `api`, `lifecycle`, `catalog`,
+  `manifest`, `store`, `caddy`, `hostclient`, `events`, `protocol`, `auth`,
+  `audit`, `admission`. This is where ~90% of development happens.
+- **The dashboard** — all of `web-ui/` (Vue 3 + Vite + npm). Fully OS-agnostic.
+- **The fake host-agent** (`cmd/host-agent`) — speaks the real
+  `../specs/BRAIN_HOST_PROTOCOL.md` wire format over a real UNIX socket, with
+  host ops stubbed. Lets the entire control-plane spine run on a Mac.
+- **The full inner-loop stack** — `make dev` (Caddy container + fake host-agent
+  + brain + Vite), installing apps, SSE, routing, uninstall.
+- **Sample manifests** — `catalog/`.
+- **Unit tests** for all the above, plus the self-contained `make test-health`.
+
+On macOS, cgo automatically selects the stub implementations (`pam_other.go`,
+`dbus_other.go`), so you do **not** need `libpam0g-dev` or any C headers.
+
+### Linux-only — requires a real Linux host
+
+The host-integrated subsystems and their test lanes. These talk to
+`/etc/shadow`, the system DBus, systemd, and the TPM — there's nothing to fake
+them against off-Linux, and they run in CI regardless.
+
+- **`cmd/host-agent-real`** — the production host-agent.
+- **`internal/hostagent/pamverifier`** (real PAM via `msteinert/pam`; needs
+  `libpam0g-dev` + cgo) and **`usermgr`** (`useradd`/`chpasswd` against
+  `/etc/passwd`/`/etc/shadow`).
+- **`internal/hostagent/avahipublisher`** (real Avahi DBus publishing).
+- **The nspawn fast lane** — `make test-usermgr-nspawn`,
+  `make test-boot-chain-nspawn` (need `systemd-nspawn` + `mmdebstrap`).
+- **The QEMU medium lane** — `make test-medium-qemu` (needs `mkosi` + `swtpm` +
+  `qemu-system-x86` + OVMF).
+- **Boot ordering, LUKS/TPM, NetworkManager** — the outer loop generally.
+
+**Bottom line:** if your change is in the brain, the UI, the catalog, or the
+protocol contracts, your OS doesn't matter. If it touches host integration, you
+need Linux (or you rely on CI to exercise it) — and you can still develop
+against the fake host-agent on any platform up to the point where real host
+behavior is required.
+
 ## Prerequisites
 
 - **Docker** + the `docker compose` plugin (`docker compose version`).
@@ -39,8 +94,9 @@ This guide covers the inner loop.
   make test-nopam    # skip pamverifier, no libpam0g-dev needed
   ```
 
-  macOS devs: skip — `host-agent-real` is Linux-only by design (it talks to
-  `/etc/shadow` via Linux PAM). Use `make test-nopam` or just run the fake.
+  This is Linux-only — see [Who can contribute to what](#who-can-contribute-to-what)
+  above. On macOS/Windows, skip it and use `make test-nopam` or run the fake
+  host-agent.
 
 ## Start the stack
 
