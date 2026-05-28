@@ -17,7 +17,7 @@ When a topic is **decided**, remove its entry here and add the rationale to `DEC
 
 ## Tier 1 — Blocking
 
-*(No active Tier-1 items at 2026-05-18.)*
+*(No active Tier-1 items at 2026-05-27. Last audit: 2026-05-27 — boot/storage track is on `0023 LUKS+TPM` and well-specified in `STORAGE.md` / `BOOT.md`; no design item is currently blocking it. Implementation slice queue lives in [`../progress/README.md`](../progress/README.md) # Up next.)*
 
 ---
 

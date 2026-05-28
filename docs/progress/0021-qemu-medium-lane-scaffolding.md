@@ -1,9 +1,9 @@
 # 0021 — QEMU + swtpm medium-lane scaffolding
 
-- **Status:** in progress — code written, end-to-end run pending on a non-20.04 host
-- **Date:** 2026-05-27
+- **Status:** done
+- **Date:** 2026-05-28
 - **Specs touched:** `TESTING.md`, `BOOT.md`, `STORAGE.md`
-- **Verified on:** none yet. Ubuntu 20.04 dev box (Python 3.8, no swtpm in apt) couldn't satisfy the dep matrix without ~30 min of jammy backporting + deadsnakes. Code paused for a fresh run on 22.04+ / Debian 12+. The lane logic is structurally complete and reviewed against the same shape as slice 0020's nspawn driver.
+- **Verified on:** Ubuntu 20.04 dev box (KVM). swtpm from jammy backport, mkosi v27 via pipx + python3.10 (deadsnakes). `make test-medium-qemu` → PASS: SSH at ~8s, `malmo-storage-verify.service` active, `storage.json` present with empty findings, `tpm2_pcrread sha256:7` succeeds.
 
 Closes the "no real kernel / no real TPM" gap from `TESTING.md` # Medium lane. Slice 0020's fast lane proves unit shape inside an nspawn namespace; this slice boots a real Linux kernel under QEMU with a software TPM and runs our reporter in real systemd userspace. SSH-driven assertions read back the verdict.
 
@@ -17,9 +17,9 @@ bookworm + `systemd-boot` + `tpm2-tools` + `openssh-server` + the packages neede
 
 mkosi was chosen for the test-lane image build per the spec call (`live-build` remains the v1 *production* ISO tool — different concern). `NEXT.md` # Tier 4 # Testing has the open entry "live-build vs mkosi revisit weighted by test-story" which this slice partly informs.
 
-### `dev/test-qemu/mkosi.postinst`
+### `dev/test-qemu/mkosi.postinst.chroot`
 
-Runs inside the chroot. Adds a `.wants` symlink for `malmo-storage-ready.target` under `multi-user.target.wants/`, writes `/etc/tmpfiles.d/malmo.conf` for `/run/malmo/health/`, ensures the verify binary is executable, and disables `systemd-networkd-wait-online` (would otherwise eat boot time in a slirp-networked VM with no DHCP lease guarantees).
+Runs inside the chroot (`.chroot` extension = mkosi v27+ chroot mode; the image root is mounted at `/`). Adds a `.wants` symlink for `malmo-storage-ready.target` under `multi-user.target.wants/`, writes `/etc/tmpfiles.d/malmo.conf` for `/run/malmo/health/`, ensures the verify binary is executable, disables `systemd-networkd-wait-online` (would otherwise eat boot time in a slirp-networked VM with no DHCP lease guarantees), enables ssh.service + disables host-agent.service in the system preset, commits a machine-id (prevents the `systemd-firstboot` interactive wizard from blocking `sysinit.target`), and enables `systemd-networkd` with a DHCP `.network` file for virtio NIC.
 
 ### `dev/test-qemu/bootstrap.sh` — preflight + build
 
@@ -114,13 +114,12 @@ On 22.04+ none of this is needed; `sudo apt-get install -y qemu-system-x86 swtpm
 
 - **No LUKS, no TPM-sealed unseal.** See above — slice 0022.
 - **No data drive.** Single virtio disk, no second disk for the data-drive enrollment path. `malmo-storage-verify` runs in its Level-0 path (no `/etc/malmo/data-drive.enrolled`). The second-drive shape lands when device-backing canary work picks up.
-- **`host-agent.service` is staged-but-disabled.** Its `Requires=docker.service` would fail at boot. Stubbing docker in a VM the way 0020 stubs it in nspawn is feasible but out of scope for this slice. The brain stack as a whole isn't exercised in the VM yet.
+- **`host-agent.service` is staged-but-disabled.** Its `Requires=docker.service` would fail at boot. Additionally, `host-agent.service` carries `RuntimeDirectory=malmo`; when the stub (`/bin/true`) exits, systemd removes `/run/malmo/` — destroying `storage.json` before any assertion can read it. The fix: explicit `disable host-agent.service` in the preset and in the postinst. The brain stack as a whole isn't exercised in the VM yet.
 - **No CI integration.** Same posture as the fast lane (0018/0020). Each lane is invocable locally via `make`; wiring all the lanes into a CI workflow is its own slice.
 - **mkosi v22+ requirement.** Ubuntu 20.04's apt has v9; bootstrap detects and bails. `pipx install mkosi` is the documented escape; we don't (yet) ship a pinned version. A reproducibility concern when the lane spreads to more developer machines.
 - **slirp networking.** Adequate for SSH port-forward; not adequate for any future test that needs multicast/mDNS reachable from the host. Bridged networking is the upgrade path when that test lands.
 - **TCG fallback.** Without KVM (CI without `/dev/kvm`), TCG works but boot is ~10x slower. Documented; not mitigated.
 - **No image signing.** mkosi can produce signed images via `[Validation] Checksum=` / `SecureBoot=` — not used here. Production signing belongs to `BUILD.md`'s pipeline, not the test lane.
-- **End-to-end not yet verified.** Code is on disk; the 20.04 dev box couldn't supply all deps without significant backport work (see "Host-dep dance" above). The lane will be verified on a 22.04+ box and then committed. Per the project's "verify against real system before committing" rule, this slice is *not* in the committed history yet. Files live untracked in `dev/test-qemu/` + `docs/progress/0021-…`.
 
 ## What's next
 

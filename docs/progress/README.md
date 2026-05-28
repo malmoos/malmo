@@ -7,6 +7,14 @@ reading every commit. New entries get the next number; never renumber.
 Every change ships with a progress entry or an update to one (see
 [`../../CLAUDE.md`](../../CLAUDE.md) # Documentation discipline).
 
+## Up next
+
+The implementation slice queue, ordered. Each item links back to the progress entry whose "what's next" it satisfies. Pull the top item; when it lands, write the next numbered entry and re-order. Design topics (not implementation slices) live in [`../specs/NEXT.md`](../specs/NEXT.md).
+
+1. **0023 — LUKS root + first-boot TPM enrollment + unseal verification.** Builds on [0021](0021-qemu-medium-lane-scaffolding.md)'s QEMU+swtpm medium-lane scaffolding. Critical-path slice: realizes the encryption posture in `STORAGE.md` and the boot ordering in `BOOT.md`, exercises the medium lane the scaffolding was built for. *(In-flight follow-up from 0021 / 0022.)*
+2. **Per-issue health audit records.** Small finish on [0022](0022-health-persistence.md). Change `ApplyStorageFindings` to return affected IDs so `health.issue.raised` / `health.issue.cleared` audit records can target `{kind: "health_issue", id: "<id>"}` instead of bulk count records.
+3. **Notification wiring: health raise/clear → dashboard bell.** `NOTIFICATIONS.md` is locked but no `notifications` table or emitter exists yet. First consumer of the seam: on health-issue raise (transition), enqueue a notification routed to admin users; on clear, mark resolved. Follow-up from [0022](0022-health-persistence.md).
+
 ## Entry template
 
 ```markdown
@@ -52,5 +60,5 @@ Ordered follow-ups. Update as they land.
 | [0018](0018-nspawn-usermgr-lane.md) | nspawn fast-lane wiring for usermgrtest (bootstrap.sh + run-usermgr-tests.sh + make test-usermgr-nspawn) | done |
 | [0019](0019-boot-pipeline-units.md) | Boot pipeline: storage-ready target, malmo-storage-verify reporter, brain health registry + `GET /api/v1/health` | done |
 | [0020](0020-nspawn-boot-chain-lane.md) | nspawn boot-chain fast lane: `--boot` of `dist/systemd/` units + dependency-shape assertions | done |
-| [0021](0021-qemu-medium-lane-scaffolding.md) | QEMU+swtpm medium-lane scaffolding: real kernel + real systemd + TPM plumbing | in progress |
+| [0021](0021-qemu-medium-lane-scaffolding.md) | QEMU+swtpm medium-lane scaffolding: real kernel + real systemd + TPM plumbing | done |
 | [0022](0022-health-persistence.md) | SQLite persistence for health issues (`health_issues` table, store write-through, boot-time restore) | done |

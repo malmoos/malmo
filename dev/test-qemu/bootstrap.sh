@@ -21,7 +21,7 @@ TEST_DIR="${REPO_ROOT}/dev/test-qemu"
 WORK="${REPO_ROOT}/.dev/qemu"
 EXTRA="${TEST_DIR}/mkosi.extra"
 CANARY="${WORK}/.malmo-medium-ready"
-CANARY_VERSION="v1"
+CANARY_VERSION="v10"  # bump when mkosi.conf changes require a clean rebuild
 IMAGE_OUT="${WORK}/malmo-medium.raw"
 SSH_KEY="${WORK}/ssh-key"
 
@@ -41,6 +41,13 @@ fi
 CALLER_HOME=""
 if [ -n "$CALLER" ]; then
     CALLER_HOME="$(getent passwd "$CALLER" | cut -d: -f6)"
+fi
+
+# Sudo strips PATH (secure_path in sudoers); fold the caller's user-local
+# bin dir back in so tools like mkosi installed via `pipx`/`pip --user`/
+# symlinked into ~/.local/bin/ are visible to the preflight probe below.
+if [ -n "$CALLER_HOME" ] && [ -d "$CALLER_HOME/.local/bin" ]; then
+    PATH="$CALLER_HOME/.local/bin:$PATH"
 fi
 
 # --- 1. host preflight
@@ -80,9 +87,15 @@ EOF
     exit 1
 fi
 
-# mkosi version sanity (need >=22 for the config schema we use).
-mkosi_version="$(mkosi --version 2>&1 | head -1 | awk '{print $NF}' | tr -d v)"
-mkosi_major="${mkosi_version%%.*}"
+# mkosi version sanity (need >=22 for the config schema we use). Capture
+# the whole output first to avoid SIGPIPE killing mkosi when `head -1`
+# closes the pipe early (mkosi 27 surfaces this; `set -e` + `pipefail`
+# would then abort us with rc=141).
+mkosi_version_full="$(mkosi --version 2>&1 || true)"
+mkosi_version_line="$(printf '%s\n' "$mkosi_version_full" | head -n1)"
+mkosi_version="$(printf '%s' "$mkosi_version_line" | awk '{print $NF}' | tr -d v)"
+# Strip a trailing suffix like `~devel`/`-dev`/`rc1` so `-lt` sees a pure int.
+mkosi_major="${mkosi_version%%[!0-9]*}"
 if [ -n "$mkosi_major" ] && [ "$mkosi_major" -lt 22 ] 2>/dev/null; then
     echo "mkosi version $mkosi_version is too old (need >=22). pipx install --upgrade mkosi" >&2
     exit 1
@@ -187,10 +200,61 @@ chmod 0755 "$EXTRA/usr/local/bin/medium-assertions.sh"
 # ops it needs (loopback mount, etc.).
 echo "building medium-lane image via mkosi (first run takes a few minutes)..."
 cd "$TEST_DIR"
+# The staging steps above run as root and leave files owned root:root,
+# some at restrictive modes (0700 for /root/.ssh). mkosi runs as $CALLER
+# and would fail to traverse them. Re-own the entire staged tree (and
+# the work dir mkosi writes into) to the caller. mkosi preserves mode
+# inside the image regardless of host ownership.
 if [ -n "$CALLER" ]; then
-    sudo -u "$CALLER" mkosi --force build
+    chown -R "$CALLER":"$(id -gn "$CALLER")" "$EXTRA" "$WORK"
+fi
+# Resolve absolute path so the nested `sudo -u` invocation finds mkosi
+# even though sudo strips PATH (same idiom as $GO above).
+MKOSI_BIN="$(command -v mkosi || true)"
+if [ -z "$MKOSI_BIN" ]; then
+    echo "mkosi disappeared from PATH between preflight and build" >&2
+    exit 1
+fi
+
+# mkosi's launcher shim runs `python3` from its environment; >=3.10 is
+# required. Probe explicitly so we can pass MKOSI_INTERPRETER through to
+# the (sudo-stripped) build invocation. Required on focal where system
+# python is 3.8 and deadsnakes no longer ships 3.10 (focal EOL); the
+# caller's conda/miniconda python typically satisfies the bar.
+MKOSI_INTERPRETER=""
+for cand in python3.13 python3.12 python3.11 python3.10; do
+    if path="$(command -v "$cand" 2>/dev/null)"; then
+        MKOSI_INTERPRETER="$path"; break
+    fi
+done
+if [ -z "$MKOSI_INTERPRETER" ] && [ -n "$CALLER_HOME" ]; then
+    for cand in "$CALLER_HOME/anaconda3/bin/python3" \
+                "$CALLER_HOME/miniconda3/bin/python3" \
+                "$CALLER_HOME/.pyenv/shims/python3"; do
+        if [ -x "$cand" ] && "$cand" -c \
+            'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' \
+            2>/dev/null; then
+            MKOSI_INTERPRETER="$cand"; break
+        fi
+    done
+fi
+if [ -z "$MKOSI_INTERPRETER" ]; then
+    cat >&2 <<'EOF'
+mkosi requires Python >=3.10; none found on PATH or in caller's conda/miniconda.
+Install options:
+  - jammy/noble: apt-get install python3.10 python3.10-venv
+  - focal:       deadsnakes no longer ships 3.10 (focal EOL). Use conda,
+                 pyenv, or `uv python install 3.10`.
+EOF
+    exit 1
+fi
+echo "mkosi interpreter: $MKOSI_INTERPRETER"
+
+if [ -n "$CALLER" ]; then
+    sudo -u "$CALLER" env "MKOSI_INTERPRETER=$MKOSI_INTERPRETER" \
+        "$MKOSI_BIN" --force build
 else
-    mkosi --force build
+    MKOSI_INTERPRETER="$MKOSI_INTERPRETER" "$MKOSI_BIN" --force build
 fi
 
 # mkosi writes to OutputDirectory=../../.dev/qemu/. Confirm the

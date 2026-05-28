@@ -32,8 +32,17 @@ Orientation:
 
 ## Progress
 
-See [`progress/README.md`](progress/README.md) for the full index. Latest:
+See [`progress/README.md`](progress/README.md) for the full index and the
+**Up next** queue (next implementation slices). Latest:
 
+- [`0022-health-persistence.md`](progress/0022-health-persistence.md)
+  — `health_issues` SQLite table, store write-through, boot-time
+  `LoadFromStore` restore, `health.issue.raised/cleared` audit actions.
+- [`0021-qemu-medium-lane-scaffolding.md`](progress/0021-qemu-medium-lane-scaffolding.md)
+  — QEMU+swtpm medium-lane scaffolding (real kernel + real systemd + TPM
+  plumbing); runway for the LUKS/TPM slice.
+- [`0020-nspawn-boot-chain-lane.md`](progress/0020-nspawn-boot-chain-lane.md)
+  — nspawn `--boot` of `dist/systemd/` units + dependency-shape assertions.
 - [`0019-boot-pipeline-units.md`](progress/0019-boot-pipeline-units.md)
   — boot pipeline slice #1: `malmo-storage-ready.target`,
   `malmo-storage-verify` reporter, host-agent `GET /v1/health/storage`,

@@ -18,6 +18,11 @@ web-ui/dist/
 web-ui/.vite/
 *.tsbuildinfo
 
+# medium-lane test image build artifacts (populated by bootstrap.sh at build time)
+dev/test-qemu/mkosi.extra/
+dev/test-qemu/mkosi.tools/
+dev/test-qemu/mkosi.tools.manifest
+
 # Editor / OS
 .DS_Store
 *.swp

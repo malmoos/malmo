@@ -45,11 +45,10 @@ if [ "${EUID:-$(id -u)}" -ne 0 ]; then
     exit 1
 fi
 
-# --- 1. bootstrap if needed
-if [ ! -f "$IMAGE_OUT" ] \
-   || [ ! -f "${WORK}/.malmo-medium-ready" ]; then
-    "${REPO_ROOT}/dev/test-qemu/bootstrap.sh"
-fi
+# --- 1. always invoke bootstrap; it has its own canary-version gate
+# and exits fast when the cached image is current. Skipping bootstrap
+# here would make `CANARY_VERSION` bumps invisible to the driver.
+"${REPO_ROOT}/dev/test-qemu/bootstrap.sh"
 
 # --- 2. resolve OVMF firmware (varies by distro; bootstrap already
 # confirmed one exists, repeat the probe here for hermeticity).
@@ -172,8 +171,11 @@ fi
 echo "running in-VM assertions..."
 ssh "${SSH_OPTS[@]}" "root@127.0.0.1" \
     "/usr/local/bin/medium-assertions.sh" || true
-# scp the verdict back.
-scp "${SSH_OPTS[@]}" "root@127.0.0.1:/var/lib/malmo-medium-result" \
+# scp the verdict back (note: scp uses -P for port, not -p).
+scp -P "$SSH_PORT" -i "$SSH_KEY" \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o LogLevel=ERROR -o ConnectTimeout=2 -o BatchMode=yes \
+    "root@127.0.0.1:/var/lib/malmo-medium-result" \
     "$RESULT_FILE" 2>/dev/null || true
 
 # --- 8. shut down the guest cleanly
