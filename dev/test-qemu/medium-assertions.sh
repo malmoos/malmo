@@ -75,4 +75,21 @@ pcr_out="$(tpm2_pcrread sha256:7 2>&1)" \
 grep -q '7 *:' <<<"$pcr_out" \
     || fail "tpm2_pcrread output unexpected shape: $pcr_out"
 
+# --- 5. root actually sits on a LUKS/dm-crypt device (slice 0023 Stage 1)
+# The whole point of 0023: prove we booted the *encrypted* root, not a
+# silent plaintext fallback. Reaching here means systemd-cryptsetup
+# unlocked the LUKS container in the initrd (via the passphrase
+# credential — no TPM2 token is enrolled yet on first boot) and
+# switch-root landed on the mapper device. Assert the mount source is
+# the dm-crypt device, not a bare partition.
+root_src="$(findmnt -no SOURCE / 2>/dev/null || true)"
+case "$root_src" in
+    /dev/mapper/luks-*|/dev/dm-*) ;;
+    *) fail "root is not on a dm-crypt device (source='$root_src'); encrypted-root path not exercised" ;;
+esac
+# Belt-and-suspenders: confirm it's a live LUKS mapping, not a same-named
+# mapper device of some other dm target.
+cryptsetup status "$root_src" 2>/dev/null | grep -qiE 'type:[[:space:]]*LUKS' \
+    || fail "root device '$root_src' is not a live LUKS mapping"
+
 ok

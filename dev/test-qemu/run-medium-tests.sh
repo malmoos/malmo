@@ -23,6 +23,35 @@ QEMU_SERIAL="${RUN_DIR}/serial.log"
 QEMU_PID=""
 SWTPM_PID=""
 
+# QEMU writes serial.log as root (this script runs under sudo). Resolve
+# the invoking user so we can hand diagnostics back caller-readable —
+# otherwise the kept log is root-owned and undebuggable without sudo.
+CALLER="${SUDO_USER:-}"
+if [ -z "$CALLER" ] || [ "$CALLER" = "root" ]; then
+    CALLER="$(logname 2>/dev/null || true)"
+fi
+
+# Copy the serial log somewhere the caller can read, and surface the
+# lines that actually explain a boot failure. The kernel/systemd
+# dependency-failure cascade is downstream noise; the load-bearing line
+# is the systemd-cryptsetup ExecStart error just above it. tail alone
+# cuts it off, so grep the unlock path explicitly with context.
+dump_serial() {
+    [ -r "$QEMU_SERIAL" ] || return 0
+    local saved="${WORK}/last-serial.log"
+    cp "$QEMU_SERIAL" "$saved" 2>/dev/null || true
+    if [ -n "$CALLER" ]; then
+        chown "$CALLER":"$(id -gn "$CALLER" 2>/dev/null || echo "$CALLER")" \
+            "$saved" 2>/dev/null || true
+    fi
+    echo "--- serial: unlock path (cryptsetup/luks/credential/tpm2) ---" >&2
+    grep -niE 'cryptsetup|luks|credential|passphrase|tpm2|unlock|sysroot|switch-root' \
+        "$QEMU_SERIAL" 2>/dev/null | tail -40 >&2 || true
+    echo "--- serial: tail 30 ---" >&2
+    tail -30 "$QEMU_SERIAL" >&2 || true
+    echo "--- full serial log saved (caller-readable): ${saved} ---" >&2
+}
+
 cleanup() {
     local rc=$?
     if [ -n "$QEMU_PID" ] && kill -0 "$QEMU_PID" 2>/dev/null; then
@@ -139,7 +168,17 @@ qemu_base_args() {
     QEMU_ARGS=(
         -machine "q35,accel=${ACCEL}"
         -cpu host
-        -m 1G
+        # 2G, not 1G: the LUKS2 recovery keyslot uses Argon2id, whose
+        # memory cost systemd-repart calibrated on the big-RAM *build
+        # host* (libcryptsetup default caps it near 1 GiB). Unlocking
+        # re-allocates that buffer, and a 1 GiB guest — minus the
+        # initramfs unpacked into RAM and the kernel — can't, so the
+        # unlock died with "Not enough available memory to open a
+        # keyslot" / "Cannot allocate memory". 2 GiB clears it with
+        # headroom, and is also more representative of a real malmo box
+        # (an old laptop, never 1 GiB). Harness-only change — the built
+        # image is untouched, so no rebuild/canary bump needed.
+        -m 2G
         -smp 2
         -nographic
         -serial "file:${QEMU_SERIAL}"
@@ -183,7 +222,7 @@ for _i in $(seq 1 90); do
     fi
     if ! kill -0 "$QEMU_PID" 2>/dev/null; then
         echo "qemu died before sshd came up. serial log:" >&2
-        tail -50 "$QEMU_SERIAL" >&2 || true
+        dump_serial
         exit 1
     fi
     sleep 1
@@ -192,7 +231,7 @@ done
 # Final check — if we exited the loop without ssh, fail clearly.
 if ! ssh "${SSH_OPTS[@]}" "root@127.0.0.1" true 2>/dev/null; then
     echo "ssh never reachable after 90s. serial log tail:" >&2
-    tail -50 "$QEMU_SERIAL" >&2 || true
+    dump_serial
     exit 1
 fi
 
@@ -231,7 +270,7 @@ fi
 VERDICT="$(cat "$RESULT_FILE" 2>/dev/null || true)"
 if [ -z "$VERDICT" ]; then
     echo "FAIL: no verdict written (qemu rc=$QEMU_RC, serial tail:)" >&2
-    tail -20 "$QEMU_SERIAL" >&2 || true
+    dump_serial
     exit 1
 fi
 if [ "$VERDICT" = "PASS" ]; then
