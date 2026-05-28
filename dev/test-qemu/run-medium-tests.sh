@@ -12,6 +12,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORK="${REPO_ROOT}/.dev/qemu"
 IMAGE_OUT="${WORK}/malmo-medium.raw"
 SSH_KEY="${WORK}/ssh-key"
+PASSPHRASE_FILE="${REPO_ROOT}/dev/test-qemu/mkosi.passphrase"
 
 # Per-run ephemeral state.
 RUN_DIR="$(mktemp -d -t malmo-medium.XXXXXX)"
@@ -112,25 +113,53 @@ if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
     ACCEL=kvm
 fi
 
-QEMU_ARGS=(
-    -machine "q35,accel=${ACCEL}"
-    -cpu host
-    -m 1G
-    -smp 2
-    -nographic
-    -serial "file:${QEMU_SERIAL}"
-    -monitor none
-    -drive "file=${IMAGE_OUT},if=virtio,snapshot=on,format=raw"
-    -drive "if=pflash,format=raw,readonly=on,file=${OVMF_CODE}"
-    -chardev "socket,id=chrtpm,path=${SWTPM_SOCK}"
-    -tpmdev "emulator,id=tpm0,chardev=chrtpm"
-    -device tpm-crb,tpmdev=tpm0
-    -nic "user,hostfwd=tcp::${SSH_PORT}-:22,model=virtio-net-pci"
-    -no-reboot
-)
-if [ -n "$OVMF_VARS" ]; then
-    QEMU_ARGS+=( -drive "if=pflash,format=raw,file=${OVMF_VARS}" )
-fi
+# LUKS recovery passphrase (slice 0023). Supplied to the *first* boot as
+# a systemd credential over SMBIOS type 11 — the mkosi-initrd's
+# systemd-cryptsetup@.service ImportCredential drop-in consumes
+# `cryptsetup.passphrase` to unlock the root before any TPM2 token
+# exists. The second boot deliberately omits it so the only way in is
+# the PCR-7-bound TPM2 keyslot enrolled on the first boot.
+[ -r "$PASSPHRASE_FILE" ] || { echo "missing $PASSPHRASE_FILE (run bootstrap)" >&2; exit 1; }
+LUKS_PASS="$(cat "$PASSPHRASE_FILE")"
+LUKS_CRED="type=11,value=io.systemd.credential:cryptsetup.passphrase=${LUKS_PASS}"
+
+# Writable per-run disk overlay. The image must persist mutations
+# *between* the two boots (the first-boot TPM2 enrollment writes a new
+# keyslot into the on-disk LUKS header that the second boot reads back),
+# so snapshot=on (which discards on exit, and resets between QEMU
+# processes) won't do. A qcow2 overlay backed by the read-only golden
+# raw keeps the golden image clean while persisting writes for this run.
+OVERLAY="${RUN_DIR}/disk.qcow2"
+qemu-img create -q -f qcow2 -F raw -b "$IMAGE_OUT" "$OVERLAY"
+
+# Base QEMU args shared by both boots. The disk overlay, OVMF vars, and
+# swtpm state dir all persist across the two QEMU processes so the TPM
+# seal enrolled in boot 1 unseals in boot 2 (identical firmware + PCRs).
+qemu_base_args() {
+    QEMU_ARGS=(
+        -machine "q35,accel=${ACCEL}"
+        -cpu host
+        -m 1G
+        -smp 2
+        -nographic
+        -serial "file:${QEMU_SERIAL}"
+        -monitor none
+        -drive "file=${OVERLAY},if=virtio,format=qcow2"
+        -drive "if=pflash,format=raw,readonly=on,file=${OVMF_CODE}"
+        -chardev "socket,id=chrtpm,path=${SWTPM_SOCK}"
+        -tpmdev "emulator,id=tpm0,chardev=chrtpm"
+        -device tpm-crb,tpmdev=tpm0
+        -nic "user,hostfwd=tcp::${SSH_PORT}-:22,model=virtio-net-pci"
+        -no-reboot
+    )
+    if [ -n "$OVMF_VARS" ]; then
+        QEMU_ARGS+=( -drive "if=pflash,format=raw,file=${OVMF_VARS}" )
+    fi
+}
+
+qemu_base_args
+# First boot: include the recovery-passphrase credential.
+QEMU_ARGS+=( -smbios "$LUKS_CRED" )
 
 echo "launching qemu (accel=${ACCEL})..."
 qemu-system-x86_64 "${QEMU_ARGS[@]}" &

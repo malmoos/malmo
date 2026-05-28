@@ -21,7 +21,8 @@ TEST_DIR="${REPO_ROOT}/dev/test-qemu"
 WORK="${REPO_ROOT}/.dev/qemu"
 EXTRA="${TEST_DIR}/mkosi.extra"
 CANARY="${WORK}/.malmo-medium-ready"
-CANARY_VERSION="v10"  # bump when mkosi.conf changes require a clean rebuild
+CANARY_VERSION="v12"  # bump when mkosi.conf changes require a clean rebuild
+PASSPHRASE_FILE="${TEST_DIR}/mkosi.passphrase"  # LUKS recovery key (slice 0023); gitignored
 IMAGE_OUT="${WORK}/malmo-medium.raw"
 SSH_KEY="${WORK}/ssh-key"
 
@@ -52,7 +53,7 @@ fi
 
 # --- 1. host preflight
 preflight_missing=()
-for tool in mkosi swtpm qemu-system-x86_64 ssh ssh-keygen scp; do
+for tool in mkosi swtpm qemu-system-x86_64 qemu-img ssh ssh-keygen scp; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         preflight_missing+=("$tool")
     fi
@@ -150,13 +151,63 @@ if [ ! -f "$SSH_KEY" ]; then
 fi
 chmod 0600 "$SSH_KEY"
 
+# --- 3b. LUKS recovery passphrase (slice 0023).
+# mkosi auto-detects dev/test-qemu/mkosi.passphrase (must be mode 0600,
+# no trailing newline) and enrolls it as LUKS keyslot 0 on the encrypted
+# root. This is the test-lane stand-in for STORAGE.md's installer-
+# generated recovery passphrase. Generated once, persisted, gitignored.
+# run-medium-tests.sh reads it back to build the first-boot SMBIOS
+# credential; the enrollment service reads the staged copy at
+# /etc/malmo/secrets/luks-recovery.key. Single source of truth.
+if [ ! -f "$PASSPHRASE_FILE" ]; then
+    # 32 hex chars, no newline — matches the cryptsetup/crypttab keyfile format.
+    head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$PASSPHRASE_FILE"
+fi
+chmod 0600 "$PASSPHRASE_FILE"
+if [ -n "$CALLER" ]; then
+    chown "$CALLER":"$(id -gn "$CALLER")" "$PASSPHRASE_FILE"
+fi
+
 # --- 4. stage mkosi.extra/
 rm -rf "$EXTRA"
 mkdir -p "$EXTRA/etc/systemd/system" \
          "$EXTRA/usr/lib/malmo" \
          "$EXTRA/root/.ssh" \
          "$EXTRA/etc/ssh/sshd_config.d" \
+         "$EXTRA/etc/malmo/secrets" \
          "$EXTRA/usr/local/bin"
+
+# Recovery keyfile baked at the production path STORAGE.md specifies
+# (/etc/malmo/secrets/luks-recovery.key, mode 0400, root-owned). The
+# first-boot enrollment service reads it via systemd-cryptenroll
+# --unlock-key-file to authorize adding the TPM2 keyslot — exactly what
+# host-agent's first-run would do in production.
+cp "$PASSPHRASE_FILE" "$EXTRA/etc/malmo/secrets/luks-recovery.key"
+chmod 0400 "$EXTRA/etc/malmo/secrets/luks-recovery.key"
+
+# Kernel cmdline for the encrypted root (slice 0023). systemd-repart
+# derives the LUKS header UUID from the pinned root partition UUID (see
+# mkosi.repart/10-root.conf) as v4(HMAC-SHA256(key=partuuid,
+# msg="luks-uuid")). Compute it here and bake rd.luks.uuid into the UKI
+# cmdline (mkosi prepends /etc/kernel/cmdline to KernelCommandLine).
+# rd.luks.options=tpm2-device=auto makes the second boot try the TPM2
+# token first; first boot falls back to the cryptsetup.passphrase
+# credential. The post-build check below verifies the computed UUID
+# against the real image before we ever boot it.
+ROOT_PARTUUID="10101010-1010-4010-8010-101010101010"
+LUKS_UUID="$(python3 - "$ROOT_PARTUUID" <<'PY'
+import sys, hmac, hashlib, uuid
+base = uuid.UUID(sys.argv[1]).bytes
+d = bytearray(hmac.new(base, b"luks-uuid", hashlib.sha256).digest()[:16])
+d[6] = (d[6] & 0x0f) | 0x40   # UUID version 4
+d[8] = (d[8] & 0x3f) | 0x80   # RFC 4122 variant
+print(uuid.UUID(bytes=bytes(d)))
+PY
+)"
+[ -n "$LUKS_UUID" ] || { echo "failed to compute LUKS UUID" >&2; exit 1; }
+mkdir -p "$EXTRA/etc/kernel"
+printf 'rd.luks.uuid=%s rd.luks.options=tpm2-device=auto root=/dev/mapper/luks-%s\n' \
+    "$LUKS_UUID" "$LUKS_UUID" > "$EXTRA/etc/kernel/cmdline"
 
 # dist/systemd units. Same shape as 0020's staging but installed
 # permanently into the image rather than bind-mounted at runtime.
@@ -276,6 +327,27 @@ if [ ! -f "$IMAGE_OUT" ]; then
     ls -la "$WORK" >&2 || true
     exit 1
 fi
+
+# Verify the computed LUKS UUID matches the built image (slice 0023).
+# Catches a wrong derive_uuid formula here — at build, with a clear
+# message — instead of as a silent unlock failure 90s into a QEMU boot.
+# losetup -P exposes the partitions; blkid reads the LUKS2 header UUID
+# without unlocking. p2 is the root partition (p1 = ESP).
+VLOOP="$(losetup -fP --show "$IMAGE_OUT")"
+udevadm settle 2>/dev/null || sleep 0.5
+ACTUAL_LUKS_UUID="$(blkid -s UUID -o value "${VLOOP}p2" 2>/dev/null || true)"
+losetup -d "$VLOOP" 2>/dev/null || true
+if [ "$ACTUAL_LUKS_UUID" != "$LUKS_UUID" ]; then
+    cat >&2 <<EOF
+LUKS UUID mismatch — the rd.luks.uuid baked into the cmdline won't match
+the encrypted root, so the initrd will never unlock it.
+  computed (in cmdline): $LUKS_UUID
+  actual (image header): $ACTUAL_LUKS_UUID
+Fix the derive_uuid computation in bootstrap.sh (or bake the actual value).
+EOF
+    exit 1
+fi
+echo "verified root LUKS UUID = $LUKS_UUID"
 
 echo -n "$CANARY_VERSION" > "$CANARY"
 echo "medium-lane image ready at $IMAGE_OUT"
