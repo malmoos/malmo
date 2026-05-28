@@ -23,10 +23,10 @@ type UnpublishRequest struct {
 
 // SystemStatus is GET /v1/system/status.
 type SystemStatus struct {
-	Hostname      string `json:"hostname"`
-	UptimeS       int64  `json:"uptime_s"`
-	DiskPressure  bool   `json:"disk_pressure"`
-	AgentVersion  string `json:"agent_version"`
+	Hostname     string `json:"hostname"`
+	UptimeS      int64  `json:"uptime_s"`
+	DiskPressure bool   `json:"disk_pressure"`
+	AgentVersion string `json:"agent_version"`
 }
 
 // PublishedName is one entry in the discovery state.

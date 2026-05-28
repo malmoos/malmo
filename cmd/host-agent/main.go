@@ -5,11 +5,12 @@
 // See docs/dev/running-locally.md for the real binary (cmd/host-agent-real).
 //
 // Env vars:
-//   MALMO_AGENT_SOCK  — UNIX socket path (default protocol.SocketPath)
-//   MALMO_HEALTH_PATH — when set, serve GET /v1/health/storage from this
-//                       file (read via the same FilesystemHealthSource the
-//                       real binary uses). When unset, the endpoint returns
-//                       an empty findings list ("storage looks healthy").
+//
+//	MALMO_AGENT_SOCK  — UNIX socket path (default protocol.SocketPath)
+//	MALMO_HEALTH_PATH — when set, serve GET /v1/health/storage from this
+//	                    file (read via the same FilesystemHealthSource the
+//	                    real binary uses). When unset, the endpoint returns
+//	                    an empty findings list ("storage looks healthy").
 package main
 
 import (

@@ -31,10 +31,10 @@ func main() {
 	}
 
 	findings := storageverify.Check(storageverify.Config{
-		Root:                  root,
-		MarkerPath:            "/etc/malmo/data-drive.enrolled",
-		DataDriveCanaryPath:   "/srv/malmo/.canary",
-		BindMountCanaryPath:   "/var/lib/malmo/.canary",
+		Root:                root,
+		MarkerPath:          "/etc/malmo/data-drive.enrolled",
+		DataDriveCanaryPath: "/srv/malmo/.canary",
+		BindMountCanaryPath: "/var/lib/malmo/.canary",
 	})
 
 	payload := protocol.StorageHealth{

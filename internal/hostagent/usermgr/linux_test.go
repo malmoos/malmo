@@ -65,8 +65,8 @@ nogroup:x:65534:
 		{"alice", "sudo", true},
 		{"bob", "sudo", true},
 		{"cindy", "sudo", true},
-		{"dave", "sudo", false},        // not listed
-		{"alice", "malmo", false},      // listed in sudo, not malmo
+		{"dave", "sudo", false},         // not listed
+		{"alice", "malmo", false},       // listed in sudo, not malmo
 		{"alice", "nonexistent", false}, // group not present
 		{"", "sudo", false},
 	}
