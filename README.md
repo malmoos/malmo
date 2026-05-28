@@ -44,3 +44,7 @@ Then open <http://localhost:5173> and install **Whoami** from the catalog.
 ## Documentation
 
 [`docs/README.md`](docs/README.md) is the map of everything. The [`CLAUDE.md`](CLAUDE.md) at the root holds working conventions for this repo, including the rule that **every change ships with documentation**.
+
+## Contributing
+
+New contributor (or pointing a coding agent at the repo)? Start with [`docs/dev/contributing.md`](docs/dev/contributing.md) — the end-to-end loop (orient → pick a task → branch → build → test → document → PR). Open implementation tasks live in [GitHub Issues](https://github.com/onel/malmo/issues) (`gh issue list --label P1`). All work happens on a branch and lands via a PR into `main`, with `Closes #<N>` to link the issue.
