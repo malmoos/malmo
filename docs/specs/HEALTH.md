@@ -193,7 +193,7 @@ The non-negotiable invariant — the dashboard is the user's tool to recover the
 - **`BRAIN_UI_PROTOCOL.md`** — new `/api/v1/health/issues` endpoint family and new event `kind`s (`health.issue_raised`, `health.issue_cleared`, `health.issue_updated`).
 - **`WEB_UI.md`** — banners, inline cards, disabled-action affordances. Pinia store for active issues; SSE subscription wires updates; `useHealth()` composable.
 - **`AUTH.md`** — admin-only vs. member-visible issues. v1: members see all banners (transparency), but Tier-2 actions on critical issues require admin elevation (existing 5-minute window).
-- **`LOGGING.md`** — issue raises/clears land in `audit_events` (`action: health.issue_raised`, etc.). Diagnostic-bundle endpoint includes the current issue set + recent transitions.
+- **`LOGGING.md`** — issue raises/clears land in `audit_events`, one record per issue (`action: health.issue.raised` / `health.issue.cleared`, `target_kind: health_issue`, `target_id` = the issue ID). Diagnostic-bundle endpoint includes the current issue set + recent transitions.
 - **`NOTIFICATIONS.md`** — issue raise/clear is the primary trigger for the dashboard notification center. The issue-raise path additionally emits a notification for allowlisted issue types (storage + system criticals; box-wide criticals also emit a member-facing transparency variant). No change to the issue model.
 
 ## Locked decisions

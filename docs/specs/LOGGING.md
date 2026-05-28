@@ -140,7 +140,7 @@ audit_events
   actor_user_id   INTEGER  NULL                      -- who; NULL for system events
   actor_role      TEXT     NOT NULL                  -- 'member' | 'admin' | 'system'
   action          TEXT     NOT NULL                  -- 'login.success', 'app.install', …
-  target_kind     TEXT     NULL                      -- 'user' | 'app' | 'share' | …
+  target_kind     TEXT     NULL                      -- 'user' | 'app' | 'share' | 'health_issue' | …
   target_id       TEXT     NULL                      -- slug, user_id, etc.
   source_ip       TEXT     NULL                      -- where the request came from
   success         INTEGER  NOT NULL                  -- 0/1
@@ -167,6 +167,8 @@ The following `action` strings are the pinned v1 set. Defined as exported consts
 | `user.delete` | Admin deleted a user via `DELETE /api/v1/users/:id`. |
 | `user.password.reset` | Admin reset another user's password via `POST /api/v1/users/:id/password`. |
 | `user.password.change` | User changed their own password via `POST /api/v1/me/password` (success and failure both audited). |
+| `health.issue.raised` | A typed health issue transitioned from cleared to active. One record per issue, system actor, `target_kind: health_issue`. |
+| `health.issue.cleared` | A typed health issue transitioned from active to cleared. One record per issue, system actor, `target_kind: health_issue`. |
 
 SSH/SMB/sudo ingestion (`ssh.login.success`, `ssh.login.failure`, `smb.login.*`, `sudo.invoke`, `su.invoke`) is deferred — see "What this doc deliberately doesn't pin" and `NEXT.md`.
 
@@ -176,6 +178,7 @@ A single function in brain: `audit.Record(ctx, action, target, metadata, success
 
 - `api` package — login success/failure, logout, setup.complete.
 - `api` package (app handlers) — install, custom-app create, uninstall.
+- `cmd/brain` (storage-health poll) — `health.issue.raised` / `health.issue.cleared`, one record per transitioned issue (system actor).
 - Future: `users` package — user create / delete / rename / role change.
 - Future: `shares` package — grant / revoke, SMB opt-in / opt-out.
 - Future: `tier2` package — Tailscale up/down, SMB enable/disable, etc.
