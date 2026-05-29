@@ -80,6 +80,8 @@ GET /v1/system/status
   { "hostname": "cindy-zx9", "uptime_s": 84021, "disk_pressure": false, ... }
 ```
 
+**Health findings report (`GET /v1/health/system`).** The brain can't read host hardware directly (it's containerized behind the socket-proxy), so all *physical* health detection — SMART, `statfs`, mount flags, `systemctl is-active`, memory pressure — is host-agent's job. host-agent samples on its own cadence and the brain polls this one report on the 60s heartbeat, reconciling findings into typed health issues (`HEALTH.md` # Detector catalog, locus B). It returns findings across domains (storage, drives, services, resources) in one payload — **not** a proliferation of per-domain endpoints — so the brain's `ApplyFindings(category, …)` reconcile can clear-absent / raise-present per category atomically. This supersedes the slice-1 single-purpose storage report (`/run/malmo/health/storage.json` boot reporter stays; the polled endpoint generalizes). See `DECISIONS.md` 2026-05-29.
+
 ```
 POST /v1/auth/verify-password
   { "user": "cindy", "password": "..." }
@@ -358,3 +360,4 @@ Beyond the malmo-group membership assertion (above), CI asserts:
 - `SERVICE_PROVISIONING.md` — Tier-2 ops (systemctl, config edits) flow through host-agent via this protocol's Pattern A and Pattern B.
 - `UPDATES.md` — apt operations are Pattern B (jobs with SSE log streams). The "brain ↔ host-agent protocol versioning" open item is resolved (lockstep).
 - `NEXT.md` — carries the future web-terminal and app-facing-background-jobs items (failure semantics is now closed).
+- `HEALTH.md` — the # Detector catalog owns the per-issue measurement/cadence/threshold contract; this doc owns the `GET /v1/health/system` transport that carries locus-B findings to the brain.

@@ -21,6 +21,25 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-05-29 — Health detector catalog: who measures what, and the SMART-don't-block call
+
+**Previously:** `HEALTH.md` locked the issue *model* and listed ~15 issue *types* in a taxonomy table, but never said how any of them is detected — it deferred debounce/retry policy to "inside each detector" and named no thresholds, cadences, or data sources. The concrete check set was a `NEXT.md` Tier-4 open item.
+
+**Now:** `HEALTH.md` gains a **Detector catalog** that binds every issue to one detector with an execution locus (A boot-reporter / B host-agent-periodic / C brain-periodic / D reactive), a measurement, cadence, threshold, and clear condition. Six new issue types land from the exercise: `disk-smart-failing`, `service-down`, `container-restart-loop`, `ram-pressure`, `reboot-required`, `journal-disk-pressure` (plus `auto-unlock-degraded` from the TPM work and a registered-but-deferred `app-unresponsive`). Two cross-cutting defaults are pinned: **raise on 2 consecutive bad samples / clear on 1 good** (authoritative boot+reactive signals exempt), and **hysteresis** (raise and clear thresholds differ) on all percentage-threshold issues.
+
+**Two non-obvious sub-decisions:**
+
+1. **A failing drive (`disk-smart-failing`) warns loudly but does NOT block writes.** The instinct is to treat a dying drive like `data-drive-readonly` and refuse writes. That's backwards: a SMART-failing drive is usually still *readable*, and blocking writes traps the user's data on the drive they most need to copy *off*. So: `error` severity, loud banner, notification — zero block flags.
+2. **Host system health is one report, not many endpoints.** The brain can't read host hardware (it's containerized behind the socket-proxy), so all physical measurement is host-agent's. The existing single-purpose `GET /v1/health/storage` generalizes to one `GET /v1/health/system` carrying findings across domains; `ApplyStorageFindings` generalizes to `ApplyFindings(category, …)` with per-category reconcile so a storage poll can't clear a service finding.
+
+We also wrote down the **non-goals** — email deliverability, public-port scans, public-DNS/IPv6 checks, fail2ban status, kernel-panic capture — because they're core to public-facing neighbors (Yunohost's `diagnosis`) and a "parity" PR would otherwise import them into a closed-by-default box where they make no sense.
+
+**Why:** the implementation reached the point where notifications are derived from health-issue transitions (`docs/progress/README.md` # Up next) — the emitter has nothing to emit until the detectors exist, so the enumeration stopped being deferrable. Yunohost's `diagnosis` taxonomy was the prior-art reference; the locus split is malmo-specific (driven by the containerized brain).
+
+**Affected docs:** `HEALTH.md` (new # Detector catalog section; taxonomy tables extended to ~22 issues; capacity section tabularized); `NEXT.md` (Tier-4 enumeration item removed; folded-in children re-filed); `BRAIN_HOST_PROTOCOL.md` (knock-on note for the generalized `/v1/health/system` report). Implementation follows as brain `internal/health` registry additions + host-agent reporters.
+
+---
+
 ## 2026-05-24 — Per-app A records via Avahi DBus, not static service files
 
 **Previously:** `DISCOVERY.md` and `docs/progress/0012-host-agent-avahi-files.md` specified that per-app A records are published by writing `/etc/avahi/services/app-<slug>.service` XML files. The rationale was that static files survive daemon restarts without replay, avoiding the need for host-agent to track groups across restarts.

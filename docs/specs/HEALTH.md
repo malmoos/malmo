@@ -92,6 +92,8 @@ These are the issue types the brain knows about at v1. New issues are added by c
 | `disk-full` | critical | writes, apps | 1/2 | A drive crossed its hard threshold (95% on either drive). Tier-1 action: free space by removing files (links to Files / app instance breakdown); Tier-2: eject-and-replace flow (Settings → Storage → Eject) for upgrading to a bigger drive. |
 | `canary-mismatch` | critical | writes, apps | 2 | Storage assembly succeeded but the canary check failed — almost certainly a malmo bug. |
 | `mergerfs-assembly-failed` | error | writes, apps | 2 | Mergerfs could not assemble the union across the data branches. |
+| `disk-smart-failing` | error | (nothing) | 1 | SMART reports a drive is failing or growing bad sectors. **Deliberately does not block writes** — the data is still readable, and blocking would trap it on the dying drive (`DECISIONS.md` 2026-05-29). Loud banner + notification; Tier-1 action is "replace this drive" (links to the eject-and-replace flow). |
+| `auto-unlock-degraded` | warning | (nothing) | 2 | The box booted, but TPM auto-unlock failed (PCR-7 changed) and it fell back to the recovery passphrase. It will prompt for the passphrase again on the next reboot until the TPM is re-enrolled. The *hard* case (can't boot at all) stays in `malmo-recovery.target`, not here. See `STORAGE.md` # Encryption posture, `BOOT.md`. |
 
 ### State
 
@@ -100,6 +102,7 @@ These are the issue types the brain knows about at v1. New issues are added by c
 | `brain-db-corrupt` | critical | nearly all ops | 2 | SQLite integrity check failed; brain is operating in a minimal-functionality mode. |
 | `bootstrap-state-mismatch` | critical | nearly all ops | 2 | The box thinks it's bootstrapped but the brain database is missing — typically a data-drive swap. |
 | `schema-migration-failed` | critical | apps, writes | 2 | A brain schema migration did not complete; the previous brain version is still callable for rollback. |
+| `service-down` | error | (nothing) | 2 | A core system service (Docker, Caddy, Avahi, chrony, Samba, host-agent) isn't running. Per-unit `instance_key`. Does **not** set block flags: operations that need the dead service fail naturally with their own errors, and blocking everything because Avahi died would be blunt. Tier-2 action restarts the unit. |
 
 ### Version
 
@@ -107,6 +110,8 @@ These are the issue types the brain knows about at v1. New issues are added by c
 |---|---|---|---|---|
 | `version-mismatch` | error | apps | 2 | host-agent and brain versions are not the lockstep pair they should be. |
 | `app-image-partial` | warning | (that app only) | 2 | An app image download was interrupted and is incomplete. |
+| `container-restart-loop` | warning | (nothing) | 2 | An app's container is crash-looping (restarted more than N times in a window). Per-app `instance_key`. The app is already failing; we surface it rather than block. Tier-2 action: view logs / stop the app. |
+| `app-unresponsive` | warning | (nothing) | 2 | **Deferred.** An app's container is running but its declared HTTP health-probe fails ("up but not responding"). Gated on the manifest `health_probe` field (`NEXT.md` Tier 4 — per-app HTTP health-probe). Registered shape only; no detector until the manifest field lands. |
 
 ### Network
 
@@ -119,9 +124,96 @@ These are the issue types the brain knows about at v1. New issues are added by c
 
 ### Capacity & informational
 
-Issues that exist to be visible without blocking anything: `update-available`, `backup-overdue`, `tls-cert-near-expiry`. Same shape; all flags false; just surfaced as informational banners.
+Issues that exist to be visible without blocking anything. Same shape; all block flags false; surfaced as informational banners (warnings) or quiet cards (info).
 
-**The set is intentionally bounded.** ~15 well-named issues at v1, not 60. New failure modes map onto an existing issue or earn a new entry here; both paths go through a code change to the brain.
+| ID | Severity | Tier | Summary |
+|---|---|---|---|
+| `update-available` | info | 2 | A brain/UI, app, or OS update is ready to apply. See `UPDATES.md`. |
+| `backup-overdue` | warning | 2 | No successful backup within the configured window. See `STORAGE.md` (backup architecture, deferred). |
+| `tls-cert-near-expiry` | warning | 1/2 | A `.malmo.network` certificate is within its renewal-failure window. See `MALMO_NETWORK.md`. |
+| `reboot-required` | info | 2 | A kernel or security update was applied that needs a reboot to take effect. Tier-2 action: reboot now / schedule. See `UPDATES.md`. |
+| `ram-pressure` | warning | 1 | The box is under sustained memory pressure (swap thrashing). Informational — points the user at the per-container monitor to see what's heavy. See `LOCAL_ANALYTICS.md`. |
+| `journal-disk-pressure` | warning | 2 | The persistent journal is near its size cap and competing for OS-drive space. Tier-2 action: vacuum the journal. See `LOGGING.md`. |
+
+**The set is intentionally bounded.** ~25 well-named issues at v1, not 60. New failure modes map onto an existing issue or earn a new entry here; both paths go through a code change to the brain.
+
+## Detector catalog
+
+The taxonomy above says *what* the issues are. This section says *how each one is detected* — the missing half. Each issue type has exactly one detector; this is its contract.
+
+### Where detectors run
+
+The brain runs in a container behind the Docker socket-proxy (`CONTROL_PLANE.md`) and **cannot read host hardware** — no `statfs` of the host, no `smartctl`, no `systemctl is-active`, no `/proc/pressure`. That single fact shapes the whole catalog: every *physical* measurement is taken by **host-agent** and reported to the brain; the brain only runs detectors against state it owns directly. Four loci:
+
+- **A — Boot-time reporters.** host-agent (and boot-chain units like `malmo-storage-verify`, `BOOT.md`) write findings to `/run/malmo/health/*.json`. The brain reads them at startup and reconciles. *(Built: storage assembly, canary, mergerfs — slices 0019/0024.)*
+- **B — host-agent periodic reporters.** host-agent samples on a timer and the brain polls a health endpoint, reconciling findings the same way boot findings are reconciled. *(Built: `GET /v1/health/storage` @ 60s.)* Everything host-physical and recurring lives here.
+- **C — brain periodic checks.** Brain goroutine timers over brain-owned state: SQLite, the cert it serves, the version it negotiated, Docker events via the proxy.
+- **D — reactive.** udev (drive add/remove), Docker container events, host-agent push events — no polling, the signal arrives.
+
+**Transport decision (locus B):** the existing single-purpose `GET /v1/health/storage` generalizes to **one `GET /v1/health/system` report carrying findings across domains** (storage, drives, services, resources), not a proliferation of per-domain endpoints. The brain's `ApplyStorageFindings` reconcile (`internal/health`) generalizes to `ApplyFindings(category, findings)` — same clear-absent / raise-present / atomic-batch logic, scoped per category so a storage poll doesn't clear a service finding. This is a `BRAIN_HOST_PROTOCOL.md` knock-on; see `DECISIONS.md` 2026-05-29.
+
+### Cross-cutting detector policy
+
+These defaults apply to **every** detector unless its row overrides them. `HEALTH.md` previously deferred this to "inside each detector"; pinning a default stops every detector reinventing anti-flap.
+
+- **Debounce — raise on 2 consecutive bad samples, clear on 1 good sample.** Asymmetric on purpose: slow to alarm (avoid transient-noise banners), fast to reassure. **Exception:** locus-A boot reporters and locus-D reactive signals (udev, Docker events) are authoritative and 1-shot — no debounce.
+- **Hysteresis on threshold issues.** Raise and clear thresholds differ so a value hovering at the boundary doesn't flap the banner: `disk-nearly-full` raises at 90%/85% but clears only below 88%/83%; `disk-full` raises at 95%, clears below 93%.
+- **No severity escalation over time** (already locked) — a warning that's been up for a week is still a warning. Detectors may raise a *different, more severe issue* when the *evidence* worsens (e.g. SMART pre-fail vs. confirmed self-test FAIL could be two issues), but never escalate the same issue by age.
+- **Last-checked is always fresh.** Every poll updates `last_checked_at` even when nothing transitions, so the dashboard can show "checked 30s ago" and a stale timestamp itself signals a dead detector.
+
+### Catalog — locus B (host-agent periodic)
+
+| Issue | Measurement | Cadence | Raise threshold | Clear |
+|---|---|---|---|---|
+| `data-drive-readonly` | `findmnt` mount flags on the data branch | 60s | flag `ro` present | flag `rw` |
+| `disk-nearly-full` | `statfs` %used per drive | 5 min | ≥90% data / ≥85% OS | <88% / <83% |
+| `disk-full` | `statfs` %used per drive | 5 min | ≥95% either drive | <93% |
+| `disk-smart-failing` | `smartctl -H` + reallocated/pending/uncorrectable sector counts | 6h | SMART health FAIL **or** sector count >0 and growing | sticky — clears only when the drive is replaced (UUID change) |
+| `service-down` | `systemctl is-active` over the core-unit allowlist | 60s | `failed`/`inactive` | `active` |
+| `ram-pressure` | `/proc/pressure/memory` (PSI `some avg60`) | 60s | sustained > threshold (tune at first soak) | below threshold |
+| `clock-not-synced` | `chronyc tracking` — last sync age + offset | 5 min | >6h since sync **or** offset >10s | synced and offset <10s |
+| `mdns-down` | `systemctl is-active avahi-daemon` + publish state | 60s | not publishing | publishing |
+| `lan-unreachable` | `network-online.target` reached + primary-connection state | 60s + NM event | target not reached | reachable |
+| `journal-disk-pressure` | journal directory size vs configured cap | 1h | within 10% of cap | below |
+
+`hostname-conflict` is locus **D** (Avahi name-collision signal, not polled). `data-drive-missing` / `data-drive-wrong` are primarily locus D (udev) with a 60s locus-B backstop.
+
+### Catalog — locus C (brain-owned state)
+
+| Issue | Measurement | Cadence | Raise |
+|---|---|---|---|
+| `brain-db-corrupt` | `PRAGMA integrity_check` | boot + 6h | result ≠ `ok` |
+| `schema-migration-failed` | migration runner result | boot | migration aborted |
+| `bootstrap-state-mismatch` | bootstrap marker present but DB absent | boot | mismatch |
+| `version-mismatch` | host-agent vs brain version on handshake | each handshake | not the lockstep pair |
+| `tls-cert-near-expiry` | NotAfter of the served `.malmo.network` cert | daily | within renewal-failure window |
+| `update-available` | release/catalog manifest vs installed | per refresh | newer version present |
+| `backup-overdue` | last successful backup timestamp | hourly | older than window *(deferred with backup)* |
+| `store-write-failed` | store write error (reactive, not timed) | on error | any persistent write failure *(built)* |
+
+### Catalog — locus A (boot reporters) and D (reactive)
+
+| Issue | Locus | Trigger |
+|---|---|---|
+| `canary-mismatch`, `mergerfs-assembly-failed` | A | `malmo-storage-verify` finding at boot *(built)* |
+| `health-report-malformed` | A | report file unparseable *(built)* |
+| `auto-unlock-degraded` | A | boot-chain records TPM unseal fell back to passphrase |
+| `reboot-required` | C/A | `/var/run/reboot-required` present (post-update) |
+| `data-drive-missing` / `data-drive-wrong` | D | udev add/remove; brain re-verifies enrolled UUID |
+| `hostname-conflict` | D | Avahi name-collision callback |
+| `app-image-partial` | D | image pull reports incomplete |
+| `container-restart-loop` | D | Docker restart count > N within window |
+| `app-unresponsive` | D | manifest HTTP health-probe fails — *deferred, needs manifest field* |
+
+### What we deliberately do not check
+
+malmo is **closed-by-default, single-node, no email, no public DNS** except the opt-in `.malmo.network` path. Several checks that a public-facing neighbor (Yunohost's `diagnosis`) treats as core are **non-goals** — written down so a future "parity" PR doesn't sleepwalk them in:
+
+- **Email deliverability** — reverse-DNS, DNS blocklists, SMTP port reachability. We ship no mail stack (`NOTIFICATIONS.md` v1 is dashboard-only).
+- **Public port exposure / open-port scans.** Closed-by-default means nothing is meant to be reachable from the internet; we don't probe for it.
+- **Public DNS-record correctness / IPv6 reachability.** The `.malmo.network` path owns its own cert/DNS health (`tls-cert-near-expiry`); there's no user-managed public DNS to validate.
+- **fail2ban / intrusion-detection status.** Brute-force throttling on the login endpoint is its own item (`NEXT.md` Tier 4, `AUTH.md`), not a diagnosis check.
+- **Kernel-panic / coredump capture.** Tracked as a `LOGGING.md`/`TELEMETRY.md` concern (`NEXT.md` Tier 4), not a health detector — by the time it'd raise, the box rebooted.
 
 ## Lifecycle of an issue
 
@@ -191,6 +283,7 @@ The non-negotiable invariant — the dashboard is the user's tool to recover the
 - **`STORAGE.md`** — the canary check and enrollment-marker mismatch are *reporters* now, not gatekeepers. Their findings become health issues, not boot failures.
 - **`CONTROL_PLANE.md`** — host-agent's systemd ordering uses `After=malmo-storage-ready.target Wants=malmo-storage-ready.target`, not `Requires=`. host-agent always starts (so the brain always starts), reads storage findings, and acts accordingly.
 - **`BRAIN_UI_PROTOCOL.md`** — new `/api/v1/health/issues` endpoint family and new event `kind`s (`health.issue_raised`, `health.issue_cleared`, `health.issue_updated`).
+- **`BRAIN_HOST_PROTOCOL.md`** — locus-B detectors are fed by host-agent's `GET /v1/health/system` findings report (the brain can't measure host hardware itself). This doc owns *what* each detector measures; the protocol doc owns *how* findings cross the socket. See `DECISIONS.md` 2026-05-29.
 - **`WEB_UI.md`** — banners, inline cards, disabled-action affordances. Pinia store for active issues; SSE subscription wires updates; `useHealth()` composable.
 - **`AUTH.md`** — admin-only vs. member-visible issues. v1: members see all banners (transparency), but Tier-2 actions on critical issues require admin elevation (existing 5-minute window).
 - **`LOGGING.md`** — issue raises/clears land in `audit_events`, one record per issue (`action: health.issue.raised` / `health.issue.cleared`, `target_kind: health_issue`, `target_id` = the issue ID). Diagnostic-bundle endpoint includes the current issue set + recent transitions.

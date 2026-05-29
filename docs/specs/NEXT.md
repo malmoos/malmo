@@ -17,7 +17,28 @@ When a topic is **decided**, remove its entry here and add the rationale to `DEC
 
 ## Tier 1 — Blocking
 
-*(No active Tier-1 items at 2026-05-27. Last audit: 2026-05-27 — boot/storage track is on `0023 LUKS+TPM` and well-specified in `STORAGE.md` / `BOOT.md`; no design item is currently blocking it. Implementation slice queue lives in [`../progress/README.md`](../progress/README.md) # Up next.)*
+*(Last audit: 2026-05-29 — promoted the dashboard-shell and file-manager gaps to Tier 1 after an Umbrel-comparison pass. The infrastructure spine (boot/storage/health/updates/auth) is well-specified; the gaps are now at the product surface — the things the user touches after the box boots. The two items below are what make malmo "work end to end" as a product rather than a control plane. Implementation slice queue lives in [`../progress/README.md`](../progress/README.md) # Up next.)*
+
+### Dashboard shell / home IA — no doc owns the logged-in product surface
+
+Every subsystem we've specced *feeds* the dashboard, but nothing defines what the dashboard **is**. `WEB_UI.md` is deliberately stack-and-deploy only (separate container, deploy model, stack, degraded-mode surfacing) — it does not own the logged-in information architecture. Unowned today:
+
+- **Home screen / app launcher** — the app grid, the "open app" interaction, what a tile shows (icon, status, per-user vs. shared), empty state.
+- **Global navigation / IA** — where Apps, Store, Files, Activity (audit), Settings, Users, the notification bell, and the live system-resources dropdown sit relative to each other.
+- **Search**, and the first-arrival experience (the existing Tier-2 "Dashboard at first arrival" entry is a fragment of this larger whole — fold it in when this is opened).
+- **Widgets** — Umbrel apps contribute home-screen widgets; malmo has no concept. Given "the app ecosystem is the strongest pillar," widgets are how apps earn home-screen presence. At minimum pin a yes/no for v1.
+
+**Proposed home:** a new `DASHBOARD.md` (or `SHELL.md`) owning the logged-in IA; `WEB_UI.md` stays the stack/deploy doc. Folds in the Tier-2 "Dashboard at first arrival" entry.
+**Context:** `WEB_UI.md`, `FIRST_RUN.md` (Phase 3), `LOCAL_ANALYTICS.md` (top-bar live-resources dropdown), `NOTIFICATIONS.md` (the bell), `AUTH.md` (role-gated nav).
+**Why Tier 1:** this is the product. It's the surface the whole spine exists to serve, and the one piece of "boots and works end to end" that has no owning doc. Prior art: Umbrel's entire `ui` package + home-screen/widgets model; Synology DSM's desktop. (Compare: Umbrel ships `widgets` as a first-class `umbreld` module.)
+
+### In-dashboard file manager — "files are first-class" has no in-product browse surface
+
+"Files are first-class, apps are windows" is a load-bearing differentiator, but the only specced access path to a user's own `Photos/`, `Documents/`, `Shared/` is **SMB + the desktop OS file managers**. `DISCOVERY.md` even states the browse experience "is the dashboard, not the OS file manager" — yet no in-dashboard file browser exists. For the north-star audience (the Plex/Synology user who will *not* mount an SMB share), a web file manager is table stakes — it's Synology's flagship surface (File Station) and a core Umbrel module. The Tier-4 "data-import flows" line is a fraction of this.
+
+**Proposed home:** a new `FILES.md` owning the in-dashboard file browser — view/upload/download/rename/move within the user's use-case folders and `Shared/`, per-user scoping (mirrors the FS permission model in `STORAGE.md`), and how it relates to (does not replace) SMB. Folds in the Tier-4 "data-import flows" item.
+**Context:** `STORAGE.md` (use-case folders, `0750` per-user permissions, `Shared/`), `DISCOVERY.md` (the "dashboard is the browse surface" claim this makes good on), `APP_ISOLATION.md` (how apps see the same folders), `AUTH.md` (per-user access). Prior art: Synology File Station; Umbrel's `files` module.
+**Why Tier 1:** without it, "files are first-class" is true on disk but invisible in the product for any user who hasn't set up SMB — exactly the user we're building for.
 
 ---
 
@@ -54,9 +75,9 @@ The actual paste-compose UX. Field-by-field interaction, main-port inference, wh
 
 ### Dashboard at first arrival
 
-Empty, "get started" suggestions, or a starter bundle. Tradeoffs: friction vs. opinionated push vs. discovery.
+Empty, "get started" suggestions, or a starter bundle. Tradeoffs: friction vs. opinionated push vs. discovery. **Folds into the Tier-1 "Dashboard shell / home IA" entry** — kept here as a pointer until that doc is opened, since first-arrival is the empty state of the home screen.
 
-**Context:** `FIRST_RUN.md` (Phase 3).
+**Context:** `FIRST_RUN.md` (Phase 3), Tier-1 "Dashboard shell / home IA".
 **Why Tier 2:** first-impression UX; gates the wizard-to-steady-state hand-off.
 
 ### Store catalog curation policy
@@ -73,6 +94,13 @@ Who can add/rename subfolders under `~/Shared/`? How does an admin see what's in
 
 **Context:** `STORAGE.md` # Permissions, `AUTH.md`.
 **Why Tier 2:** the on-disk mechanics are pinned; the dashboard UX isn't. Households without this can still use Shared/ via SMB, but the in-dashboard view needs design before public release.
+
+### First-run restore / migrate-from-old-box fork
+
+`FIRST_RUN.md` is greenfield-only today: wipe → wizard → dashboard. There is no branch for "I'm replacing my old box" or "restore from backup." Even though off-site backup itself is deferred (Tier-3 "Backup architecture shape"), the *fork* in the wizard shapes first-run now — a "Set up as new" vs. "Restore from backup / migrate from another box" choice early in the flow. Reserve it now or retrofit the wizard later. Umbrel ships a data-export / migration path; cross-box migration is also tracked under Tier-4 "Backup & migration."
+
+**Context:** `FIRST_RUN.md`, Tier-3 "Backup architecture shape," Tier-4 "Cross-box migration."
+**Why Tier 2:** it's a structural branch in the first-run flow; cheap to reserve the fork now, expensive to wedge in after the happy-path wizard is built.
 
 ### Email-on-file for users
 
@@ -98,6 +126,20 @@ The brain↔UI API is public-callable from day one (third-party stores, CLI, ext
 ---
 
 ## Tier 3 — Defer-able, but pin the shape
+
+### Factory reset / repurpose / "start over"
+
+Explicitly undocumented today — `USERS_AND_GROUPS.md` # Known gaps admits "we don't have a clean 'reset everything except user content' story yet; treat reinstall + restore from backup as the floor." This is an end-to-end lifecycle gap: resale, household handoff, "I broke it and want a clean slate." It has a security dimension beyond UX — securely destroying LUKS keyslots so the outgoing drive is unreadable — so it's not purely a dashboard flow. Both Synology and Umbrel treat reset/repurpose as standard. Open: scope (full wipe vs. reset-config-keep-content vs. reset-keep-nothing), where it lives in the UI (Settings → Advanced, gated by fresh password), and the key-destruction mechanics.
+
+**Context:** `USERS_AND_GROUPS.md` # Known gaps, `STORAGE.md` (LUKS keyslot destruction), `AUTH.md` (elevation gate), `FIRST_RUN.md` (post-reset re-onboarding), `BUILD.md` (relationship to reinstall).
+**Why Tier 3:** reinstall-from-ISO is the v1 floor, so this doesn't block bring-up; bites the first time someone resells or hands off a box. Pin the shape (esp. key destruction) before public release.
+
+### Brain state-migration framework (SQLite schema + on-disk layout)
+
+App-level and managed-service migration are well-specced (`SERVICE_PROVISIONING.md` cross-version auto-migrate, `UPDATES.md` pre-update snapshot). The **brain's own** SQLite schema + on-disk instance-layout migration across auto-updates is only *referenced* (LOGGING.md mentions "buggy migrations" defensively) — no doc owns the mechanism. For an auto-updating fleet this is load-bearing: a bad brain migration bricks boxes with no UI left to recover from. Umbrel carries dedicated `migration` and `startup-migrations` modules for exactly this. Pin the shape: versioned, forward-only, transactional, run-before-serving, tested in the boot lanes, and how it interacts with brain-version rollback (`RELEASE_MANIFEST.md` `rollback_to`).
+
+**Context:** `CONTROL_PLANE.md` (brain lifecycle), `UPDATES.md` (brain+UI stream, rollback), `RELEASE_MANIFEST.md` (`rollback_to`), `LOGGING.md` (append-only audit triggers vs. migrations), `TESTING.md` (boot-lane coverage).
+**Why Tier 3:** the brain schema is small and stable today, so it doesn't bite at current scale; becomes a fleet-bricking risk the moment a migration ships wrong. Pin the discipline before the schema grows.
 
 ### OS major-version upgrade commitment
 
@@ -385,7 +427,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - `live-build` vs. `mkosi` revisit weighted by test-story. `mkosi`'s `mkosi qemu` integration materially improves the medium/slow test lanes; if the build choice is being relitigated, this is a non-trivial weight. `BUILD.md`, `TESTING.md`.
 
 **Health**
-- v1 health-check enumeration — the typed issue set in `HEALTH.md` is locked, but the concrete *list* of checks (disk SMART, journal-disk-pressure, container-restart-loops, time-drift, cert-near-expiry, …) isn't. Study Yunohost's `yunohost diagnosis` check taxonomy before enumerating — closest neighbor with a mature, opinionated set. `HEALTH.md`.
+- *(Resolved 2026-05-29 — v1 health-check enumeration is now specced as the `HEALTH.md` # Detector catalog; see `DECISIONS.md` 2026-05-29. Disk SMART, journal-disk-pressure, container-restart-loop, service-down, ram-pressure, reboot-required, auto-unlock-degraded landed in the taxonomy; per-app HTTP health-probe remains deferred — see the manifest item below. Implementation follows as brain `internal/health` registry additions + host-agent locus-B reporters + the generalized `/v1/health/system` report.)*
 
 **Top-level**
 - Redundancy implementation when Level 2 storage ships (btrfs vs. ZFS vs. mdadm). `SPEC.md`.
