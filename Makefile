@@ -4,6 +4,9 @@
 # systemd) and is not wired here yet.
 
 GO ?= $(shell command -v go || echo $(HOME)/.local/go/bin/go)
+# gofmt from the same toolchain as $(GO), so `make check` matches CI exactly
+# regardless of what's on PATH.
+GOFMT ?= $(shell $(GO) env GOROOT)/bin/gofmt
 DEV_DIR := .dev
 STATE_DIR := $(DEV_DIR)/state
 AGENT_SOCK := $(abspath $(DEV_DIR)/agent.sock)
@@ -12,13 +15,16 @@ export MALMO_AGENT_SOCK := $(AGENT_SOCK)
 export MALMO_STATE_DIR := $(STATE_DIR)
 export MALMO_CATALOG_DIR := ./catalog
 
-.PHONY: build host-agent brain host-agent-real test test-all test-caddy test-avahi test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev openapi clean help
+.PHONY: build host-agent brain host-agent-real check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev openapi clean help
 
 # msteinert/pam v2.1.0 uses RTLD_NEXT, a GNU extension that requires
 # _GNU_SOURCE at C compile time. Apply globally; harmless to non-cgo builds.
 export CGO_CFLAGS := -D_GNU_SOURCE
 
 help:
+	@echo "make check       - pre-PR gate: gofmt + vet + full test suite (Go). Run before every PR."
+	@echo "make check-web   - pre-PR gate for frontend changes: web-ui typecheck + build"
+	@echo "make fmt         - rewrite Go sources into gofmt-canonical form (autofix)"
 	@echo "make dev         - all three foreground procs in one terminal (recommended)"
 	@echo "make build       - compile brain + host-agent"
 	@echo "make net         - create the malmo-ingress docker network"
@@ -36,6 +42,35 @@ help:
 	@echo ""
 	@echo "One-terminal: make dev   (Caddy started detached; Ctrl-C stops the rest)"
 	@echo "Four terminals: make caddy ; make run-agent ; make run-brain ; make ui"
+
+# ---- Quality gate -------------------------------------------------------
+# `make check` is the pre-PR gate. It mirrors CI's Go job and the
+# definition-of-done in docs/dev/contributing.md: gofmt-clean, vet-clean, and
+# the full test suite green. Cheapest checks run first so it fails fast.
+# Frontend changes additionally need `make check-web`. The full test suite
+# needs libpam0g-dev (see docs/dev/running-locally.md); use the individual
+# targets if you don't have the headers.
+check: fmt-check vet test
+
+# Web typecheck + production build (mirrors CI's web job). Needs node/npm.
+check-web:
+	cd web-ui && npm install && npm run build
+
+# Rewrite Go sources into gofmt-canonical form (autofix).
+fmt:
+	$(GOFMT) -w $$(git ls-files '*.go')
+
+# Fail (listing offenders) if any Go source isn't gofmt-clean. Pure check —
+# never mutates the tree; run `make fmt` to fix.
+fmt-check:
+	@out=$$($(GOFMT) -l $$(git ls-files '*.go')); \
+	  if [ -n "$$out" ]; then \
+	    echo "These files are not gofmt-clean:"; echo "$$out"; \
+	    echo "Fix with: make fmt"; exit 1; \
+	  fi
+
+vet:
+	$(GO) vet ./...
 
 build: host-agent brain
 

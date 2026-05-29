@@ -1,8 +1,8 @@
 # 0023 — LUKS root + first-boot TPM enrollment + unseal verification
 
-- **Status:** in progress
+- **Status:** done (all three stages verified `medium-lane test: PASS`, 2026-05-29)
 - **Date:** 2026-05-28
-- **Specs touched:** `STORAGE.md`, `BOOT.md`, `TESTING.md`
+- **Specs exercised:** `STORAGE.md` (# Encryption posture), `BOOT.md` (# The chain). **Spec edited:** `TESTING.md` (# Medium lane — the unseal scenario is realized as two QEMU processes, not an in-guest reboot; see below).
 - **Builds on:** [0021](0021-qemu-medium-lane-scaffolding.md) (QEMU+swtpm scaffolding). 0021 booted a real kernel with a live TPM but a *plaintext* root; this slice adds the encryption + seal/unseal path that 0021 explicitly deferred.
 
 Closes the "no LUKS, no TPM-sealed unseal" gap from 0021 # Known gaps. This is the first test of `STORAGE.md` # Encryption posture and `BOOT.md` # The chain (line 30, "LUKS unlock (root drive) via TPM2 PCR 7") against a real kernel + real (software) TPM.
@@ -13,7 +13,7 @@ Boot a **LUKS-encrypted** root under QEMU+swtpm, prove the production-shaped flo
 
 1. **Build:** root is LUKS+ext4, enrolled with a recovery-passphrase keyslot (mirrors `STORAGE.md`: one recovery passphrase enrolled as a keyslot at install). Initramfs can unlock via that keyslot on first boot (no TPM token exists yet, headless box can't prompt).
 2. **First boot:** an enrollment step runs `systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 <root-dev>` — the exact command `STORAGE.md` # First-run flow step 4 specifies. Marks itself done (run-once).
-3. **Second boot (in-test reboot):** initramfs auto-unlocks root via the TPM2 token against PCR 7 — no passphrase, unattended. This is the `BOOT.md` headless-boot requirement.
+3. **Second boot (power cycle — a second QEMU process sharing the disk + TPM state; see the two-boot-cycle section for why not an in-guest reboot):** initramfs auto-unlocks root via the TPM2 token against PCR 7 — no passphrase, unattended. This is the `BOOT.md` headless-boot requirement.
 4. **Assert:** `cryptsetup luksDump` shows a `systemd-tpm2` token bound to PCR 7; root sits on a `crypt` device; a sentinel proves we reached the second boot without manual unlock.
 
 ## Decisions (settled 2026-05-28)
@@ -57,32 +57,42 @@ With both module fixes in, the next boot got all the way *into* the unlock: `dm_
 
 Also this round: `run-medium-tests.sh` now copies the serial log to `.dev/qemu/last-serial.log` (caller-owned) and greps the unlock path on failure — the previous `tail -50` cut off the load-bearing `systemd-cryptsetup` error above the dependency-failure cascade. And `medium-assertions.sh` gained a check that `/` is on a live `dm-crypt`/LUKS mapping, so a silent plaintext fallback can't pass as a green Stage 1.
 
-## The in-test reboot — new harness capability
+## The two-boot cycle — new harness capability (built as two QEMU processes, not an in-guest reboot)
 
-0021's driver boots once and powers off (`-no-reboot`, disk `snapshot=on`). 0023 needs **two boots of the same disk within one run** so first-boot enrollment persists into the second boot:
+0021's driver boots once and powers off (`-no-reboot`, disk `snapshot=on`). 0023 needs **two boots of the same disk within one run** so first-boot enrollment persists into the second boot. The plan above this section assumed an *in-guest* `systemctl reboot` inside one long-lived QEMU process. **That's not what shipped** — and the reason is the whole point of the test: the unattended-unseal proof requires the second boot to get *no* recovery-passphrase credential, but the passphrase is delivered as an SMBIOS type-11 credential fixed at QEMU launch and can't be withheld partway through a single process. So the two boots have to be **two sequential QEMU processes** against shared persistent state:
 
-- Drop `-no-reboot`; switch the disk off `snapshot=on` to a **writable per-run overlay** (`qemu-img create -b … -F raw` or a per-run `cp` of the raw), so enrollment writes persist but the golden image stays clean.
-- swtpm + OVMF pflash vars stay alive for the whole QEMU process, so PCRs and LUKS-header state persist naturally across an in-guest `systemctl reboot`.
-- Driver sequence: boot → SSH → first-boot assertions → `systemctl reboot` → wait for SSH to drop and return → second-boot assertions → poweroff.
+- **One writable per-run disk overlay** (`qemu-img create -f qcow2 -F raw -b <golden>`) shared by both QEMU processes, so the keyslot the first boot enrolls into the on-disk LUKS header is read back by the second — while the golden raw stays clean. (`snapshot=on` would reset between processes; a plain overlay persists.)
+- **One OVMF pflash vars copy** shared across both, so firmware measurements into PCR 7 reproduce.
+- **swtpm relaunched per boot against one persistent `--tpmstate` dir.** swtpm exits when its QEMU client disconnects, so it can't span both processes anyway — and relaunching it is the faithful model: a TPM *power cycle*. Volatile PCRs reset and are re-measured to identical values by the identical firmware; the persistent SRK + NVRAM live in the state dir, so the PCR-7-sealed keyslot enrolled in boot 1 unseals in boot 2.
+- Driver sequence (`run_boot <phase>`, called twice): launch swtpm → launch QEMU → wait for SSH → run `medium-assertions.sh <phase>` → scp the verdict back → `systemctl poweroff` → reap QEMU + swtpm. Boot 1 passes `-smbios type=11,…cryptsetup.passphrase=…` (enroll path); boot 2 passes nothing (unseal path).
 
 ## What was done
 
 - **Stage 1 — encrypted root boots: DONE (verified `medium-lane test: PASS`, 2026-05-29).** mkosi-repart produces a LUKS2+ext4 root (recovery passphrase keyslot 0 from `mkosi.passphrase`). The initrd unlocks it via `rd.luks.uuid=` + the `cryptsetup.passphrase` SMBIOS credential, switch-root lands on `/dev/mapper/luks-…`, and the VM reaches multi-user with sshd up. Getting there took four real-boot iterations, each surfacing a bug only visible on hardware (see the boot-mechanism section above): (1) gpt-auto can't discover the encrypted root pre-coldplug → `rd.luks.uuid=` with a repart-derived LUKS UUID; (2) `dm_mod`/`dm_crypt` never loaded → `modules-load.d` in the initrd via `mkosi.initrd.conf/`; (3) the `.ko` files weren't even included → `dm[-_]mod`/`dm[-_]crypt` include patterns (underscore-vs-hyphen `re.search`); (4) Argon2id keyslot OOM in a 1 GiB guest → `-m 2G`. Assertions confirm `/` is a live LUKS mapping, system is running, storage-verify ran, TPM is readable.
-- Stages 2 & 3 not started — see "Staging" below.
+- **Stage 2 — first-boot TPM enrollment: DONE (verified `medium-lane test: PASS`, 2026-05-29).**
+  - `dev/test-qemu/first-boot-tpm-enroll.sh` (staged to `/usr/lib/malmo/`): resolves the LUKS backing partition from the mounted root via `cryptsetup status`, then runs the exact `STORAGE.md` # First-run flow command — `systemd-cryptenroll --unlock-key-file=/etc/malmo/secrets/luks-recovery.key --tpm2-device=auto --tpm2-pcrs=7 <backing>`. Writes the run-once marker `/var/lib/malmo/.luks-tpm-enrolled` **only on a successful enroll**, so a failed run re-tries next boot.
+  - `dev/test-qemu/malmo-tpm-enroll.service`: `Type=oneshot`, `ConditionPathExists=!<marker>` (run-once), `After=local-fs.target`, `Before=malmo-storage-ready.target`, `WantedBy=malmo-storage-ready.target`. "Not a gate" is true for *success* — it's pulled by `Wants=`, so a failed enroll converges the system to `degraded`, not a boot failure. But `Before=` is still an *ordering* gate: the target's start job blocks on this oneshot finishing, so a hung enroll stalls `malmo-storage-ready.target` (and everything after it) for up to `TimeoutStartSec=120s`. Fine for the test lane; the real host-agent first-run caller (known-gaps #3 below) must stay off the boot-critical ordering chain — run async / after the milestone, not `Before=` it.
+  - Wiring: `bootstrap.sh` stages both files; `mkosi.postinst.chroot` chmods the script and drops the `.wants` symlink by hand (can't `systemctl enable` in a chroot — same idiom as the storage-ready target).
+  - `first-boot` assertion: waits for the marker (fails fast on `is-failed`, since sshd has no ordering vs. the enroll unit), then parses `cryptsetup luksDump --dump-json-metadata` with grep/sed only (no jq/python3 in the guest) to assert a `systemd-tpm2` token bound to PCR 7. Confirmed on the real boot: the enroll ran and the PCR-7 token landed in the header.
+- **Stage 3 — reboot + unattended unseal: DONE (verified `medium-lane test: PASS`, 2026-05-29).** `run-medium-tests.sh` refactored into the two-process `run_boot <phase>` cycle (see the section above). Boot 2 deliberately supplies no passphrase credential and the console is serial-only, so the recovery keyslot is unreachable — **reaching multi-user is itself the unattended PCR-7-unseal proof.** The serial log confirms the mechanism: on boot 2 the enroll unit is `skipped because of an unmet condition check (ConditionPathExists=!…)` (marker present from boot 1), yet root unlocked and the system came up. The `second-boot` assertion additionally confirms the token + PCR-7 binding survived the power cycle.
+- **Two harness bugs found only on the real run (fixed, no rebuild — both harness-side):**
+  - `medium-assertions.sh` sampled `systemctl is-system-running` *once* at the top → spurious `starting` failure: on first boot sshd races ahead of the still-running enroll, which is part of the boot transaction (`WantedBy=malmo-storage-ready.target`), and the driver's follow-up poweroff then SIGTERM'd the enroll mid-Argon2 (looked like a failure, was an interruption). Fixed by polling for `running`/`degraded` with a timeout instead of one sample.
+  - `run-medium-tests.sh` launched swtpm *once* for both boots → boot 2 died at QEMU launch (`Failed to connect socket …/swtpm/sock`): swtpm exits when boot 1's QEMU disconnects. Fixed by relaunching swtpm per boot against the shared `--tpmstate` dir (the TPM power-cycle model above).
 
 ## Staging
 
 Built in verifiable stages against the real mkosi/QEMU rather than one speculative commit (0021 surfaced 8 bugs only visible on a real run):
 
 - **Stage 1 — encrypted image boots at all. ✅ DONE** (`mkosi.repart/` + passphrase; VM reaches multi-user unlocking via the recovery keyslot). mkosi's crypttab/UUID/initrd behavior learned the hard way — captured above.
-- **Stage 2 — first-boot TPM enrollment.** Add the enrollment unit; assert a TPM2 token lands in the LUKS header on first boot.
-- **Stage 3 — reboot + unseal.** Harness reboot cycle; assert second boot unlocks via TPM unattended and the token is bound to PCR 7.
+- **Stage 2 — first-boot TPM enrollment. ✅ DONE** (run-once `malmo-tpm-enroll.service` runs `systemd-cryptenroll --tpm2-pcrs=7`; `first-boot` assertion confirms a `systemd-tpm2` PCR-7 token in the LUKS header).
+- **Stage 3 — reboot + unseal. ✅ DONE** (two-process boot cycle; boot 2 gets no passphrase and still reaches multi-user, proving unattended PCR-7 unseal; `second-boot` assertion confirms the token survived the power cycle).
 
 ## Known gaps & deviations (running list)
 
 - **Secure Boot off** — see decision above. PCR 7 reflects SB-disabled state; prod assumes SB on (`STORAGE.md`). Fidelity gap, tracked for a later slice.
 - **Recovery passphrase is a build-time keyfile, not the installer-generated secret.** The test exercises enrollment + unseal, not the installer's secret-generation/storage (`/etc/malmo/secrets/luks-recovery.key`) — that's `BUILD.md`/first-run territory.
-- **Enrollment trigger is a test-lane unit, not host-agent first-run.** The `systemd-cryptenroll` *command* matches production; its real caller (host-agent first-run) isn't built yet. Replace the test unit with the real caller when that lands.
+- **Enrollment trigger is a test-lane unit, not host-agent first-run.** The `systemd-cryptenroll` *command* matches production; its real caller (host-agent first-run) isn't built yet. Replace the test unit with the real caller when that lands — and keep it **off the boot-critical ordering chain**: the test unit's `Before=malmo-storage-ready.target` means a hung enroll stalls the milestone for up to 120s (see the unit comment), which is fine for a one-shot test but wrong for production boot timing. Run the real caller async / after the milestone.
+- **Enroll is append-only, not idempotent — the real caller should `--wipe-slot=tpm2`.** The test relies solely on the run-once marker to avoid duplicate keyslots, but that has a gap: if the enroll *succeeds* and the marker write then fails (or PCRs drift and a re-enroll is wanted), the next run's bare `systemd-cryptenroll --tpm2-device=auto …` *appends* a second TPM2 keyslot rather than replacing the first. The production idiom is `systemd-cryptenroll --wipe-slot=tpm2 --tpm2-device=auto …` so re-enrollment is replace-not-append. Not added to the test unit (the marker covers the test, and baking it in would force a rebuild for a path the test doesn't exercise) — but the real host-agent caller must use it.
 
 ## What's next
 

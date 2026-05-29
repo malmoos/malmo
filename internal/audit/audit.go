@@ -25,10 +25,10 @@ const (
 	ActionAppCustomCreate = "app.custom.create"
 
 	// User management actions (USERS_AND_GROUPS.md).
-	ActionUserCreate        = "user.create"
-	ActionUserRoleChange    = "user.role.change"
-	ActionUserDelete        = "user.delete"
-	ActionUserPasswordReset = "user.password.reset"
+	ActionUserCreate         = "user.create"
+	ActionUserRoleChange     = "user.role.change"
+	ActionUserDelete         = "user.delete"
+	ActionUserPasswordReset  = "user.password.reset"
 	ActionUserPasswordChange = "user.password.change"
 
 	// Recovery-code redemption (AUTH.md # Using the recovery code).

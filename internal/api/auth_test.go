@@ -731,10 +731,10 @@ func TestRecoverMissingFields(t *testing.T) {
 	// No setup needed — 422 fires before any store lookup.
 
 	cases := []map[string]string{
-		{"username": "andrei", "recovery_code": "abc123"},                     // missing new_password
-		{"username": "andrei", "new_password": "newpass"},                    // missing recovery_code
-		{"recovery_code": "abc123", "new_password": "newpass"},               // missing username
-		{},                                                                    // all missing
+		{"username": "andrei", "recovery_code": "abc123"},      // missing new_password
+		{"username": "andrei", "new_password": "newpass"},      // missing recovery_code
+		{"recovery_code": "abc123", "new_password": "newpass"}, // missing username
+		{}, // all missing
 	}
 	for _, body := range cases {
 		resp := h.do("POST", "/api/v1/recover", body)
