@@ -40,6 +40,11 @@ Orientation:
 See [`progress/README.md`](progress/README.md) for the full index and the
 **Up next** queue (next implementation slices). Latest:
 
+- [`0026-dashboard-chassis-home-grid.md`](progress/0026-dashboard-chassis-home-grid.md)
+  — `web-ui` brought up to the `WEB_UI.md` stack (Vue Router, Pinia, Tailwind 4,
+  reka-ui, lucide); the dev screen replaced with the `DASHBOARD.md` shell: the
+  grouped Household / Yours home grid + four-item dock against the scoped
+  `GET /apps`. First dashboard frontend slice.
 - [`0025-owner-scoped-instances.md`](progress/0025-owner-scoped-instances.md)
   — `owner_user_id` + `scope` on instances, `<slug>--<user>` slug derivation,
   install authorization (member→personal, admin→choice), warn-don't-block
