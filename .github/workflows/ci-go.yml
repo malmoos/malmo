@@ -1,0 +1,55 @@
+# CI gate for the Go brain layer: full test pyramid + vet + build.
+# The CI realization of the fast Go layers in docs/specs/TESTING.md.
+#
+# Triggers on PRs into main, and only when Go-relevant files change (path
+# filter) — docs-only / web-only PRs don't spin a runner. PR-only by design:
+# every change lands via PR, so a push:main trigger would just double-run.
+#
+# DEFERRED — not wired here (issue #14 follow-up): the medium/slow boot lanes
+# (`make test-boot-chain-nspawn`, `make test-medium-qemu`) need privileged
+# runners (systemd-nspawn, QEMU+swtpm), coordinated with the 0023 track.
+name: CI / Go
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "Makefile"
+      - ".github/workflows/ci-go.yml"
+
+# Cancel superseded runs on the same ref (e.g. force-pushes to a PR branch).
+concurrency:
+  group: ci-go-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go — test + vet + build
+    runs-on: ubuntu-latest
+    env:
+      # msteinert/pam v2.1.0 uses RTLD_NEXT, a GNU extension that needs
+      # _GNU_SOURCE at C compile time (see docs/dev/running-locally.md and the
+      # Makefile). Required to build/test the pamverifier package.
+      CGO_CFLAGS: -D_GNU_SOURCE
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install PAM headers
+        run: sudo apt-get update && sudo apt-get install -y libpam0g-dev
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test (full suite incl. pamverifier)
+        run: make test
