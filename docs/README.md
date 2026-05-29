@@ -40,6 +40,10 @@ Orientation:
 See [`progress/README.md`](progress/README.md) for the full index and the
 **Up next** queue (next implementation slices). Latest:
 
+- [`0025-owner-scoped-instances.md`](progress/0025-owner-scoped-instances.md)
+  — `owner_user_id` + `scope` on instances, `<slug>--<user>` slug derivation,
+  install authorization (member→personal, admin→choice), warn-don't-block
+  duplicate installs, caller-scoped app reads. First dashboard backend slice.
 - [`0022-health-persistence.md`](progress/0022-health-persistence.md)
   — `health_issues` SQLite table, store write-through, boot-time
   `LoadFromStore` restore, `health.issue.raised/cleared` audit actions.

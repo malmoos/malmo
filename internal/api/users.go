@@ -48,6 +48,20 @@ func (s *Server) registerUsers(api huma.API) {
 	}, s.resetUserPassword)
 }
 
+// validateUsername enforces the constraints owner-scoped instance slugs depend
+// on (DASHBOARD.md # instance naming): a username may not contain the `--`
+// instance separator, nor start with `xn--` (reserved IDN/punycode prefix), so
+// a `<slug>--<user>` slug always parses back into slug + user unambiguously.
+func validateUsername(name string) error {
+	if strings.Contains(name, "--") {
+		return huma.Error422UnprocessableEntity("username may not contain '--'")
+	}
+	if strings.HasPrefix(name, "xn--") {
+		return huma.Error422UnprocessableEntity("username may not start with 'xn--'")
+	}
+	return nil
+}
+
 func (s *Server) listUsers(ctx context.Context, _ *struct{}) (*struct {
 	Body struct {
 		Users []UserDTO `json:"users"`
@@ -90,6 +104,9 @@ func (s *Server) createUser(ctx context.Context, in *struct {
 	password := in.Body.Password
 	if username == "" || password == "" {
 		return nil, huma.Error422UnprocessableEntity("username and password are required")
+	}
+	if err := validateUsername(username); err != nil {
+		return nil, err
 	}
 
 	role := in.Body.Role

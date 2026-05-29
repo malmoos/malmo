@@ -22,7 +22,17 @@ func sample(id, slug string) Instance {
 	return Instance{
 		ID: id, ManifestID: "whoami", Name: "Whoami", Slug: slug,
 		Version: "1.10", State: "installing",
+		OwnerUserID: "u_owner", Scope: ScopeHousehold,
 		CreatedAt: time.Unix(1_700_000_000, 0),
+	}
+}
+
+func TestCreateRejectsInvalidScope(t *testing.T) {
+	s := open(t)
+	i := sample("a", "alpha")
+	i.Scope = "bogus"
+	if err := s.Create(i); err == nil {
+		t.Fatal("Create accepted an out-of-range scope, want error")
 	}
 }
 
