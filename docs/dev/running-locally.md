@@ -243,3 +243,28 @@ curl -s localhost:8080/openapi.json            # generated schema
 curl --unix-socket .dev/agent.sock http://agent/v1/system/status
 curl --unix-socket .dev/agent.sock http://agent/v1/discovery/state
 ```
+
+## CI
+
+Two **path-filtered, PR-only** workflows gate every PR into `main`, mirroring
+the local pre-PR gate. Each runs only when its own files change, so a docs-only
+PR spins no runner, a Go-only PR skips the web build, and vice versa. They're
+PR-only (no `push: main`) because every change lands via PR — a push trigger
+would just double-run.
+
+- **`.github/workflows/ci-go.yml`** — runs on `**.go` / `go.mod` / `go.sum` /
+  `Makefile` changes: installs `libpam0g-dev`, then `go build ./...`,
+  `go vet ./...`, and `make test` (full suite incl. `pamverifier`, with
+  `CGO_CFLAGS=-D_GNU_SOURCE`). Same as `make check`.
+- **`.github/workflows/ci-web.yml`** — runs on `web-ui/**` changes: `npm ci`
+  then `npm run build` (Node pinned by `web-ui/.nvmrc`; `build` runs `vue-tsc`
+  typecheck before `vite build`). Same as `make check-web`.
+
+Note: if these are ever promoted to *required* status checks, the path filters
+mean a PR that doesn't touch a workflow's files won't report that check —
+branch protection would then need the [skipped-check workaround](https://docs.github.com/en/actions/managing-workflow-runs-and-deployments/managing-workflow-runs/skipping-workflow-runs). No branch protection is configured today.
+
+The **medium/slow boot lanes** (`make test-boot-chain-nspawn`,
+`make test-medium-qemu`) are **not** in CI yet — they need privileged runners
+(systemd-nspawn, QEMU+swtpm) and are a coordinated follow-up. See
+[`TESTING.md`](../specs/TESTING.md) for the full three-lane model.
