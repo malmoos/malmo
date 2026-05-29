@@ -59,11 +59,11 @@ Combination, not a single axis:
 
 - **Multi-user from day one.** Designed for the household: one account per family member.
 - **First account created = admin (root).** Owns the box, can manage other accounts and the system.
-- **Apps are owned by an account**, but data can be shared between users (e.g. a shared Photos library under `~/Shared/`).
-- **Single shared app instance is the default for shared use cases.** Example: one grocery list app, one shared dataset, multiple malmo users log in to it.
+- **App instances are owned by an account.** Every instance is either a **household (shared)** instance — admin-owned, one instance the whole household opens — or a **personal (per-user)** instance, owned by one user with its own data, route, and folder bindings. Admins choose which at install; members can create personal instances only. Duplicate installs warn, never block (you can run your own copy of an app someone already installed). See `DASHBOARD.md` # the apps model — the load-bearing decision recorded in `DECISIONS.md` 2026-05-29.
+- **User content stays shareable** independent of app instancing — a shared Photos library under `~/Shared/`, per-user folders under `~/`. Personal instances bind only their owner's folders, which keeps "files are first-class" per-user isolation intact (`STORAGE.md`).
 - **No malmo SSO into apps (for now).** Each app keeps its own authentication. The malmo login gates the device; in-app accounts are separate.
 
-> Open tension: with no SSO, every shared app forces each household member to also create an in-app account. Acceptable for v1 but worth revisiting once we see real usage.
+> Open tension: with no SSO, a *household* app still forces each member to create an in-app account. Owner-scoping softens this (a member who wants their own data can install a personal instance instead of sharing), but the shared-instance case remains. Revisit if/when SSO lands — at which point shared instances become the *encouraged* path for multi-user-capable apps.
 
 ## OS-provided managed services
 
