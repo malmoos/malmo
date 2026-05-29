@@ -104,7 +104,7 @@ func TestEmitHealthNotifications_RaiseLooksUpIssueAndClearResolves(t *testing.T)
 	mgr.Raise("canary-mismatch", "", "checksum drift")
 
 	fns := &fakeNotifStore{}
-	notifier := notify.New(fns)
+	notifier := notify.New(fns, nil)
 
 	raised := []health.IssueKey{{ID: "data-drive-missing"}, {ID: "canary-mismatch"}}
 	cleared := []health.IssueKey{{ID: "mergerfs-assembly-failed"}}
@@ -131,7 +131,7 @@ func TestEmitHealthNotifications_RaiseLooksUpIssueAndClearResolves(t *testing.T)
 func TestEmitHealthNotifications_NoNotificationForInactiveKey(t *testing.T) {
 	mgr := health.NewManager(nil) // empty — Get returns ok=false
 	fns := &fakeNotifStore{}
-	emitHealthNotifications(notify.New(fns), mgr, []health.IssueKey{{ID: "data-drive-missing"}}, nil)
+	emitHealthNotifications(notify.New(fns, nil), mgr, []health.IssueKey{{ID: "data-drive-missing"}}, nil)
 	if len(fns.raised) != 0 {
 		t.Fatalf("want 0 raises for a key with no live issue, got %d", len(fns.raised))
 	}

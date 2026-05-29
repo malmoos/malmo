@@ -17,6 +17,12 @@ const (
 	AppStateChanged Kind = "app.state_changed"
 	AppInstalled    Kind = "app.installed"
 	AppUninstalled  Kind = "app.uninstalled"
+	// Notification lifecycle (NOTIFICATIONS.md # Surfaces). created = a new
+	// notification appeared; updated covers read / resolve / dismiss. Payloads
+	// are advisory refetch triggers — the client re-reads its audience-scoped
+	// list rather than merging the event data.
+	NotificationCreated Kind = "notification.created"
+	NotificationUpdated Kind = "notification.updated"
 )
 
 type Event struct {

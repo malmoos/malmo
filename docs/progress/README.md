@@ -14,7 +14,7 @@ The implementation slice queue, ordered. Each item links back to the progress en
 This is the **maintainer's critical-path** queue. Work carved off for **parallel contributors** lives in [GitHub Issues](https://github.com/onel/malmo/issues) (some items there are pulled from these "what's next" follow-ups). The two are kept from overlapping on purpose. See [`../dev/contributing.md`](../dev/contributing.md) for the contributor loop.
 
 1. **0023 — LUKS root + first-boot TPM enrollment + unseal verification.** Builds on [0021](0021-qemu-medium-lane-scaffolding.md)'s QEMU+swtpm medium-lane scaffolding. Critical-path slice: realizes the encryption posture in `STORAGE.md` and the boot ordering in `BOOT.md`, exercises the medium lane the scaffolding was built for. *(In-flight follow-up from 0021 / 0022.)*
-2. **Notification read surface: bell API + SSE.** [0025](0025-health-notifications.md) landed the write seam (`notifications` table + health raise/clear emitter); nothing reads it back yet. Next: `/api/v1/notifications` family (audience-scoped list, mark-read, dismiss, per-category mute), `notification.created` / `notification.updated` SSE kinds (`BRAIN_UI_PROTOCOL.md`), and the `notification_reads` join for per-recipient unread counts. Follow-up from [0025](0025-health-notifications.md).
+2. **Notification Web UI + transparency variant.** [0026](0026-notification-read-surface.md) landed the backend read surface (`/api/v1/notifications` family, `notification_reads` per-recipient join, `notification.created` / `notification.updated` SSE kinds); nothing renders it yet. Next: the dashboard bell + dropdown inbox, Pinia store, SSE subscription, `useNotifications()` (`WEB_UI.md`); then the info-only member **transparency variant** + the "all clear" resolved follow-up on clear (`NOTIFICATIONS.md`); per-category mute and retention/pruning trail behind. Follow-up from [0026](0026-notification-read-surface.md).
 
 ## Entry template
 
@@ -65,3 +65,4 @@ Ordered follow-ups. Update as they land.
 | [0022](0022-health-persistence.md) | SQLite persistence for health issues (`health_issues` table, store write-through, boot-time restore) | done |
 | [0024](0024-per-issue-health-audit.md) | Per-issue health audit records (`ApplyStorageFindings` returns affected keys; one `health.issue.*` record per issue) | done |
 | [0025](0025-health-notifications.md) | Health raise/clear → dashboard notifications (`notifications` table + `internal/notify` emitter; coalesced, admin-routed, resolved-on-clear) | done |
+| [0026](0026-notification-read-surface.md) | Notification read surface: `/api/v1/notifications` family + `notification_reads` per-recipient read/dismiss + `notification.created`/`.updated` SSE kinds | done |
