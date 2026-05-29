@@ -166,7 +166,7 @@ When the underlying HEALTH issue clears, the brain marks the notification resolv
 
 ### Read / unread / dismiss
 
-- **Per-recipient read state.** A notification addressed to `admins` is read/unread *per admin* — one admin reading it doesn't clear the badge for another. (Implementation: a `notification_reads` join table keyed on `(notification_id, user_id)`; the bare `read_at` on the record is the single-recipient fast path for `audience: user`.)
+- **Per-recipient read state.** A notification addressed to `admins` is read/unread *per admin* — one admin reading it doesn't clear the badge for another. (Implementation: a `notification_reads` join table keyed on `(notification_id, user_id)` carries read/dismiss state for **every** recipient uniformly — `audience: user` rows take the same join, not a per-row fast path; the notification record itself stays free of per-recipient state. The uniform join was chosen over a row-column shortcut for `audience: user` because one code path is simpler than two and the read query joins regardless.)
 - **Unread badge** on the bell shows the count of unread notifications visible to the current user.
 - **Dismiss** removes a notification from the active inbox; dismissed notifications are retained (subject to retention policy) but out of the default view. Dismissing is not the same as resolving the underlying condition — a dismissed `disk-full` notification does not clear the HEALTH issue or unblock writes.
 

@@ -181,7 +181,21 @@ func (s *Store) migrate() error {
 			resolved_at   INTEGER NULL
 		);
 		CREATE UNIQUE INDEX IF NOT EXISTS notifications_active_dedup
-			ON notifications(dedup_key) WHERE dismissed_at IS NULL;`)
+			ON notifications(dedup_key) WHERE dismissed_at IS NULL;
+		-- notification_reads: per-recipient read/dismiss state (NOTIFICATIONS.md
+		-- # Read / unread / dismiss). A box-wide ('admins') notification is one
+		-- row in notifications but read/unread *per admin*, so read state can't
+		-- live on the notification row — it lives here, one row per (notification,
+		-- user). Used uniformly for every audience (the row-level read_at/
+		-- dismissed_at columns on notifications stay reserved). ON DELETE CASCADE
+		-- on both FKs so pruning a notification or deleting a user cleans up.
+		CREATE TABLE IF NOT EXISTS notification_reads (
+			notification_id INTEGER NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+			user_id         TEXT    NOT NULL REFERENCES users(id)         ON DELETE CASCADE,
+			read_at         INTEGER NULL,
+			dismissed_at    INTEGER NULL,
+			PRIMARY KEY (notification_id, user_id)
+		);`)
 	if err != nil {
 		return err
 	}

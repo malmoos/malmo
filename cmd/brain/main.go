@@ -71,7 +71,7 @@ func main() {
 
 	authMgr := auth.NewManager(st)
 	auditor := audit.New(st)
-	notifier := notify.New(st)
+	notifier := notify.New(st, bus)
 	healthMgr := health.NewManager(st)
 
 	// Restore persisted health issues before serving requests. Non-fatal:

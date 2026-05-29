@@ -325,6 +325,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Log rotation for non-journald files (Caddy access logs, anything that escapes the journal). `LOGGING.md`.
 
 **Observability (user-facing)**
+- Notification retention / pruning — capped-count and/or age policy for the `notifications` and `notification_reads` tables (the prunable bell store, distinct from append-only `audit_events`). Rows accumulate unbounded today; pick the cap (per-recipient? global? resolved-rows-first?) and where it runs. `NOTIFICATIONS.md` # Read / unread / dismiss, `LOGGING.md`.
 - Per-container live monitor ("Activity Monitor" view) — sortable table of all containers with live CPU/RAM/net/disk. Host-level live view is specced (top-bar dropdown); per-container live is the deferred surface. Mechanism same as system-resources SSE. `LOCAL_ANALYTICS.md`, `WEB_UI.md`.
 - App-level network bandwidth accounting (per-container veth stats). Useful for "which app is hammering my ISP" but expensive. `LOCAL_ANALYTICS.md`.
 - Storage growth attribution — what *kind* of data grew ("Photos +50 GB this month, mostly RAW files"). Compound on top of the per-app storage trend already specced. `LOCAL_ANALYTICS.md`, `STORAGE.md`.

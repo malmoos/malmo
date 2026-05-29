@@ -40,6 +40,11 @@ Orientation:
 See [`progress/README.md`](progress/README.md) for the full index and the
 **Up next** queue (next implementation slices). Latest:
 
+- [`0026-notification-read-surface.md`](progress/0026-notification-read-surface.md)
+  — the read half of the bell: `/api/v1/notifications` family (audience-scoped
+  list, unread-count, mark-read, mark-all-read, dismiss), the
+  `notification_reads` per-recipient join, and `notification.created` /
+  `notification.updated` SSE kinds. Backend only — Vue bell deferred.
 - [`0025-health-notifications.md`](progress/0025-health-notifications.md)
   — first consumer of the notification seam: `notifications` SQLite table +
   `internal/notify` emitter. Health raise → admin-routed notification
