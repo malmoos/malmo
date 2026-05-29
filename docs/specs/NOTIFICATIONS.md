@@ -103,7 +103,8 @@ The curated set of events that produce a notification. New entries are added by 
 | Event | Severity | To |
 |---|---|---|
 | Drive failing / SMART warning (when the check lands) | error | Admin |
-| `data-drive-missing` / `data-drive-readonly` / `data-drive-wrong` | critical | Admin (+ member transparency) |
+| `data-drive-readonly` / `data-drive-wrong` | critical | Admin (+ member transparency) |
+| `data-drive-missing` | error | Admin (+ member transparency) |
 | `disk-full` | critical | Admin (+ member transparency) |
 | `disk-nearly-full` | warning | Admin |
 
@@ -111,7 +112,8 @@ The curated set of events that produce a notification. New entries are added by 
 
 | Event | Severity | To |
 |---|---|---|
-| `brain-db-corrupt`, `canary-mismatch`, `mergerfs-assembly-failed` | critical | Admin |
+| `brain-db-corrupt`, `canary-mismatch` | critical | Admin |
+| `mergerfs-assembly-failed` | error | Admin |
 | `schema-migration-failed`, `version-mismatch` | error | Admin |
 | Box rebooted / recovered after downtime | info | Admin |
 

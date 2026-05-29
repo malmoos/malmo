@@ -40,6 +40,11 @@ Orientation:
 See [`progress/README.md`](progress/README.md) for the full index and the
 **Up next** queue (next implementation slices). Latest:
 
+- [`0025-health-notifications.md`](progress/0025-health-notifications.md)
+  — first consumer of the notification seam: `notifications` SQLite table +
+  `internal/notify` emitter. Health raise → admin-routed notification
+  (coalesced by `dedup_key`); clear → resolved. Write seam only — bell API,
+  SSE, and read-state deferred.
 - [`0024-per-issue-health-audit.md`](progress/0024-per-issue-health-audit.md)
   — `ApplyStorageFindings` returns affected `IssueKey`s; one per-issue
   `health.issue.raised`/`cleared` audit record (`target_kind: health_issue`)
