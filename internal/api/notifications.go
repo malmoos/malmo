@@ -46,6 +46,21 @@ func (s *Server) registerNotifications(api huma.API) {
 		OperationID: "dismiss-notification", Method: "POST", Path: "/api/v1/notifications/{id}/dismiss",
 		Summary: "Dismiss one notification (out of the active inbox)", DefaultStatus: http.StatusNoContent,
 	}, s.dismissNotification)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "list-notification-mutes", Method: "GET", Path: "/api/v1/notifications/mutes",
+		Summary: "List the caller's muted notification categories",
+	}, s.listNotificationMutes)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "mute-notification-category", Method: "PUT", Path: "/api/v1/notifications/mutes/{category}",
+		Summary: "Mute a notification category for the caller", DefaultStatus: http.StatusNoContent,
+	}, s.muteNotificationCategory)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "unmute-notification-category", Method: "DELETE", Path: "/api/v1/notifications/mutes/{category}",
+		Summary: "Unmute a notification category for the caller", DefaultStatus: http.StatusNoContent,
+	}, s.unmuteNotificationCategory)
 }
 
 // NotificationDTO is the wire shape of one notification row, with this caller's
@@ -177,6 +192,68 @@ func (s *Server) markAllNotificationsRead(ctx context.Context, _ *struct{}) (*st
 	}
 	if err := s.store.MarkAllNotificationsRead(id.User.ID, id.IsAdmin(), s.auth.Clock()); err != nil {
 		return nil, huma.Error500InternalServerError("mark all read failed", err)
+	}
+	s.bus.Publish(events.NotificationUpdated, map[string]any{})
+	return nil, nil
+}
+
+// listNotificationMutes returns the caller's muted categories (NOTIFICATIONS.md
+// # Configuration). Per-user: a mute is the caller's own preference, scoped to
+// their session, never another user's.
+func (s *Server) listNotificationMutes(ctx context.Context, _ *struct{}) (*struct {
+	Body struct {
+		Muted []string `json:"muted"`
+	}
+}, error) {
+	id, ok := auth.FromContext(ctx)
+	if !ok {
+		return nil, huma.Error401Unauthorized("unauthenticated")
+	}
+	muted, err := s.store.ListMutedCategories(id.User.ID)
+	if err != nil {
+		return nil, huma.Error500InternalServerError("mutes query failed", err)
+	}
+	out := &struct {
+		Body struct {
+			Muted []string `json:"muted"`
+		}
+	}{}
+	out.Body.Muted = []string{}
+	out.Body.Muted = append(out.Body.Muted, muted...)
+	return out, nil
+}
+
+func (s *Server) muteNotificationCategory(ctx context.Context, in *struct {
+	Category string `path:"category"`
+}) (*struct{}, error) {
+	id, ok := auth.FromContext(ctx)
+	if !ok {
+		return nil, huma.Error401Unauthorized("unauthenticated")
+	}
+	if !notify.ValidCategory(in.Category) {
+		return nil, huma.Error422UnprocessableEntity("unknown notification category")
+	}
+	if err := s.store.MuteNotificationCategory(id.User.ID, in.Category); err != nil {
+		return nil, huma.Error500InternalServerError("mute failed", err)
+	}
+	// A mute changes what the caller's bell counts/shows; nudge their other tabs
+	// to refetch (mirrors the read-state handlers' SSE publish).
+	s.bus.Publish(events.NotificationUpdated, map[string]any{})
+	return nil, nil
+}
+
+func (s *Server) unmuteNotificationCategory(ctx context.Context, in *struct {
+	Category string `path:"category"`
+}) (*struct{}, error) {
+	id, ok := auth.FromContext(ctx)
+	if !ok {
+		return nil, huma.Error401Unauthorized("unauthenticated")
+	}
+	if !notify.ValidCategory(in.Category) {
+		return nil, huma.Error422UnprocessableEntity("unknown notification category")
+	}
+	if err := s.store.UnmuteNotificationCategory(id.User.ID, in.Category); err != nil {
+		return nil, huma.Error500InternalServerError("unmute failed", err)
 	}
 	s.bus.Publish(events.NotificationUpdated, map[string]any{})
 	return nil, nil

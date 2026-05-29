@@ -26,14 +26,41 @@ import (
 )
 
 // Category groups notifications in the inbox (NOTIFICATIONS.md # The
-// notification model). Only the categories this slice can produce are defined;
-// updates / security / account / app land with their sources.
+// notification model). The full taxonomy is defined here because the per-category
+// mute surface (NOTIFICATIONS.md # Configuration) validates against the complete
+// set — a user can mute a category before its source exists (e.g. mute `updates`
+// chatter). Only storage / system have producers today; updates / security /
+// account / app light up as their sources land.
 type Category string
 
 const (
-	CategoryStorage Category = "storage"
-	CategorySystem  Category = "system"
+	CategoryStorage  Category = "storage"
+	CategorySystem   Category = "system"
+	CategoryUpdates  Category = "updates"
+	CategorySecurity Category = "security"
+	CategoryAccount  Category = "account"
+	CategoryApp      Category = "app"
 )
+
+// Categories is the complete notification taxonomy, in display order — the
+// source of truth the mute surface validates against (NOTIFICATIONS.md
+// # Configuration).
+var Categories = []Category{
+	CategoryStorage, CategorySystem, CategoryUpdates,
+	CategorySecurity, CategoryAccount, CategoryApp,
+}
+
+// ValidCategory reports whether s names a known notification category. The mute
+// API uses it to reject unknown categories rather than persist a typo that would
+// silently mute nothing.
+func ValidCategory(s string) bool {
+	for _, c := range Categories {
+		if string(c) == s {
+			return true
+		}
+	}
+	return false
+}
 
 // Severity reuses HEALTH's vocabulary plus info (NOTIFICATIONS.md # Severity).
 // For health-derived notifications it is copied verbatim from the issue —

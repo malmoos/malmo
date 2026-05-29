@@ -195,6 +195,20 @@ func (s *Store) migrate() error {
 			read_at         INTEGER NULL,
 			dismissed_at    INTEGER NULL,
 			PRIMARY KEY (notification_id, user_id)
+		);
+		-- notification_mutes: per-user, per-category mute (NOTIFICATIONS.md
+		-- # Configuration). Presence of a row means the category is muted for that
+		-- user; absence means on — "everything on by default", so a new user has no
+		-- rows and sees everything. The (user_id, category) PK fully models the
+		-- mute; unmute is a DELETE. Mute is a read-time filter (the list/count/
+		-- mark-all queries exclude muted categories), never emit-time suppression:
+		-- a box-wide 'admins'/'members' notification is one row shared by many
+		-- recipients, so it can't be withheld per-user at write time. ON DELETE
+		-- CASCADE cleans up when the user is deleted.
+		CREATE TABLE IF NOT EXISTS notification_mutes (
+			user_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			category  TEXT NOT NULL,
+			PRIMARY KEY (user_id, category)
 		);`)
 	if err != nil {
 		return err

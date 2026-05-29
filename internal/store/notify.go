@@ -129,6 +129,59 @@ func notificationVisibilityClause(isAdmin bool) string {
 	return "(n.audience = 'members' OR (n.audience = 'user' AND n.user_id = ?))"
 }
 
+// notificationMuteClause drops rows whose category the caller has muted
+// (NOTIFICATIONS.md # Configuration). It is a read-time filter on the aggregate
+// surfaces (list, unread count, mark-all) — never emit-time suppression, since a
+// class notification is one row for many recipients. Binds exactly one parameter
+// (the caller's user id); the per-id read/dismiss path (GetNotification) does NOT
+// apply it, so a user can still act on a specific row in a muted category.
+func notificationMuteClause() string {
+	return " AND n.category NOT IN (SELECT category FROM notification_mutes WHERE user_id = ?)"
+}
+
+// MuteNotificationCategory mutes category for userID (NOTIFICATIONS.md
+// # Configuration). Idempotent — a repeat mute is a no-op. The category is
+// validated by the API layer (notify.ValidCategory) before this is called.
+func (s *Store) MuteNotificationCategory(userID, category string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO notification_mutes (user_id, category)
+		 VALUES (?,?)
+		 ON CONFLICT (user_id, category) DO NOTHING`,
+		userID, category)
+	return err
+}
+
+// UnmuteNotificationCategory removes a mute for userID (NOTIFICATIONS.md
+// # Configuration). No-op when the category was not muted, so unmute is
+// idempotent and safe to call blindly.
+func (s *Store) UnmuteNotificationCategory(userID, category string) error {
+	_, err := s.db.Exec(
+		`DELETE FROM notification_mutes WHERE user_id = ? AND category = ?`,
+		userID, category)
+	return err
+}
+
+// ListMutedCategories returns the categories userID has muted, sorted — the
+// settings surface reads this to render the mute toggles.
+func (s *Store) ListMutedCategories(userID string) ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT category FROM notification_mutes WHERE user_id = ? ORDER BY category`,
+		userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // ListNotificationsForRecipient returns the caller's notifications newest-first,
 // audience-scoped with this caller's per-recipient read/dismiss state joined in
 // from notification_reads. Dismissed rows are excluded unless IncludeDismissed.
@@ -139,9 +192,10 @@ func (s *Store) ListNotificationsForRecipient(f NotificationFilter) ([]notify.No
 	if limit <= 0 {
 		limit = 50
 	}
-	// Args in statement order: JOIN user_id, visibility user_id, [AfterID], limit.
-	args := []any{f.UserID, f.UserID}
-	where := notificationVisibilityClause(f.IsAdmin)
+	// Args in statement order: JOIN user_id, visibility user_id, mute user_id,
+	// [AfterID], limit.
+	args := []any{f.UserID, f.UserID, f.UserID}
+	where := notificationVisibilityClause(f.IsAdmin) + notificationMuteClause()
 	if !f.IncludeDismissed {
 		where += " AND nr.dismissed_at IS NULL"
 	}
@@ -210,9 +264,9 @@ func (s *Store) CountUnreadNotifications(userID string, isAdmin bool) (int, erro
 		 FROM notifications n
 		 LEFT JOIN notification_reads nr
 		   ON nr.notification_id = n.id AND nr.user_id = ?
-		 WHERE `+notificationVisibilityClause(isAdmin)+`
+		 WHERE `+notificationVisibilityClause(isAdmin)+notificationMuteClause()+`
 		   AND nr.read_at IS NULL AND nr.dismissed_at IS NULL`,
-		userID, userID).Scan(&c)
+		userID, userID, userID).Scan(&c)
 	return c, err
 }
 
@@ -273,7 +327,10 @@ func (s *Store) DismissNotification(id int64, userID string, at time.Time) error
 
 // MarkAllNotificationsRead marks every notification currently visible to the
 // caller (and not already read by them) read in one statement — the bell's
-// "mark all read" / read-on-open action.
+// "mark all read" / read-on-open action. It applies the same mute filter as
+// list/count, so a muted category is left untouched: unmuting later reveals its
+// notifications in their true unread state rather than as already-read rows the
+// user never saw.
 func (s *Store) MarkAllNotificationsRead(userID string, isAdmin bool, at time.Time) error {
 	_, err := s.db.Exec(
 		`INSERT INTO notification_reads (notification_id, user_id, read_at)
@@ -281,10 +338,10 @@ func (s *Store) MarkAllNotificationsRead(userID string, isAdmin bool, at time.Ti
 		 FROM notifications n
 		 LEFT JOIN notification_reads nr
 		   ON nr.notification_id = n.id AND nr.user_id = ?
-		 WHERE `+notificationVisibilityClause(isAdmin)+`
+		 WHERE `+notificationVisibilityClause(isAdmin)+notificationMuteClause()+`
 		   AND nr.read_at IS NULL
 		 ON CONFLICT (notification_id, user_id)
 		 DO UPDATE SET read_at = COALESCE(notification_reads.read_at, excluded.read_at)`,
-		userID, at.UnixMilli(), userID, userID)
+		userID, at.UnixMilli(), userID, userID, userID)
 	return err
 }
