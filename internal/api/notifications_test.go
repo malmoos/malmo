@@ -137,6 +137,43 @@ func TestNotifications_AudienceScoping(t *testing.T) {
 	}
 }
 
+// The 'members' broadcast audience (transparency variant, slice 0028) over the
+// wire: every member sees it and can act on it; no admin does — and an admin
+// gets 404 (not 403) trying to touch it, the same information-hiding the foreign
+// rows get.
+func TestNotifications_MembersAudienceScoping(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1") // admin session in jar
+	h.addMember("u_bob", "bob", "bobpass")
+
+	memberID := h.seedNotification("members:1", notify.AudienceMembers, "")
+
+	// Alice (admin) does not see the members broadcast.
+	if hasID(h.bellList(), memberID) {
+		t.Error("admin alice must not see the members-audience notification")
+	}
+	// And cannot act on it — 404, not 403.
+	resp := h.do("POST", fmt.Sprintf("/api/v1/notifications/%d/read", memberID), nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("admin marking members row = %d; want 404", resp.StatusCode)
+	}
+
+	// Bob (member) sees it and can mark it read.
+	h.loginAs("bob", "bobpass")
+	if !hasID(h.bellList(), memberID) {
+		t.Error("member bob should see the members-audience notification")
+	}
+	resp = h.do("POST", fmt.Sprintf("/api/v1/notifications/%d/read", memberID), nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("member marking members row = %d; want 204", resp.StatusCode)
+	}
+	if c := h.bellCount(); c != 0 {
+		t.Errorf("member unread after read = %d; want 0", c)
+	}
+}
+
 // Marking a notification read drops the badge count and flips its `read` flag,
 // but the row stays in the list (read ≠ dismissed).
 func TestNotifications_MarkReadDropsCount(t *testing.T) {

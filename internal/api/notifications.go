@@ -199,6 +199,7 @@ func (s *Server) notificationRecipient(ctx context.Context, id int64) (auth.Iden
 		return auth.Identity{}, huma.Error500InternalServerError("notification lookup failed", err)
 	}
 	visible := (n.Audience == notify.AudienceAdmins && who.IsAdmin()) ||
+		(n.Audience == notify.AudienceMembers && !who.IsAdmin()) ||
 		(n.Audience == notify.AudienceUser && n.UserID == who.User.ID)
 	if !visible {
 		return auth.Identity{}, huma.Error404NotFound("no such notification")

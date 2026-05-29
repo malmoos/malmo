@@ -262,6 +262,50 @@ func TestListNotificationsForRecipient_AudienceScoping(t *testing.T) {
 	}
 }
 
+// The 'members' broadcast audience (the transparency variant, slice 0028) is
+// visible to every member and to no admin — the mirror of the 'admins'
+// audience. Admins receive the actionable copy instead, so they must not also
+// see the member transparency row.
+func TestListNotificationsForRecipient_MembersAudience(t *testing.T) {
+	s := open(t)
+	seedUser(t, s, "u_admin", RoleAdmin)
+	seedUser(t, s, "u_mem", RoleMember)
+
+	box := newNotification("health:data-drive-missing")
+	if err := s.RaiseNotification(box); err != nil {
+		t.Fatalf("raise admins: %v", err)
+	}
+	members := newNotification("health:data-drive-missing:member")
+	members.Audience = notify.AudienceMembers
+	members.Variant = notify.VariantTransparency
+	if err := s.RaiseNotification(members); err != nil {
+		t.Fatalf("raise members: %v", err)
+	}
+
+	// Member sees the broadcast members row, never the admins row.
+	mem, err := s.ListNotificationsForRecipient(NotificationFilter{UserID: "u_mem", IsAdmin: false})
+	if err != nil {
+		t.Fatalf("list member: %v", err)
+	}
+	if !dedupSet(mem, "health:data-drive-missing:member") {
+		t.Errorf("member sees %v, want {health:data-drive-missing:member}", dedups(mem))
+	}
+
+	// Admin sees the admins row, never the members transparency row.
+	admin, err := s.ListNotificationsForRecipient(NotificationFilter{UserID: "u_admin", IsAdmin: true})
+	if err != nil {
+		t.Fatalf("list admin: %v", err)
+	}
+	if !dedupSet(admin, "health:data-drive-missing") {
+		t.Errorf("admin sees %v, want {health:data-drive-missing} only (not the member row)", dedups(admin))
+	}
+
+	// The member's badge counts the broadcast row.
+	if c, _ := s.CountUnreadNotifications("u_mem", false); c != 1 {
+		t.Errorf("member unread = %d, want 1 (the members broadcast)", c)
+	}
+}
+
 func TestListNotificationsForRecipient_ExcludesDismissed(t *testing.T) {
 	s := open(t)
 	seedUser(t, s, "u_admin", RoleAdmin)
@@ -414,6 +458,45 @@ func TestMarkAllNotificationsRead(t *testing.T) {
 		if n.ReadAt == 0 {
 			t.Errorf("%s still unread after mark-all", n.DedupKey)
 		}
+	}
+}
+
+// Mark-all-read goes through the same visibility clause as list/count, so a
+// member's mark-all must reach their broadcast 'members' rows (and their own
+// 'user' rows) while never touching 'admins' rows. Symmetry guard for the
+// member branch of the clause across all three read queries (slice 0028).
+func TestMarkAllNotificationsRead_MemberAudience(t *testing.T) {
+	s := open(t)
+	seedUser(t, s, "u_admin", RoleAdmin)
+	seedUser(t, s, "u_mem", RoleMember)
+
+	members := newNotification("health:data-drive-missing:member")
+	members.Audience = notify.AudienceMembers
+	if err := s.RaiseNotification(members); err != nil {
+		t.Fatalf("raise members: %v", err)
+	}
+	own := userNotification("app:foo:u_mem", "u_mem")
+	if err := s.RaiseNotification(own); err != nil {
+		t.Fatalf("raise user: %v", err)
+	}
+	// An admins row the member must not be able to read away.
+	if err := s.RaiseNotification(newNotification("health:canary-mismatch")); err != nil {
+		t.Fatalf("raise admins: %v", err)
+	}
+
+	if c, _ := s.CountUnreadNotifications("u_mem", false); c != 2 {
+		t.Fatalf("member unread before mark-all = %d, want 2", c)
+	}
+	if err := s.MarkAllNotificationsRead("u_mem", false, time.UnixMilli(2000)); err != nil {
+		t.Fatalf("mark all: %v", err)
+	}
+	if c, _ := s.CountUnreadNotifications("u_mem", false); c != 0 {
+		t.Errorf("member unread after mark-all = %d, want 0 (members + own rows read)", c)
+	}
+	// The admin still sees the admins row as unread — the member's mark-all did
+	// not reach it.
+	if c, _ := s.CountUnreadNotifications("u_admin", true); c != 1 {
+		t.Errorf("admin unread = %d, want 1 (untouched by member's mark-all)", c)
 	}
 }
 

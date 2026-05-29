@@ -76,8 +76,11 @@ func TestHealthRaised_AllowlistedProducesNotification(t *testing.T) {
 	fs := &fakeStore{}
 	newNotifier(fs).HealthRaised(issue("data-drive-missing", ""))
 
-	if len(fs.raised) != 1 {
-		t.Fatalf("want 1 raised notification, got %d", len(fs.raised))
+	// data-drive-missing is a member-transparency issue, so it raises two: the
+	// admin actionable (raised[0], asserted here) and the member transparency
+	// notice (raised[1], asserted in TestHealthRaised_MemberTransparency).
+	if len(fs.raised) != 2 {
+		t.Fatalf("want 2 raised notifications (admin + member), got %d", len(fs.raised))
 	}
 	n := fs.raised[0]
 	if n.SourceKind != SourceHealthIssue || n.SourceID != "data-drive-missing" {
@@ -134,19 +137,28 @@ func TestHealthRaised_NotAllowlisted_NoNotification(t *testing.T) {
 func TestHealthRaised_InstanceKeyInDedupKey(t *testing.T) {
 	fs := &fakeStore{}
 	newNotifier(fs).HealthRaised(issue("data-drive-missing", "inst-abc"))
-	if len(fs.raised) != 1 {
-		t.Fatalf("want 1 notification, got %d", len(fs.raised))
+	if len(fs.raised) != 2 {
+		t.Fatalf("want 2 notifications (admin + member), got %d", len(fs.raised))
 	}
 	if got := fs.raised[0].DedupKey; got != "health:data-drive-missing:inst-abc" {
-		t.Errorf("dedup_key = %q, want health:data-drive-missing:inst-abc", got)
+		t.Errorf("admin dedup_key = %q, want health:data-drive-missing:inst-abc", got)
+	}
+	// The member notice keys off the same base plus :member, so its clear
+	// resolves exactly its own raise.
+	if got := fs.raised[1].DedupKey; got != "health:data-drive-missing:inst-abc:member" {
+		t.Errorf("member dedup_key = %q, want health:data-drive-missing:inst-abc:member", got)
 	}
 }
 
 func TestHealthCleared_AllowlistedResolves(t *testing.T) {
 	fs := &fakeStore{}
 	newNotifier(fs).HealthCleared("data-drive-missing", "")
-	if len(fs.resolved) != 1 || fs.resolved[0] != "health:data-drive-missing" {
-		t.Fatalf("resolved = %v, want [health:data-drive-missing]", fs.resolved)
+	// A transparency issue resolves both the admin problem and the member notice.
+	if !contains(fs.resolved, "health:data-drive-missing") {
+		t.Errorf("resolved = %v, want it to include the admin problem key", fs.resolved)
+	}
+	if !contains(fs.resolved, "health:data-drive-missing:member") {
+		t.Errorf("resolved = %v, want it to include the member problem key", fs.resolved)
 	}
 	if fs.resolveAt[0] != time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) {
 		t.Errorf("resolve at = %v, want clock value", fs.resolveAt[0])
@@ -242,4 +254,148 @@ func TestHealthRaised_NotAllowlisted_NoPublish(t *testing.T) {
 	if len(fp.events) != 0 {
 		t.Fatalf("want no publish for non-allowlisted issue, got %d", len(fp.events))
 	}
+}
+
+// --- member transparency variant (slice 0028) -----------------------------
+
+// A box-blocking storage issue (data-drive-missing) emits, alongside the admin
+// actionable notification, an info-only transparency notice broadcast to members
+// (NOTIFICATIONS.md # Member transparency variant): no action link, info
+// severity regardless of the issue's own severity, keyed off the base dedup key
+// plus :member so it coalesces and clears independently of the admin row.
+func TestHealthRaised_MemberTransparency(t *testing.T) {
+	fs := &fakeStore{}
+	newNotifier(fs).HealthRaised(issue("data-drive-missing", ""))
+
+	m, ok := raisedByKey(fs, "health:data-drive-missing:member")
+	if !ok {
+		t.Fatalf("no member transparency notice raised; raised keys = %v", raisedKeys(fs))
+	}
+	if m.Audience != AudienceMembers || m.Variant != VariantTransparency {
+		t.Errorf("routing = {%q,%q}, want {members,transparency}", m.Audience, m.Variant)
+	}
+	if m.Severity != SeverityInfo {
+		t.Errorf("severity = %q, want info (transparency is never the issue's own severity)", m.Severity)
+	}
+	if m.ActionLabel != "" || m.ActionRoute != "" {
+		t.Errorf("action = {%q,%q}, want none (remediation is admin-gated)", m.ActionLabel, m.ActionRoute)
+	}
+	if m.Summary != memberPausedSummary || m.Body != memberPausedBody {
+		t.Errorf("copy = {%q,%q}, want the member paused copy", m.Summary, m.Body)
+	}
+	if m.SourceID != "data-drive-missing" {
+		t.Errorf("source_id = %q, want data-drive-missing", m.SourceID)
+	}
+}
+
+// An allowlisted issue NOT marked memberTransparency (canary-mismatch — a
+// System/state issue) notifies admins only, never broadcasting to members, even
+// though it also blocks writes. Guards against gating transparency on the
+// block-flags instead of the curated allowlist.
+func TestHealthRaised_NonTransparency_NoMemberNotice(t *testing.T) {
+	fs := &fakeStore{}
+	newNotifier(fs).HealthRaised(issue("canary-mismatch", ""))
+
+	if len(fs.raised) != 1 {
+		t.Fatalf("want 1 raised (admin only), got %d: %v", len(fs.raised), raisedKeys(fs))
+	}
+	if fs.raised[0].Audience != AudienceAdmins {
+		t.Errorf("audience = %q, want admins", fs.raised[0].Audience)
+	}
+}
+
+// --- "all clear" on resolve (slice 0028) ----------------------------------
+
+// Clearing a transparency issue resolves both problem rows AND emits an info
+// "all clear" to each audience (NOTIFICATIONS.md # Clears): an admin-actionable
+// resolved copy and a member transparency resolved copy, each keyed :cleared.
+func TestHealthCleared_EmitsAllClear(t *testing.T) {
+	fs := &fakeStore{}
+	newNotifier(fs).HealthCleared("data-drive-missing", "")
+
+	adminClear, ok := raisedByKey(fs, "health:data-drive-missing:cleared")
+	if !ok {
+		t.Fatalf("no admin all-clear raised; raised keys = %v", raisedKeys(fs))
+	}
+	if adminClear.Audience != AudienceAdmins || adminClear.Severity != SeverityInfo {
+		t.Errorf("admin all-clear routing = {%q,%q}, want {admins,info}", adminClear.Audience, adminClear.Severity)
+	}
+	if adminClear.Summary != "Your data drive is reconnected." {
+		t.Errorf("admin all-clear summary = %q, want the rule's clearSummary", adminClear.Summary)
+	}
+
+	memberClear, ok := raisedByKey(fs, "health:data-drive-missing:member:cleared")
+	if !ok {
+		t.Fatalf("no member all-clear raised; raised keys = %v", raisedKeys(fs))
+	}
+	if memberClear.Audience != AudienceMembers || memberClear.Severity != SeverityInfo {
+		t.Errorf("member all-clear routing = {%q,%q}, want {members,info}", memberClear.Audience, memberClear.Severity)
+	}
+	if memberClear.Summary != memberClearSummary {
+		t.Errorf("member all-clear summary = %q, want %q", memberClear.Summary, memberClearSummary)
+	}
+}
+
+// A non-transparency issue's clear emits the admin all-clear only — no member
+// row, mirroring the raise.
+func TestHealthCleared_NonTransparency_AdminAllClearOnly(t *testing.T) {
+	fs := &fakeStore{}
+	newNotifier(fs).HealthCleared("canary-mismatch", "")
+
+	if len(fs.raised) != 1 {
+		t.Fatalf("want 1 all-clear raised (admin only), got %d: %v", len(fs.raised), raisedKeys(fs))
+	}
+	if fs.raised[0].DedupKey != "health:canary-mismatch:cleared" || fs.raised[0].Audience != AudienceAdmins {
+		t.Errorf("all-clear = {%q,%q}, want {health:canary-mismatch:cleared,admins}", fs.raised[0].DedupKey, fs.raised[0].Audience)
+	}
+	// Only the admin problem is resolved (no member problem for this issue).
+	if !contains(fs.resolved, "health:canary-mismatch") {
+		t.Errorf("resolved = %v, want it to include the admin problem key", fs.resolved)
+	}
+	if contains(fs.resolved, "health:canary-mismatch:member") {
+		t.Errorf("resolved = %v, must not touch a member key for a non-transparency issue", fs.resolved)
+	}
+}
+
+// On raise the notifier resolves the paired all-clear keys, so a flap
+// (clear → raise) retracts the now-false "reconnected" notice rather than
+// leaving it next to the fresh problem (NOTIFICATIONS.md # Clears).
+func TestHealthRaised_ResolvesStaleAllClear(t *testing.T) {
+	fs := &fakeStore{}
+	newNotifier(fs).HealthRaised(issue("data-drive-missing", ""))
+
+	if !contains(fs.resolved, "health:data-drive-missing:cleared") {
+		t.Errorf("resolved = %v, want the admin all-clear key retracted on raise", fs.resolved)
+	}
+	if !contains(fs.resolved, "health:data-drive-missing:member:cleared") {
+		t.Errorf("resolved = %v, want the member all-clear key retracted on raise", fs.resolved)
+	}
+}
+
+// --- raised-notification lookup helpers ---
+
+func raisedByKey(fs *fakeStore, key string) (Notification, bool) {
+	for _, n := range fs.raised {
+		if n.DedupKey == key {
+			return n, true
+		}
+	}
+	return Notification{}, false
+}
+
+func raisedKeys(fs *fakeStore) []string {
+	out := make([]string, len(fs.raised))
+	for i, n := range fs.raised {
+		out[i] = n.DedupKey
+	}
+	return out
+}
+
+func contains(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }

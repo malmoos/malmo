@@ -27,9 +27,10 @@ func (s *Store) RaiseNotification(n notify.Notification) error {
 		return err
 	}
 	if rows, _ := res.RowsAffected(); rows > 0 {
-		// A coalesced re-raise is a fresh occurrence (this is only reached on a
-		// genuine cleared→active transition), so clear any per-recipient read/
-		// dismiss state — the notification re-surfaces unread on every bell
+		// A coalesced raise is a fresh occurrence (the notifier only re-raises a
+		// key on a genuine issue transition — a problem flapping back, or a
+		// repeated clear re-emitting its "all clear"), so clear any per-recipient
+		// read/dismiss state — the notification re-surfaces unread on every bell
 		// (NOTIFICATIONS.md # One notification per raise: "while unread"). The
 		// active row for this key is unique (notifications_active_dedup).
 		if _, err := s.db.Exec(
@@ -116,13 +117,16 @@ type NotificationFilter struct {
 
 // notificationVisibilityClause is the SQL predicate (over alias n) that scopes
 // notifications to a recipient (NOTIFICATIONS.md # Routing): an admin sees
-// box-wide ('admins') rows plus their own ('user') rows; a member sees only
-// their own. Either branch binds exactly one parameter — the caller's user id.
+// box-wide ('admins') rows plus their own ('user') rows; a member sees the
+// member-broadcast transparency rows ('members') plus their own. The two class
+// audiences are disjoint — admins never see 'members' rows (they get the
+// actionable copy) and members never see 'admins' rows. Either branch binds
+// exactly one parameter — the caller's user id.
 func notificationVisibilityClause(isAdmin bool) string {
 	if isAdmin {
 		return "(n.audience = 'admins' OR (n.audience = 'user' AND n.user_id = ?))"
 	}
-	return "(n.audience = 'user' AND n.user_id = ?)"
+	return "(n.audience = 'members' OR (n.audience = 'user' AND n.user_id = ?))"
 }
 
 // ListNotificationsForRecipient returns the caller's notifications newest-first,

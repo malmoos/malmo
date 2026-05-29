@@ -49,7 +49,7 @@ A notification is a typed record in the brain's SQLite. Shape:
   "source_id":   "data-drive-missing",       // links back to the originating event/issue type
   "dedup_key":   "health:data-drive-missing",// coalescing key — see Lifecycle
 
-  "audience":    "admins",                   // admins | user
+  "audience":    "admins",                   // admins | members | user
   "user_id":     null,                       // set when audience = user
   "variant":     "actionable",               // actionable | transparency (see Routing)
 
@@ -85,6 +85,7 @@ A notification goes to whoever can **act** on it, and/or whoever it is personall
 Recipients:
 
 - **Admin** — all admins.
+- **Members** — all non-admin users; the broadcast audience for the transparency variant below.
 - **Owner** — the member who owns the specific app instance.
 - **Self** — the account the event is about.
 
@@ -93,6 +94,8 @@ Recipients:
 When a **box-wide critical** issue blocks something a member uses (e.g. `disk-full` → uploads paused, `data-drive-missing` → saving paused), the member receives an **info-only `transparency` variant**: a non-actionable notice ("Saving is paused — your admin has been notified") so the "why can't I upload?" question answers itself. The **actionable** variant — with the fix link — goes to admins. This mirrors HEALTH's existing stance that members see degraded-state banners for transparency while Tier-2 remediation stays admin-gated.
 
 The transparency variant has no `action` and is purely informational; it clears (or flips to an "all clear" info notification) when the underlying issue clears.
+
+**Delivery (as implemented).** The transparency notice is one row with `audience: members` — a class broadcast, the mirror of `admins`, read/dismissed per-recipient via the same `notification_reads` join. Which issues emit it is a curated property of the notification allowlist (the storage drive issues the table below marks "+ member transparency"), *not* a function of an issue's `blocks_writes` flag: `canary-mismatch` and `mergerfs-assembly-failed` also block writes but stay admin-only, because they are System/state plumbing, not the member-legible "your saving is paused" condition. The notice is `info` severity regardless of the originating issue's severity (the member's experience is the same whether the drive is missing or wrong). On clear, the member notice resolves and a member "all clear" (`info`) is emitted; on a flap (re-raise after clear) the now-false all-clear is retracted.
 
 ## The notification list (v1 source allowlist)
 
