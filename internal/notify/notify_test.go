@@ -5,16 +5,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/malmo/malmo/internal/events"
 	"github.com/malmo/malmo/internal/health"
 )
 
 // fakeStore captures Raise/Resolve calls so the derivation logic can be tested
 // without SQLite. The coalescing SQL itself is tested in internal/store.
 type fakeStore struct {
-	raised    []Notification
-	resolved  []string // dedup keys
-	resolveAt []time.Time
-	raiseErr  error
+	raised     []Notification
+	resolved   []string // dedup keys
+	resolveAt  []time.Time
+	raiseErr   error
+	resolveErr error
 }
 
 func (f *fakeStore) RaiseNotification(n Notification) error {
@@ -26,9 +28,27 @@ func (f *fakeStore) RaiseNotification(n Notification) error {
 }
 
 func (f *fakeStore) ResolveNotification(dedupKey string, at time.Time) error {
+	if f.resolveErr != nil {
+		return f.resolveErr
+	}
 	f.resolved = append(f.resolved, dedupKey)
 	f.resolveAt = append(f.resolveAt, at)
 	return nil
+}
+
+// fakePublisher captures SSE events so the notifier's bus emission can be
+// asserted without a real events.Bus.
+type publishedEvent struct {
+	kind events.Kind
+	data map[string]any
+}
+
+type fakePublisher struct {
+	events []publishedEvent
+}
+
+func (f *fakePublisher) Publish(kind events.Kind, data map[string]any) {
+	f.events = append(f.events, publishedEvent{kind, data})
 }
 
 func issue(id, instanceKey string) health.Issue {
@@ -43,7 +63,11 @@ func issue(id, instanceKey string) health.Issue {
 }
 
 func newNotifier(s NotificationStore) *Notifier {
-	n := New(s)
+	return newNotifierWithPub(s, nil)
+}
+
+func newNotifierWithPub(s NotificationStore, pub Publisher) *Notifier {
+	n := New(s, pub)
 	n.SetClock(func() time.Time { return time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC) })
 	return n
 }
@@ -145,5 +169,77 @@ func TestHealthRaised_StoreErrorSwallowed(t *testing.T) {
 	newNotifier(fs).HealthRaised(issue("data-drive-missing", "")) // must not panic
 	if len(fs.raised) != 0 {
 		t.Fatalf("raise should have errored before capture, got %d", len(fs.raised))
+	}
+}
+
+// On a successful raise the notifier publishes notification.created onto the
+// bus so the dashboard bell updates without a refresh. The payload is an
+// advisory refetch trigger (dedup_key + category/severity for a future toast
+// decision), not the notification body.
+func TestHealthRaised_PublishesCreated(t *testing.T) {
+	fs := &fakeStore{}
+	fp := &fakePublisher{}
+	newNotifierWithPub(fs, fp).HealthRaised(issue("data-drive-missing", ""))
+
+	if len(fp.events) != 1 {
+		t.Fatalf("want 1 published event, got %d", len(fp.events))
+	}
+	ev := fp.events[0]
+	if ev.kind != events.NotificationCreated {
+		t.Errorf("kind = %q, want notification.created", ev.kind)
+	}
+	if ev.data["dedup_key"] != "health:data-drive-missing" {
+		t.Errorf("dedup_key payload = %v", ev.data["dedup_key"])
+	}
+	if ev.data["category"] != "storage" || ev.data["severity"] != "critical" {
+		t.Errorf("payload = %v, want category=storage severity=critical", ev.data)
+	}
+}
+
+// On a clear the notifier publishes notification.updated keyed to the same
+// dedup_key (read/resolve/dismiss all ride this one kind).
+func TestHealthCleared_PublishesUpdated(t *testing.T) {
+	fs := &fakeStore{}
+	fp := &fakePublisher{}
+	newNotifierWithPub(fs, fp).HealthCleared("data-drive-missing", "")
+
+	if len(fp.events) != 1 || fp.events[0].kind != events.NotificationUpdated {
+		t.Fatalf("want 1 notification.updated event, got %v", fp.events)
+	}
+	if fp.events[0].data["dedup_key"] != "health:data-drive-missing" {
+		t.Errorf("dedup_key payload = %v", fp.events[0].data["dedup_key"])
+	}
+}
+
+// A store error skips the publish — nothing was written, so the bell must not
+// be told a notification appeared.
+func TestHealthRaised_StoreError_NoPublish(t *testing.T) {
+	fs := &fakeStore{raiseErr: errors.New("db down")}
+	fp := &fakePublisher{}
+	newNotifierWithPub(fs, fp).HealthRaised(issue("data-drive-missing", ""))
+	if len(fp.events) != 0 {
+		t.Fatalf("want no publish on store error, got %d", len(fp.events))
+	}
+}
+
+// Symmetric with TestHealthRaised_StoreError_NoPublish: a resolve that errors
+// skips the publish — nothing changed in the store, so the bell must not be
+// told a notification updated. Guards the early return in HealthCleared.
+func TestHealthCleared_StoreError_NoPublish(t *testing.T) {
+	fs := &fakeStore{resolveErr: errors.New("db down")}
+	fp := &fakePublisher{}
+	newNotifierWithPub(fs, fp).HealthCleared("data-drive-missing", "")
+	if len(fp.events) != 0 {
+		t.Fatalf("want no publish on resolve error, got %d", len(fp.events))
+	}
+}
+
+// A non-allowlisted issue neither writes nor publishes.
+func TestHealthRaised_NotAllowlisted_NoPublish(t *testing.T) {
+	fs := &fakeStore{}
+	fp := &fakePublisher{}
+	newNotifierWithPub(fs, fp).HealthRaised(issue("health-report-malformed", ""))
+	if len(fp.events) != 0 {
+		t.Fatalf("want no publish for non-allowlisted issue, got %d", len(fp.events))
 	}
 }

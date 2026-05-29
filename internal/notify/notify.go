@@ -5,18 +5,21 @@
 // it maps a bounded, code-registered allowlist of health issue IDs to a
 // persisted, prunable notification.
 //
-// Scope of this slice (the write seam only): on a health-issue *transition*
-// the Notifier emits one notification (coalesced by dedup_key) routed to
-// admins; on clear it marks the notification resolved. The bell UI, the
-// list/read/dismiss API, the SSE event kinds, per-recipient read state, the
-// member transparency variant, and off-box transports are all deferred to
-// later slices (see docs/progress/0025-health-notifications.md).
+// On a health-issue *transition* the Notifier emits one notification
+// (coalesced by dedup_key) routed to admins, and on clear marks it resolved.
+// It also publishes notification.created / notification.updated onto the SSE
+// bus so the dashboard bell updates without a refresh (the read surface — the
+// list/read/dismiss API and per-recipient read state — lives in store + api,
+// docs/progress/0026-notification-read-surface.md). The member transparency
+// variant, the "all clear" resolved follow-up, per-category mute, the bell UI,
+// and off-box transports remain deferred to later slices.
 package notify
 
 import (
 	"log/slog"
 	"time"
 
+	"github.com/malmo/malmo/internal/events"
 	"github.com/malmo/malmo/internal/health"
 )
 
@@ -57,9 +60,12 @@ const (
 
 // Notification is the typed record persisted in the brain's SQLite
 // `notifications` table (NOTIFICATIONS.md # The notification model). It is
-// mutable and prunable — distinct from the append-only audit log. The
-// read_at / dismissed_at columns exist on the table for forward compatibility
-// but are not modeled here: per-recipient read state is a later slice.
+// mutable and prunable — distinct from the append-only audit log.
+//
+// ReadAt / DismissedAt are *per-recipient* state: they live in the
+// notification_reads join, not on the notification row, and are populated only
+// by the recipient-scoped read query (ListNotificationsForRecipient). On the
+// write path they are zero.
 type Notification struct {
 	ID          int64
 	TS          int64 // unix epoch ms — most-recent occurrence
@@ -76,6 +82,8 @@ type Notification struct {
 	ActionLabel string // "" → no action link
 	ActionRoute string
 	ResolvedAt  int64 // 0 = active; set when the underlying condition clears
+	ReadAt      int64 // 0 = unread for this recipient (per-recipient, from the join)
+	DismissedAt int64 // 0 = not dismissed by this recipient (per-recipient, from the join)
 }
 
 // NotificationStore is the persistence surface notify needs. Declared here so
@@ -89,6 +97,16 @@ type NotificationStore interface {
 	// ResolveNotification marks the active notification for dedupKey resolved.
 	// No-op when no active row matches (idempotent).
 	ResolveNotification(dedupKey string, at time.Time) error
+}
+
+// Publisher fans a notification lifecycle change onto the SSE bus so the
+// dashboard bell updates without a refresh (NOTIFICATIONS.md # Surfaces). The
+// payload is advisory — a refetch trigger, not a data channel — so the client
+// re-reads the audience-scoped list (WEB_UI.md). Consumer-side interface
+// (CLAUDE.md): events.Bus implements it. Optional — a nil Publisher disables
+// SSE emission (the bell is a floor, not a gate).
+type Publisher interface {
+	Publish(kind events.Kind, data map[string]any)
 }
 
 // healthRule binds one health issue ID to how it notifies. This is the
@@ -127,12 +145,22 @@ var healthRules = map[string]healthRule{
 // triggering operation (NOTIFICATIONS.md: the bell is a floor, not a gate).
 type Notifier struct {
 	store NotificationStore
+	pub   Publisher // may be nil — SSE emission is then a no-op
 	now   func() time.Time
 }
 
-// New returns a Notifier backed by the given store.
-func New(s NotificationStore) *Notifier {
-	return &Notifier{store: s, now: func() time.Time { return time.Now().UTC() }}
+// New returns a Notifier backed by the given store, publishing lifecycle
+// changes onto pub (pass nil to disable SSE emission).
+func New(s NotificationStore, pub Publisher) *Notifier {
+	return &Notifier{store: s, pub: pub, now: func() time.Time { return time.Now().UTC() }}
+}
+
+// publish emits an SSE event if a Publisher is wired. Best-effort: a missing
+// bus never blocks the notification write.
+func (n *Notifier) publish(kind events.Kind, data map[string]any) {
+	if n.pub != nil {
+		n.pub.Publish(kind, data)
+	}
 }
 
 // SetClock swaps the time source — tests use this to assert TS without sleeping.
@@ -164,7 +192,13 @@ func (n *Notifier) HealthRaised(iss health.Issue) {
 	}
 	if err := n.store.RaiseNotification(notif); err != nil {
 		slog.Error("notify: raise failed", "source_id", iss.ID, "err", err)
+		return
 	}
+	n.publish(events.NotificationCreated, map[string]any{
+		"dedup_key": notif.DedupKey,
+		"category":  string(notif.Category),
+		"severity":  string(notif.Severity),
+	})
 }
 
 // HealthCleared marks the notification for a cleared health issue resolved.
@@ -175,9 +209,12 @@ func (n *Notifier) HealthCleared(id, instanceKey string) {
 	if _, ok := healthRules[id]; !ok {
 		return
 	}
-	if err := n.store.ResolveNotification(healthDedupKey(id, instanceKey), n.now()); err != nil {
+	dedupKey := healthDedupKey(id, instanceKey)
+	if err := n.store.ResolveNotification(dedupKey, n.now()); err != nil {
 		slog.Error("notify: resolve failed", "source_id", id, "err", err)
+		return
 	}
+	n.publish(events.NotificationUpdated, map[string]any{"dedup_key": dedupKey})
 }
 
 // healthDedupKey is the coalescing key for a HEALTH-derived notification:
