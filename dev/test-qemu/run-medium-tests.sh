@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # Medium-lane test driver: QEMU + swtpm + SSH-driven assertions.
 #
-# Slice 0021 scope: scaffolding only. Boot a real Linux kernel in QEMU
-# with a software TPM, SSH in, run /usr/local/bin/medium-assertions.sh
-# (baked into the image at build time), scp the verdict back, shut
-# down. See docs/specs/TESTING.md # Medium lane and
-# docs/progress/0021-qemu-medium-lane-scaffolding.md.
+# Boots the LUKS-encrypted image through TWO sequential QEMU processes
+# against one shared disk overlay + OVMF vars + swtpm state (slice 0023
+# Stages 2-3):
+#   boot 1  recovery-passphrase credential supplied → initrd unlocks the
+#           TPM-less root → run-once unit enrolls a PCR-7 TPM2 keyslot.
+#   boot 2  no credential → root can only unlock via that TPM2 token, so
+#           reaching multi-user proves unattended PCR-7 unseal.
+# Each boot SSHes in, runs /usr/local/bin/medium-assertions.sh <phase>
+# (baked into the image at build time), scp's the verdict back, powers
+# off. See docs/specs/TESTING.md # Medium lane and
+# docs/progress/0023-luks-tpm-enrollment.md.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -121,20 +127,58 @@ fi
 [ -n "$SSH_PORT" ] || { echo "could not allocate ssh forward port" >&2; exit 1; }
 echo "ssh forward: 127.0.0.1:${SSH_PORT} -> guest:22"
 
-# --- 4. launch swtpm
+# --- 4. swtpm lifecycle: one emulator instance *per boot*, both against
+# the same persistent --tpmstate dir. swtpm exits when its QEMU client
+# disconnects, so a single shared instance can't span the two sequential
+# QEMU processes (the first boot's poweroff tears it down, leaving the
+# second boot with no socket to connect to). Relaunching per boot is also
+# the faithful model: it's a TPM *power cycle* — volatile PCRs reset and
+# get re-measured to identical values by the (identical) firmware, while
+# the persistent SRK + NVRAM live in the state dir, so the PCR-7-sealed
+# keyslot enrolled in boot 1 unseals in boot 2.
 mkdir -p "$SWTPM_DIR"
-swtpm socket \
-    --tpmstate "dir=$SWTPM_DIR" \
-    --ctrl "type=unixio,path=$SWTPM_SOCK" \
-    --tpm2 \
-    --daemon \
-    --pid "file=${SWTPM_DIR}/pid" \
-    --log "file=${SWTPM_DIR}/log,level=20"
-# swtpm --daemon backgrounds and writes the pid file.
-sleep 0.2
-if [ -f "${SWTPM_DIR}/pid" ]; then
-    SWTPM_PID="$(cat "${SWTPM_DIR}/pid")"
-fi
+
+start_swtpm() {
+    local phase="$1"
+    # Per-phase log so a boot-2 failure doesn't clobber boot-1's TPM log
+    # (the enroll-vs-unseal interaction is exactly what you'd diff).
+    local log="${SWTPM_DIR}/log-${phase}"
+    swtpm socket \
+        --tpmstate "dir=$SWTPM_DIR" \
+        --ctrl "type=unixio,path=$SWTPM_SOCK" \
+        --tpm2 \
+        --daemon \
+        --pid "file=${SWTPM_DIR}/pid" \
+        --log "file=${log},level=20"
+    # swtpm --daemon backgrounds and writes the pid file.
+    SWTPM_PID=""
+    sleep 0.2
+    [ -f "${SWTPM_DIR}/pid" ] && SWTPM_PID="$(cat "${SWTPM_DIR}/pid")"
+    # Wait (bounded) for the control socket before QEMU tries to connect.
+    for _i in $(seq 1 50); do
+        [ -S "$SWTPM_SOCK" ] && break
+        sleep 0.1
+    done
+    # Fail fast if swtpm never came up — otherwise QEMU fails to connect
+    # and the driver mis-reports it as "qemu died before sshd", masking
+    # the real cause (the swtpm log holds it).
+    [ -S "$SWTPM_SOCK" ] || {
+        echo "swtpm control socket never appeared; see ${log}" >&2
+        return 1
+    }
+}
+
+stop_swtpm() {
+    [ -n "$SWTPM_PID" ] || return 0
+    kill -TERM "$SWTPM_PID" 2>/dev/null || true
+    for _i in $(seq 1 20); do
+        kill -0 "$SWTPM_PID" 2>/dev/null || break
+        sleep 0.1
+    done
+    kill -KILL "$SWTPM_PID" 2>/dev/null || true
+    SWTPM_PID=""
+    rm -f "$SWTPM_SOCK"
+}
 
 # --- 5. launch QEMU
 ACCEL=tcg
@@ -167,7 +211,10 @@ qemu-img create -q -f qcow2 -F raw -b "$IMAGE_OUT" "$OVERLAY"
 qemu_base_args() {
     QEMU_ARGS=(
         -machine "q35,accel=${ACCEL}"
-        -cpu host
+        # -cpu host requires KVM (QEMU rejects it under TCG with "kvm
+        # required by -cpu host"); fall back to -cpu max on the no-KVM
+        # software-emulation path so the harness still launches.
+        -cpu "$([ "$ACCEL" = kvm ] && echo host || echo max)"
         # 2G, not 1G: the LUKS2 recovery keyslot uses Argon2id, whose
         # memory cost systemd-repart calibrated on the big-RAM *build
         # host* (libcryptsetup default caps it near 1 GiB). Unlocking
@@ -196,15 +243,9 @@ qemu_base_args() {
     fi
 }
 
-qemu_base_args
-# First boot: include the recovery-passphrase credential.
-QEMU_ARGS+=( -smbios "$LUKS_CRED" )
-
-echo "launching qemu (accel=${ACCEL})..."
-qemu-system-x86_64 "${QEMU_ARGS[@]}" &
-QEMU_PID=$!
-
-# --- 6. poll for SSH availability (boot takes 10-30s on KVM)
+# --- 6. SSH options shared by both boots. The hostfwd port is reused
+# across boots — they run strictly sequentially (boot 1 fully exits
+# before boot 2 launches), so there's no contention.
 SSH_OPTS=(
     -p "$SSH_PORT"
     -i "$SSH_KEY"
@@ -214,68 +255,124 @@ SSH_OPTS=(
     -o ConnectTimeout=2
     -o BatchMode=yes
 )
-echo "waiting for sshd..."
-for _i in $(seq 1 90); do
-    if ssh "${SSH_OPTS[@]}" "root@127.0.0.1" true 2>/dev/null; then
-        echo "ssh up (${_i}s)"
-        break
-    fi
-    if ! kill -0 "$QEMU_PID" 2>/dev/null; then
-        echo "qemu died before sshd came up. serial log:" >&2
-        dump_serial
-        exit 1
-    fi
-    sleep 1
-done
 
-# Final check — if we exited the loop without ssh, fail clearly.
-if ! ssh "${SSH_OPTS[@]}" "root@127.0.0.1" true 2>/dev/null; then
-    echo "ssh never reachable after 90s. serial log tail:" >&2
-    dump_serial
-    exit 1
-fi
-
-# --- 7. run assertions inside the VM
-echo "running in-VM assertions..."
-ssh "${SSH_OPTS[@]}" "root@127.0.0.1" \
-    "/usr/local/bin/medium-assertions.sh" || true
-# scp the verdict back (note: scp uses -P for port, not -p).
-scp -P "$SSH_PORT" -i "$SSH_KEY" \
-    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -o LogLevel=ERROR -o ConnectTimeout=2 -o BatchMode=yes \
-    "root@127.0.0.1:/var/lib/malmo-medium-result" \
-    "$RESULT_FILE" 2>/dev/null || true
-
-# --- 8. shut down the guest cleanly
-ssh "${SSH_OPTS[@]}" "root@127.0.0.1" "systemctl poweroff" 2>/dev/null || true
-
-# Bounded wait for QEMU to exit on its own (clean poweroff). SIGKILL
+# Bounded wait for the current QEMU to exit (clean poweroff), SIGKILL
 # fallback after 15s — same pattern as the fast lane's container kill.
-for _i in $(seq 1 15); do
-    if ! kill -0 "$QEMU_PID" 2>/dev/null; then
-        break
+# Clears QEMU_PID so the EXIT trap doesn't double-kill.
+kill_qemu() {
+    [ -n "$QEMU_PID" ] || return 0
+    for _i in $(seq 1 15); do
+        kill -0 "$QEMU_PID" 2>/dev/null || break
+        sleep 1
+    done
+    if kill -0 "$QEMU_PID" 2>/dev/null; then
+        kill -KILL "$QEMU_PID" 2>/dev/null || true
     fi
-    sleep 1
-done
-QEMU_RC=0
-if kill -0 "$QEMU_PID" 2>/dev/null; then
-    kill -KILL "$QEMU_PID" 2>/dev/null || true
-fi
-wait "$QEMU_PID" 2>/dev/null || QEMU_RC=$?
-if [ "$QEMU_RC" -ne 0 ] && [ "$QEMU_RC" -ne 137 ] && [ "$QEMU_RC" -ne 143 ]; then
-    echo "warning: qemu exited rc=$QEMU_RC" >&2
-fi
+    wait "$QEMU_PID" 2>/dev/null || true
+    QEMU_PID=""
+    # Tear down this boot's TPM emulator too — swtpm is relaunched per
+    # boot against the shared state dir (see start_swtpm).
+    stop_swtpm
+}
 
-# --- 9. verdict
-VERDICT="$(cat "$RESULT_FILE" 2>/dev/null || true)"
-if [ -z "$VERDICT" ]; then
-    echo "FAIL: no verdict written (qemu rc=$QEMU_RC, serial tail:)" >&2
-    dump_serial
+# Boot the image once and run one phase of in-VM assertions against it.
+# The disk overlay, OVMF vars, and swtpm state all persist across the two
+# calls (created/launched once, above), so the TPM2 keyslot the first
+# boot enrolls into the on-disk LUKS header unseals on the second boot
+# under an identical firmware + PCR-7 measurement. Sets the global VERDICT
+# to the phase's PASS / FAIL string; returns non-zero on any failure.
+#
+#   run_boot <phase> [extra qemu args...]
+run_boot() {
+    local phase="$1"; shift
+    QEMU_SERIAL="${RUN_DIR}/serial-${phase}.log"
+    QEMU_PID=""
+
+    qemu_base_args
+    QEMU_ARGS+=( "$@" )
+
+    echo "=== boot phase=${phase} (accel=${ACCEL}) ==="
+    # Fresh TPM emulator for this boot (shared persistent state dir).
+    if ! start_swtpm "$phase"; then
+        VERDICT="FAIL: swtpm did not start (phase ${phase})"
+        return 1
+    fi
+    qemu-system-x86_64 "${QEMU_ARGS[@]}" &
+    QEMU_PID=$!
+
+    echo "waiting for sshd..."
+    local up=""
+    for _i in $(seq 1 90); do
+        if ssh "${SSH_OPTS[@]}" "root@127.0.0.1" true 2>/dev/null; then
+            echo "ssh up (${_i}s)"; up=1; break
+        fi
+        if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+            echo "qemu (phase=${phase}) died before sshd came up. serial:" >&2
+            dump_serial
+            stop_swtpm
+            VERDICT="FAIL: qemu died before sshd (phase ${phase})"
+            return 1
+        fi
+        sleep 1
+    done
+    if [ -z "$up" ]; then
+        echo "ssh never reachable after 90s (phase=${phase}). serial:" >&2
+        dump_serial
+        kill_qemu
+        VERDICT="FAIL: ssh never reachable (phase ${phase})"
+        return 1
+    fi
+
+    echo "running in-VM assertions (phase=${phase})..."
+    ssh "${SSH_OPTS[@]}" "root@127.0.0.1" \
+        "/usr/local/bin/medium-assertions.sh ${phase}" || true
+    # scp the verdict back (note: scp uses -P for port, not -p).
+    scp -P "$SSH_PORT" -i "$SSH_KEY" \
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        -o LogLevel=ERROR -o ConnectTimeout=2 -o BatchMode=yes \
+        "root@127.0.0.1:/var/lib/malmo-medium-result" \
+        "$RESULT_FILE" 2>/dev/null || true
+    VERDICT="$(cat "$RESULT_FILE" 2>/dev/null || true)"
+
+    # Clean shutdown so the LUKS-header writes (first-boot enrollment)
+    # flush to the overlay before the next boot reads them back.
+    ssh "${SSH_OPTS[@]}" "root@127.0.0.1" "systemctl poweroff" 2>/dev/null || true
+    kill_qemu
+
+    if [ -z "$VERDICT" ]; then
+        echo "no verdict written (phase=${phase}). serial:" >&2
+        dump_serial
+        VERDICT="FAIL: no verdict (phase ${phase})"
+        return 1
+    fi
+    if [ "$VERDICT" != "PASS" ]; then
+        dump_serial
+        return 1
+    fi
+    return 0
+}
+
+# --- 7. two-boot cycle (slice 0023 Stages 2 + 3).
+#
+# Boot 1 (enrollment): supply the recovery-passphrase credential over
+# SMBIOS so the initrd can unlock the still-TPM-less root; the run-once
+# malmo-tpm-enroll.service then adds the PCR-7-bound TPM2 keyslot.
+if ! run_boot "first-boot" -smbios "$LUKS_CRED"; then
+    echo "medium-lane test: ${VERDICT}" >&2
     exit 1
 fi
-if [ "$VERDICT" = "PASS" ]; then
-    echo "medium-lane test: PASS"
-    exit 0
+echo "first boot OK — TPM2 keyslot enrolled (PCR 7)"
+
+# Boot 2 (unseal): deliberately NO credential. The recovery keyslot is
+# unreachable (no passphrase, serial-only console), so the only way root
+# unlocks is the TPM2 token enrolled above — booting to multi-user is the
+# unattended-unseal proof. Same overlay + swtpm + OVMF vars as boot 1, so
+# PCR 7 reproduces and the sealed keyslot opens.
+if ! run_boot "second-boot"; then
+    echo "medium-lane test: ${VERDICT}" >&2
+    exit 1
 fi
-echo "medium-lane test: $VERDICT" >&2
-exit 1
+echo "second boot OK — unattended PCR-7 TPM2 unseal"
+
+echo "medium-lane test: PASS"
+exit 0
