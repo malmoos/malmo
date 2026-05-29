@@ -2,6 +2,7 @@ package health
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -113,8 +114,8 @@ func TestApplyStorageFindings_RaiseAndClear(t *testing.T) {
 	raised, cleared := m.ApplyStorageFindings(protocol.StorageHealth{
 		Findings: []protocol.Finding{{ID: "data-drive-missing", Details: "x"}},
 	})
-	if raised != 1 || cleared != 0 {
-		t.Errorf("first poll: want raised=1 cleared=0, got %d/%d", raised, cleared)
+	if len(raised) != 1 || len(cleared) != 0 {
+		t.Errorf("first poll: want raised=1 cleared=0, got %d/%d", len(raised), len(cleared))
 	}
 	if len(m.List()) != 1 {
 		t.Fatalf("active: want 1, got %d", len(m.List()))
@@ -124,11 +125,83 @@ func TestApplyStorageFindings_RaiseAndClear(t *testing.T) {
 	raised, cleared = m.ApplyStorageFindings(protocol.StorageHealth{
 		Findings: []protocol.Finding{},
 	})
-	if raised != 0 || cleared != 1 {
-		t.Errorf("clear poll: want raised=0 cleared=1, got %d/%d", raised, cleared)
+	if len(raised) != 0 || len(cleared) != 1 {
+		t.Errorf("clear poll: want raised=0 cleared=1, got %d/%d", len(raised), len(cleared))
 	}
 	if len(m.List()) != 0 {
 		t.Fatalf("active: want 0 after clear, got %d", len(m.List()))
+	}
+}
+
+// TestApplyStorageFindings_ReturnsAffectedKeys pins the per-issue return
+// contract the audit hook depends on: the returned slices carry the exact
+// issue keys that transitioned (not a count), sorted by ID for a stable
+// per-issue audit-record order.
+//
+// Three findings (not two) in non-sorted input order make the sort
+// load-bearing: with only two keys, Go's map-iteration randomization is weak
+// enough that an implementation missing the sort would still pass too often
+// to guard anything.
+func TestApplyStorageFindings_ReturnsAffectedKeys(t *testing.T) {
+	m := NewManager(nil)
+
+	// First poll raises three issues, supplied in non-sorted order. The
+	// returned slice must come back sorted by ID.
+	raised, cleared := m.ApplyStorageFindings(protocol.StorageHealth{
+		Findings: []protocol.Finding{
+			{ID: "mergerfs-assembly-failed"},
+			{ID: "data-drive-missing"},
+			{ID: "canary-mismatch"},
+		},
+	})
+	if len(cleared) != 0 {
+		t.Errorf("first poll: want 0 cleared, got %v", cleared)
+	}
+	wantRaised := []IssueKey{
+		{ID: "canary-mismatch"},
+		{ID: "data-drive-missing"},
+		{ID: "mergerfs-assembly-failed"},
+	}
+	if !reflect.DeepEqual(raised, wantRaised) {
+		t.Errorf("first poll raised: want %v, got %v", wantRaised, raised)
+	}
+
+	// Second poll keeps canary-mismatch, drops the other two: no raises, two
+	// cleared keys, also returned sorted by ID.
+	raised, cleared = m.ApplyStorageFindings(protocol.StorageHealth{
+		Findings: []protocol.Finding{{ID: "canary-mismatch"}},
+	})
+	if len(raised) != 0 {
+		t.Errorf("second poll: want 0 raised, got %v", raised)
+	}
+	wantCleared := []IssueKey{
+		{ID: "data-drive-missing"},
+		{ID: "mergerfs-assembly-failed"},
+	}
+	if !reflect.DeepEqual(cleared, wantCleared) {
+		t.Errorf("second poll cleared: want %v, got %v", wantCleared, cleared)
+	}
+}
+
+// TestSortIssueKeys_TieBreakOnInstanceKey pins both sort dimensions: primary
+// by ID, tie-broken by InstanceKey. The InstanceKey path is unreachable
+// through ApplyStorageFindings today (protocol.Finding has no InstanceKey
+// field), so this exercises it directly to keep the contract honest for when
+// per-instance findings land.
+func TestSortIssueKeys_TieBreakOnInstanceKey(t *testing.T) {
+	ks := []IssueKey{
+		{ID: "data-drive-missing", InstanceKey: "b"},
+		{ID: "data-drive-missing", InstanceKey: "a"},
+		{ID: "canary-mismatch", InstanceKey: "z"},
+	}
+	sortIssueKeys(ks)
+	want := []IssueKey{
+		{ID: "canary-mismatch", InstanceKey: "z"},
+		{ID: "data-drive-missing", InstanceKey: "a"},
+		{ID: "data-drive-missing", InstanceKey: "b"},
+	}
+	if !reflect.DeepEqual(ks, want) {
+		t.Errorf("sorted keys: want %v, got %v", want, ks)
 	}
 }
 
@@ -222,11 +295,11 @@ func TestApplyStorageFindings_UnknownIDsAreDropped(t *testing.T) {
 			{ID: "not-a-real-issue-id"},
 		},
 	})
-	if raised != 1 {
-		t.Errorf("raised: want 1 (the known ID), got %d", raised)
+	if len(raised) != 1 || raised[0].ID != "data-drive-missing" {
+		t.Errorf("raised: want [data-drive-missing] (the known ID), got %v", raised)
 	}
-	if cleared != 0 {
-		t.Errorf("cleared: want 0, got %d", cleared)
+	if len(cleared) != 0 {
+		t.Errorf("cleared: want 0, got %d", len(cleared))
 	}
 	if len(m.List()) != 1 || m.List()[0].ID != "data-drive-missing" {
 		t.Fatalf("only the known finding should land in the registry, got %v", m.List())

@@ -175,8 +175,8 @@ func env(k, def string) string {
 // pullStorageHealth fetches the current storage findings from host-agent and
 // reconciles them into the health registry. Non-blocking: if host-agent isn't
 // reachable yet, we log and return — the brain still starts. The poll loop
-// will catch up once host-agent comes online. Audit records are emitted for
-// transitions (raise/clear counts > 0).
+// will catch up once host-agent comes online. Transitions are audited per
+// issue (see emitHealthTransitions).
 func pullStorageHealth(ctx context.Context, host *hostclient.Client, healthMgr *health.Manager, auditor *audit.Recorder) {
 	c, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -187,19 +187,26 @@ func pullStorageHealth(ctx context.Context, host *hostclient.Client, healthMgr *
 		return
 	}
 	raised, cleared := healthMgr.ApplyStorageFindings(sh)
-	if raised > 0 || cleared > 0 {
+	if len(raised) > 0 || len(cleared) > 0 {
 		slog.Info("storage health: reconciled",
-			"raised", raised, "cleared", cleared, "active_findings", len(sh.Findings))
+			"raised", len(raised), "cleared", len(cleared), "active_findings", len(sh.Findings))
 	}
-	if raised > 0 {
+	emitHealthTransitions(ctx, auditor, raised, cleared)
+}
+
+// emitHealthTransitions writes one audit record per transitioned health issue,
+// targeting {kind: health_issue, id: <id>}, so the Activity view attributes
+// each raise/clear to a specific issue rather than a bulk count. No-op when
+// both slices are empty — the steady-state case, since most polls change
+// nothing.
+func emitHealthTransitions(ctx context.Context, auditor *audit.Recorder, raised, cleared []health.IssueKey) {
+	for _, k := range raised {
 		auditor.Record(ctx, audit.ActionHealthIssueRaised,
-			audit.Target{Kind: "health_issue"},
-			map[string]any{"count": raised}, true)
+			audit.Target{Kind: "health_issue", ID: k.ID}, nil, true)
 	}
-	if cleared > 0 {
+	for _, k := range cleared {
 		auditor.Record(ctx, audit.ActionHealthIssueCleared,
-			audit.Target{Kind: "health_issue"},
-			map[string]any{"count": cleared}, true)
+			audit.Target{Kind: "health_issue", ID: k.ID}, nil, true)
 	}
 }
 

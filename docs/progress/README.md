@@ -13,8 +13,7 @@ The implementation slice queue, ordered. Each item links back to the progress en
 
 This is the **maintainer's critical-path** queue. Work carved off for **parallel contributors** lives in [GitHub Issues](https://github.com/onel/malmo/issues) (some items there are pulled from these "what's next" follow-ups). The two are kept from overlapping on purpose. See [`../dev/contributing.md`](../dev/contributing.md) for the contributor loop.
 
-1. **Per-issue health audit records.** Small finish on [0022](0022-health-persistence.md). Change `ApplyStorageFindings` to return affected IDs so `health.issue.raised` / `health.issue.cleared` audit records can target `{kind: "health_issue", id: "<id>"}` instead of bulk count records.
-2. **Notification wiring: health raise/clear → dashboard bell.** `NOTIFICATIONS.md` is locked but no `notifications` table or emitter exists yet. First consumer of the seam: on health-issue raise (transition), enqueue a notification routed to admin users; on clear, mark resolved. Follow-up from [0022](0022-health-persistence.md).
+1. **Notification wiring: health raise/clear → dashboard bell.** `NOTIFICATIONS.md` is locked but no `notifications` table or emitter exists yet. First consumer of the seam: on health-issue raise (transition), enqueue a notification routed to admin users; on clear, mark resolved. The per-issue transition keys it needs are now exposed by `ApplyStorageFindings` (see [0024](0024-per-issue-health-audit.md)). Follow-up from [0022](0022-health-persistence.md).
 
 (Slice [0023](0023-luks-tpm-enrollment.md) — LUKS root + first-boot TPM enrollment + PCR-7 unseal — landed 2026-05-29; its own "what's next" follow-ups, e.g. data-drive scaffold and CI wiring, feed future queue items.)
 
@@ -65,3 +64,5 @@ Ordered follow-ups. Update as they land.
 | [0020](0020-nspawn-boot-chain-lane.md) | nspawn boot-chain fast lane: `--boot` of `dist/systemd/` units + dependency-shape assertions | done |
 | [0021](0021-qemu-medium-lane-scaffolding.md) | QEMU+swtpm medium-lane scaffolding: real kernel + real systemd + TPM plumbing | done |
 | [0022](0022-health-persistence.md) | SQLite persistence for health issues (`health_issues` table, store write-through, boot-time restore) | done |
+| [0023](0023-luks-tpm-enrollment.md) | LUKS root + first-boot TPM enrollment + PCR-7 unseal verification | done |
+| [0024](0024-per-issue-health-audit.md) | Per-issue health audit records (`ApplyStorageFindings` returns affected keys; one `health.issue.*` record per issue) | done |

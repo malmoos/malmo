@@ -296,11 +296,12 @@ func (m *Manager) List() []Issue {
 //
 // This is the entire bridge between the host-side reporter and the brain's
 // issue model. Periodic polling of GET /v1/health/storage drives the
-// reconciliation; transitions return as raised / cleared counts for the
-// caller's audit-event hook. Findings whose ID is not in the registry are
-// logged at warn and dropped — that's a reporter-vs-brain version skew the
-// operator needs to see.
-func (m *Manager) ApplyStorageFindings(sh protocol.StorageHealth) (raised, cleared int) {
+// reconciliation; transitions return as the raised / cleared issue keys so
+// the caller can emit one per-issue audit record (target {kind: health_issue,
+// id: <id>}) rather than a bulk count. Findings whose ID is not in the
+// registry are logged at warn and dropped — that's a reporter-vs-brain
+// version skew the operator needs to see.
+func (m *Manager) ApplyStorageFindings(sh protocol.StorageHealth) (raised, cleared []IssueKey) {
 	// wantKeys uses the full issueKey (id + instanceKey) so that when Finding
 	// grows an InstanceKey field, per-instance storage findings don't collapse.
 	// Today all findings carry instanceKey="" (Finding has no InstanceKey field),
@@ -323,7 +324,7 @@ func (m *Manager) ApplyStorageFindings(sh protocol.StorageHealth) (raised, clear
 			continue
 		}
 		if m.raiseLocked(k.id, k.instanceKey, details) {
-			raised++
+			raised = append(raised, IssueKey{ID: k.id, InstanceKey: k.instanceKey})
 		}
 		// Upsert on every poll tick (not just transitions) to keep last_checked_at
 		// current in SQLite. At the current 60s cadence with a handful of findings
@@ -344,7 +345,7 @@ func (m *Manager) ApplyStorageFindings(sh protocol.StorageHealth) (raised, clear
 			continue
 		}
 		if m.clearLocked(k.id, k.instanceKey) {
-			cleared++
+			cleared = append(cleared, IssueKey{ID: k.id, InstanceKey: k.instanceKey})
 			if m.store != nil {
 				toDelete = append(toDelete, IssueKey{ID: k.id, InstanceKey: k.instanceKey})
 			}
@@ -366,7 +367,20 @@ func (m *Manager) ApplyStorageFindings(sh protocol.StorageHealth) (raised, clear
 		}
 	}
 
+	// Map iteration order is non-deterministic; sort so the per-issue audit
+	// records (and tests) see a stable order, matching List()'s contract.
+	sortIssueKeys(raised)
+	sortIssueKeys(cleared)
 	return raised, cleared
+}
+
+func sortIssueKeys(ks []IssueKey) {
+	sort.Slice(ks, func(i, j int) bool {
+		if ks[i].ID != ks[j].ID {
+			return ks[i].ID < ks[j].ID
+		}
+		return ks[i].InstanceKey < ks[j].InstanceKey
+	})
 }
 
 func severityRank(s Severity) int {
