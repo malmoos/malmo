@@ -243,3 +243,19 @@ curl -s localhost:8080/openapi.json            # generated schema
 curl --unix-socket .dev/agent.sock http://agent/v1/system/status
 curl --unix-socket .dev/agent.sock http://agent/v1/discovery/state
 ```
+
+## CI
+
+`.github/workflows/ci.yml` gates every PR into `main` (and pushes to `main`)
+with two jobs that mirror the local pre-PR gate:
+
+- **Go** — installs `libpam0g-dev`, then `go build ./...`, `go vet ./...`, and
+  `make test` (full suite incl. `pamverifier`, with `CGO_CFLAGS=-D_GNU_SOURCE`).
+  Same as `make check`.
+- **web-ui** — `npm ci` then `npm run build` (Node pinned by `web-ui/.nvmrc`;
+  `build` runs `vue-tsc` typecheck before `vite build`). Same as `make check-web`.
+
+The **medium/slow boot lanes** (`make test-boot-chain-nspawn`,
+`make test-medium-qemu`) are **not** in CI yet — they need privileged runners
+(systemd-nspawn, QEMU+swtpm) and are a coordinated follow-up. See
+[`TESTING.md`](../specs/TESTING.md) for the full three-lane model.
