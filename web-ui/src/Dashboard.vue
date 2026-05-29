@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/vue-query";
 import { api, waitForJob, type ApiError, type CatalogEntry, type Instance, type Job } from "./api";
 import { useEvents } from "./useEvents";
+import NotificationBell from "./NotificationBell.vue";
 // Login/logout are intentionally hidden in v1 (single-user dev phase). The
 // auth machinery is wired end-to-end (`logout`, `useAuth`, Login.vue) — we
 // just don't surface the controls yet. Re-enable when multi-user lands.
@@ -66,6 +67,7 @@ const installCustom = useMutation({
     <header>
       <h1>malmo</h1>
       <span class="tag">dev dashboard</span>
+      <NotificationBell class="header-bell" />
     </header>
 
     <section>
@@ -142,7 +144,8 @@ const installCustom = useMutation({
 :root { font-family: ui-sans-serif, system-ui, sans-serif; color: #1a1a1a; }
 body { margin: 0; background: #f6f6f7; }
 main { max-width: 720px; margin: 0 auto; padding: 2rem 1rem; }
-header { display: flex; align-items: baseline; gap: 0.75rem; margin-bottom: 1.5rem; }
+header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.5rem; }
+.header-bell { margin-left: auto; }
 h1 { margin: 0; font-size: 1.6rem; }
 .tag { font-size: 0.75rem; color: #888; border: 1px solid #ddd; border-radius: 999px; padding: 2px 8px; }
 h2 { font-size: 1rem; text-transform: uppercase; letter-spacing: 0.04em; color: #666; margin: 1.5rem 0 0.5rem; }
