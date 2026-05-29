@@ -70,8 +70,8 @@ func TestClear_ReturnsTrueOnTransition(t *testing.T) {
 
 func TestList_ReturnsStableOrder(t *testing.T) {
 	m := NewManager(nil)
-	m.Raise("canary-mismatch", "", "")        // critical
-	m.Raise("data-drive-missing", "", "")     // error
+	m.Raise("canary-mismatch", "", "")         // critical
+	m.Raise("data-drive-missing", "", "")      // error
 	m.Raise("health-report-malformed", "", "") // error
 
 	got := m.List()
@@ -499,7 +499,7 @@ type fakeErrStore struct {
 	writeErr error
 }
 
-func (f *fakeErrStore) UpsertHealthIssue(h Issue) error { return f.writeErr }
+func (f *fakeErrStore) UpsertHealthIssue(h Issue) error                { return f.writeErr }
 func (f *fakeErrStore) DeleteHealthIssue(id, instanceKey string) error { return f.writeErr }
 func (f *fakeErrStore) BatchUpsertAndDelete(upserts []Issue, deletes []IssueKey) error {
 	return f.writeErr

@@ -476,7 +476,9 @@ func (m *Manager) emitState(inst store.Instance, prev string) {
 
 // --- on-disk + compose helpers -------------------------------------------
 
-func (m *Manager) composeFile(id string) string { return filepath.Join(m.instanceDir(id), "compose.yml") }
+func (m *Manager) composeFile(id string) string {
+	return filepath.Join(m.instanceDir(id), "compose.yml")
+}
 
 func (m *Manager) writeInstanceDir(id string, man *manifest.Manifest, composeBytes []byte) error {
 	dir := m.instanceDir(id)

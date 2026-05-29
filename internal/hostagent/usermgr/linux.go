@@ -223,4 +223,3 @@ func runChpasswd(slug, password string) error {
 	}
 	return nil
 }
-

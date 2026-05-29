@@ -62,11 +62,18 @@ The inner dev loop is all native, no VM — see [`running-locally.md`](running-l
 
 Every behavioral change ships with tests. Which layer depends on what you touched — see [`testing-brain.md`](testing-brain.md) for the brain pyramid (unit → store → lifecycle-with-fakes → API → integration → e2e) and [`../specs/TESTING.md`](../specs/TESTING.md) for the boot-level lanes (nspawn fast / QEMU medium / soak).
 
-Run the suite before you push:
+Before you push, run the gate:
 
 ```bash
-make test           # full suite (needs libpam0g-dev — see running-locally.md)
-make test-nopam     # skip the PAM-cgo target if you don't have the headers
+make check          # the pre-PR gate: gofmt-clean + go vet + full test suite
+make check-web      # additionally, for any frontend change: web-ui typecheck + build
+```
+
+`make check` is the one command that mirrors CI's Go job and the [definition of done](#definition-of-done--checklist) below — formatting, vet, and the full test suite in one pass (fails fast on the cheap checks first). Run `make fmt` to auto-fix formatting if `check` flags it. The full suite needs `libpam0g-dev` (see [`running-locally.md`](running-locally.md)); without the headers, fall back to the narrower targets:
+
+```bash
+make fmt-check && make vet    # the non-test gates, no PAM headers needed
+make test-nopam               # skip the PAM-cgo target
 ```
 
 Lane-specific targets exist too (`make test-health`, `make test-caddy`, `make test-usermgr-nspawn`, `make test-boot-chain-nspawn`, `make test-medium-qemu`, …); `make help` lists them. Put unit/store/API tests **in the same package** by default (CLAUDE.md # Go code discipline).
@@ -97,7 +104,7 @@ PR body must include **`Closes #<N>`** (the issue it resolves — this auto-link
 ## Definition of done — checklist
 
 - [ ] Behavior works in the inner loop (`make dev`), and integration-tested against the real system if it touches one.
-- [ ] Tests added at the right layer; `make test` (or `make test-nopam`) green.
+- [ ] Tests added at the right layer; `make check` green (frontend changes: `make check-web` too).
 - [ ] Progress entry written (`docs/progress/NNNN-…`); indexes in both READMEs updated; Up-next re-ordered if needed.
 - [ ] Spec doc updated if behavior realized/diverged; `DECISIONS.md` entry if a locked decision flipped.
 - [ ] No `§`, no hard-wrapped markdown, `log/slog` only, conventions per CLAUDE.md.

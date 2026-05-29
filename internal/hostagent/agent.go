@@ -68,7 +68,7 @@ type UserManager interface {
 // cmd/host-agent-real wires UserMgr so all three delegate to /etc/passwd via
 // usermgr.LinuxUserManager.
 type Agent struct {
-	mu       sync.Mutex
+	mu sync.Mutex
 	// published is a write-through cache of announced names, keyed by slug.
 	// Updated on every successful Publish/Unpublish call so GET /v1/discovery/state
 	// can answer without requiring the Publisher to expose a listing method.
