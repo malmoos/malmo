@@ -82,6 +82,7 @@ So both transports independently force **flat, single-label**. The dotted form w
 **Cons (accepted)**
 - `immich--alex` is less elegant than `alex.immich`. Mitigated: rarely seen raw.
 - The `--` separator must be reserved: catalog slugs and usernames may not contain `--`, and neither may produce an `xn--` label prefix (reserved for IDN/punycode). We control both the catalog and username validation, so this is a validation rule, not a real limit. Documented as a constraint on `APP_STORE.md` slug validation and `USERS_AND_GROUPS.md` username rules.
+- **The personal-instance hostname leaks the `username ↔ app` mapping to the LAN.** `immich--alex.malmo.local` is a published mDNS/DNS record (`DISCOVERY.md`), so any device on the network can enumerate which user installed which app by passive discovery — usernames are first names (`FIRST_RUN.md`), so this is mildly identifying. Accepted: this is a closed-by-default, single-household LAN (`THREAT_MODEL.md` treats the LAN as semi-trusted), the same record set has to exist for routing regardless, and ownership-in-the-URL is the deliberate legibility choice above. Noted so it's a conscious tradeoff, not a surprise; revisit if malmo ever targets shared/untrusted LANs.
 
 ---
 

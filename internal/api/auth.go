@@ -192,6 +192,9 @@ func (s *Server) setup(ctx context.Context, in *struct {
 	if username == "" || password == "" {
 		return nil, huma.Error422UnprocessableEntity("username and password are required")
 	}
+	if err := validateUsername(username); err != nil {
+		return nil, err
+	}
 
 	recoveryCode, recoveryHash, err := newRecoveryCode()
 	if err != nil {

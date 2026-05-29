@@ -162,6 +162,8 @@ The display name is slugified to a stable Linux user ID:
 4. Check against a reserved-slug list: `root`, `admin`, `daemon`, `postgres`, `redis`, `mysql`, `nobody`, `www-data`, `sshd`, `systemd*`, `malmo`, plus standard system. On hit, append `1`, `2`, ... until free.
 5. Display-name uniqueness is enforced at creation, so collisions in step 4 are the rare path.
 
+The `[a-z0-9]`-strip-and-collapse in step 2 already guarantees the two reservations the `<slug>--<user>` personal-instance scheme depends on (`DASHBOARD.md` # instance naming): a username slug can never contain `--` (runs collapse to a single `-`) nor start with `xn--`. The brain also enforces both as an explicit guard at the user-creation boundary.
+
 UID assigned from the malmo-reserved range (3000+). Home directory: `/home/<slug>/`. Use-case folders created at account setup: `Photos/`, `Documents/`, `Movies/`, `Music/`, `Notes/`, `Downloads/` (`STORAGE.md` # What apps and users actually see).
 
 ### Why this shape

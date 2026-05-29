@@ -13,7 +13,8 @@ The implementation slice queue, ordered. Each item links back to the progress en
 
 This is the **maintainer's critical-path** queue. Work carved off for **parallel contributors** lives in [GitHub Issues](https://github.com/onel/malmo/issues) (some items there are pulled from these "what's next" follow-ups). The two are kept from overlapping on purpose. See [`../dev/contributing.md`](../dev/contributing.md) for the contributor loop.
 
-1. **Notification wiring: health raise/clear → dashboard bell.** `NOTIFICATIONS.md` is locked but no `notifications` table or emitter exists yet. First consumer of the seam: on health-issue raise (transition), enqueue a notification routed to admin users; on clear, mark resolved. The per-issue transition keys it needs are now exposed by `ApplyStorageFindings` (see [0024](0024-per-issue-health-audit.md)). Follow-up from [0022](0022-health-persistence.md).
+1. **Dashboard frontend: stack chassis + home grid.** With instances now owner-scoped end-to-end (see [0025](0025-owner-scoped-instances.md)), bring `web-ui` up to `WEB_UI.md` (Vue Router, Pinia, Tailwind 4, shadcn-vue) and replace the dev screen with the grouped Household / Yours app grid + four-item dock against the scoped `GET /api/v1/apps`. Follow-up from [0025](0025-owner-scoped-instances.md); see `docs/README.md` # Frontend and `DASHBOARD.md`.
+2. **Notification wiring: health raise/clear → dashboard bell.** `NOTIFICATIONS.md` is locked but no `notifications` table or emitter exists yet. First consumer of the seam: on health-issue raise (transition), enqueue a notification routed to admin users; on clear, mark resolved. The per-issue transition keys it needs are now exposed by `ApplyStorageFindings` (see [0024](0024-per-issue-health-audit.md)). Follow-up from [0022](0022-health-persistence.md).
 
 (Slice [0023](0023-luks-tpm-enrollment.md) — LUKS root + first-boot TPM enrollment + PCR-7 unseal — landed 2026-05-29; its own "what's next" follow-ups, e.g. data-drive scaffold and CI wiring, feed future queue items.)
 
@@ -66,3 +67,4 @@ Ordered follow-ups. Update as they land.
 | [0022](0022-health-persistence.md) | SQLite persistence for health issues (`health_issues` table, store write-through, boot-time restore) | done |
 | [0023](0023-luks-tpm-enrollment.md) | LUKS root + first-boot TPM enrollment + PCR-7 unseal verification | done |
 | [0024](0024-per-issue-health-audit.md) | Per-issue health audit records (`ApplyStorageFindings` returns affected keys; one `health.issue.*` record per issue) | done |
+| [0025](0025-owner-scoped-instances.md) | Owner-scoped app instances (owner_user_id + scope, `<slug>--<user>` derivation, install authorization, warn-don't-block) | done |

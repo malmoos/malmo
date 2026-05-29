@@ -14,16 +14,29 @@ import (
 )
 
 // Instance is one installed app (a compose project, APP_LIFECYCLE.md).
+//
+// Every instance is owner-scoped (DASHBOARD.md # the apps model). A household
+// instance is admin-owned on behalf of everyone and takes the bare slug; a
+// personal instance is owned by one user and takes the `<slug>--<user>` slug.
+// OwnerUserID is a plain reference (no FK): user deletion vs. owned instances
+// is unspecced (NEXT.md), so we don't couple deleteUser to ownership yet.
 type Instance struct {
-	ID         string
-	ManifestID string
-	Name       string
-	Slug       string
-	Version    string
-	State      string // installing | running | stopped | failed | uninstalling
-	MDNSName   string
-	CreatedAt  time.Time
+	ID          string
+	ManifestID  string
+	Name        string
+	Slug        string
+	Version     string
+	State       string // installing | running | stopped | failed | uninstalling
+	MDNSName    string
+	OwnerUserID string
+	Scope       string // ScopeHousehold | ScopePersonal
+	CreatedAt   time.Time
 }
+
+const (
+	ScopeHousehold = "household"
+	ScopePersonal  = "personal"
+)
 
 // User is a malmo dashboard account. The brain mirrors a Linux account
 // (USERS_AND_GROUPS.md); the *password* lives in PAM via host-agent, never
@@ -92,6 +105,8 @@ func (s *Store) migrate() error {
 			version     TEXT NOT NULL,
 			state       TEXT NOT NULL,
 			mdns_name   TEXT NOT NULL DEFAULT '',
+			owner_user_id TEXT NOT NULL DEFAULT '',
+			scope         TEXT NOT NULL DEFAULT 'household' CHECK (scope IN ('household','personal')),
 			created_at  INTEGER NOT NULL
 		);
 		CREATE TABLE IF NOT EXISTS instance_images (
@@ -158,36 +173,24 @@ func (s *Store) migrate() error {
 		return err
 	}
 
-	// Idempotent migrations: add new columns to sessions if they don't exist.
+	// Idempotent migrations: add new columns when an older DB predates them.
 	// SQLite doesn't support IF NOT EXISTS on ALTER TABLE; we detect existence
 	// by probing PRAGMA table_info and skip if the column is already there.
 	for _, col := range []struct {
-		name string
-		stmt string
+		table string
+		name  string
+		stmt  string
 	}{
-		{"expires_at", "ALTER TABLE sessions ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0"},
-		{"elevated_until", "ALTER TABLE sessions ADD COLUMN elevated_until INTEGER NOT NULL DEFAULT 0"},
+		{"sessions", "expires_at", "ALTER TABLE sessions ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0"},
+		{"sessions", "elevated_until", "ALTER TABLE sessions ADD COLUMN elevated_until INTEGER NOT NULL DEFAULT 0"},
+		{"instances", "owner_user_id", "ALTER TABLE instances ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT ''"},
+		{"instances", "scope", "ALTER TABLE instances ADD COLUMN scope TEXT NOT NULL DEFAULT 'household'"},
 	} {
-		var count int
-		rows, qErr := s.db.Query(`PRAGMA table_info(sessions)`)
-		if qErr != nil {
-			return qErr
+		has, hErr := s.hasColumn(col.table, col.name)
+		if hErr != nil {
+			return hErr
 		}
-		for rows.Next() {
-			var cid int
-			var cname, ctype string
-			var notnull, pk int
-			var dfltVal any
-			if sErr := rows.Scan(&cid, &cname, &ctype, &notnull, &dfltVal, &pk); sErr != nil {
-				_ = rows.Close()
-				return sErr
-			}
-			if cname == col.name {
-				count++
-			}
-		}
-		_ = rows.Close()
-		if count == 0 {
+		if !has {
 			if _, err := s.db.Exec(col.stmt); err != nil {
 				return err
 			}
@@ -202,7 +205,38 @@ func (s *Store) migrate() error {
 		return err
 	}
 
+	// Backfill owner_user_id for instances installed before owner-scoping: assign
+	// the bootstrap admin (oldest admin) so legacy rows have a valid owner. New
+	// rows always carry an explicit owner from the install transaction.
+	if _, err := s.db.Exec(
+		`UPDATE instances SET owner_user_id = (SELECT id FROM users WHERE role='admin' ORDER BY created_at LIMIT 1)
+		 WHERE owner_user_id = '' AND EXISTS (SELECT 1 FROM users WHERE role='admin')`,
+	); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// hasColumn reports whether table has a column of the given name.
+func (s *Store) hasColumn(table, name string) (bool, error) {
+	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notnull, pk int
+		var cname, ctype string
+		var dflt any
+		if err := rows.Scan(&cid, &cname, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if cname == name {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // InstanceImage is the resolved image pin for one service in one instance
@@ -257,10 +291,17 @@ func (s *Store) GetInstanceImages(instanceID string) ([]InstanceImage, error) {
 }
 
 func (s *Store) Create(i Instance) error {
+	// Defense-in-depth: fresh DBs carry a CHECK on scope, but SQLite can't add a
+	// CHECK via the ALTER-TABLE migration path, so a DB created before this
+	// column has no constraint. Enforce the invariant here so neither path can
+	// persist an out-of-range scope (which canSee would silently treat as unseen).
+	if i.Scope != ScopeHousehold && i.Scope != ScopePersonal {
+		return fmt.Errorf("invalid instance scope %q", i.Scope)
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO instances (id, manifest_id, name, slug, version, state, mdns_name, created_at)
-		 VALUES (?,?,?,?,?,?,?,?)`,
-		i.ID, i.ManifestID, i.Name, i.Slug, i.Version, i.State, i.MDNSName, i.CreatedAt.Unix())
+		`INSERT INTO instances (id, manifest_id, name, slug, version, state, mdns_name, owner_user_id, scope, created_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		i.ID, i.ManifestID, i.Name, i.Slug, i.Version, i.State, i.MDNSName, i.OwnerUserID, i.Scope, i.CreatedAt.Unix())
 	return err
 }
 
@@ -285,16 +326,45 @@ func (s *Store) Delete(id string) error {
 	return err
 }
 
+const instanceColumns = `id, manifest_id, name, slug, version, state, mdns_name, owner_user_id, scope, created_at`
+
 func (s *Store) Get(id string) (Instance, error) {
 	return scan(s.db.QueryRow(
-		`SELECT id, manifest_id, name, slug, version, state, mdns_name, created_at
-		 FROM instances WHERE id=?`, id))
+		`SELECT `+instanceColumns+` FROM instances WHERE id=?`, id))
 }
 
 func (s *Store) List() ([]Instance, error) {
-	rows, err := s.db.Query(
-		`SELECT id, manifest_id, name, slug, version, state, mdns_name, created_at
-		 FROM instances ORDER BY created_at`)
+	return s.queryInstances(`SELECT ` + instanceColumns + ` FROM instances ORDER BY created_at`)
+}
+
+// ListVisibleTo returns the instances a caller may see on the home grid
+// (DASHBOARD.md # the home screen): all household instances plus the caller's
+// own personal instances. An admin sees every instance. Per-app member grants
+// for household apps are deferred (NEXT.md), so household apps are visible to
+// all members for now.
+//
+// The WHERE clause below is the SQL twin of api.canSee's single-instance
+// predicate — KEEP THE TWO IN SYNC. When per-app member grants land, both must
+// change together (there is no compile-time link between them).
+func (s *Store) ListVisibleTo(userID string, isAdmin bool) ([]Instance, error) {
+	if isAdmin {
+		return s.List()
+	}
+	return s.queryInstances(
+		`SELECT `+instanceColumns+` FROM instances
+		 WHERE scope='household' OR owner_user_id=? ORDER BY created_at`, userID)
+}
+
+// InstancesByManifest returns every instance of a given manifest, regardless of
+// owner. The install handler uses it to detect duplicates for the
+// warn-don't-block flow (DASHBOARD.md # warn, don't block).
+func (s *Store) InstancesByManifest(manifestID string) ([]Instance, error) {
+	return s.queryInstances(
+		`SELECT `+instanceColumns+` FROM instances WHERE manifest_id=? ORDER BY created_at`, manifestID)
+}
+
+func (s *Store) queryInstances(query string, args ...any) ([]Instance, error) {
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -689,7 +759,7 @@ type scanner interface{ Scan(dest ...any) error }
 func scan(row scanner) (Instance, error) {
 	var i Instance
 	var created int64
-	err := row.Scan(&i.ID, &i.ManifestID, &i.Name, &i.Slug, &i.Version, &i.State, &i.MDNSName, &created)
+	err := row.Scan(&i.ID, &i.ManifestID, &i.Name, &i.Slug, &i.Version, &i.State, &i.MDNSName, &i.OwnerUserID, &i.Scope, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Instance{}, ErrNotFound
 	}

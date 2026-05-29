@@ -88,7 +88,9 @@ func TestAllocateSlug(t *testing.T) {
 		t.Helper()
 		if err := s.Create(store.Instance{
 			ID: slug + "-id", ManifestID: "x", Name: "X", Slug: slug,
-			Version: "1", State: "running", CreatedAt: time.Now(),
+			Version: "1", State: "running",
+			OwnerUserID: "u_admin", Scope: store.ScopeHousehold,
+			CreatedAt: time.Now(),
 		}); err != nil {
 			t.Fatalf("seed slug %q: %v", slug, err)
 		}
@@ -96,7 +98,7 @@ func TestAllocateSlug(t *testing.T) {
 
 	t.Run("first choice wins", func(t *testing.T) {
 		m := newMgr(t)
-		slug, err := m.allocateSlug(&manifest.Manifest{ID: "whoami"})
+		slug, err := m.allocateSlug(&manifest.Manifest{ID: "whoami"}, store.ScopeHousehold, "")
 		if err != nil || slug != "whoami" {
 			t.Fatalf("slug=%q err=%v", slug, err)
 		}
@@ -105,7 +107,7 @@ func TestAllocateSlug(t *testing.T) {
 	t.Run("falls back to -2 on conflict", func(t *testing.T) {
 		m := newMgr(t)
 		mark(t, m.store, "whoami")
-		slug, err := m.allocateSlug(&manifest.Manifest{ID: "whoami"})
+		slug, err := m.allocateSlug(&manifest.Manifest{ID: "whoami"}, store.ScopeHousehold, "")
 		if err != nil || slug != "whoami-2" {
 			t.Fatalf("slug=%q err=%v", slug, err)
 		}
@@ -114,7 +116,7 @@ func TestAllocateSlug(t *testing.T) {
 	t.Run("reserved is skipped even when free", func(t *testing.T) {
 		m := newMgr(t)
 		// "api" is reserved → allocator must skip it and try -2/-3 (also free).
-		slug, err := m.allocateSlug(&manifest.Manifest{ID: "api"})
+		slug, err := m.allocateSlug(&manifest.Manifest{ID: "api"}, store.ScopeHousehold, "")
 		if err != nil {
 			t.Fatalf("err=%v", err)
 		}
@@ -128,7 +130,7 @@ func TestAllocateSlug(t *testing.T) {
 		mark(t, m.store, "whoami")
 		mark(t, m.store, "whoami-2")
 		mark(t, m.store, "whoami-3")
-		if _, err := m.allocateSlug(&manifest.Manifest{ID: "whoami"}); err == nil {
+		if _, err := m.allocateSlug(&manifest.Manifest{ID: "whoami"}, store.ScopeHousehold, ""); err == nil {
 			t.Fatalf("expected exhaustion error")
 		}
 	})
@@ -138,7 +140,7 @@ func TestAllocateSlug(t *testing.T) {
 		mark(t, m.store, "whoami")
 		slug, err := m.allocateSlug(&manifest.Manifest{
 			ID: "whoami", PreferredSlugs: []string{"whoami", "hello"},
-		})
+		}, store.ScopeHousehold, "")
 		if err != nil {
 			t.Fatalf("err=%v", err)
 		}
@@ -147,6 +149,23 @@ func TestAllocateSlug(t *testing.T) {
 		// what the implementation does: -2 before next candidate.
 		if slug != "whoami-2" {
 			t.Fatalf("slug=%q, want whoami-2", slug)
+		}
+	})
+
+	t.Run("personal scope suffixes the owner", func(t *testing.T) {
+		m := newMgr(t)
+		slug, err := m.allocateSlug(&manifest.Manifest{ID: "immich"}, store.ScopePersonal, "alex")
+		if err != nil || slug != "immich--alex" {
+			t.Fatalf("slug=%q err=%v, want immich--alex", slug, err)
+		}
+	})
+
+	t.Run("same owner installing twice falls back to -2", func(t *testing.T) {
+		m := newMgr(t)
+		mark(t, m.store, "immich--alex")
+		slug, err := m.allocateSlug(&manifest.Manifest{ID: "immich"}, store.ScopePersonal, "alex")
+		if err != nil || slug != "immich--alex-2" {
+			t.Fatalf("slug=%q err=%v, want immich--alex-2", slug, err)
 		}
 	})
 }
