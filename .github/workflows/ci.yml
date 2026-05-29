@@ -30,12 +30,12 @@ jobs:
       # Makefile). Required to build/test the pamverifier package.
       CGO_CFLAGS: -D_GNU_SOURCE
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install PAM headers
         run: sudo apt-get update && sudo apt-get install -y libpam0g-dev
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -56,9 +56,9 @@ jobs:
       run:
         working-directory: web-ui
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: web-ui/.nvmrc
           cache: npm
