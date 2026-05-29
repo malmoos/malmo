@@ -1,0 +1,41 @@
+# CI gate for the web-ui dashboard: typecheck + production build.
+#
+# Triggers on PRs into main, and only when web-ui/ changes (path filter) —
+# Go-only / docs-only PRs don't spin a runner. PR-only by design: every change
+# lands via PR, so a push:main trigger would just double-run.
+name: CI / web-ui
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "web-ui/**"
+      - ".github/workflows/ci-web.yml"
+
+# Cancel superseded runs on the same ref (e.g. force-pushes to a PR branch).
+concurrency:
+  group: ci-web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web-ui:
+    name: web-ui — typecheck + build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web-ui
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: web-ui/.nvmrc
+          cache: npm
+          cache-dependency-path: web-ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `npm run build` runs `vue-tsc --noEmit` (typecheck) then `vite build`.
+      - name: Typecheck + build
+        run: npm run build

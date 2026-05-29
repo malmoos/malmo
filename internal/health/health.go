@@ -452,7 +452,7 @@ func builtinDefinitions() []Definition {
 			ID: "store-write-failed", Category: CategoryState,
 			Severity: SeverityError, Tier: 2,
 			BlocksWrites: false, BlocksApps: false, BlocksUsers: false,
-			Summary: "malmo can't save health state; issues won't survive a restart.",
+			Summary:   "malmo can't save health state; issues won't survive a restart.",
 			NoPersist: true,
 		},
 	}

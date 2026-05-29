@@ -21,7 +21,7 @@ TEST_DIR="${REPO_ROOT}/dev/test-qemu"
 WORK="${REPO_ROOT}/.dev/qemu"
 EXTRA="${TEST_DIR}/mkosi.extra"
 CANARY="${WORK}/.malmo-medium-ready"
-CANARY_VERSION="v14"  # bump when mkosi.conf changes require a clean rebuild
+CANARY_VERSION="v16"  # bump when mkosi.conf changes require a clean rebuild
 PASSPHRASE_FILE="${TEST_DIR}/mkosi.passphrase"  # LUKS recovery key (slice 0023); gitignored
 IMAGE_OUT="${WORK}/malmo-medium.raw"
 SSH_KEY="${WORK}/ssh-key"
@@ -226,6 +226,14 @@ ln -sf /bin/true "$EXTRA/usr/lib/malmo/host-agent-real"
 # storage-verify binary.
 cp "$VERIFY_BIN" "$EXTRA/usr/lib/malmo/malmo-storage-verify"
 chmod 0755 "$EXTRA/usr/lib/malmo/malmo-storage-verify"
+
+# First-boot TPM2 enrollment (slice 0023 Stage 2): the run-once unit +
+# its enrollment script. The unit gates on a marker (run-once); the
+# postinst wires its .wants symlink under malmo-storage-ready.target.
+# This is the test-lane stand-in for host-agent's first-run enrollment.
+cp "${TEST_DIR}/malmo-tpm-enroll.service" "$EXTRA/etc/systemd/system/"
+cp "${TEST_DIR}/first-boot-tpm-enroll.sh" "$EXTRA/usr/lib/malmo/first-boot-tpm-enroll.sh"
+chmod 0755 "$EXTRA/usr/lib/malmo/first-boot-tpm-enroll.sh"
 
 # sshd: allow root key-login, no passwords (test image only).
 cat >"$EXTRA/etc/ssh/sshd_config.d/medium-test.conf" <<'EOF'

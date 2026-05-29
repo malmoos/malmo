@@ -36,6 +36,16 @@ EOF
 # but be defensive.
 chmod 0755 /usr/lib/malmo/malmo-storage-verify
 
+# First-boot TPM2 enrollment unit (slice 0023 Stage 2). The unit declares
+# WantedBy=malmo-storage-ready.target; we can't run `systemctl enable` in
+# the chroot, so drop the .wants symlink manually (same idiom as the
+# storage-ready target above). It's a run-once oneshot gated on a marker,
+# so it self-disables after the first successful enroll.
+chmod 0755 /usr/lib/malmo/first-boot-tpm-enroll.sh
+mkdir -p /etc/systemd/system/malmo-storage-ready.target.wants
+ln -sf /etc/systemd/system/malmo-tpm-enroll.service \
+    /etc/systemd/system/malmo-storage-ready.target.wants/malmo-tpm-enroll.service
+
 # sshd: key-only root login. (sshd_config drop-in is in mkosi.extra/.)
 chmod 0700 /root/.ssh 2>/dev/null || true
 chmod 0600 /root/.ssh/authorized_keys 2>/dev/null || true

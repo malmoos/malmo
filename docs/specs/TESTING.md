@@ -57,6 +57,8 @@ Full VM boot with a software TPM (`swtpm`). Mature stack — `systemd`'s own CI 
 
 Implementation: built on `mkosi qemu` (or the equivalent for whichever image-build tool wins in `BUILD.md`). Each test boots a VM, runs an assertion script via SSH or serial console, tears down.
 
+Note on "reboot + unseal" scenarios (the TPM2 unseal happy path, and the slow lane's TPM rot simulation): a reboot that must *withhold* the recovery passphrase on the second boot is realized as **two sequential QEMU processes** sharing one disk overlay + OVMF vars + swtpm state dir (a faithful TPM power cycle — PCRs re-measure identically, SRK/NVRAM persist), not an in-guest `systemctl reboot`. The recovery passphrase is delivered as an SMBIOS type-11 credential fixed at QEMU launch and can't be withheld partway through a single long-lived process, so proving *unattended* unseal (no passphrase, TPM2-only) requires a fresh process with the credential omitted. Realized in slice 0023; see `docs/progress/0023-luks-tpm-enrollment.md`.
+
 ## Slow lane — Soak + ISO end-to-end (nightly on `main`)
 
 **What it catches:**
