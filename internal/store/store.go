@@ -153,7 +153,35 @@ func (s *Store) migrate() error {
 			raised_at       INTEGER NOT NULL,
 			last_checked_at INTEGER NOT NULL,
 			PRIMARY KEY (id, instance_key)
-		);`)
+		);
+		-- notifications: the dashboard notification center (NOTIFICATIONS.md).
+		-- Mutable and prunable, unlike audit_events. The full spec shape is
+		-- created up front so later slices (read-state, dismiss, the API) add
+		-- behavior without a migration; read_at / dismissed_at stay NULL until
+		-- those land. The partial unique index enforces the coalescing
+		-- invariant: at most one *active* (non-dismissed) notification per
+		-- dedup_key.
+		CREATE TABLE IF NOT EXISTS notifications (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts            INTEGER NOT NULL,
+			category      TEXT    NOT NULL,
+			severity      TEXT    NOT NULL,
+			source_kind   TEXT    NOT NULL,
+			source_id     TEXT    NOT NULL,
+			dedup_key     TEXT    NOT NULL,
+			audience      TEXT    NOT NULL,
+			user_id       TEXT    NULL REFERENCES users(id) ON DELETE CASCADE,
+			variant       TEXT    NOT NULL,
+			summary       TEXT    NOT NULL,
+			body          TEXT    NOT NULL DEFAULT '',
+			action_label  TEXT    NOT NULL DEFAULT '',
+			action_route  TEXT    NOT NULL DEFAULT '',
+			read_at       INTEGER NULL,
+			dismissed_at  INTEGER NULL,
+			resolved_at   INTEGER NULL
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS notifications_active_dedup
+			ON notifications(dedup_key) WHERE dismissed_at IS NULL;`)
 	if err != nil {
 		return err
 	}

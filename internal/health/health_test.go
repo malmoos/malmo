@@ -649,3 +649,28 @@ func TestCategoryCapacityConstantExists(t *testing.T) {
 		t.Errorf("CategoryCapacity: want %q, got %q", "capacity", CategoryCapacity)
 	}
 }
+
+func TestGet_ReturnsActiveIssue(t *testing.T) {
+	m := NewManager(nil)
+	m.Raise("data-drive-missing", "", "abc-123 absent")
+
+	iss, ok := m.Get("data-drive-missing", "")
+	if !ok {
+		t.Fatal("Get of an active issue should return ok=true")
+	}
+	if iss.ID != "data-drive-missing" || iss.Severity != SeverityError || iss.Details != "abc-123 absent" {
+		t.Errorf("Get returned %+v, want the raised issue with its severity/details", iss)
+	}
+}
+
+func TestGet_MissingIssueReturnsFalse(t *testing.T) {
+	m := NewManager(nil)
+	if _, ok := m.Get("data-drive-missing", ""); ok {
+		t.Error("Get of a never-raised issue should return ok=false")
+	}
+	// A per-instance key must not collide with the box-wide one.
+	m.Raise("data-drive-missing", "", "box-wide")
+	if _, ok := m.Get("data-drive-missing", "inst-abc"); ok {
+		t.Error("Get with a different instance_key should return ok=false")
+	}
+}

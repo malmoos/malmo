@@ -216,6 +216,18 @@ func (m *Manager) Clear(id, instanceKey string) bool {
 	return transitioned
 }
 
+// Get returns the active issue for (id, instanceKey) and whether it is
+// currently raised. Used by the notification emitter to read an issue's
+// severity/summary at transition time — ApplyStorageFindings returns only the
+// transitioned keys, not the full Issue. Returns ok=false for a cleared or
+// never-raised issue.
+func (m *Manager) Get(id, instanceKey string) (Issue, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	iss, ok := m.active[issueKey{id: id, instanceKey: instanceKey}]
+	return iss, ok
+}
+
 // raiseLocked is the lock-held core of Raise, callable from reconcilers that
 // already hold m.mu (e.g. ApplyStorageFindings, which must reconcile the
 // whole storage category atomically so List() never sees a torn state where
