@@ -147,7 +147,7 @@ Impact at apply time depends on what moved:
 The trigger for prompting is **permission expansion**, not version bumps. Concretely, the brain diffs the new manifest's `permissions:` block against the running version's:
 
 - New permission key (e.g., `devices` newly present) → prompt.
-- Widened value (`internet: false → true`, new entry in `user_folders` or `shared_folders`, new entry in `devices`, `gpu: false → true`, mode upgrade `read → write` on an existing folder, etc.) → prompt.
+- Widened value (`internet: false → true`, new entry in `folders`, new entry in `devices`, `gpu: false → true`, mode upgrade `read → write` on an existing folder, etc.) → prompt.
 - Same or narrower permissions → auto-apply, no prompt.
 
 This means a Photos `1.4 → 2.0` bump that doesn't touch permissions auto-applies. A Photos `1.4 → 1.5` bump that adds `devices: [/dev/dri]` for hardware-accelerated thumbnails prompts.

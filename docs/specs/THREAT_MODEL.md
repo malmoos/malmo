@@ -71,7 +71,7 @@ The richest boundary. The right question is not "can an app be compromised" (ass
 |---|---|---|
 | Container escape to host root | `cap_drop: ALL`; `privileged`, docker socket, `SYS_ADMIN` catalog-rejected; Docker default seccomp/AppArmor (`APP_ISOLATION.md` # Forbidden in store, # Capabilities) | No userns remap, no custom seccomp in v1 (Docker defaults deemed sufficient) |
 | App lies about declared permissions | Enforced at kernel/Docker layer, not metadata — violations silently fail + log (`APP_ISOLATION.md` # Failure mode) | — |
-| Compromised app reads beyond its scope | Per-app bridge (no inter-app traffic); bind-mounts limited to declared `user_folders` of *one* user; other homes not on its filesystem (`APP_ISOLATION.md` # Filesystem) | Blast radius = the app's declared permissions + its user's mounted folders + its own managed DB. An app *can* read everything its grants allow — that's the grant, not a leak |
+| Compromised app reads beyond its scope | Per-app bridge (no inter-app traffic); bind-mounts limited to the declared `folders` at their elected source (one user's home, or the household-shared tree the owner can already reach); other homes not on its filesystem (`APP_ISOLATION.md` # Filesystem) | Blast radius = the app's declared permissions + its mounted folders + its own managed DB. An app *can* read everything its grants allow — that's the grant, not a leak |
 | Brain↔Docker control-plane abuse | Brain talks to Docker via socket-proxy, not raw socket (`CONTROL_PLANE.md`) | — |
 | Privileged Door-2 app | Allowed — user authored the compose and owns the consequences (`APP_ISOLATION.md` # Trust tiers) | Explicitly the user's risk; not a store path |
 

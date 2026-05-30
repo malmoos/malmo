@@ -7,6 +7,7 @@ package manifest
 import (
 	"fmt"
 	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -34,6 +35,45 @@ type Manifest struct {
 type Permissions struct {
 	Internet bool `yaml:"internet"`
 	LAN      bool `yaml:"lan"`
+
+	// Folders is the app's declared access to use-case content folders
+	// (APP_MANIFEST.md # folders). The manifest declares *what* content the app
+	// touches (folder + mode + subfolder granularity); it does NOT declare the
+	// source. Source — the owner's personal `~/<Folder>/` vs the household
+	// `/srv/malmo/shared/<Folder>/` — is the installer's per-folder election at
+	// install time, because the author can't know whether a given household
+	// wants "my own Jellyfin on my movies" or "on the family library"
+	// (DECISIONS.md 2026-05-30 — folder source is installer-elected). Supersedes
+	// the earlier `user_folders` / `shared_folders` split.
+	Folders []Folder `yaml:"folders"`
+
+	// Devices lists explicit /dev/... paths to pass through (Zigbee dongles,
+	// webcams). The brain validates each exists before start (APP_ISOLATION.md #
+	// Devices). Separate from GPU.
+	Devices []string `yaml:"devices"`
+
+	// GPU requests the platform-appropriate GPU runtime (NVIDIA / Intel / AMD),
+	// its own field because driver wiring is platform-specific and not a plain
+	// device passthrough (APP_MANIFEST.md # gpu). No-GPU box fails at the
+	// capacity check.
+	GPU bool `yaml:"gpu"`
+}
+
+// Folder is one declared use-case content folder. Folder names come from the
+// fixed v1 taxonomy; Mode defaults to read; Scope defaults to whole.
+// pick-subfolder may carry a Default subpath the user can override at install.
+type Folder struct {
+	Folder  string `yaml:"folder"`            // photos|documents|movies|music|notes|downloads
+	Mode    string `yaml:"mode"`              // read|write (default read)
+	Scope   string `yaml:"scope"`             // whole|pick-subfolder (default whole)
+	Default string `yaml:"default,omitempty"` // default subpath for pick-subfolder
+}
+
+// folderTaxonomy is the fixed v1 use-case folder set (APP_ISOLATION.md # User
+// content). User-defined folders are deferred.
+var folderTaxonomy = map[string]bool{
+	"photos": true, "documents": true, "movies": true,
+	"music": true, "notes": true, "downloads": true,
 }
 
 func Parse(data []byte) (*Manifest, error) {
@@ -79,6 +119,40 @@ func (m *Manifest) validate() error {
 	for _, slug := range append([]string{m.ID}, m.PreferredSlugs...) {
 		if !kebabSlug.MatchString(slug) {
 			return fmt.Errorf("slug %q must be kebab-case (lowercase alphanumerics, single internal hyphens)", slug)
+		}
+	}
+	return m.validatePermissions()
+}
+
+// validatePermissions normalizes folder defaults (mode=read, scope=whole) in
+// place and rejects unknown folder names, modes, or scopes. It deliberately
+// validates nothing about *source* — personal vs shared is resolved by the
+// installer at install time, not declared here (APP_MANIFEST.md # folders).
+func (m *Manifest) validatePermissions() error {
+	for i := range m.Permissions.Folders {
+		f := &m.Permissions.Folders[i]
+		if !folderTaxonomy[f.Folder] {
+			return fmt.Errorf("permissions.folders: unknown folder %q (allowed: photos, documents, movies, music, notes, downloads)", f.Folder)
+		}
+		if f.Mode == "" {
+			f.Mode = "read"
+		}
+		if f.Mode != "read" && f.Mode != "write" {
+			return fmt.Errorf("permissions.folders[%s]: mode must be read or write, got %q", f.Folder, f.Mode)
+		}
+		if f.Scope == "" {
+			f.Scope = "whole"
+		}
+		if f.Scope != "whole" && f.Scope != "pick-subfolder" {
+			return fmt.Errorf("permissions.folders[%s]: scope must be whole or pick-subfolder, got %q", f.Folder, f.Scope)
+		}
+		if f.Default != "" {
+			if f.Scope != "pick-subfolder" {
+				return fmt.Errorf("permissions.folders[%s]: default is only valid with scope: pick-subfolder", f.Folder)
+			}
+			if strings.HasPrefix(f.Default, "/") || strings.Contains(f.Default, "..") {
+				return fmt.Errorf("permissions.folders[%s]: default must be a relative subpath under the folder", f.Folder)
+			}
 		}
 	}
 	return nil

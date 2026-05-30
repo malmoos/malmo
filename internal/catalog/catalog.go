@@ -4,13 +4,23 @@
 package catalog
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 
 	"github.com/malmo/malmo/internal/manifest"
 )
+
+// ErrNotFound is returned by Load when no manifest exists for the id (the
+// directory or manifest.yml is absent). It is deliberately distinct from a
+// manifest that exists but fails to parse or is missing its compose file:
+// those are integrity errors a curated catalog should never ship, so the API
+// maps ErrNotFound to 404 and every other Load error to 500. Follows the
+// "typed errors at boundaries" rule (CLAUDE.md) — same shape as store.ErrNotFound.
+var ErrNotFound = errors.New("catalog: manifest not found")
 
 type Catalog struct{ root string }
 
@@ -48,7 +58,10 @@ func (c *Catalog) Load(manifestID string) (*manifest.Manifest, []byte, error) {
 	dir := filepath.Join(c.root, manifestID)
 	manBytes, err := os.ReadFile(filepath.Join(dir, "manifest.yml"))
 	if err != nil {
-		return nil, nil, fmt.Errorf("catalog: no manifest for %q: %w", manifestID, err)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil, fmt.Errorf("%w: %q", ErrNotFound, manifestID)
+		}
+		return nil, nil, fmt.Errorf("catalog: read manifest for %q: %w", manifestID, err)
 	}
 	man, err := manifest.Parse(manBytes)
 	if err != nil {

@@ -30,6 +30,10 @@ Mechanically, a personal instance is exactly the Tier-3 shape already locked in 
 
 A member installing an app binds *their own* user folders into *their own* instance — which is why per-user instances **resolve** the "files are first-class" tension rather than create it. A single shared Immich would have to read every user's `~/Photos`, violating the per-user `0750` isolation in `STORAGE.md`. A personal Immich reads only its owner's `~/Photos`. Owner-scoping and per-user folders fit each other.
 
+**Folder source is a per-folder install choice.** For each folder an app declares (`APP_MANIFEST.md` # `folders`), the install screen resolves a *source*: a personal instance offers the owner's folder (default) or the household Shared folder per folder; a household instance always uses Shared. The author declares only the folder + mode, never the source — "my own Jellyfin on my movies" vs "on the family library" is the installer's call, not the author's (`DECISIONS.md` 2026-05-30). This is the only folder-related input on the otherwise all-or-nothing consent screen, alongside the `pick-subfolder` prompt.
+
+**The consent screen is driven by `GET /api/v1/catalog/:id/install-plan`** (`BRAIN_UI_PROTOCOL.md` # GET /api/v1/catalog/:id/install-plan). The brain computes the screen's inputs from the parsed manifest and the caller's role: the role-derived scope options (admin gets Household + Just-for-me, member gets personal only), the declared permissions, and a per-folder per-scope source menu (household → Shared only; personal → owner's folder or Shared). The endpoint is read-only and advisory — it makes no host calls and mutates nothing; the user's elections are validated and stamped into the compose override only at `POST /api/v1/apps` install time.
+
 ### Warn, don't block, on duplicate install
 
 When a user goes to install an app that already has an instance on the box (household or another user's personal), we **warn and offer, never block**:
@@ -41,7 +45,7 @@ Rationale: two people may want genuinely different things from the same app — 
 ### What stays deferred (don't scope-creep here)
 
 - **Resource limits / quotas per user.** N personal Immichs = N container stacks on a pantry laptop. This is a real runtime cost, but it's a *product-acceptance* reality, not a structural one — the box owner self-limits. We surface it as a **warning when resources are tight** (ties into `HEALTH.md` `ram-pressure` / `disk-full`), not a hard cap. Quotas remain a `NEXT.md` Tier-4 item.
-- **Cross-user shared-folder access for personal instances** — `APP_ISOLATION.md` already carves this out at MVP (Tier-1/household apps reach `~/Shared/` via `shared_folders`; personal instances do not yet).
+- **Granular post-install permission revocation.** Install-time consent is all-or-nothing (accept the declared permissions or cancel); changing a grant after install — turning off a folder, downgrading write→read — is the separate per-app permissions screen deferred to `NEXT.md` Tier-3. (Cross-user *shared-folder access* for personal instances is no longer deferred — it's now the install-time source election below; `DECISIONS.md` 2026-05-30.)
 - **SSO.** The long-term door (mentioned in `SPEC.md` # Accounts & users): if/when malmo gets SSO, *shared* instances become the *encouraged* path for apps that support internal multi-user, with personal instances as the escape hatch for apps that don't (or for users who want hard data isolation). Warn-don't-block keeps both doors open in the meantime.
 
 ---

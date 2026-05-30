@@ -11,7 +11,10 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"strconv"
 	"strings"
+
+	"github.com/malmo/malmo/internal/hostagent"
 )
 
 // LinuxUserManager implements hostagent.UserManager against the local system.
@@ -147,7 +150,7 @@ func isInGroup(slug, group string) (bool, error) {
 	return parseGroupMembership(b, slug, group), nil
 }
 
-// parseGroupMembership is the pure parser, exported for unit testing.
+// parseGroupMembership is the pure parser, package-private and tested from within the package.
 // /etc/group format: name:passwd:gid:user1,user2,...
 //
 // Returns false for an empty slug — `strings.Split("", ",")` yields `[""]`,
@@ -211,6 +214,65 @@ func (m *LinuxUserManager) DeleteUser(slug string) error {
 		return fmt.Errorf("usermgr: userdel %q: %w", slug, err)
 	}
 	return nil
+}
+
+// ResolveHome implements hostagent.UserManager. Reads /etc/passwd via
+// os/user.Lookup and returns the user's home directory, UID, and GID.
+// Returns hostagent.ErrUnknownUser when the user does not exist so the
+// calling handler can return 404 rather than 500.
+func (m *LinuxUserManager) ResolveHome(username string) (home string, uid, gid int, err error) {
+	if username == "" {
+		return "", 0, 0, fmt.Errorf("usermgr: empty username")
+	}
+	u, lookupErr := user.Lookup(username)
+	if lookupErr != nil {
+		var unknown user.UnknownUserError
+		if errors.As(lookupErr, &unknown) {
+			return "", 0, 0, hostagent.ErrUnknownUser
+		}
+		return "", 0, 0, fmt.Errorf("usermgr: lookup %q: %w", username, lookupErr)
+	}
+	parsedUID, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("usermgr: parse uid %q for %q: %w", u.Uid, username, err)
+	}
+	parsedGID, err := strconv.Atoi(u.Gid)
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("usermgr: parse gid %q for %q: %w", u.Gid, username, err)
+	}
+	return u.HomeDir, parsedUID, parsedGID, nil
+}
+
+// WellKnownIdentity implements hostagent.UserManager. Resolves the malmo-app
+// system user (UID/GID) and the malmo-shared group (GID) from the host's
+// /etc/passwd and /etc/group via os/user. These system accounts are provisioned
+// by the box build, not by host-agent; the lookups here are read-only.
+//
+// NOTE: malmo-app and malmo-shared are not present on the dev box — only the
+// fake branch runs in the dev loop. This implementation is correct for prod and
+// must compile cleanly even when the accounts are absent.
+func (m *LinuxUserManager) WellKnownIdentity() (appUID, appGID, sharedGID int, err error) {
+	u, err := user.Lookup("malmo-app")
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("lookup malmo-app user: %w", err)
+	}
+	parsedUID, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("parse malmo-app uid %q: %w", u.Uid, err)
+	}
+	parsedGID, err := strconv.Atoi(u.Gid)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("parse malmo-app gid %q: %w", u.Gid, err)
+	}
+	g, err := user.LookupGroup("malmo-shared")
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("lookup malmo-shared group: %w", err)
+	}
+	parsedSharedGID, err := strconv.Atoi(g.Gid)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("parse malmo-shared gid %q: %w", g.Gid, err)
+	}
+	return parsedUID, parsedGID, parsedSharedGID, nil
 }
 
 func runChpasswd(slug, password string) error {

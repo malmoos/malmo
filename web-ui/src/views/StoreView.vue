@@ -1,17 +1,31 @@
 <script setup lang="ts">
-// Store — browse/install apps (DASHBOARD.md # global navigation). This is the
-// former dev Dashboard's catalog + custom-install surface, moved to its own
-// route now that Home is the launcher. Install authorization is enforced by the
-// brain (DASHBOARD.md # install authorization): admins default to a household
-// instance, members are forced to a personal one. The explicit scope picker for
-// admins and the warn-don't-block duplicate-confirm dialog are follow-ups; for
-// now we install with the brain's default scope and hide the button once a
-// caller-visible instance of that manifest exists (sidestepping the 409).
-import { ref } from "vue";
+// Store — browse/install apps (DASHBOARD.md # global navigation). Catalog
+// installs now go through a consent + configuration dialog: clicking Install
+// fetches GET /api/v1/catalog/:id/install-plan (advisory), renders InstallDialog
+// with the scope picker (admins only) and per-folder source/subfolder elections,
+// then submits the elections to POST /api/v1/apps as config.folders[].
+// Duplicate-install (409 duplicate-install) surfaces the existing-copy summary
+// and offers "Install my own copy" which re-submits with confirm:true.
+// 422 election-validation errors are passed into the dialog and displayed inline.
+// Household instances show "Open shared app" + a secondary Install button;
+// the caller's own personal instance shows "Open"; otherwise "Install".
+import { ref, computed } from "vue";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/vue-query";
-import { api, waitForJob, type ApiError, type CatalogEntry, type Instance, type Job } from "../api";
+import { useAuth } from "../auth";
+import {
+  api,
+  waitForJob,
+  ApiError,
+  type CatalogEntry,
+  type Instance,
+  type Job,
+  type InstallPlan,
+  type InstallRequest,
+} from "../api";
+import InstallDialog from "../components/InstallDialog.vue";
 
 const qc = useQueryClient();
+const { currentUser } = useAuth();
 
 const catalog = useQuery({
   queryKey: ["catalog"],
@@ -23,17 +37,136 @@ const apps = useQuery({
   queryFn: () => api.get<{ apps: Instance[] }>("/apps"),
 });
 
-const install = useMutation({
-  mutationFn: async (manifestId: string) => {
-    const job = await api.post<Job>("/apps", { manifest_id: manifestId });
-    return waitForJob(job.job_id);
-  },
-  onSettled: () => qc.invalidateQueries({ queryKey: ["apps"] }),
+// ── Install-plan dialog state ─────────────────────────────────────────────────
+
+// planFor is the catalog id whose install-plan we're fetching/showing.
+const planFor = ref<string | null>(null);
+// dialogError is passed into InstallDialog for 422 inline display.
+const dialogError = ref<string | null>(null);
+// duplicateInfo holds the ApiError.message from a 409 duplicate-install response.
+const duplicateInfo = ref<string | null>(null);
+// pendingRequest holds the last InstallRequest we sent (for confirm retry).
+const pendingRequest = ref<InstallRequest | null>(null);
+// installingId is the manifest id whose install job is running. Set once the
+// POST is accepted (202) — drives the row's "Installing…"/disabled state after
+// the dialog has closed, independent of which row's dialog was last open.
+const installingId = ref<string | null>(null);
+// installError surfaces a failure that happens *during* the job (after the
+// dialog has already closed), as a dismissable banner.
+const installError = ref<string | null>(null);
+
+const installPlanQuery = useQuery({
+  queryKey: computed(() => ["install-plan", planFor.value]),
+  queryFn: () => api.get<InstallPlan>(`/catalog/${planFor.value}/install-plan`),
+  enabled: computed(() => planFor.value !== null),
+  staleTime: 0,
+  // The plan for a given (id, role) is stable for the life of a dialog; a
+  // background refetch would swap props.plan out from under an open dialog.
+  refetchOnWindowFocus: false,
 });
 
-function installedManifest(id: string): boolean {
-  return (apps.data.value?.apps ?? []).some((a) => a.manifest_id === id);
+// activePlan is the plan to show, derived from the query — null while no dialog
+// is requested or the fetch hasn't resolved. Deriving (not mirroring via a
+// queryFn side-effect) keeps a background refetch from mutating dialog state.
+const activePlan = computed<InstallPlan | null>(() =>
+  planFor.value !== null ? (installPlanQuery.data.value ?? null) : null,
+);
+
+function openInstallDialog(catalogId: string) {
+  dialogError.value = null;
+  duplicateInfo.value = null;
+  pendingRequest.value = null;
+  planFor.value = catalogId;
 }
+
+function closeDialog() {
+  planFor.value = null;
+  dialogError.value = null;
+  duplicateInfo.value = null;
+  pendingRequest.value = null;
+}
+
+// ── Install mutation ──────────────────────────────────────────────────────────
+
+const install = useMutation({
+  mutationFn: async (req: InstallRequest) => {
+    const job = await api.post<Job>("/apps", req);
+    // POST accepted (202) → the job is running. 409 duplicate / 422 election
+    // rejection would have thrown above, with the dialog still open. Now that
+    // the install has started, close the dialog and mark the row installing.
+    installingId.value = req.manifest_id;
+    planFor.value = null;
+    const done = await waitForJob(job.job_id);
+    // waitForJob resolves for any terminal status; a failed/cancelled job is an
+    // install failure, not a success — throw so onError surfaces it.
+    if (done.status !== "completed") {
+      throw new Error(done.error?.message ?? "The install didn't finish.");
+    }
+    return done;
+  },
+  onSuccess: () => {
+    closeDialog();
+  },
+  onError: (err: unknown) => {
+    if (err instanceof ApiError && err.code === "duplicate-install") {
+      // Thrown at POST time, dialog still open → warn-don't-block banner.
+      duplicateInfo.value = err.message;
+    } else if (installingId.value) {
+      // Failed during the job, after the dialog closed → standalone banner.
+      installError.value = (err as Error).message;
+    } else {
+      // Failed at POST (422 election rejection) → inline in the open dialog.
+      dialogError.value = (err as Error).message;
+    }
+  },
+  onSettled: async () => {
+    // Keep the row in "Installing…" until the apps list reflects the new
+    // instance, so it flips straight to "Open" with no "Install" flicker.
+    await qc.invalidateQueries({ queryKey: ["apps"] });
+    installingId.value = null;
+  },
+});
+
+function handleSubmit(req: InstallRequest) {
+  dialogError.value = null;
+  duplicateInfo.value = null;
+  installError.value = null;
+  pendingRequest.value = req;
+  install.mutate(req);
+}
+
+function handleConfirmDuplicate() {
+  if (!pendingRequest.value) return;
+  const req = { ...pendingRequest.value, confirm: true };
+  duplicateInfo.value = null;
+  install.mutate(req);
+}
+
+// ── Per-row button logic ──────────────────────────────────────────────────────
+
+// rowInstances maps manifest_id → the caller-relevant instances, computed once
+// per apps/user change so each row's button is an O(1) lookup (not a filter).
+const rowInstances = computed(() => {
+  const uid = currentUser.value?.id;
+  const m = new Map<string, { household?: Instance; ownPersonal?: Instance }>();
+  for (const a of apps.data.value?.apps ?? []) {
+    const e = m.get(a.manifest_id) ?? {};
+    if (a.scope === "household") e.household ??= a;
+    else if (a.scope === "personal" && a.owner_user_id === uid) e.ownPersonal ??= a;
+    m.set(a.manifest_id, e);
+  }
+  return m;
+});
+
+function householdInstance(manifestId: string): Instance | undefined {
+  return rowInstances.value.get(manifestId)?.household;
+}
+
+function ownPersonalInstance(manifestId: string): Instance | undefined {
+  return rowInstances.value.get(manifestId)?.ownPersonal;
+}
+
+// ── Custom app install ────────────────────────────────────────────────────────
 
 const customName = ref("");
 const customPort = ref<number | undefined>(undefined);
@@ -72,19 +205,113 @@ const installCustom = useMutation({
             <strong class="text-sm">{{ c.name }}</strong>
             <span class="text-xs text-muted-foreground">v{{ c.version }}</span>
           </div>
-          <button
-            class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
-            :disabled="install.isPending.value || installedManifest(c.id)"
-            @click="install.mutate(c.id)"
-          >
-            {{ installedManifest(c.id) ? "Installed" : install.isPending.value ? "Installing…" : "Install" }}
-          </button>
+
+          <div class="flex items-center gap-2">
+            <!-- Household instance exists: "Open shared app" link + Install button -->
+            <template v-if="householdInstance(c.id)">
+              <a
+                :href="householdInstance(c.id)!.url"
+                target="_blank"
+                rel="noopener"
+                class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
+              >
+                Open shared app
+              </a>
+              <button
+                class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+                :disabled="installingId === c.id"
+                @click="openInstallDialog(c.id)"
+              >
+                {{ installingId === c.id ? "Installing…" : "Install" }}
+              </button>
+            </template>
+
+            <!-- Caller's own personal instance exists: "Open" link only -->
+            <template v-else-if="ownPersonalInstance(c.id)">
+              <a
+                :href="ownPersonalInstance(c.id)!.url"
+                target="_blank"
+                rel="noopener"
+                class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
+              >
+                Open
+              </a>
+            </template>
+
+            <!-- No visible instance: Install button -->
+            <template v-else>
+              <button
+                class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+                :disabled="installingId === c.id"
+                @click="openInstallDialog(c.id)"
+              >
+                {{ installingId === c.id ? "Installing…" : "Install" }}
+              </button>
+            </template>
+          </div>
         </li>
       </ul>
-      <p v-if="install.isError.value" class="text-sm text-destructive">
-        {{ (install.error.value as ApiError).message }}
-      </p>
     </section>
+
+    <!-- Duplicate-install warning (409 duplicate-install) -->
+    <div
+      v-if="duplicateInfo"
+      class="rounded-xl border border-border bg-card px-4 py-3 space-y-2"
+    >
+      <p class="text-sm">{{ duplicateInfo }}</p>
+      <div class="flex gap-2">
+        <button
+          class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+          :disabled="install.isPending.value"
+          @click="handleConfirmDuplicate"
+        >
+          {{ install.isPending.value ? "Installing…" : "Install my own copy" }}
+        </button>
+        <button
+          class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
+          @click="closeDialog"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+
+    <!-- Install failed after the dialog closed (job failure / host 5xx) -->
+    <div
+      v-if="installError"
+      class="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 space-y-2"
+    >
+      <p class="text-sm text-destructive">{{ installError }}</p>
+      <button
+        class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
+        @click="installError = null"
+      >
+        Dismiss
+      </button>
+    </div>
+
+    <!-- Install consent dialog -->
+    <InstallDialog
+      v-if="activePlan && !duplicateInfo"
+      :plan="activePlan"
+      :submit-error="dialogError"
+      @submit="handleSubmit"
+      @cancel="closeDialog"
+    />
+
+    <!-- Plan loading indicator (shown while dialog hasn't appeared yet) -->
+    <p
+      v-if="planFor && !activePlan && installPlanQuery.isFetching.value"
+      class="text-sm text-muted-foreground"
+    >
+      Loading install plan…
+    </p>
+    <p
+      v-if="installPlanQuery.isError.value && planFor"
+      class="text-sm text-destructive"
+    >
+      {{ (installPlanQuery.error.value as Error).message }}
+    </p>
 
     <section class="space-y-3">
       <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Add custom app</h2>

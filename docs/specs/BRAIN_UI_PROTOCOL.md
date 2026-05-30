@@ -25,15 +25,55 @@ Four patterns, same rule as host-agent. Sync for short ops, jobs for anything th
 For anything under ~5s and not needing progress.
 
 ```
-GET  /api/v1/apps              → list installed instances
-GET  /api/v1/apps/:id          → instance detail
-POST /api/v1/users             → create user
-GET  /api/v1/settings/network  → current network config
-GET  /api/v1/health/issues     → active health issues (see HEALTH.md)
-POST /api/v1/health/:id/:act   → invoke a remediation action attached to an issue
+GET  /api/v1/apps                          → list installed instances
+GET  /api/v1/apps/:id                      → instance detail
+POST /api/v1/users                         → create user
+GET  /api/v1/settings/network              → current network config
+GET  /api/v1/health/issues                 → active health issues (see HEALTH.md)
+POST /api/v1/health/:id/:act               → invoke a remediation action attached to an issue
+GET  /api/v1/catalog/:id/install-plan      → permission/scope plan for installing a catalog app (see below)
 ```
 
 Plain HTTP. Errors: HTTP status + `{ "code": "...", "message": "...", "details": {...} }`. Codes are stable strings; messages are human-readable, not contractual.
+
+#### GET /api/v1/catalog/:id/install-plan
+
+Returns everything the install-consent screen needs before the user confirms. Requires an authenticated session (401 if absent). An unknown catalog id → 404; a catalog entry that exists but fails to parse or is missing its compose file → 500 (an integrity problem a curated catalog should never ship, surfaced loudly rather than masked as a missing app).
+
+```jsonc
+{
+  "manifest_id": "jellyfin",
+  "name": "Jellyfin",
+  "version": "10.9.6",
+  "scope_options": ["household", "personal"],  // role-derived: admin gets both, member gets ["personal"] only
+  "scope_default": "household",                 // admin → "household", member → "personal"
+  "permissions": {
+    "internet": false,
+    "lan": true,
+    "gpu": false,
+    "devices": ["/dev/dri/renderD128"],
+    "folders": [
+      {
+        "folder": "movies",
+        "mode": "write",              // "read" | "write"
+        "scope": "pick-subfolder",    // "whole" | "pick-subfolder"
+        "subfolder_default": "Movies/Family",  // omitted unless scope=pick-subfolder
+        "sources": {
+          "household": { "options": ["shared"],             "default": "shared" },
+          "personal":  { "options": ["personal", "shared"], "default": "personal" }
+        }
+      }
+    ]
+  }
+}
+```
+
+**Key properties of the response:**
+
+- **Role-derived scope options.** `scope_options` and `scope_default` are computed from the caller's role. The install-plan drives the picker; `POST /api/v1/apps` enforces the same rule (members are rejected on household scope).
+- **Per-scope source menus (Option A).** Each folder carries `sources.household` and `sources.personal`, each a `{options, default}` menu. The UI does zero policy derivation: pick a scope, look up `folder.sources[<scope>]`, render. A single-option menu (`household → ["shared"]`) renders as fixed/disabled. Both menus are always populated regardless of the caller's role — the household menu is unreachable for members (household scope isn't offered) but keeping the shape uniform means the UI doesn't branch on role when rendering a folder row.
+- **Structured fields only, no copy.** The brain returns `mode`/`scope`/`subfolder_default` and source fields. The UI owns all wording ("can add, change & delete files in…", "Which folder should this app manage?"). This matches how the rest of the brain returns data, not sentences.
+- **Advisory, not authoritative.** The install-plan drives the consent screen. The authoritative validation + override stamping happen in slice 4 when `POST /api/v1/apps` receives the user's elections in its `config`. This endpoint makes no host calls and mutates nothing.
 
 ### Pattern B — Jobs
 

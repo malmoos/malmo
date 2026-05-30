@@ -146,7 +146,7 @@ Third-party stores, external tooling, and (later) `malmoctl` need non-interactiv
 
 A user granted Immich access to `~/Photos/`. Six months later they want to revoke it without uninstalling. Today the manifest declares permissions at install; nothing covers the *change* path. UX: per-app permissions screen mirroring iOS/Android's, with consequences spelled out ("Immich will no longer be able to see your photos"). Brain side: re-render compose, restart instance, audit-event.
 
-**Context:** `APP_MANIFEST.md` (`permissions.user_folders`), `APP_ISOLATION.md`, `APP_LIFECYCLE.md`, `LOGGING.md` (audit).
+**Context:** `APP_MANIFEST.md` (`permissions.folders`), `APP_ISOLATION.md`, `APP_LIFECYCLE.md`, `LOGGING.md` (audit).
 **Why Tier 3:** install-time grant works for v1; revocation is the second-order feature users will ask for once they've lived with the box for a while.
 
 ### Hostname / box-name rename
@@ -229,7 +229,7 @@ Both deferred from v1 (`DECISIONS.md` 2026-05-15). Shape is pinned in `RELEASE_M
 
 The architecture and the install/wizard/add-drive/eject mechanics are locked (`STORAGE.md`, `FIRST_RUN.md`, `AUTH.md`, `BRAIN_HOST_PROTOCOL.md`, `HEALTH.md` # `disk-full`). What remains is design-time copy + screen-layout: card shape for OS drive vs. data drive at Level 0/1, where the "Show recovery passphrase" affordance lives under Advanced, eject-drive confirmation copy, disk-pressure banner copy + top-space-hogs enumeration, single-drive "add a data drive later" dashboard hint, and the file-access permission block on the app-install dialog ("Photos will read and write your Photos folder").
 
-**Context:** `STORAGE.md`, `FIRST_RUN.md`, `HEALTH.md`, `APP_MANIFEST.md` # `permissions.user_folders`.
+**Context:** `STORAGE.md`, `FIRST_RUN.md`, `HEALTH.md`, `APP_MANIFEST.md` # `permissions.folders`.
 **Why Tier 3:** doesn't block bring-up — the brain endpoints and health-issue flags exist. UX iteration belongs with the designer and the first user-test pass, not the spec.
 
 ### Reboot scheduling UX
@@ -280,7 +280,9 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 
 **Manifests & catalog**
 - Exact `MALMO_SERVICE_*` variable schema per service type — `APP_MANIFEST.md`, `SERVICE_PROVISIONING.md`.
-- `permissions.devices` syntax — paths vs. categories (`gpu`, `webcam`). `APP_MANIFEST.md`.
+- `permissions.devices` syntax — paths vs. categories (`webcam`, etc.). `APP_MANIFEST.md`. *(GPU split out into its own `gpu: true` field — `DECISIONS.md` 2026-05-30; this item now covers only non-GPU device shorthand.)*
+- **Store `permissions.capabilities` escape hatch (deferred).** A reviewed-at-submission list (`NET_ADMIN`, `SYS_TIME`) for the rare store app that legitimately needs one capability. Cut from the v1 schema (`DECISIONS.md` 2026-05-30 — store apps get `cap_drop: [ALL]`, no `cap_add`); capability needs go through Door-2 / Tier 2 today. Revisit if a curated app genuinely can't fit either path. `APP_MANIFEST.md`, `APP_ISOLATION.md`.
+- **Door-2 vs. Door-1 admission asymmetry.** `APP_ISOLATION.md`'s trust-tier model says Door-2 custom compose may carry `privileged` / `cap_add` / the Docker socket ("the user wrote it"), but the implemented admission policy (`internal/admission`, run for *both* doors in `install()`) rejects all three uniformly. Decide whether Door-2 actually relaxes admission, and if so exactly which primitives — vs. holding the line and pushing those use cases to Tier 2 only. `APP_LIFECYCLE.md` # admission policy, `APP_ISOLATION.md` # Trust tiers.
 - Manifest signing / provenance for third-party stores. `APP_MANIFEST.md`.
 - App icon & screenshot handling — bundled vs. URL. `APP_MANIFEST.md`.
 - Update-strategy declarations (in-place vs. needs-migration). `APP_MANIFEST.md` (folds into hooks).
@@ -312,12 +314,13 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - **Dashboard Settings → Network panel UX.** The plumbing (NM-backed endpoints) is in `BRAIN_HOST_PROTOCOL.md`; the UX details (saved-networks list, signal/security indicators, switch-network "you may briefly lose this page" confirmation, static-IP form, multi-NIC priority controls) belong to `WEB_UI.md`. `BRAIN_HOST_PROTOCOL.md` # Network endpoints, `WEB_UI.md`.
 
 **Isolation & runtime**
+- **GPU + device capacity enforcement.** `permissions.gpu` and `permissions.devices` are parsed and (for devices) passed through, but the spec's "refuse at capacity check if the GPU/device is absent" (`APP_ISOLATION.md` # GPU, # Devices) is not honored — the brain has no host hardware-capability query, so an absent GPU/device currently fails at `docker compose up` instead of giving the specced capacity error, and `gpu: true` emits no runtime stanza at all. Needs a host capability endpoint (sibling of `/v1/identity/well-known`) the install transaction checks before generating the override. Deferred from the folder-enforcement slice (`docs/progress/install-permissions-enforcement.md`). `APP_ISOLATION.md`, `BRAIN_HOST_PROTOCOL.md`.
 - GPU sharing across apps (MIG / time-slice / exclusive). `APP_ISOLATION.md`.
 - macvlan on bonded / bridged host interfaces. `APP_ISOLATION.md`.
 - Read-only root rollout as a catalog requirement. `APP_ISOLATION.md`.
 - Egress allowlist for `internet: true`. `APP_ISOLATION.md`.
 - Per-app firewall rules (apps as L4 endpoints). `APP_ISOLATION.md`.
-- Tier-3 per-user app access to household-shared content (`/srv/malmo/shared/`). Tier-1 apps reach it via `shared_folders`; per-user instances do not at MVP. `APP_ISOLATION.md`, `APP_MANIFEST.md`.
+- Author-declared default/hint for folder source (e.g. an `allow_shared`-style flag) so a manifest can bias the install-time personal-vs-shared toggle without removing the installer's choice. Resolved-for-now as fully installer-elected (`DECISIONS.md` 2026-05-30); revisit if catalog demand appears. `APP_MANIFEST.md` # `folders`.
 - fscrypt coverage for per-user app state under `/var/lib/malmo/instances/<id>/`. When per-home fscrypt lands, does it extend to managed-service data (per-user Postgres, etc.)? `APP_ISOLATION.md` # Managed services placement, `STORAGE.md` # Future: per-user encryption.
 
 **Storage & first-run**

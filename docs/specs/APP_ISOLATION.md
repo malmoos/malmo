@@ -2,7 +2,7 @@
 
 > Working spec for how the brain enforces what apps can do at runtime. Companion to `SPEC.md`, `CONTROL_PLANE.md`, `APP_MANIFEST.md`, `SERVICE_PROVISIONING.md`, `STORAGE.md`, `FIRST_RUN.md`.
 
-The manifest declares *intent* (`internet: true`, `lan: false`, `user_folders: [{folder: photos}]`). This document describes what those declarations mean concretely — what Linux/Docker primitives back them, what the defaults are, and where the trust boundaries sit.
+The manifest declares *intent* (`internet: true`, `lan: false`, `folders: [{folder: photos}]`). This document describes what those declarations mean concretely — what Linux/Docker primitives back them, what the defaults are, and where the trust boundaries sit.
 
 ## Principles
 
@@ -24,29 +24,31 @@ The manifest declares *intent* (`internet: true`, `lan: false`, `user_folders: [
 
 ## Multi-user runtime
 
-malmo is multi-user (`FIRST_RUN.md`). Every user has private data; admins manage the box but cannot read other users' files through normal paths. App execution reflects this: **most apps run as per-user instances, scoped to one user's data**.
+malmo is multi-user (`FIRST_RUN.md`). Every user has private data; admins manage the box but cannot read other users' files through normal paths. App execution reflects this: **every app instance has an owner**, and a personal instance is scoped to its owner's data (`DASHBOARD.md` # instances are owner-scoped, `DECISIONS.md` 2026-05-29).
 
-### Per-user instances (default for Tier-3 apps)
+### Owner-scoped instances
 
-When a user installs a Tier-3 app, the brain spawns a container scoped to that user. If two users install the same app, two containers run — one per (user, app) tuple. Containers are named `malmo-<app>-<user-slug>`.
+Whether an instance is **household** (admin-owned, shared — one instance, the app's own internal multi-user separates people inside it) or **personal** (owned by one user, its own data, folders, and route) is **elected by the installing user**, not derived from a tier or declared in the manifest (`APP_MANIFEST.md` # G). Admins choose household or personal; members install personal only.
 
-- The container's main process runs as the **user's Linux UID/GID** (assigned at user creation, in the malmo-reserved 3000+ range). The brain enforces this via the compose `user:` field; we do not rely on `PUID`/`PGID` env-var conventions.
-- The container sees only the bind-mounted use-case folders declared in the manifest (subset of `/home/<user>/Photos/`, `Documents/`, etc. — see `APP_MANIFEST.md` # `user_folders`). Other users' homes are not bind-mounted; they're not even on the filesystem the container can reach.
-- App authors write a single-user app. They do not need to know about users, sessions, or identity. malmo handles replication.
+A personal instance is the per-owner compose-project shape locked in `APP_LIFECYCLE.md` # an app instance is a Docker Compose project: an independent project named `malmo-<instance-id>`, with its own instance id, data dir, and slug `<slug>--<user>`. If two users each install the same app personally, two independent instances run.
+
+- A personal instance's main process runs as the **owner's Linux UID/GID** (assigned at user creation, in the malmo-reserved 3000+ range). The brain enforces this via the compose `user:` field; we do not rely on `PUID`/`PGID` env-var conventions. (A household instance runs as a shared service identity, not a single member's UID.)
+- The container sees only the bind-mounted use-case folders declared in the manifest (the owner's `/home/<user>/Photos/`, `Documents/`, etc., or a household `/srv/malmo/shared/<Folder>/` when the installer elected the shared source — see `APP_MANIFEST.md` # `folders`), mounted at the fixed `/malmo/<folder>` paths. Other users' homes are not bind-mounted; they're not even on the filesystem the container can reach.
+- App authors write a single-user app. They do not need to know about users, sessions, or identity — malmo runs one instance per owner.
 
 ### Tier-2 apps (always shared)
 
-Tier-2 apps (Tailscale, SMB, DLNA, future entries — `SERVICE_PROVISIONING.md`) are inherently box-wide. One instance per box, admin-installed. They are not replicated per user. Tier-2 ≠ Tier-3 from a runtime-isolation standpoint and most of the rules in this document apply differently. See `SERVICE_PROVISIONING.md` for their model.
+Tier-2 apps (Tailscale, SMB, DLNA, future entries — `SERVICE_PROVISIONING.md`) are inherently box-wide. One instance per box, admin-installed. They are not owner-scoped. Tier-2 ≠ Tier-3 from a runtime-isolation standpoint and most of the rules in this document apply differently. See `SERVICE_PROVISIONING.md` for their model.
 
-### No `multi_user` field in MVP
+### No `multi_user` field
 
-Every Tier-3 app is per-user. Every Tier-2 app is shared. No manifest field expresses this — it follows from the tier. The schema reserves a future `multi_user: per_user | aware | shared` field for sophisticated apps that want cross-user awareness (e.g., a future malmo-built Photos app with sharing UI), but it is not user-settable at v1.
+Household-vs-personal is an install-time election, not a static property of the app, so **no manifest field expresses it** (an earlier draft's `multi_user.mode` was removed — `DECISIONS.md` 2026-05-29). Cross-user *awareness* inside a single instance (e.g., a future malmo-built Photos app with its own sharing UI) is a separate, deferred concern, not a v1 manifest field.
 
-### Routing across users
+### Routing per instance
 
-Subdomains stay clean: `<app>.malmo.local` for everyone. The reverse proxy reads the session cookie, identifies the logged-in user, and routes to that user's per-user instance.
+Each instance has its own subdomain: bare `<slug>.malmo.local` for the household instance, `<slug>--<user>.malmo.local` for a personal one (`DASHBOARD.md` # instance naming). Ownership is legible in the URL itself, and one wildcard cert covers every instance.
 
-Consequence: if Andrei sends Maria a URL like `photos.malmo.local`, Maria lands on *her* Photos, not Andrei's. This is a deliberate privacy property — no URL-level cross-user data leakage — but means the URL is not a stable shareable handle. Granular cross-user sharing (intentionally exposing one user's content to another) is a future feature; v1 sharing is "drop it in `~/Shared/`" only (`STORAGE.md`).
+Consequence: a personal instance's URL is owner-specific — `immich--alex.malmo.local` is Alex's. Granular cross-user sharing (intentionally exposing one user's content to another) is a future feature; v1 sharing is "drop it in `~/Shared/`" only (`STORAGE.md`).
 
 ### User lifecycle
 
@@ -93,7 +95,7 @@ Cost: each `lan: true` app burns one IP on the user's LAN. Tolerable — single-
 
 Denied. Apps that need to share data go through:
 - Managed services (`services: [postgres]`)
-- A shared use-case folder (`user_folders: [...]` — two of the same user's apps see the same `~/Photos/`) or, for Tier-1 household apps, `shared_folders: [...]` against `/srv/malmo/shared/`
+- A shared use-case folder (`folders: [...]` — two of the same user's apps pointed at the same source see the same `~/Photos/`, or the same `/srv/malmo/shared/` tree)
 
 A user who genuinely wants two apps wired directly together puts them in one Door-2 compose. Cross-app networking is not a v1 feature.
 
@@ -111,7 +113,7 @@ The writable layer resets on container *recreation* (image update, uninstall/rei
 
 ### Volumes
 
-Persistent paths in the manifest map to brain-controlled host paths under `/var/lib/malmo/apps/<id>/`. The app declares the path inside the container; the brain decides where on the host it lives. App authors don't pick host paths.
+App state (indexes, configs, the app's own DB) lives under the instance dir at `/var/lib/malmo/instances/<id>/data/`, via bind mounts only — no Docker named volumes (`APP_LIFECYCLE.md` # on-disk layout per instance). The author writes the bind mount against `${MALMO_DATA_DIR}/foo:/foo` (or the relative `./data/foo:/foo`); the brain injects `MALMO_DATA_DIR`, so authors reference a stable variable rather than a hardcoded host path.
 
 `/tmp` is a size-capped tmpfs.
 
@@ -119,22 +121,25 @@ Persistent paths in the manifest map to brain-controlled host paths under `/var/
 
 ### User content (use-case folders)
 
-Each Tier-3 app instance is scoped to its user's private home directory. Apps reach user content by **bind-mounting use-case folders** declared in the manifest (`APP_MANIFEST.md` # `user_folders`):
+Apps reach user content by **bind-mounting use-case folders** declared in the manifest (`APP_MANIFEST.md` # `folders`):
 
 ```yaml
 permissions:
-  user_folders:
+  folders:
     - { folder: photos, mode: write }
     - { folder: documents, mode: read }
 ```
 
-`mode` defaults to `read` if unspecified — least privilege, and `write` is a deliberate choice the catalog reviewer notices.
+Each declared folder is bind-mounted at a fixed in-container path `/malmo/<folder>` and the absolute path injected as `MALMO_FOLDER_<NAME>`; the app's compose maps that variable to its own library path (`APP_MANIFEST.md` # `folders`). `mode` defaults to `read` if unspecified — least privilege, and `write` is a deliberate choice the catalog reviewer notices.
 
-Use-case folder taxonomy v1 (fixed): `photos`, `documents`, `movies`, `music`, `notes`, `downloads` — mapped to capitalized directories under `/home/<user>/` (`Photos/`, `Documents/`, etc., per `STORAGE.md`). User-defined folders deferred.
+Use-case folder taxonomy v1 (fixed): `photos`, `documents`, `movies`, `music`, `notes`, `downloads` — mapped to capitalized directories (`Photos/`, `Documents/`, etc., per `STORAGE.md`). User-defined folders deferred.
 
-**Layout.** Use-case folders live at `/home/<user>/<Folder>/`, owned by that user (UID in the malmo 3000+ range), with `/home/<user>/` mode `0750` (`STORAGE.md` # Permissions). The container runs as the user's UID and sees only the folders declared in its manifest, bind-mounted in — it has no path to other users' homes at all.
+**The host source is the installer's per-folder election, not the manifest's.** A declared folder binds one of two sources, chosen at install:
 
-**Household-shared content (`/srv/malmo/shared/`) is not exposed to per-user app instances at MVP.** It exists for the v1 cross-user sharing story (drop a file in `Shared/`, every user's file browser sees it via the `malmo-shared` group — `STORAGE.md`, `USERS_AND_GROUPS.md`), but Tier-3 per-user containers do not bind-mount it. Tier-1 household apps (e.g., a household Jellyfin) reach this content via `shared_folders` in their manifest (`APP_MANIFEST.md` # `shared_folders`). Allowing Tier-3 per-user apps to read across the per-user/shared boundary is a deferred feature — tracked in `NEXT.md`.
+- **Personal source** — the owner's `/home/<user>/<Folder>/`, owned by that user (UID in the malmo 3000+ range), with `/home/<user>/` mode `0750` (`STORAGE.md` # Permissions). The container runs as the owner's UID and reaches no other user's home. This is the default offered for a personal instance.
+- **Shared source** — `/srv/malmo/shared/<Folder>/`, the household tree every member can already reach via the `malmo-shared` group (`STORAGE.md`, `USERS_AND_GROUPS.md`). The brain adds the container to `malmo-shared` (compose `group_add`) so it has exactly that group's access — no new privilege. Always used by a household instance; offered to a personal instance when the installer elects it.
+
+A personal instance reading the shared tree (the "my own Jellyfin on the family library" case) is now a supported election — **this supersedes the earlier MVP carve-out** that forbade Tier-3 per-user apps from crossing the per-user/shared boundary (`DECISIONS.md` 2026-05-30). The boundary still holds in the one direction that matters: a household (shared) instance never binds a single member's private `~/`, because there is no one owner to scope it to.
 
 The `PUID`/`PGID` env-var pattern from earlier drafts is gone — we set the container's runtime UID directly via the compose `user:` field, so file ownership lines up natively. Apps that hardcode an internal UID and ignore the runtime user override will hit permission errors and get pulled from the catalog.
 
@@ -182,31 +187,26 @@ The common case is expressed through high-level fields in the manifest, not raw 
 | `lan: true` | macvlan attachment + multicast |
 | `devices: [...]` | device cgroup entries |
 | `gpu: true` | platform-appropriate GPU runtime |
-| `user_folders: [...]` | bind mount of `/home/<user>/<Folder>/` |
-| `shared_folders: [...]` | bind mount of `/srv/malmo/shared/<folder>/` + `malmo-shared` group membership |
+| `folders: [...]` (personal source) | bind mount of `/home/<user>/<Folder>/` at `/malmo/<folder>` + injected `MALMO_FOLDER_<NAME>` |
+| `folders: [...]` (shared source) | bind mount of `/srv/malmo/shared/<Folder>/` at `/malmo/<folder>` + `malmo-shared` group membership (`group_add`) + injected `MALMO_FOLDER_<NAME>` |
 
 App authors think "I need to control the network," not "I need `NET_ADMIN`." The brain does the translation.
 
-### Escape hatch
+### Escape hatch — not a v1 store field
 
-For the rare app that legitimately needs a specific capability:
+There is **no `permissions.capabilities` list in the v1 store schema.** A store app gets `cap_drop: [ALL]` and adds nothing back; admission rejects any `cap_add` (`APP_LIFECYCLE.md` # admission policy, `APP_MANIFEST.md` # E). A reviewed-at-submission capability list for the rare legitimate case (`NET_ADMIN`, `SYS_TIME`) is a **deferred** schema addition — tracked in `NEXT.md`, not assumed by the catalog today.
 
-```yaml
-permissions:
-  capabilities: [NET_ADMIN, SYS_TIME]
-```
-
-Defaults to empty. Anything in this list is reviewed at catalog submission.
+The app that genuinely needs a capability, `privileged`, the Docker socket, or low-level hardware access goes through the **Door-2 custom path** (the user wrote the compose, owns the consequences) or, for curated OS integrations, **Tier 2** (`SERVICE_PROVISIONING.md`).
 
 ### Forbidden in store
 
-These three are catalog-rejected because they are container-escape primitives:
+These are container-escape primitives and are catalog-rejected:
 
 - `privileged: true`
 - Mounting `/var/run/docker.sock`
-- `SYS_ADMIN` in `permissions.capabilities`
+- any `cap_add` (`SYS_ADMIN` especially)
 
-A store app cannot request them. Door-2 custom compose can do all three — the user wrote the compose, the user owns the consequences. Legit privileged use cases (low-level backup tools, hardware management) are pushed to the Door-2 path.
+A store app cannot request them. The intent is that Door-2 custom compose carries them — the user wrote it — but note that the **current admission policy runs identically for both doors** (`APP_LIFECYCLE.md` # admission policy), so the exact set of primitives Door-2 may relax is an **open item** (`NEXT.md`), not yet a door-asymmetric rule.
 
 ### Not in v1
 

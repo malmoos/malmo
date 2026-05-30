@@ -46,6 +46,14 @@ type CaddyDriver interface {
 type HostDriver interface {
 	Publish(ctx context.Context, slug string) (protocol.PublishResponse, error)
 	Unpublish(ctx context.Context, slug string) error
+	// ResolveHome returns the owner's home directory path, UID, and GID. Used
+	// by writeOverride to build bind-mount sources and the user: directive for
+	// personal-scope app instances.
+	ResolveHome(ctx context.Context, user string) (protocol.ResolveHomeResponse, error)
+	// WellKnownIdentity returns the fixed host service identities: the malmo-app
+	// service UID/GID a household instance runs as, and the malmo-shared GID a
+	// shared-source folder mount joins via group_add.
+	WellKnownIdentity(ctx context.Context) (protocol.WellKnownIdentityResponse, error)
 }
 
 // Admitter validates a verbatim compose. Default impl is admission.Check; tests

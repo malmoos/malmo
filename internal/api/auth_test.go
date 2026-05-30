@@ -43,6 +43,11 @@ type harness struct {
 	// docs/progress/0017-host-agent-delete-user.md).
 	deleteCalls *[]string
 	apiSrv      *Server // the underlying api.Server, for direct method tests
+	// catalogDir is the root the harness's catalog reads from. catalog.Load
+	// hits the filesystem on each call, so tests write manifest fixtures into
+	// this dir *after* construction and the live server picks them up — no need
+	// to swap the catalog on the already-listening server.
+	catalogDir string
 }
 
 // srvServer exposes the underlying *Server for tests that exercise handler
@@ -109,7 +114,8 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(func() { _ = hostHTTP.Close() })
 
 	host := hostclient.New(sock)
-	cat := catalog.New(t.TempDir())
+	catDir := t.TempDir()
+	cat := catalog.New(catDir)
 	bus := events.NewBus()
 	authMgr := auth.NewManager(st)
 
@@ -120,7 +126,7 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(ts.Close)
 
 	jar, _ := newJar()
-	return &harness{srv: ts, jar: jar, t: t, pwds: pwds, pmu: &pmu, st: st, deleteCalls: &deleteCalls, apiSrv: srv}
+	return &harness{srv: ts, jar: jar, t: t, pwds: pwds, pmu: &pmu, st: st, deleteCalls: &deleteCalls, apiSrv: srv, catalogDir: catDir}
 }
 
 func (h *harness) do(method, path string, body any) *http.Response {

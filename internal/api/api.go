@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -110,6 +111,11 @@ func (s *Server) register(api huma.API) {
 		OperationID: "get-job", Method: "GET", Path: "/api/v1/jobs/{id}",
 		Summary: "Get job status",
 	}, s.getJob)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "get-install-plan", Method: "GET", Path: "/api/v1/catalog/{id}/install-plan",
+		Summary: "Permission/scope plan for installing a catalog app",
+	}, s.installPlan)
 }
 
 // --- DTOs ----------------------------------------------------------------
@@ -242,6 +248,9 @@ func (s *Server) installApp(ctx context.Context, in *struct {
 		ManifestID string `json:"manifest_id"`
 		Scope      string `json:"scope,omitempty"`   // "household" | "personal"; default household for admins, forced personal for members
 		Confirm    bool   `json:"confirm,omitempty"` // proceed past the duplicate-install warning
+		Config     struct {
+			Folders []FolderElection `json:"folders,omitempty"`
+		} `json:"config,omitempty"` // per-folder source/subfolder elections (consent screen)
 	}
 }) (*struct{ Body Job }, error) {
 	manifestID := in.Body.ManifestID
@@ -252,12 +261,29 @@ func (s *Server) installApp(ctx context.Context, in *struct {
 	if err != nil {
 		return nil, err
 	}
+	// Load the manifest to validate the folder elections authoritatively (the
+	// install-plan endpoint is advisory). A validation failure is an
+	// elevation-class mutation rejection, so it audits success=false.
+	man, _, err := s.catalog.Load(manifestID)
+	if errors.Is(err, catalog.ErrNotFound) {
+		return nil, huma.Error404NotFound("no such catalog app")
+	}
+	if err != nil {
+		slog.Error("install: catalog entry failed to load", "manifest_id", manifestID, "err", err)
+		return nil, huma.Error500InternalServerError("catalog entry is malformed")
+	}
+	mounts, err := resolveElections(man, scope, in.Body.Config.Folders)
+	if err != nil {
+		s.auditor.Record(ctx, audit.ActionAppInstall, audit.Target{Kind: "app"},
+			map[string]any{"manifest_id": manifestID, "scope": scope, "owner_user_id": owner.UserID}, false)
+		return nil, err
+	}
 	if err := s.checkDuplicate(ctx, manifestID, in.Body.Confirm, audit.ActionAppInstall); err != nil {
 		return nil, err
 	}
 	jobCtx := ctx // capture for audit inside the job goroutine
 	job := s.jobs.run("app-install", func(job *Job) (map[string]any, error) {
-		inst, err := s.life.Install(context.Background(), manifestID, owner, scope, job.setStep)
+		inst, err := s.life.Install(context.Background(), manifestID, owner, scope, mounts, job.setStep)
 		target := audit.Target{Kind: "app"}
 		// confirm records a deliberate override of the duplicate-install warning,
 		// so the Activity view can see "installed a second copy on purpose".
@@ -279,6 +305,8 @@ func (s *Server) installApp(ctx context.Context, in *struct {
 // install authorization): members always install a personal instance owned by
 // themselves; admins choose household (the default) or personal. It audits a
 // failed attempt when a member explicitly requests a household install.
+// scopeMenu() is the read-path mirror of this authorization table — it drives
+// the install-plan consent screen. Keep the two in sync.
 // meta is the action-specific audit metadata (e.g. {"manifest_id": …} for a
 // catalog install, {"name": …} for a custom one); resolveOwnerScope adds the
 // requested scope before recording a rejected attempt.

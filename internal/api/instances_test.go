@@ -44,6 +44,43 @@ func TestInstallMemberCannotChooseHousehold(t *testing.T) {
 	}
 }
 
+func TestInstallRejectsIllegalElectionAndAudits(t *testing.T) {
+	h := newHarness(t)
+	writeManifestFixture(t, h.catalogDir, "jellyfin", foldersManifestYML)
+	h.setupAdmin("admin", "hunter2")
+
+	// Household install electing a personal folder source — illegal (household
+	// forces shared). Must reject synchronously, before the job runs.
+	resp := h.do("POST", "/api/v1/apps", map[string]any{
+		"manifest_id": "jellyfin",
+		"scope":       "household",
+		"config": map[string]any{
+			"folders": []map[string]any{{"folder": "movies", "source": "personal"}},
+		},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("illegal election install = %d, want 422", resp.StatusCode)
+	}
+
+	// The rejection is an elevation-class mutation failure → audited success=false.
+	ar := h.do("GET", "/api/v1/audit", nil)
+	defer ar.Body.Close()
+	body := decodeJSON[struct {
+		Events []AuditEventDTO `json:"events"`
+	}](t, ar)
+	found := false
+	for _, e := range body.Events {
+		if e.Action == "app.install" && !e.Success {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("want an app.install success=false audit record for the rejected election")
+	}
+}
+
 func TestResolveOwnerScope(t *testing.T) {
 	h := newHarness(t)
 	admin := store.User{ID: "u_a", Username: "andrei", Role: store.RoleAdmin}

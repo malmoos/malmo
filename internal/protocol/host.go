@@ -103,6 +103,29 @@ type Finding struct {
 	Details string `json:"details,omitempty"`
 }
 
+// ResolveHomeResponse is GET /v1/users/{username}/home. Returns the owner's home
+// directory path and POSIX UID/GID so the brain (containerized, no /etc/passwd
+// access) can emit correct bind-mount sources and user: directives in the
+// compose override. 404 with code "unknown-user" if the user does not exist.
+type ResolveHomeResponse struct {
+	HomePath string `json:"home_path"`
+	UID      int    `json:"uid"`
+	GID      int    `json:"gid"`
+}
+
+// WellKnownIdentityResponse is GET /v1/identity/well-known. Returns the fixed
+// service-account identities the brain needs to emit correct user:/group_add
+// directives in compose overrides for household-scope app instances.
+//
+// MalmoAppUID/GID is the shared service identity (compose user:).
+// MalmoSharedGID is the GID of the malmo-shared group (apps electing a shared
+// folder source are added to it via group_add).
+type WellKnownIdentityResponse struct {
+	MalmoAppUID    int `json:"malmo_app_uid"`
+	MalmoAppGID    int `json:"malmo_app_gid"`
+	MalmoSharedGID int `json:"malmo_shared_gid"`
+}
+
 // Error is the JSON error body shape on non-2xx responses.
 type Error struct {
 	Code    string `json:"code"`

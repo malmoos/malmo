@@ -6,16 +6,19 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/malmo/malmo/internal/admission"
 	"github.com/malmo/malmo/internal/catalog"
 	"github.com/malmo/malmo/internal/events"
+	"github.com/malmo/malmo/internal/hostclient"
 	"github.com/malmo/malmo/internal/manifest"
 	"github.com/malmo/malmo/internal/store"
 
@@ -23,6 +26,57 @@ import (
 )
 
 const ingressNetwork = "malmo-ingress"
+
+// Folder-source election values (the installer's per-folder choice). Mirrors
+// the api package's source constants; kept local so lifecycle doesn't import
+// the API layer.
+const (
+	sourcePersonal = "personal"
+	sourceShared   = "shared"
+)
+
+// folderDir maps a taxonomy folder name to its capitalized on-disk directory
+// (STORAGE.md # user content). Personal source binds <home>/<dir>, shared binds
+// /srv/malmo/shared/<dir>.
+var folderDir = map[string]string{
+	"photos": "Photos", "documents": "Documents", "movies": "Movies",
+	"music": "Music", "notes": "Notes", "downloads": "Downloads",
+}
+
+// FolderMount is one resolved per-folder election the override generator binds.
+// The manifest declares the folder + mode; the installer elects Source
+// (personal|shared) and, for a pick-subfolder folder, a Subfolder. Built and
+// validated by the API layer (internal/api resolveElections) — lifecycle treats
+// it as authoritative and only cross-references the manifest for the mount mode.
+type FolderMount struct {
+	Folder    string // taxonomy name (lowercase): photos|documents|movies|music|notes|downloads
+	Source    string // sourcePersonal | sourceShared
+	Subfolder string // optional relative subpath under the folder (pick-subfolder)
+}
+
+// isolation is the resolved per-instance identity + folder binds writeOverride
+// and writeEnv stamp onto every service. nil when the manifest declares no
+// folders (writeOverride then emits today's network/cap_drop-only override).
+type isolation struct {
+	uid, gid  int    // container runtime identity (compose user:)
+	sharedGID int    // malmo-shared GID for group_add on shared-source mounts
+	home      string // owner home dir (personal scope); "" for household
+	mounts    []FolderMount
+}
+
+// hostSource resolves the host path bound for one mount: the owner's
+// <home>/<Folder>/ for a personal source, /srv/malmo/shared/<Folder>/ for a
+// shared source, narrowed by Subfolder when present.
+func (it *isolation) hostSource(mt FolderMount) string {
+	base := filepath.Join("/srv/malmo/shared", folderDir[mt.Folder])
+	if mt.Source == sourcePersonal {
+		base = filepath.Join(it.home, folderDir[mt.Folder])
+	}
+	if mt.Subfolder != "" {
+		base = filepath.Join(base, mt.Subfolder)
+	}
+	return base
+}
 
 var reservedSlugs = map[string]bool{
 	"api": true, "admin": true, "dashboard": true, "malmo": true,
@@ -88,12 +142,12 @@ type Owner struct {
 	Username string
 }
 
-func (m *Manager) Install(ctx context.Context, manifestID string, owner Owner, scope string, progress func(step string)) (store.Instance, error) {
+func (m *Manager) Install(ctx context.Context, manifestID string, owner Owner, scope string, mounts []FolderMount, progress func(step string)) (store.Instance, error) {
 	man, composeBytes, err := m.catalog.Load(manifestID)
 	if err != nil {
 		return store.Instance{}, err
 	}
-	return m.install(ctx, man, composeBytes, owner, scope, progress)
+	return m.install(ctx, man, composeBytes, owner, scope, mounts, progress)
 }
 
 // CustomSpec is a user-pasted (Door-2) app: a raw compose plus the bits the
@@ -113,13 +167,15 @@ func (m *Manager) InstallCustom(ctx context.Context, spec CustomSpec, owner Owne
 	if err != nil {
 		return store.Instance{}, err
 	}
-	return m.install(ctx, man, composeBytes, owner, scope, progress)
+	// Door-2 synthesized manifests declare no folders, so a custom install
+	// elects no mounts (the user owns their own compose, including any user:).
+	return m.install(ctx, man, composeBytes, owner, scope, nil, progress)
 }
 
 // install is the shared transaction both doors converge on (APP_MANIFEST.md #
 // one model, two doors): a manifest + verbatim compose pair, whether loaded
 // from the catalog or synthesized from a pasted compose.
-func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBytes []byte, owner Owner, scope string, progress func(step string)) (store.Instance, error) {
+func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBytes []byte, owner Owner, scope string, mounts []FolderMount, progress func(step string)) (store.Instance, error) {
 	step := func(s string) {
 		if progress != nil {
 			progress(s)
@@ -181,23 +237,52 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 		return rollback(fmt.Errorf("persist digests: %w", err))
 	}
 
-	// 6. Generate override (with pins) + .env.
+	// 6. Resolve the per-instance isolation (container identity + folder binds)
+	// when the manifest declares folders. Personal instances run as the owner's
+	// UID/GID; household instances run as the shared malmo-app identity. Both
+	// learn the malmo-shared GID for shared-source group_add. Folderless apps
+	// (and Door-2 custom apps) skip this and keep the network/cap_drop-only
+	// override (APP_ISOLATION.md # User content).
+	var iso *isolation
+	if len(man.Permissions.Folders) > 0 {
+		wk, err := m.host.WellKnownIdentity(ctx)
+		if err != nil {
+			return rollback(fmt.Errorf("resolve host identity: %w", err))
+		}
+		iso = &isolation{sharedGID: wk.MalmoSharedGID, mounts: mounts}
+		if scope == store.ScopeHousehold {
+			iso.uid, iso.gid = wk.MalmoAppUID, wk.MalmoAppGID
+		} else {
+			rh, err := m.host.ResolveHome(ctx, owner.Username)
+			if errors.Is(err, hostclient.ErrUnknownUser) {
+				// The owner was deleted between the install-plan call and the
+				// commit — a terminal install error, not a retryable host fault.
+				return rollback(fmt.Errorf("owner account %q no longer exists", owner.Username))
+			}
+			if err != nil {
+				return rollback(fmt.Errorf("resolve owner home: %w", err))
+			}
+			iso.uid, iso.gid, iso.home = rh.UID, rh.GID, rh.HomePath
+		}
+	}
+
+	// 7. Generate override (with pins + isolation) + .env.
 	step("generating_override")
-	if err := m.writeOverride(id, man, composeBytes, pins); err != nil {
+	if err := m.writeOverride(id, man, composeBytes, pins, iso); err != nil {
 		return rollback(fmt.Errorf("override: %w", err))
 	}
-	if err := m.writeEnv(id, slug); err != nil {
+	if err := m.writeEnv(id, slug, iso); err != nil {
 		return rollback(fmt.Errorf("env: %w", err))
 	}
 
-	// 7. Create per-app network.
+	// 8. Create per-app network.
 	step("creating_network")
 	appNet := "malmo-app-" + id
 	if err := m.docker.NetworkCreate(ctx, appNet, !man.Permissions.Internet); err != nil {
 		return rollback(fmt.Errorf("create network: %w", err))
 	}
 
-	// 8. Publish mDNS + register the Caddy route pointing at a splash page, so
+	// 9. Publish mDNS + register the Caddy route pointing at a splash page, so
 	// the hostname is reachable immediately (APP_LIFECYCLE.md # register early,
 	// with a splash) instead of returning connection-refused for ~120s.
 	host := slug + ".malmo.local"
@@ -216,13 +301,13 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 			"instance_id", id, "host", host, "err", err)
 	}
 
-	// 9. docker compose up -d.
+	// 10. docker compose up -d.
 	step("compose_up")
 	if out, err := m.docker.ComposeUp(ctx, m.instanceDir(id), "malmo-"+id); err != nil {
 		return rollback(fmt.Errorf("compose up: %w\n%s", err, out))
 	}
 
-	// 10. Wait for main_service healthy. Failures here do NOT roll back: the
+	// 11. Wait for main_service healthy. Failures here do NOT roll back: the
 	// instance dir is kept for inspection and the route flips to a "failed"
 	// splash (APP_LIFECYCLE.md install transaction, steps 10-11 failure).
 	step("waiting_healthy")
@@ -236,7 +321,7 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 		return store.Instance{}, fmt.Errorf("%s did not become healthy: %w", man.Name, err)
 	}
 
-	// 11. Flip the Caddy upstream from splash to the real container.
+	// 12. Flip the Caddy upstream from splash to the real container.
 	step("flipping_route")
 	upstream := fmt.Sprintf("malmo-%s-%s:%d", id, man.MainService, man.MainPort)
 	if err := m.caddy.AddRoute(ctx, id, host, upstream); err != nil {
@@ -244,7 +329,7 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 			"instance_id", id, "host", host, "upstream", upstream, "err", err)
 	}
 
-	// 12. Mark running.
+	// 13. Mark running.
 	if err := m.store.SetState(id, "running"); err != nil {
 		return rollback(err)
 	}
@@ -515,7 +600,7 @@ func (m *Manager) writeInstanceDir(id string, man *manifest.Manifest, composeByt
 // attachment, plus the `image: name@sha256:…` pin per service (digest pinning
 // — APP_LIFECYCLE.md). main_service additionally joins the ingress network
 // with a per-instance alias so Caddy can reach exactly this instance.
-func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes []byte, pins []servicePin) error {
+func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes []byte, pins []servicePin, iso *isolation) error {
 	svcNames, err := composeServices(composeBytes)
 	if err != nil {
 		return err
@@ -523,6 +608,12 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 	pinBySvc := make(map[string]string, len(pins))
 	for _, p := range pins {
 		pinBySvc[p.Service] = p.PinnedRef()
+	}
+	// Mount mode is the manifest's say (read→:ro, write→:rw); the election only
+	// chose the source, never the mode.
+	modeByFolder := make(map[string]string, len(man.Permissions.Folders))
+	for _, f := range man.Permissions.Folders {
+		modeByFolder[f.Folder] = f.Mode
 	}
 	appNet := "malmo-app-" + id
 	services := map[string]any{}
@@ -550,6 +641,40 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 		if ref, ok := pinBySvc[svc]; ok {
 			entry["image"] = ref
 		}
+		// Folder enforcement: run as the elected identity, bind each declared
+		// folder at /malmo/<folder> from its elected source, and join malmo-shared
+		// when any source is the household tree (APP_ISOLATION.md # User content).
+		if iso != nil {
+			entry["user"] = fmt.Sprintf("%d:%d", iso.uid, iso.gid)
+			volumes := make([]string, 0, len(iso.mounts))
+			needShared := false
+			for _, mt := range iso.mounts {
+				mode := ":ro"
+				if modeByFolder[mt.Folder] == "write" {
+					mode = ":rw"
+				}
+				volumes = append(volumes, iso.hostSource(mt)+":/malmo/"+mt.Folder+mode)
+				if mt.Source == sourceShared {
+					needShared = true
+				}
+			}
+			if len(volumes) > 0 {
+				entry["volumes"] = volumes
+			}
+			if needShared {
+				entry["group_add"] = []string{strconv.Itoa(iso.sharedGID)}
+			}
+		}
+		// Device passthrough (APP_ISOLATION.md # Devices). Each declared /dev path
+		// is exposed at the same path inside the container. Host-side existence
+		// validation is deferred (needs a host capability query).
+		if len(man.Permissions.Devices) > 0 {
+			devices := make([]string, len(man.Permissions.Devices))
+			for i, d := range man.Permissions.Devices {
+				devices[i] = d + ":" + d
+			}
+			entry["devices"] = devices
+		}
 		services[svc] = entry
 	}
 	override := map[string]any{
@@ -566,14 +691,22 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 	return os.WriteFile(filepath.Join(m.instanceDir(id), "compose.override.yml"), out, 0o644)
 }
 
-func (m *Manager) writeEnv(id, slug string) error {
+func (m *Manager) writeEnv(id, slug string, iso *isolation) error {
 	dataDir, _ := filepath.Abs(filepath.Join(m.instanceDir(id), "data"))
-	env := strings.Join([]string{
+	lines := []string{
 		"MALMO_INSTANCE_ID=" + id,
 		"MALMO_APP_URL=http://" + slug + ".malmo.local",
 		"MALMO_DATA_DIR=" + dataDir,
-		"",
-	}, "\n")
+	}
+	// Inject the in-container path for each bound folder (APP_MANIFEST.md #
+	// folders) — the app's compose maps MALMO_FOLDER_<NAME> to its library path.
+	// The path is stable regardless of the elected source.
+	if iso != nil {
+		for _, mt := range iso.mounts {
+			lines = append(lines, "MALMO_FOLDER_"+strings.ToUpper(mt.Folder)+"=/malmo/"+mt.Folder)
+		}
+	}
+	env := strings.Join(append(lines, ""), "\n")
 	return os.WriteFile(filepath.Join(m.instanceDir(id), ".env"), []byte(env), 0o644)
 }
 
