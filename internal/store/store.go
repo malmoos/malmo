@@ -168,6 +168,62 @@ func (s *Store) migrate() error {
 			raised_at       INTEGER NOT NULL,
 			last_checked_at INTEGER NOT NULL,
 			PRIMARY KEY (id, instance_key)
+		);
+		-- notifications: the dashboard notification center (NOTIFICATIONS.md).
+		-- Mutable and prunable, unlike audit_events. The full spec shape is
+		-- created up front so later slices (read-state, dismiss, the API) add
+		-- behavior without a migration; read_at / dismissed_at stay NULL until
+		-- those land. The partial unique index enforces the coalescing
+		-- invariant: at most one *active* (non-dismissed) notification per
+		-- dedup_key.
+		CREATE TABLE IF NOT EXISTS notifications (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts            INTEGER NOT NULL,
+			category      TEXT    NOT NULL,
+			severity      TEXT    NOT NULL,
+			source_kind   TEXT    NOT NULL,
+			source_id     TEXT    NOT NULL,
+			dedup_key     TEXT    NOT NULL,
+			audience      TEXT    NOT NULL,
+			user_id       TEXT    NULL REFERENCES users(id) ON DELETE CASCADE,
+			variant       TEXT    NOT NULL,
+			summary       TEXT    NOT NULL,
+			body          TEXT    NOT NULL DEFAULT '',
+			action_label  TEXT    NOT NULL DEFAULT '',
+			action_route  TEXT    NOT NULL DEFAULT '',
+			read_at       INTEGER NULL,
+			dismissed_at  INTEGER NULL,
+			resolved_at   INTEGER NULL
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS notifications_active_dedup
+			ON notifications(dedup_key) WHERE dismissed_at IS NULL;
+		-- notification_reads: per-recipient read/dismiss state (NOTIFICATIONS.md
+		-- # Read / unread / dismiss). A box-wide ('admins') notification is one
+		-- row in notifications but read/unread *per admin*, so read state can't
+		-- live on the notification row — it lives here, one row per (notification,
+		-- user). Used uniformly for every audience (the row-level read_at/
+		-- dismissed_at columns on notifications stay reserved). ON DELETE CASCADE
+		-- on both FKs so pruning a notification or deleting a user cleans up.
+		CREATE TABLE IF NOT EXISTS notification_reads (
+			notification_id INTEGER NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+			user_id         TEXT    NOT NULL REFERENCES users(id)         ON DELETE CASCADE,
+			read_at         INTEGER NULL,
+			dismissed_at    INTEGER NULL,
+			PRIMARY KEY (notification_id, user_id)
+		);
+		-- notification_mutes: per-user, per-category mute (NOTIFICATIONS.md
+		-- # Configuration). Presence of a row means the category is muted for that
+		-- user; absence means on — "everything on by default", so a new user has no
+		-- rows and sees everything. The (user_id, category) PK fully models the
+		-- mute; unmute is a DELETE. Mute is a read-time filter (the list/count/
+		-- mark-all queries exclude muted categories), never emit-time suppression:
+		-- a box-wide 'admins'/'members' notification is one row shared by many
+		-- recipients, so it can't be withheld per-user at write time. ON DELETE
+		-- CASCADE cleans up when the user is deleted.
+		CREATE TABLE IF NOT EXISTS notification_mutes (
+			user_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			category  TEXT NOT NULL,
+			PRIMARY KEY (user_id, category)
 		);`)
 	if err != nil {
 		return err

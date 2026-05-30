@@ -5,8 +5,7 @@ The map of all documentation. Three homes:
 - **[`specs/`](specs/)** — design source of truth. What malmo *is* and the
   locked decisions behind it. Read the relevant spec end-to-end before changing
   behavior in that area.
-- **[`progress/`](progress/)** — implementation log. Numbered, ADR-style entries
-  recording **what was done** and **what's next** for each unit of work.
+- **[`progress/`](progress/)** — implementation log. ADR-style entries recording **what was done** and **what's next** for each unit of work.
 - **[`dev/`](dev/)** — developer how-to. Running locally, code-level
   architecture, tooling.
 
@@ -40,6 +39,22 @@ Orientation:
 See [`progress/README.md`](progress/README.md) for the full index and the
 **Up next** queue (next implementation slices). Latest:
 
+- [`notification-category-mute.md`](progress/notification-category-mute.md)
+  — Per-category notification mute: `notification_mutes` table, read-time filter on list/count/mark-all, `GET`/`PUT`/`DELETE` mute API. Backend only — settings UI deferred.
+- [`notification-clears-transparency.md`](progress/notification-clears-transparency.md)
+  — Notification clears + member transparency variant: `members` audience, info-only member notice on box-blocking storage issues, "all clear" on resolve, flap retraction. Backend only.
+- [`notification-web-ui.md`](progress/notification-web-ui.md)
+  — Notification Web UI: dashboard bell + unread badge + dropdown inbox (`useNotifications()`, SSE-invalidated TanStack Query, plain CSS). Bell re-homed into `TopBar.vue`.
+- [`notification-read-surface.md`](progress/notification-read-surface.md)
+  — the read half of the bell: `/api/v1/notifications` family (audience-scoped
+  list, unread-count, mark-read, mark-all-read, dismiss), the
+  `notification_reads` per-recipient join, and `notification.created` /
+  `notification.updated` SSE kinds. Backend only — Vue bell deferred.
+- [`health-notifications.md`](progress/health-notifications.md)
+  — first consumer of the notification seam: `notifications` SQLite table +
+  `internal/notify` emitter. Health raise → admin-routed notification
+  (coalesced by `dedup_key`); clear → resolved. Write seam only — bell API,
+  SSE, and read-state deferred.
 - [`0026-dashboard-chassis-home-grid.md`](progress/0026-dashboard-chassis-home-grid.md)
   — `web-ui` brought up to the `WEB_UI.md` stack (Vue Router, Pinia, Tailwind 4,
   reka-ui, lucide); the dev screen replaced with the `DASHBOARD.md` shell: the
@@ -49,6 +64,10 @@ See [`progress/README.md`](progress/README.md) for the full index and the
   — `owner_user_id` + `scope` on instances, `<slug>--<user>` slug derivation,
   install authorization (member→personal, admin→choice), warn-don't-block
   duplicate installs, caller-scoped app reads. First dashboard backend slice.
+- [`0024-per-issue-health-audit.md`](progress/0024-per-issue-health-audit.md)
+  — `ApplyStorageFindings` returns affected `IssueKey`s; one per-issue
+  `health.issue.raised`/`cleared` audit record (`target_kind: health_issue`)
+  instead of a bulk count.
 - [`0022-health-persistence.md`](progress/0022-health-persistence.md)
   — `health_issues` SQLite table, store write-through, boot-time
   `LoadFromStore` restore, `health.issue.raised/cleared` audit actions.

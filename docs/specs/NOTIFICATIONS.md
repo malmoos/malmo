@@ -49,7 +49,7 @@ A notification is a typed record in the brain's SQLite. Shape:
   "source_id":   "data-drive-missing",       // links back to the originating event/issue type
   "dedup_key":   "health:data-drive-missing",// coalescing key — see Lifecycle
 
-  "audience":    "admins",                   // admins | user
+  "audience":    "admins",                   // admins | members | user
   "user_id":     null,                       // set when audience = user
   "variant":     "actionable",               // actionable | transparency (see Routing)
 
@@ -85,6 +85,7 @@ A notification goes to whoever can **act** on it, and/or whoever it is personall
 Recipients:
 
 - **Admin** — all admins.
+- **Members** — all non-admin users; the broadcast audience for the transparency variant below.
 - **Owner** — the member who owns the specific app instance.
 - **Self** — the account the event is about.
 
@@ -93,6 +94,8 @@ Recipients:
 When a **box-wide critical** issue blocks something a member uses (e.g. `disk-full` → uploads paused, `data-drive-missing` → saving paused), the member receives an **info-only `transparency` variant**: a non-actionable notice ("Saving is paused — your admin has been notified") so the "why can't I upload?" question answers itself. The **actionable** variant — with the fix link — goes to admins. This mirrors HEALTH's existing stance that members see degraded-state banners for transparency while Tier-2 remediation stays admin-gated.
 
 The transparency variant has no `action` and is purely informational; it clears (or flips to an "all clear" info notification) when the underlying issue clears.
+
+**Delivery (as implemented).** The transparency notice is one row with `audience: members` — a class broadcast, the mirror of `admins`, read/dismissed per-recipient via the same `notification_reads` join. Which issues emit it is a curated property of the notification allowlist (the storage drive issues the table below marks "+ member transparency"), *not* a function of an issue's `blocks_writes` flag: `canary-mismatch` and `mergerfs-assembly-failed` also block writes but stay admin-only, because they are System/state plumbing, not the member-legible "your saving is paused" condition. The notice is `info` severity regardless of the originating issue's severity (the member's experience is the same whether the drive is missing or wrong). On clear, the member notice resolves and a member "all clear" (`info`) is emitted; on a flap (re-raise after clear) the now-false all-clear is retracted.
 
 ## The notification list (v1 source allowlist)
 
@@ -103,7 +106,8 @@ The curated set of events that produce a notification. New entries are added by 
 | Event | Severity | To |
 |---|---|---|
 | Drive failing / SMART warning (when the check lands) | error | Admin |
-| `data-drive-missing` / `data-drive-readonly` / `data-drive-wrong` | critical | Admin (+ member transparency) |
+| `data-drive-readonly` / `data-drive-wrong` | critical | Admin (+ member transparency) |
+| `data-drive-missing` | error | Admin (+ member transparency) |
 | `disk-full` | critical | Admin (+ member transparency) |
 | `disk-nearly-full` | warning | Admin |
 
@@ -111,7 +115,8 @@ The curated set of events that produce a notification. New entries are added by 
 
 | Event | Severity | To |
 |---|---|---|
-| `brain-db-corrupt`, `canary-mismatch`, `mergerfs-assembly-failed` | critical | Admin |
+| `brain-db-corrupt`, `canary-mismatch` | critical | Admin |
+| `mergerfs-assembly-failed` | error | Admin |
 | `schema-migration-failed`, `version-mismatch` | error | Admin |
 | Box rebooted / recovered after downtime | info | Admin |
 
@@ -164,7 +169,7 @@ When the underlying HEALTH issue clears, the brain marks the notification resolv
 
 ### Read / unread / dismiss
 
-- **Per-recipient read state.** A notification addressed to `admins` is read/unread *per admin* — one admin reading it doesn't clear the badge for another. (Implementation: a `notification_reads` join table keyed on `(notification_id, user_id)`; the bare `read_at` on the record is the single-recipient fast path for `audience: user`.)
+- **Per-recipient read state.** A notification addressed to `admins` is read/unread *per admin* — one admin reading it doesn't clear the badge for another. (Implementation: a `notification_reads` join table keyed on `(notification_id, user_id)` carries read/dismiss state for **every** recipient uniformly — `audience: user` rows take the same join, not a per-row fast path; the notification record itself stays free of per-recipient state. The uniform join was chosen over a row-column shortcut for `audience: user` because one code path is simpler than two and the read query joins regardless.)
 - **Unread badge** on the bell shows the count of unread notifications visible to the current user.
 - **Dismiss** removes a notification from the active inbox; dismissed notifications are retained (subject to retention policy) but out of the default view. Dismissing is not the same as resolving the underlying condition — a dismissed `disk-full` notification does not clear the HEALTH issue or unblock writes.
 
@@ -184,6 +189,8 @@ Minimal in v1:
 - Severity is not user-tunable in v1 (it's a property of the source event).
 - No quiet hours / snooze in v1 (`NEXT.md`) — low value without an off-box transport that would otherwise wake someone.
 
+**Delivery (as implemented).** A mute is a row in `notification_mutes` keyed `(user_id, category)` — presence means muted, absence means on, so a new user has no rows and sees everything ("everything on by default"); unmute is a DELETE. It is a **read-time filter** applied uniformly to the three aggregate surfaces (the inbox list, the unread badge count, and mark-all-read), *never* emit-time suppression: a box-wide `admins`/`members` notification is one row shared by many recipients, so it cannot be withheld per-user at write time. The per-id read/dismiss path is deliberately mute-agnostic — a user can still act on a specific notification in a muted category (e.g. one they read before muting). Mark-all-read honors the filter so a muted category is left untouched and reappears in its true unread state on unmute. Mutating a mute is **not audited** (a personal view preference, not an elevation-class action — `CLAUDE.md`). The wire surface is `GET /api/v1/notifications/mutes` (the caller's muted categories), `PUT`/`DELETE /api/v1/notifications/mutes/{category}` (mute/unmute, idempotent, 422 on an unknown category validated against the full `notify.Categories` taxonomy). Muting a category currently hides *all* its severities including criticals; whether criticals should ring through a mute is an open question (`NEXT.md`).
+
 ## The transport-agnostic seam (why this doesn't need a rewrite later)
 
 The model above is built so off-box transports slot in without reshaping it:
@@ -200,7 +207,7 @@ When email-on-file lands (its own `NEXT.md` Tier-2 item) and/or the mobile app s
 - **`UPDATES.md`** — the update outcomes it already surfaces (tile badges, Settings → Updates, toasts) additionally produce notifications per the list. The post-update toast and the notification are the durable/ephemeral pair described above.
 - **`LOGGING.md`** — the allowlisted security/account audit actions fan out to a notification in addition to the `audit_events` row. The audit row stays the system of record; the notification is the prunable, read-stateful copy.
 - **`BRAIN_UI_PROTOCOL.md`** — new `/api/v1/notifications` endpoint family (list, mark-read, dismiss, per-category mute) and new SSE `kind`s (`notification.created`, `notification.updated`).
-- **`WEB_UI.md`** — bell + dropdown inbox in the chrome; Pinia store for notifications; SSE subscription; `useNotifications()` composable; unread-badge logic.
+- **`WEB_UI.md`** — bell + dropdown inbox in the chrome; `useNotifications()` composable wrapping the list + unread-count `useQuery`s (notifications are server state → TanStack Query, not Pinia, per `WEB_UI.md`'s "server state lives in Query" rule; the dropdown open-state is component-local ephemeral state); SSE subscription invalidates those queries; unread-badge logic.
 - **`AUTH.md` / `USERS_AND_GROUPS.md`** — recipient resolution (Admin / Owner / Self) reuses the existing role and instance-ownership model; no new concepts.
 
 ## Locked decisions

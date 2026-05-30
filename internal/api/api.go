@@ -66,6 +66,7 @@ func (s *Server) Handler() http.Handler {
 	s.registerUsers(api)
 	s.registerMeRoutes(api)
 	s.registerHealth(api)
+	s.registerNotifications(api)
 
 	// SSE is registered raw (huma streaming adds no value here and the raw
 	// handler keeps the wire format curl-debuggable per BRAIN_UI_PROTOCOL.md).
