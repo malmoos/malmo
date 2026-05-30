@@ -534,6 +534,170 @@ func TestGetNotification_NotFound(t *testing.T) {
 	}
 }
 
+// --- per-category mute (slice 0029) --------------------------------------
+
+// A muted category drops out of the caller's list and unread count; other
+// categories are untouched (NOTIFICATIONS.md # Configuration).
+func TestNotificationMute_HidesCategoryFromListAndCount(t *testing.T) {
+	s := open(t)
+	seedUser(t, s, "u_admin", RoleAdmin)
+	if err := s.RaiseNotification(newNotification("health:data-drive-missing")); err != nil { // storage
+		t.Fatalf("raise storage: %v", err)
+	}
+	sys := newNotification("health:canary-mismatch")
+	sys.Category = notify.CategorySystem
+	if err := s.RaiseNotification(sys); err != nil {
+		t.Fatalf("raise system: %v", err)
+	}
+
+	if err := s.MuteNotificationCategory("u_admin", string(notify.CategoryStorage)); err != nil {
+		t.Fatalf("mute: %v", err)
+	}
+
+	got, err := s.ListNotificationsForRecipient(NotificationFilter{UserID: "u_admin", IsAdmin: true})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if !dedupSet(got, "health:canary-mismatch") {
+		t.Errorf("after muting storage, list = %v, want {health:canary-mismatch}", dedups(got))
+	}
+	if c, _ := s.CountUnreadNotifications("u_admin", true); c != 1 {
+		t.Errorf("unread after mute = %d, want 1 (system only)", c)
+	}
+}
+
+// Unmuting restores a category — its notifications reappear in the list/count.
+func TestNotificationMute_Unmute(t *testing.T) {
+	s := open(t)
+	seedUser(t, s, "u_admin", RoleAdmin)
+	if err := s.RaiseNotification(newNotification("health:data-drive-missing")); err != nil {
+		t.Fatalf("raise: %v", err)
+	}
+	cat := string(notify.CategoryStorage)
+	if err := s.MuteNotificationCategory("u_admin", cat); err != nil {
+		t.Fatalf("mute: %v", err)
+	}
+	if c, _ := s.CountUnreadNotifications("u_admin", true); c != 0 {
+		t.Fatalf("muted unread = %d, want 0", c)
+	}
+	if err := s.UnmuteNotificationCategory("u_admin", cat); err != nil {
+		t.Fatalf("unmute: %v", err)
+	}
+	if c, _ := s.CountUnreadNotifications("u_admin", true); c != 1 {
+		t.Errorf("unmuted unread = %d, want 1 (restored)", c)
+	}
+}
+
+// A mute is one user's preference: it never affects another user's view.
+func TestNotificationMute_PerUser(t *testing.T) {
+	s := open(t)
+	seedUser(t, s, "u_admin1", RoleAdmin)
+	seedUser(t, s, "u_admin2", RoleAdmin)
+	if err := s.RaiseNotification(newNotification("health:data-drive-missing")); err != nil {
+		t.Fatalf("raise: %v", err)
+	}
+	if err := s.MuteNotificationCategory("u_admin1", string(notify.CategoryStorage)); err != nil {
+		t.Fatalf("mute: %v", err)
+	}
+	if c, _ := s.CountUnreadNotifications("u_admin1", true); c != 0 {
+		t.Errorf("admin1 (muted) unread = %d, want 0", c)
+	}
+	if c, _ := s.CountUnreadNotifications("u_admin2", true); c != 1 {
+		t.Errorf("admin2 (not muted) unread = %d, want 1", c)
+	}
+}
+
+// Mute and unmute are idempotent; ListMutedCategories returns the set sorted.
+func TestNotificationMute_IdempotentAndListed(t *testing.T) {
+	s := open(t)
+	seedUser(t, s, "u_admin", RoleAdmin)
+	// Mute out of order, with a repeat, to exercise idempotency + sorted output.
+	for _, c := range []string{"updates", "storage", "updates", "system"} {
+		if err := s.MuteNotificationCategory("u_admin", c); err != nil {
+			t.Fatalf("mute %s: %v", c, err)
+		}
+	}
+	muted, err := s.ListMutedCategories("u_admin")
+	if err != nil {
+		t.Fatalf("list muted: %v", err)
+	}
+	want := []string{"storage", "system", "updates"}
+	if len(muted) != len(want) {
+		t.Fatalf("muted = %v, want %v", muted, want)
+	}
+	for i := range want {
+		if muted[i] != want[i] {
+			t.Fatalf("muted = %v, want sorted %v", muted, want)
+		}
+	}
+	// Unmute is a no-op when absent and safe to repeat.
+	if err := s.UnmuteNotificationCategory("u_admin", "security"); err != nil {
+		t.Errorf("unmute absent category: %v", err)
+	}
+	if err := s.UnmuteNotificationCategory("u_admin", "storage"); err != nil {
+		t.Errorf("unmute: %v", err)
+	}
+	if err := s.UnmuteNotificationCategory("u_admin", "storage"); err != nil {
+		t.Errorf("double unmute: %v", err)
+	}
+	muted, _ = s.ListMutedCategories("u_admin")
+	if len(muted) != 2 {
+		t.Errorf("after unmute storage, muted = %v, want {system, updates}", muted)
+	}
+}
+
+// Mark-all-read applies the mute filter: a muted category is left untouched, so
+// unmuting later reveals its notifications still unread (the user never saw
+// them). Pins the consistency of the three aggregate read queries.
+func TestMarkAllNotificationsRead_SkipsMuted(t *testing.T) {
+	s := open(t)
+	seedUser(t, s, "u_admin", RoleAdmin)
+	if err := s.RaiseNotification(newNotification("health:data-drive-missing")); err != nil { // storage
+		t.Fatalf("raise storage: %v", err)
+	}
+	sys := newNotification("health:canary-mismatch")
+	sys.Category = notify.CategorySystem
+	if err := s.RaiseNotification(sys); err != nil {
+		t.Fatalf("raise system: %v", err)
+	}
+	if err := s.MuteNotificationCategory("u_admin", string(notify.CategoryStorage)); err != nil {
+		t.Fatalf("mute: %v", err)
+	}
+
+	if err := s.MarkAllNotificationsRead("u_admin", true, time.UnixMilli(2000)); err != nil {
+		t.Fatalf("mark all: %v", err)
+	}
+	// Unmute storage — its notification must still be unread (mark-all skipped it).
+	if err := s.UnmuteNotificationCategory("u_admin", string(notify.CategoryStorage)); err != nil {
+		t.Fatalf("unmute: %v", err)
+	}
+	if c, _ := s.CountUnreadNotifications("u_admin", true); c != 1 {
+		t.Errorf("after unmute, unread = %d, want 1 (storage row never marked read)", c)
+	}
+}
+
+// The mute filter is audience-independent: a member muting a category drops the
+// members-broadcast rows of that category from their list/count too.
+func TestNotificationMute_MembersAudience(t *testing.T) {
+	s := open(t)
+	seedUser(t, s, "u_mem", RoleMember)
+	members := newNotification("health:data-drive-missing:member") // storage category
+	members.Audience = notify.AudienceMembers
+	members.Variant = notify.VariantTransparency
+	if err := s.RaiseNotification(members); err != nil {
+		t.Fatalf("raise members: %v", err)
+	}
+	if c, _ := s.CountUnreadNotifications("u_mem", false); c != 1 {
+		t.Fatalf("member unread before mute = %d, want 1", c)
+	}
+	if err := s.MuteNotificationCategory("u_mem", string(notify.CategoryStorage)); err != nil {
+		t.Fatalf("mute: %v", err)
+	}
+	if c, _ := s.CountUnreadNotifications("u_mem", false); c != 0 {
+		t.Errorf("member unread after muting storage = %d, want 0", c)
+	}
+}
+
 // --- small assertions helpers ---
 
 func dedups(ns []notify.Notification) []string {

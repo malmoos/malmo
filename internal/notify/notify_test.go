@@ -399,3 +399,22 @@ func contains(ss []string, want string) bool {
 	}
 	return false
 }
+
+// ValidCategory backs the mute API's input check (slice 0029). The full
+// taxonomy must be recognized — even categories without a producer yet — and
+// junk/case variants rejected, so a typo can't persist a no-op mute.
+func TestValidCategory(t *testing.T) {
+	if len(Categories) != 6 {
+		t.Errorf("Categories has %d entries; want the 6 in NOTIFICATIONS.md # The notification model", len(Categories))
+	}
+	for _, c := range Categories {
+		if !ValidCategory(string(c)) {
+			t.Errorf("ValidCategory(%q) = false; want true", c)
+		}
+	}
+	for _, bad := range []string{"", "bogus", "Storage", "STORAGE", "storage "} {
+		if ValidCategory(bad) {
+			t.Errorf("ValidCategory(%q) = true; want false", bad)
+		}
+	}
+}
