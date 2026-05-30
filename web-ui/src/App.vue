@@ -1,11 +1,12 @@
 <script setup lang="ts">
-// App is the auth-aware router. Three views, picked from auth state:
+// App is the auth-aware root. It picks one of four states from auth:
 //   - bootstrapping (briefly, while /auth/state + /me settle)
 //   - Setup (no users on the box yet)
-//   - Login (users exist but no valid session)
-//   - Dashboard (signed in)
+//   - the signed-in shell (AppShell + routed views)
+//   - a dev-only "session unavailable" notice (sign-in is disabled in the
+//     single-user dev phase; see auth.ts)
 // Any 401 from a later API call drops currentUser via the handler wired in
-// auth.ts, which flips us back to Login without a route change.
+// auth.ts, which flips us back here without a route change.
 import { onMounted } from "vue";
 import { bootstrap, useAuth } from "./auth";
 // Login is kept in the tree but not rendered in v1 — the dev phase is
@@ -14,7 +15,7 @@ import { bootstrap, useAuth } from "./auth";
 import Login from "./Login.vue";
 void Login;
 import Setup from "./Setup.vue";
-import Dashboard from "./Dashboard.vue";
+import AppShell from "./components/AppShell.vue";
 
 const { currentUser, hasUsers, booted } = useAuth();
 
@@ -24,15 +25,11 @@ onMounted(() => {
 </script>
 
 <template>
-  <div v-if="!booted" class="boot">Loading…</div>
+  <div v-if="!booted" class="grid h-full place-items-center text-muted-foreground">Loading…</div>
   <Setup v-else-if="!hasUsers" />
-  <Dashboard v-else-if="currentUser" />
-  <div v-else class="boot">
-    Session unavailable. Sign-in is disabled in this dev build —
-    reset <code>.dev/state</code> to re-bootstrap.
+  <AppShell v-else-if="currentUser" />
+  <div v-else class="mx-auto mt-16 max-w-xl px-4 text-center text-muted-foreground">
+    Session unavailable. Sign-in is disabled in this dev build — reset
+    <code>.dev/state</code> to re-bootstrap.
   </div>
 </template>
-
-<style>
-.boot { max-width: 720px; margin: 4rem auto; text-align: center; color: #999; font-family: ui-sans-serif, system-ui, sans-serif; }
-</style>

@@ -42,7 +42,12 @@ type harness struct {
 	// (closes the 0015/0016 orphan-on-rollback gap; see
 	// docs/progress/0017-host-agent-delete-user.md).
 	deleteCalls *[]string
+	apiSrv      *Server // the underlying api.Server, for direct method tests
 }
+
+// srvServer exposes the underlying *Server for tests that exercise handler
+// helpers directly (resolveOwnerScope, checkDuplicate) instead of over HTTP.
+func (h *harness) srvServer() *Server { return h.apiSrv }
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
@@ -115,7 +120,7 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(ts.Close)
 
 	jar, _ := newJar()
-	return &harness{srv: ts, jar: jar, t: t, pwds: pwds, pmu: &pmu, st: st, deleteCalls: &deleteCalls}
+	return &harness{srv: ts, jar: jar, t: t, pwds: pwds, pmu: &pmu, st: st, deleteCalls: &deleteCalls, apiSrv: srv}
 }
 
 func (h *harness) do(method, path string, body any) *http.Response {

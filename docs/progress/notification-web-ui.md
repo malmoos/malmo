@@ -1,4 +1,4 @@
-# 0027 — Notification Web UI: dashboard bell + dropdown inbox
+# Notification Web UI: dashboard bell + dropdown inbox
 
 - **Status:** done
 - **Date:** 2026-05-29

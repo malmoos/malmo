@@ -6,6 +6,7 @@ package manifest
 
 import (
 	"fmt"
+	"regexp"
 
 	"gopkg.in/yaml.v3"
 )
@@ -69,5 +70,20 @@ func (m *Manifest) validate() error {
 	if m.ManifestVersion != 1 {
 		return fmt.Errorf("unsupported manifest_version %d (this build supports 1)", m.ManifestVersion)
 	}
+	// Slugs must be strict kebab-case so they stay parseable inside the
+	// `<slug>--<user>` personal-instance scheme (DASHBOARD.md # instance
+	// naming): single internal hyphens only — no leading/trailing hyphen and no
+	// `--` run (which would collide with the owner separator and also covers the
+	// reserved `xn--` prefix). The id is the fallback slug when preferred_slugs
+	// is empty, so it's checked too.
+	for _, slug := range append([]string{m.ID}, m.PreferredSlugs...) {
+		if !kebabSlug.MatchString(slug) {
+			return fmt.Errorf("slug %q must be kebab-case (lowercase alphanumerics, single internal hyphens)", slug)
+		}
+	}
 	return nil
 }
+
+// kebabSlug matches lowercase alphanumeric labels joined by single hyphens:
+// `home-assistant` ok; `whoami-`, `-x`, `a--b`, `xn--y`, `Foo` rejected.
+var kebabSlug = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)

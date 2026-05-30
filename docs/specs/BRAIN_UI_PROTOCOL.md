@@ -41,7 +41,7 @@ For anything that can exceed ~5s or needs progress / cancel: app install, app up
 
 ```
 POST /api/v1/apps
-  { "manifest_id": "photoprism", "config": {...} }
+  { "manifest_id": "photoprism", "scope": "household", "confirm": false, "config": {...} }
 → 202 Accepted
   { "job_id": "j_a4f7b2", "kind": "app-install", "status": "running" }
 
@@ -56,6 +56,12 @@ POST /api/v1/jobs/j_a4f7b2/cancel
 ```
 
 Status values: `running`, `completed`, `failed`, `cancelled`, `cancelling`, `stalled` — same vocabulary as host-agent jobs. On `completed`, the response carries `result`. On `failed`, an `error` with `code` + `message`.
+
+**Owner-scoping on install (`DASHBOARD.md` # the apps model).** `scope` is `"household"` or `"personal"`. Members may only install `personal` instances (a `household` request is `403`); admins choose, defaulting to `household` when omitted. The owner is always the calling user — there is no "install on behalf of" parameter. Installed instances carry `owner_user_id`, `owner_username`, and `scope` in the `GET /api/v1/apps` / `:id` DTO; `GET /api/v1/apps` is scoped to the caller (own personal + all household; admins see all), and `GET /api/v1/apps/:id` returns `404` (not `403`) for a personal instance the caller doesn't own, so existence isn't disclosed.
+
+**Warn, don't block, on duplicate install (`DASHBOARD.md` # warn, don't block).** A `POST /api/v1/apps` with `confirm` unset/false, when an instance of that manifest already exists that the caller can see (a household instance or their own personal one), returns `409 Conflict` with `code: "duplicate-install"` and an `errors` array summarizing the existing copies. The UI surfaces "open it" vs. "install your own copy"; the latter retries the same request with `confirm: true`, which skips the check.
+
+**The two install endpoints are intentionally asymmetric.** `POST /api/v1/apps` (catalog, Door-1) takes `scope` **and** `confirm`. `POST /api/v1/apps/custom` (pasted compose, Door-2) takes `scope` but **not** `confirm` — a custom install synthesizes a fresh manifest id with a random suffix on every paste, so two custom installs can never collide and the duplicate warning never applies.
 
 Some brain jobs internally delegate to host-agent jobs (an app install does brain-side work; a `mkfs` is essentially a passthrough). The brain owns its own job ID space; the host-agent job ID is an internal implementation detail.
 
