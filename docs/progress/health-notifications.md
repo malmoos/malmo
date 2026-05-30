@@ -4,13 +4,13 @@
 - **Date:** 2026-05-29
 - **Specs touched:** none (realizes `NOTIFICATIONS.md` as written; `HEALTH.md` # NOTIFICATIONS.md cross-reference already describes this)
 
-First consumer of the notification seam (`NOTIFICATIONS.md`). The `notifications` table and an emitter now exist: on a health-issue raise *transition* the brain enqueues a notification routed to admins, coalesced by `dedup_key`; on clear it marks that notification resolved. This rides the per-issue transition keys [0024](0024-per-issue-health-audit.md) exposed — the same signal that drives per-issue audit records now also drives the bell.
+First consumer of the notification seam (`NOTIFICATIONS.md`). The `notifications` table and an emitter now exist: on a health-issue raise *transition* the brain enqueues a notification routed to admins, coalesced by `dedup_key`; on clear it marks that notification resolved. This rides the per-issue transition keys [per-issue-health-audit.md](per-issue-health-audit.md) exposed — the same signal that drives per-issue audit records now also drives the bell.
 
 ## What was done
 
 ### `internal/notify` — the derivation + routing layer (new package)
 
-A leaf package that maps health issues to persisted notifications. Imports `health` (for `health.Issue`); **does not** import `store` — it declares a consumer-side `NotificationStore` interface (`RaiseNotification`, `ResolveNotification`) that `store` implements, mirroring the `store`→`health` direction from [0022](0022-health-persistence.md).
+A leaf package that maps health issues to persisted notifications. Imports `health` (for `health.Issue`); **does not** import `store` — it declares a consumer-side `NotificationStore` interface (`RaiseNotification`, `ResolveNotification`) that `store` implements, mirroring the `store`→`health` direction from [health-persistence.md](health-persistence.md).
 
 - `Notifier` (like `audit.Recorder`): `HealthRaised(iss health.Issue)` and `HealthCleared(id, instanceKey string)`. Store errors are logged and swallowed — never propagated. The bell is a floor, not a gate (`NOTIFICATIONS.md` # Stance), so a notification write failing must not block the triggering operation.
 - **Explicit curated allowlist** (`healthRules`, a `map[issueID]healthRule`) — the same discipline as HEALTH's `builtinDefinitions`. Registered issue IDs that `NOTIFICATIONS.md` lists: `data-drive-missing`, `data-drive-wrong`, `data-drive-readonly` (storage) and `canary-mismatch`, `mergerfs-assembly-failed` (system). Three have a live detector today (`internal/storageverify` emits `data-drive-missing`, `data-drive-wrong`, `canary-mismatch`); `data-drive-readonly` and `mergerfs-assembly-failed` are pre-registered ahead of their detectors, mirroring HEALTH's own pre-registration pattern — harmless, and they notify the moment their detector lands. Each carries its notification category and an `Open Storage` → `/settings/storage` action. Severity is copied verbatim from the issue (never reassigned). `HealthCleared` gates on the same allowlist so clearing a non-notifying issue is a true no-op.

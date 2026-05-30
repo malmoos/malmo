@@ -45,7 +45,7 @@ files announce *services*, not bare A-record aliases. Even with the corrected
 XML (`<host-name>` inside `<service>`), `avahi-resolve -n <slug>.malmo.local`
 timed out — Avahi will not publish a standalone A record from a static file.
 DBus `EntryGroup.AddAddress` is the only programmatic path. See
-`DECISIONS.md` entry 2026-05-24 and `docs/progress/0013-avahi-dbus-publisher.md`.
+`DECISIONS.md` entry 2026-05-24 and `docs/progress/avahi-dbus-publisher.md`.
 
 **Restart durability.** DBus entry groups are process-local: they are lost when
 host-agent restarts. The brain re-publishes all running instances at startup via
@@ -57,7 +57,7 @@ the existing startup reconcile (`lifecycle.Reconcile`), which already calls
 covered. The brain does not currently detect that host-agent restarted (only
 that it is reachable). A future mitigation is to poll `GET /v1/system/status`
 for `uptime_s` decreasing and replay on detection. Tracked in
-`docs/progress/0013-avahi-dbus-publisher.md`.
+`docs/progress/avahi-dbus-publisher.md`.
 
 ### 3. Service records (Bonjour browsing)
 

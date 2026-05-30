@@ -158,6 +158,6 @@ For where each of these is planned, see the matching `specs/` doc.
 2. [`specs/SPEC.md`](specs/SPEC.md) and [`specs/CONTROL_PLANE.md`](specs/CONTROL_PLANE.md)
    — the design vocabulary the code uses.
 3. [`dev/running-locally.md`](dev/running-locally.md) — get the stack up.
-4. [`progress/0001-walking-skeleton.md`](progress/0001-walking-skeleton.md)
+4. [`progress/walking-skeleton.md`](progress/walking-skeleton.md)
    through the latest entry — the order things were built, with the why.
 5. `cmd/brain/main.go` — 100 lines, names every package and how they wire.

@@ -5,14 +5,14 @@
 - **Specs touched:** `TESTING.md`, `BOOT.md`
 
 Closes the "no real boot validation" gap called out in
-[`0019-boot-pipeline-units.md`](0019-boot-pipeline-units.md) # Known
+[`boot-pipeline-units.md`](boot-pipeline-units.md) # Known
 gaps. The `dist/systemd/` units shipped in 0019 were hand-validated by
 reading only; this slice puts them in front of a live systemd
 inside `systemd-nspawn --boot` and asserts the shape `TESTING.md`
 # Fast lane enumerates: unit dependency errors, drop-in overrides
 applying, synthetic targets activating in the right shape.
 
-The fast lane established by [0018](0018-nspawn-usermgr-lane.md) ran a
+The fast lane established by [nspawn-usermgr-lane.md](nspawn-usermgr-lane.md) ran a
 Go test binary inside the namespace without systemd as PID 1. This
 slice introduces the **boot mode** variant of that pattern — same
 ephemeral-overlay hygiene, but with `--boot` so unit files actually
@@ -219,5 +219,5 @@ In recommended order:
   because nothing is checked" regression.
 - **`storage-verify-timeout` synthesis** once the wrapper unit exists
   (carried forward from
-  [`0019-boot-pipeline-units.md`](0019-boot-pipeline-units.md) # Known
+  [`boot-pipeline-units.md`](boot-pipeline-units.md) # Known
   gaps); this lane is the right home for asserting it.

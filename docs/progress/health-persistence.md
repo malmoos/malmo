@@ -80,12 +80,12 @@ All 23 health tests + all 29 store tests pass.
 
 ## Known gaps & deviations
 
-- **Audit records are count-level, not per-issue.** `pullStorageHealth` emits one `health.issue.raised` record with `{"count": N}` rather than one record per issue ID. Per-issue granularity would require `ApplyStorageFindings` to return affected IDs rather than counts — deferred to the slice that extends the reconciliation API. *(Resolved in [0024](0024-per-issue-health-audit.md).)*
+- **Audit records are count-level, not per-issue.** `pullStorageHealth` emits one `health.issue.raised` record with `{"count": N}` rather than one record per issue ID. Per-issue granularity would require `ApplyStorageFindings` to return affected IDs rather than counts — deferred to the slice that extends the reconciliation API. *(Resolved in [per-issue-health-audit.md](per-issue-health-audit.md).)*
 - **No API changes.** `GET /api/v1/health` already reads `m.List()` from the in-memory Manager — no change needed; the manager is now the authoritative view whether populated from live detection or from SQLite.
 - **No notification wiring.** Health raise/clear → notification center is its own slice per `NOTIFICATIONS.md`.
 
 ## What's next
 
 - **0023: LUKS root + first-boot TPM enrollment + unseal verification** (originally labeled 0022 in 0021's "what's next" — renumbered here). Builds on the QEMU medium-lane scaffolding from 0021.
-- **Done ([0024](0024-per-issue-health-audit.md)):** Per-issue audit records. `ApplyStorageFindings` now returns affected `IssueKey`s so audit records target `{kind: "health_issue", id: "<id>"}` instead of a bulk count record.
+- **Done ([per-issue-health-audit.md](per-issue-health-audit.md)):** Per-issue audit records. `ApplyStorageFindings` now returns affected `IssueKey`s so audit records target `{kind: "health_issue", id: "<id>"}` instead of a bulk count record.
 - **Notification wiring.** `NOTIFICATIONS.md` — on health issue raise (transition), emit a notification to admin users.

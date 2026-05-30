@@ -27,7 +27,7 @@ Rejections are a typed `admission.Error` surfaced as HTTP 422.
 
 `Install` (Door-1) and `InstallCustom` (Door-2) both converge on an unexported
 `install(ctx, man, composeBytes, progress)` — the transaction from
-[0001](0001-walking-skeleton.md)/[0002](0002-reconcile-and-health-wait.md),
+[walking-skeleton.md](walking-skeleton.md)/[reconcile-and-health-wait.md](reconcile-and-health-wait.md),
 now with admission as its first step. Door-1 loads the pair from the catalog;
 Door-2 synthesizes it. This is the spec's "one model, two doors" made literal.
 

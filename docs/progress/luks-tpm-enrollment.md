@@ -3,7 +3,7 @@
 - **Status:** done (all three stages verified `medium-lane test: PASS`, 2026-05-29)
 - **Date:** 2026-05-28
 - **Specs exercised:** `STORAGE.md` (# Encryption posture), `BOOT.md` (# The chain). **Spec edited:** `TESTING.md` (# Medium lane — the unseal scenario is realized as two QEMU processes, not an in-guest reboot; see below).
-- **Builds on:** [0021](0021-qemu-medium-lane-scaffolding.md) (QEMU+swtpm scaffolding). 0021 booted a real kernel with a live TPM but a *plaintext* root; this slice adds the encryption + seal/unseal path that 0021 explicitly deferred.
+- **Builds on:** [qemu-medium-lane-scaffolding.md](qemu-medium-lane-scaffolding.md) (QEMU+swtpm scaffolding). 0021 booted a real kernel with a live TPM but a *plaintext* root; this slice adds the encryption + seal/unseal path that 0021 explicitly deferred.
 
 Closes the "no LUKS, no TPM-sealed unseal" gap from 0021 # Known gaps. This is the first test of `STORAGE.md` # Encryption posture and `BOOT.md` # The chain (line 30, "LUKS unlock (root drive) via TPM2 PCR 7") against a real kernel + real (software) TPM.
 

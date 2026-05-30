@@ -4,7 +4,7 @@
 - **Date:** 2026-05-22
 - **Specs touched:** `APP_LIFECYCLE.md`, `BRAIN_HOST_PROTOCOL.md`
 
-Hardens the install lifecycle from [0001](0001-walking-skeleton.md) so it
+Hardens the install lifecycle from [walking-skeleton.md](walking-skeleton.md) so it
 survives restarts and reflects real readiness. Two related changes.
 
 ## What was done
@@ -79,9 +79,9 @@ a brain bug.)
 
 ## What's next
 
-Picks up the [0001](0001-walking-skeleton.md) list, now that 1–2 are done:
+Picks up the [walking-skeleton.md](walking-skeleton.md) list, now that 1–2 are done:
 
-1. ~~**Door-2 custom-compose path + admission policy**~~ — done in [0003](0003-door-2-and-admission.md).
+1. ~~**Door-2 custom-compose path + admission policy**~~ — done in [door-2-and-admission.md](door-2-and-admission.md).
 2. **`WEB_UI.md` component stack** — Tailwind 4 + shadcn-vue, `useJob()`
    composable, splash/failed state surfaced in the dashboard.
 3. **60s heartbeat reconcile + post-op verify** — extend reconcile beyond the

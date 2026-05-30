@@ -172,7 +172,7 @@ make clean        # stop the dev Caddy, remove malmo app containers + networks,
 
 `cmd/host-agent-real` is the production binary: it uses real PAM for
 `verify-password` while `set-password`, `set-role`, and `delete-user` remain
-in-memory fakes (tracked in `docs/progress/0011-host-agent-pam-verify.md`).
+in-memory fakes (tracked in `docs/progress/host-agent-pam-verify.md`).
 
 **Prerequisites:**
 

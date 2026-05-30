@@ -37,7 +37,7 @@ If a task turns out to need a **design decision that isn't in a spec**, stop —
 
 ### ⛔ Owned / in-flight — don't touch
 
-The **boot / storage / LUKS+TPM track** is actively in flight ([`../progress/0023-luks-tpm-enrollment.md`](../progress/0023-luks-tpm-enrollment.md)). Stay out of: `dev/test-qemu/**`, `cmd/malmo-storage-verify/`, `internal/storageverify/`, `dist/systemd/**`, and the `BOOT.md` / `STORAGE.md` specs. Coordinate with the maintainer before starting anything in that area.
+The **boot / storage / LUKS+TPM track** is actively in flight ([`../progress/luks-tpm-enrollment.md`](../progress/luks-tpm-enrollment.md)). Stay out of: `dev/test-qemu/**`, `cmd/malmo-storage-verify/`, `internal/storageverify/`, `dist/systemd/**`, and the `BOOT.md` / `STORAGE.md` specs. Coordinate with the maintainer before starting anything in that area.
 
 ## Step 2 — Branch off `main`
 

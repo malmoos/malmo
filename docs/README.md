@@ -55,42 +55,40 @@ See [`progress/README.md`](progress/README.md) for the full index and the
   `internal/notify` emitter. Health raise → admin-routed notification
   (coalesced by `dedup_key`); clear → resolved. Write seam only — bell API,
   SSE, and read-state deferred.
-- [`0026-dashboard-chassis-home-grid.md`](progress/0026-dashboard-chassis-home-grid.md)
+- [`dashboard-chassis-home-grid.md`](progress/dashboard-chassis-home-grid.md)
   — `web-ui` brought up to the `WEB_UI.md` stack (Vue Router, Pinia, Tailwind 4,
   reka-ui, lucide); the dev screen replaced with the `DASHBOARD.md` shell: the
   grouped Household / Yours home grid + four-item dock against the scoped
   `GET /apps`. First dashboard frontend slice.
-- [`0025-owner-scoped-instances.md`](progress/0025-owner-scoped-instances.md)
+- [`owner-scoped-instances.md`](progress/owner-scoped-instances.md)
   — `owner_user_id` + `scope` on instances, `<slug>--<user>` slug derivation,
   install authorization (member→personal, admin→choice), warn-don't-block
   duplicate installs, caller-scoped app reads. First dashboard backend slice.
-- [`0024-per-issue-health-audit.md`](progress/0024-per-issue-health-audit.md)
+- [`per-issue-health-audit.md`](progress/per-issue-health-audit.md)
   — `ApplyStorageFindings` returns affected `IssueKey`s; one per-issue
   `health.issue.raised`/`cleared` audit record (`target_kind: health_issue`)
   instead of a bulk count.
-- [`0022-health-persistence.md`](progress/0022-health-persistence.md)
+- [`health-persistence.md`](progress/health-persistence.md)
   — `health_issues` SQLite table, store write-through, boot-time
   `LoadFromStore` restore, `health.issue.raised/cleared` audit actions.
-- [`0021-qemu-medium-lane-scaffolding.md`](progress/0021-qemu-medium-lane-scaffolding.md)
+- [`qemu-medium-lane-scaffolding.md`](progress/qemu-medium-lane-scaffolding.md)
   — QEMU+swtpm medium-lane scaffolding (real kernel + real systemd + TPM
   plumbing); runway for the LUKS/TPM slice.
-- [`0020-nspawn-boot-chain-lane.md`](progress/0020-nspawn-boot-chain-lane.md)
+- [`nspawn-boot-chain-lane.md`](progress/nspawn-boot-chain-lane.md)
   — nspawn `--boot` of `dist/systemd/` units + dependency-shape assertions.
-- [`0019-boot-pipeline-units.md`](progress/0019-boot-pipeline-units.md)
+- [`boot-pipeline-units.md`](progress/boot-pipeline-units.md)
   — boot pipeline slice #1: `malmo-storage-ready.target`,
   `malmo-storage-verify` reporter, host-agent `GET /v1/health/storage`,
   brain `internal/health` registry, `GET /api/v1/health`. Userspace half of
   `BOOT.md`; initramfs/LUKS/TPM + boot-ordering tests are follow-ups.
-- [`0018-nspawn-usermgr-lane.md`](progress/0018-nspawn-usermgr-lane.md)
+- [`nspawn-usermgr-lane.md`](progress/nspawn-usermgr-lane.md)
   — nspawn fast-lane harness for usermgr integration tests against a real
   `/etc/passwd` rootfs.
-- [`0011`–`0017`](progress/README.md) — host-agent-real auth surface
-  (PAM verify, set-password, set-role, delete-user) + Avahi DBus publisher
-  + Caddy subdomain routing verified end-to-end.
-- [`0006-auth-and-users.md`](progress/0006-auth-and-users.md)
+- [`host-agent-pam-verify.md`](progress/host-agent-pam-verify.md) through [`host-agent-delete-user.md`](progress/host-agent-delete-user.md) + [`avahi-dbus-publisher.md`](progress/avahi-dbus-publisher.md) + [`caddy-routing-verified.md`](progress/caddy-routing-verified.md) — host-agent-real auth surface (PAM verify, set-password, set-role, delete-user) + Avahi DBus publisher + Caddy subdomain routing verified end-to-end.
+- [`auth-and-users.md`](progress/auth-and-users.md)
   — first-admin bootstrap, password login, opaque cookie sessions, auth
   middleware gating all mutations.
-- [`0001-walking-skeleton.md`](progress/0001-walking-skeleton.md) — first
+- [`walking-skeleton.md`](progress/walking-skeleton.md) — first
   vertical slice: install/uninstall an app end-to-end through the real
   architecture spine.
 

@@ -71,11 +71,11 @@ We also wrote down the **non-goals** — email deliverability, public-port scans
 
 The restart-durability argument for static files was correct in principle but moot in practice: static files cannot do the job at all.
 
-**New tradeoff:** DBus entry groups are process-local. They are lost on host-agent restart. The brain re-publishes all running instances via the startup reconcile (`lifecycle.Reconcile`), which already calls `host.Publish` per running instance. Mid-life host-agent restart while the brain is running is a known gap — tracked in `docs/progress/0013-avahi-dbus-publisher.md`.
+**New tradeoff:** DBus entry groups are process-local. They are lost on host-agent restart. The brain re-publishes all running instances via the startup reconcile (`lifecycle.Reconcile`), which already calls `host.Publish` per running instance. Mid-life host-agent restart while the brain is running is a known gap — tracked in `docs/progress/avahi-dbus-publisher.md`.
 
 **Forward consequences:** brain owns more replay logic; the nspawn CI lane (future slice) is the place to verify "Avahi accepted our AddAddress" end-to-end.
 
-**Affected docs:** `DISCOVERY.md` (§ "Per-app A records" rewritten; install-transaction list updated); `docs/progress/0013-avahi-dbus-publisher.md` (new, replaces `0012`); `docs/progress/README.md` (index updated).
+**Affected docs:** `DISCOVERY.md` (§ "Per-app A records" rewritten; install-transaction list updated); `docs/progress/avahi-dbus-publisher.md` (new, replaces `0012`); `docs/progress/README.md` (index updated).
 
 ---
 

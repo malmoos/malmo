@@ -4,7 +4,7 @@
 - **Date:** 2026-05-29
 - **Specs touched:** `LOGGING.md` # v1 action vocabulary, `HEALTH.md` # cross-references
 
-Closes the "audit records are count-level, not per-issue" gap noted in [0022](0022-health-persistence.md) # Known gaps. The storage-health reconciler now returns the exact issue keys that transitioned, and `cmd/brain` emits one audit record per raised/cleared issue targeting `{kind: "health_issue", id: "<id>"}` — so the Activity view answers "which issue raised?" instead of "N issues raised."
+Closes the "audit records are count-level, not per-issue" gap noted in [health-persistence.md](health-persistence.md) # Known gaps. The storage-health reconciler now returns the exact issue keys that transitioned, and `cmd/brain` emits one audit record per raised/cleared issue targeting `{kind: "health_issue", id: "<id>"}` — so the Activity view answers "which issue raised?" instead of "N issues raised."
 
 ## What was done
 
