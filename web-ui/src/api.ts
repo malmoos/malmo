@@ -86,6 +86,22 @@ export interface Instance {
   scope: Scope;
 }
 
+// Notification is the bell read surface (NOTIFICATIONS.md # Surfaces). Routing
+// fields (audience, variant, user_id) stay server-side; `read` is this caller's
+// per-recipient state folded into a bool. `ts` / `resolved_at` are unix epoch ms.
+export interface Notification {
+  id: number;
+  ts: number;
+  category: string;
+  severity: "info" | "warning" | "error" | "critical";
+  summary: string;
+  body?: string;
+  action_label?: string;
+  action_route?: string;
+  read: boolean;
+  resolved_at?: number;
+}
+
 export interface Job {
   job_id: string;
   kind: string;

@@ -9,11 +9,18 @@ export function useEvents() {
   let es: EventSource | null = null;
 
   const invalidateApps = () => qc.invalidateQueries({ queryKey: ["apps"] });
+  // Notification events are advisory refetch triggers (NOTIFICATIONS.md #
+  // Surfaces): re-read the caller's audience-scoped list/badge rather than
+  // merging payloads off the shared, unfiltered bus.
+  const invalidateNotifications = () => qc.invalidateQueries({ queryKey: ["notifications"] });
 
   onMounted(() => {
     es = new EventSource("/api/v1/events", { withCredentials: true });
     for (const kind of ["app.state_changed", "app.installed", "app.uninstalled"]) {
       es.addEventListener(kind, invalidateApps);
+    }
+    for (const kind of ["notification.created", "notification.updated"]) {
+      es.addEventListener(kind, invalidateNotifications);
     }
   });
 

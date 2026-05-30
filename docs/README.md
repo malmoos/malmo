@@ -39,6 +39,8 @@ Orientation:
 See [`progress/README.md`](progress/README.md) for the full index and the
 **Up next** queue (next implementation slices). Latest:
 
+- [`notification-web-ui.md`](progress/notification-web-ui.md)
+  — Notification Web UI: dashboard bell + unread badge + dropdown inbox (`useNotifications()`, SSE-invalidated TanStack Query, plain CSS). Bell re-homed into `TopBar.vue`.
 - [`notification-read-surface.md`](progress/notification-read-surface.md)
   — the read half of the bell: `/api/v1/notifications` family (audience-scoped
   list, unread-count, mark-read, mark-all-read, dismiss), the

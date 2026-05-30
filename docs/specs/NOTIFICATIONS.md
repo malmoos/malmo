@@ -202,7 +202,7 @@ When email-on-file lands (its own `NEXT.md` Tier-2 item) and/or the mobile app s
 - **`UPDATES.md`** — the update outcomes it already surfaces (tile badges, Settings → Updates, toasts) additionally produce notifications per the list. The post-update toast and the notification are the durable/ephemeral pair described above.
 - **`LOGGING.md`** — the allowlisted security/account audit actions fan out to a notification in addition to the `audit_events` row. The audit row stays the system of record; the notification is the prunable, read-stateful copy.
 - **`BRAIN_UI_PROTOCOL.md`** — new `/api/v1/notifications` endpoint family (list, mark-read, dismiss, per-category mute) and new SSE `kind`s (`notification.created`, `notification.updated`).
-- **`WEB_UI.md`** — bell + dropdown inbox in the chrome; Pinia store for notifications; SSE subscription; `useNotifications()` composable; unread-badge logic.
+- **`WEB_UI.md`** — bell + dropdown inbox in the chrome; `useNotifications()` composable wrapping the list + unread-count `useQuery`s (notifications are server state → TanStack Query, not Pinia, per `WEB_UI.md`'s "server state lives in Query" rule; the dropdown open-state is component-local ephemeral state); SSE subscription invalidates those queries; unread-badge logic.
 - **`AUTH.md` / `USERS_AND_GROUPS.md`** — recipient resolution (Admin / Owner / Self) reuses the existing role and instance-ownership model; no new concepts.
 
 ## Locked decisions

@@ -10,8 +10,9 @@
 //     single-user dev phase (re-enabled with the AUTH.md login screen).
 import { ref } from "vue";
 import { RouterLink } from "vue-router";
-import { Bell, HardDrive } from "lucide-vue-next";
+import { HardDrive } from "lucide-vue-next";
 import { useAuth } from "../auth";
+import NotificationBell from "../NotificationBell.vue";
 
 const { currentUser } = useAuth();
 const menuOpen = ref(false);
@@ -33,13 +34,7 @@ function initial(name: string | undefined): string {
     </RouterLink>
 
     <div class="flex items-center gap-2">
-      <button
-        type="button"
-        class="grid size-8 place-items-center rounded-full text-muted-foreground hover:bg-muted"
-        title="Notifications"
-      >
-        <Bell class="size-4" />
-      </button>
+      <NotificationBell />
 
       <div class="relative">
         <button
