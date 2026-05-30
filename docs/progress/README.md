@@ -6,6 +6,11 @@ commit. Entries are named by kebab-slug (`<slug>.md`) and are **not numbered** â
 sequential numbering was dropped because parallel branches kept colliding on the
 next number.
 
+Because the filename no longer carries order, **the [Index](#index) below is the
+only record of build order** â€” entries are listed oldest-first and a new entry is
+**appended to the bottom**, never inserted mid-list. Keep that order; it's the
+chronological spine the old `NNNN-` prefix used to provide.
+
 Every change ships with a progress entry or an update to one (see
 [`../../CLAUDE.md`](../../CLAUDE.md) # Documentation discipline).
 
@@ -42,7 +47,7 @@ Ordered follow-ups. Update as they land.
 
 ## Index
 
-Newest last.
+Oldest first; append new entries to the bottom.
 
 | Title | Status |
 |-------|--------|
