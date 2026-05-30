@@ -110,6 +110,11 @@ func (s *Server) register(api huma.API) {
 		OperationID: "get-job", Method: "GET", Path: "/api/v1/jobs/{id}",
 		Summary: "Get job status",
 	}, s.getJob)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "get-install-plan", Method: "GET", Path: "/api/v1/catalog/{id}/install-plan",
+		Summary: "Permission/scope plan for installing a catalog app",
+	}, s.installPlan)
 }
 
 // --- DTOs ----------------------------------------------------------------
@@ -279,6 +284,8 @@ func (s *Server) installApp(ctx context.Context, in *struct {
 // install authorization): members always install a personal instance owned by
 // themselves; admins choose household (the default) or personal. It audits a
 // failed attempt when a member explicitly requests a household install.
+// scopeMenu() is the read-path mirror of this authorization table — it drives
+// the install-plan consent screen. Keep the two in sync.
 // meta is the action-specific audit metadata (e.g. {"manifest_id": …} for a
 // catalog install, {"name": …} for a custom one); resolveOwnerScope adds the
 // requested scope before recording a rejected attempt.

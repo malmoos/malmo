@@ -83,3 +83,4 @@ Oldest first; append new entries to the bottom.
 | [notification-category-mute.md](notification-category-mute.md) — Per-category notification mute (`notification_mutes` table, read-time filter on list/count/mark-all, `GET`/`PUT`/`DELETE` mute API) | done |
 | [install-permissions-folders-schema.md](install-permissions-folders-schema.md) — Parse permission fields (`folders`/`devices`/`gpu`) + collapse `user_folders`/`shared_folders` into `folders` with installer-elected source (slice 1 of install consent flow) | done |
 | [host-agent-resolve-home.md](host-agent-resolve-home.md) — host-agent `GET /v1/users/{username}/home` → `{home_path, uid, gid}` (slice 2 of install consent flow) | done |
+| [install-plan-endpoint.md](install-plan-endpoint.md) — `GET /api/v1/catalog/{id}/install-plan`: role-derived scope options + per-folder source menus for the install consent screen (slice 3 of install consent flow) | done |

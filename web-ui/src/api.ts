@@ -112,6 +112,44 @@ export interface Job {
   error?: { code: string; message: string };
 }
 
+// InstallPlan is the response shape for GET /api/v1/catalog/:id/install-plan
+// (Pattern A sync). The brain returns structured fields; the UI owns all wording.
+// Advisory only — slice 4 (POST /api/v1/apps with config) is the authoritative path.
+export interface SourceMenu {
+  options: string[];
+  default: string;
+}
+
+export interface FolderSources {
+  household: SourceMenu;
+  personal: SourceMenu;
+}
+
+export interface InstallPlanFolder {
+  folder: string;
+  mode: "read" | "write";
+  scope: "whole" | "pick-subfolder";
+  subfolder_default?: string;
+  sources: FolderSources;
+}
+
+export interface InstallPlanPermissions {
+  internet: boolean;
+  lan: boolean;
+  gpu: boolean;
+  devices: string[];
+  folders: InstallPlanFolder[];
+}
+
+export interface InstallPlan {
+  manifest_id: string;
+  name: string;
+  version: string;
+  scope_options: Scope[];
+  scope_default: Scope;
+  permissions: InstallPlanPermissions;
+}
+
 // Poll a job to a terminal state (Pattern B). A useJob() composable with
 // refetchInterval is the real shape; this is enough for the skeleton.
 export async function waitForJob(jobId: string): Promise<Job> {
