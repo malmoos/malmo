@@ -111,15 +111,44 @@ func TestEmitHealthNotifications_RaiseLooksUpIssueAndClearResolves(t *testing.T)
 
 	emitHealthNotifications(notifier, mgr, raised, cleared)
 
-	if len(fns.raised) != 2 {
-		t.Fatalf("want 2 raised notifications, got %d", len(fns.raised))
+	// Dispatch pins: each raised key is looked up via Manager.Get and produces an
+	// admin notification carrying the live issue's data; the cleared key resolves
+	// its problem dedup key. The richer raise/clear behavior (member transparency
+	// and "all clear" follow-ups, which add more raised/resolved rows) is asserted
+	// in internal/notify — here we only confirm the cmd/brain wiring.
+	adminNotif := func(sourceID string) (notify.Notification, bool) {
+		for _, n := range fns.raised {
+			if n.SourceID == sourceID && n.Audience == notify.AudienceAdmins {
+				return n, true
+			}
+		}
+		return notify.Notification{}, false
 	}
-	if fns.raised[0].SourceID != "data-drive-missing" || fns.raised[1].SourceID != "canary-mismatch" {
-		t.Errorf("raised source ids = %q,%q", fns.raised[0].SourceID, fns.raised[1].SourceID)
+
+	ddm, ok := adminNotif("data-drive-missing")
+	if !ok {
+		t.Fatalf("no admin notification for data-drive-missing; raised = %v", fns.raised)
 	}
-	if len(fns.resolved) != 1 || fns.resolved[0] != "health:mergerfs-assembly-failed" {
-		t.Fatalf("resolved = %v, want [health:mergerfs-assembly-failed]", fns.resolved)
+	// The body is the live issue's Details — proves emitHealthNotifications resolved
+	// the key through Manager.Get rather than synthesizing a stub.
+	if ddm.Body != "abc-123 absent" {
+		t.Errorf("data-drive-missing body = %q, want the live issue's details", ddm.Body)
 	}
+	if _, ok := adminNotif("canary-mismatch"); !ok {
+		t.Errorf("no admin notification for canary-mismatch; raised = %v", fns.raised)
+	}
+	if !containsString(fns.resolved, "health:mergerfs-assembly-failed") {
+		t.Errorf("resolved = %v, want it to include the cleared issue's problem key", fns.resolved)
+	}
+}
+
+func containsString(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 // A raised key with no live issue produces no notification. emitHealthNotifications

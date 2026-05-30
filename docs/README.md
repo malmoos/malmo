@@ -39,6 +39,10 @@ Orientation:
 See [`progress/README.md`](progress/README.md) for the full index and the
 **Up next** queue (next implementation slices). Latest:
 
+- [`notification-category-mute.md`](progress/notification-category-mute.md)
+  — Per-category notification mute: `notification_mutes` table, read-time filter on list/count/mark-all, `GET`/`PUT`/`DELETE` mute API. Backend only — settings UI deferred.
+- [`notification-clears-transparency.md`](progress/notification-clears-transparency.md)
+  — Notification clears + member transparency variant: `members` audience, info-only member notice on box-blocking storage issues, "all clear" on resolve, flap retraction. Backend only.
 - [`notification-web-ui.md`](progress/notification-web-ui.md)
   — Notification Web UI: dashboard bell + unread badge + dropdown inbox (`useNotifications()`, SSE-invalidated TanStack Query, plain CSS). Bell re-homed into `TopBar.vue`.
 - [`notification-read-surface.md`](progress/notification-read-surface.md)
