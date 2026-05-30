@@ -77,6 +77,18 @@ func hasID(ns []NotificationDTO, id int64) bool {
 	return false
 }
 
+// mutedCategories fetches the caller's muted categories via the wire.
+func (h *harness) mutedCategories() []string {
+	h.t.Helper()
+	resp := h.do("GET", "/api/v1/notifications/mutes", nil)
+	if resp.StatusCode != 200 {
+		h.t.Fatalf("list mutes: %d", resp.StatusCode)
+	}
+	return decodeJSON[struct {
+		Muted []string `json:"muted"`
+	}](h.t, resp).Muted
+}
+
 // --- tests ----------------------------------------------------------------
 
 // The whole bell surface sits behind the auth fence — an unauthenticated
@@ -90,6 +102,9 @@ func TestNotifications_RequireAuth(t *testing.T) {
 		{"POST", "/api/v1/notifications/1/read"},
 		{"POST", "/api/v1/notifications/read-all"},
 		{"POST", "/api/v1/notifications/1/dismiss"},
+		{"GET", "/api/v1/notifications/mutes"},
+		{"PUT", "/api/v1/notifications/mutes/storage"},
+		{"DELETE", "/api/v1/notifications/mutes/storage"},
 	} {
 		resp := h.do(tc.method, tc.path, nil)
 		resp.Body.Close()
@@ -134,6 +149,43 @@ func TestNotifications_AudienceScoping(t *testing.T) {
 	}
 	if hasID(got, aliceID) {
 		t.Error("member bob must not see alice's user-audience notification")
+	}
+}
+
+// The 'members' broadcast audience (transparency variant, slice 0028) over the
+// wire: every member sees it and can act on it; no admin does — and an admin
+// gets 404 (not 403) trying to touch it, the same information-hiding the foreign
+// rows get.
+func TestNotifications_MembersAudienceScoping(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1") // admin session in jar
+	h.addMember("u_bob", "bob", "bobpass")
+
+	memberID := h.seedNotification("members:1", notify.AudienceMembers, "")
+
+	// Alice (admin) does not see the members broadcast.
+	if hasID(h.bellList(), memberID) {
+		t.Error("admin alice must not see the members-audience notification")
+	}
+	// And cannot act on it — 404, not 403.
+	resp := h.do("POST", fmt.Sprintf("/api/v1/notifications/%d/read", memberID), nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("admin marking members row = %d; want 404", resp.StatusCode)
+	}
+
+	// Bob (member) sees it and can mark it read.
+	h.loginAs("bob", "bobpass")
+	if !hasID(h.bellList(), memberID) {
+		t.Error("member bob should see the members-audience notification")
+	}
+	resp = h.do("POST", fmt.Sprintf("/api/v1/notifications/%d/read", memberID), nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("member marking members row = %d; want 204", resp.StatusCode)
+	}
+	if c := h.bellCount(); c != 0 {
+		t.Errorf("member unread after read = %d; want 0", c)
 	}
 }
 
@@ -249,6 +301,120 @@ func TestNotifications_NotFoundMissingAndForeign(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("member dismissing admins row = %d; want 404", resp.StatusCode)
+	}
+}
+
+// Muting a category over the wire drops it from the caller's list and badge;
+// GET reflects the mute; DELETE restores it. Round-trips the mute surface
+// (NOTIFICATIONS.md # Configuration).
+func TestNotifications_MuteHidesCategory(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+	id := h.seedNotification("box:1", notify.AudienceAdmins, "") // storage category
+
+	if c := h.bellCount(); c != 1 {
+		t.Fatalf("unread before mute = %d; want 1", c)
+	}
+	if m := h.mutedCategories(); len(m) != 0 {
+		t.Fatalf("muted before any mute = %v; want empty", m)
+	}
+
+	resp := h.do("PUT", "/api/v1/notifications/mutes/storage", nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("mute = %d; want 204", resp.StatusCode)
+	}
+
+	if m := h.mutedCategories(); len(m) != 1 || m[0] != "storage" {
+		t.Errorf("muted after mute = %v; want [storage]", m)
+	}
+	if hasID(h.bellList(), id) {
+		t.Error("muted-category notification must not appear in the list")
+	}
+	if c := h.bellCount(); c != 0 {
+		t.Errorf("unread after mute = %d; want 0", c)
+	}
+
+	resp = h.do("DELETE", "/api/v1/notifications/mutes/storage", nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("unmute = %d; want 204", resp.StatusCode)
+	}
+	if !hasID(h.bellList(), id) {
+		t.Error("unmuted-category notification should reappear in the list")
+	}
+	if c := h.bellCount(); c != 1 {
+		t.Errorf("unread after unmute = %d; want 1", c)
+	}
+}
+
+// An unknown category is rejected (422) on both mute and unmute, so a typo never
+// persists a mute that silently matches nothing.
+func TestNotifications_MuteUnknownCategory(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+	for _, method := range []string{"PUT", "DELETE"} {
+		resp := h.do(method, "/api/v1/notifications/mutes/bogus", nil)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnprocessableEntity {
+			t.Errorf("%s unknown category = %d; want 422", method, resp.StatusCode)
+		}
+	}
+}
+
+// A mute is the caller's own preference — it does not leak into another user's
+// mute list.
+func TestNotifications_MutePerUser(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+	h.addMember("u_bob", "bob", "bobpass")
+
+	resp := h.do("PUT", "/api/v1/notifications/mutes/storage", nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("alice mute = %d; want 204", resp.StatusCode)
+	}
+	if m := h.mutedCategories(); len(m) != 1 || m[0] != "storage" {
+		t.Errorf("alice muted = %v; want [storage]", m)
+	}
+
+	h.loginAs("bob", "bobpass")
+	if m := h.mutedCategories(); len(m) != 0 {
+		t.Errorf("bob muted = %v; want empty (alice's mute is hers alone)", m)
+	}
+}
+
+// A mute hides a category from the aggregate surfaces but does NOT gate acting on
+// a specific notification by id — a user can still mark-read/dismiss a row in a
+// muted category (e.g. one they saw before muting). Pins the deliberate
+// mute-agnostic per-id path (GetNotification ignores mute) against an
+// over-zealous "filter everywhere" refactor: a regression would surface here as
+// a 404.
+func TestNotifications_MutedCategoryStillActionableByID(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+	id := h.seedNotification("box:1", notify.AudienceAdmins, "") // storage category
+
+	resp := h.do("PUT", "/api/v1/notifications/mutes/storage", nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("mute = %d; want 204", resp.StatusCode)
+	}
+	if hasID(h.bellList(), id) {
+		t.Fatal("muted-category row should be hidden from the list")
+	}
+
+	// Still markable read by id — a 404 would mean the mute wrongly gated it.
+	resp = h.do("POST", fmt.Sprintf("/api/v1/notifications/%d/read", id), nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("mark-read on muted-category row = %d; want 204 (per-id path is mute-agnostic)", resp.StatusCode)
+	}
+	// And dismissable by id.
+	resp = h.do("POST", fmt.Sprintf("/api/v1/notifications/%d/dismiss", id), nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("dismiss on muted-category row = %d; want 204", resp.StatusCode)
 	}
 }
 
