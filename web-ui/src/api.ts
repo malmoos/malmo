@@ -112,6 +112,25 @@ export interface Job {
   error?: { code: string; message: string };
 }
 
+// FolderElection is one entry in the install request's config.folders array.
+// source is only relevant when the folder's source menu has more than one option.
+// subfolder is only included for pick-subfolder folders.
+export interface FolderElection {
+  folder: string;
+  source?: string;
+  subfolder?: string;
+}
+
+// InstallRequest is the POST /api/v1/apps body for catalog (Door-1) installs.
+// scope defaults server-side (household for admins, personal for members).
+// confirm:true bypasses the duplicate-install 409 check.
+export interface InstallRequest {
+  manifest_id: string;
+  scope?: Scope;
+  confirm?: boolean;
+  config: { folders: FolderElection[] };
+}
+
 // InstallPlan is the response shape for GET /api/v1/catalog/:id/install-plan
 // (Pattern A sync). The brain returns structured fields; the UI owns all wording.
 // Advisory only — slice 4 (POST /api/v1/apps with config) is the authoritative path.
