@@ -81,3 +81,4 @@ Oldest first; append new entries to the bottom.
 | [notification-web-ui.md](notification-web-ui.md) — Notification Web UI: dashboard bell + unread badge + dropdown inbox (`useNotifications()`, SSE-invalidated TanStack Query, plain CSS) | done |
 | [notification-clears-transparency.md](notification-clears-transparency.md) — Notification clears + member transparency variant (`members` audience, info-only member notice, "all clear" on resolve, flap retraction) | done |
 | [notification-category-mute.md](notification-category-mute.md) — Per-category notification mute (`notification_mutes` table, read-time filter on list/count/mark-all, `GET`/`PUT`/`DELETE` mute API) | done |
+| [install-permissions-folders-schema.md](install-permissions-folders-schema.md) — Parse permission fields (`folders`/`devices`/`gpu`) + collapse `user_folders`/`shared_folders` into `folders` with installer-elected source (slice 1 of install consent flow) | done |

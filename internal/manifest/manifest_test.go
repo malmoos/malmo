@@ -166,3 +166,69 @@ func TestSynthesizeNoServicesInCompose(t *testing.T) {
 		t.Fatalf("want error, got nil")
 	}
 }
+
+// withPerms wraps a permissions block in an otherwise-valid manifest so the
+// folder tests exercise Parse end-to-end.
+func withPerms(perms string) []byte {
+	return []byte(`
+id: app
+manifest_version: 1
+name: App
+version: "1"
+compose_file: compose.yml
+main_service: app
+main_port: 80
+permissions:
+` + perms)
+}
+
+func TestParseFoldersDefaults(t *testing.T) {
+	// mode defaults to read, scope to whole; devices/gpu parse.
+	m, err := Parse(withPerms(`
+  gpu: true
+  devices: [/dev/ttyUSB0, /dev/dri]
+  folders:
+    - { folder: photos }
+    - { folder: notes, mode: write, scope: pick-subfolder, default: Notes/Obsidian }
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !m.Permissions.GPU || len(m.Permissions.Devices) != 2 {
+		t.Fatalf("gpu/devices not parsed: %+v", m.Permissions)
+	}
+	photos := m.Permissions.Folders[0]
+	if photos.Mode != "read" || photos.Scope != "whole" {
+		t.Fatalf("defaults not applied: %+v", photos)
+	}
+	notes := m.Permissions.Folders[1]
+	if notes.Mode != "write" || notes.Scope != "pick-subfolder" || notes.Default != "Notes/Obsidian" {
+		t.Fatalf("notes folder parsed wrong: %+v", notes)
+	}
+}
+
+func TestParseFoldersRejectsUnknownName(t *testing.T) {
+	_, err := Parse(withPerms("  folders:\n    - { folder: secrets }\n"))
+	if err == nil || !strings.Contains(err.Error(), "unknown folder") {
+		t.Fatalf("want unknown-folder error, got %v", err)
+	}
+}
+
+func TestParseFoldersRejectsBadModeAndScope(t *testing.T) {
+	if _, err := Parse(withPerms("  folders:\n    - { folder: photos, mode: delete }\n")); err == nil || !strings.Contains(err.Error(), "mode") {
+		t.Fatalf("want mode error, got %v", err)
+	}
+	if _, err := Parse(withPerms("  folders:\n    - { folder: photos, scope: some }\n")); err == nil || !strings.Contains(err.Error(), "scope") {
+		t.Fatalf("want scope error, got %v", err)
+	}
+}
+
+func TestParseFoldersRejectsDefaultMisuse(t *testing.T) {
+	// default only valid with pick-subfolder; no traversal/absolute paths.
+	if _, err := Parse(withPerms("  folders:\n    - { folder: photos, default: Sub }\n")); err == nil || !strings.Contains(err.Error(), "default is only valid") {
+		t.Fatalf("want default-with-whole error, got %v", err)
+	}
+	if _, err := Parse(withPerms("  folders:\n    - { folder: photos, scope: pick-subfolder, default: ../etc }\n")); err == nil || !strings.Contains(err.Error(), "relative subpath") {
+		t.Fatalf("want traversal error, got %v", err)
+	}
+}

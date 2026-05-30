@@ -56,7 +56,7 @@ Fields per app:
 - **`manifest_url` / `manifest_hash`** — content-addressed pointer to the full manifest. On install, brain fetches and verifies the hash matches.
 - **`compose_url` / `compose_hash`** — same, for the compose file.
 - **`images`** — map of `image:tag` (as referenced in the compose) → resolved `sha256:` digest. CI resolves these at catalog-build time. The brain pulls by digest, not by tag — see Trust below.
-- **`files_first_class`** — true when the manifest declares `user_folders` and does not set `storage.app_managed_user_content`. Surfaces as a badge in the UI; not a gate.
+- **`files_first_class`** — true when the manifest declares `folders` and does not set `storage.app_managed_user_content`. Surfaces as a badge in the UI; not a gate.
 
 Top-level fields:
 

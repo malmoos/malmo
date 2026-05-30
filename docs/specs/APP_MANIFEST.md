@@ -119,7 +119,7 @@ Used for the install-time capacity check ("you have 800M free; this wants 512M; 
 
 Two distinct kinds of storage in every app — user content and app state. See `STORAGE.md` # Files are first-class.
 
-**User content** is what the user owns — photos, music, notes, documents. Lives at `/home/<user>/Photos/`, `~/Music/`, etc. Apps reach it by **bind-mounting use-case folders**, declared in `permissions.user_folders` (next section). Survives app uninstall.
+**User content** is what the user owns — photos, music, notes, documents. Lives at `/home/<user>/Photos/`, `~/Music/`, etc. Apps reach it by **bind-mounting use-case folders**, declared in `permissions.folders` (next section). Survives app uninstall.
 
 **App state** is the app's own working data — indexes, caches, databases, configs. Lives at `/var/lib/malmo/instances/<id>/data/`. Opaque to the user. Deleted on uninstall (or archived if the user picks "keep data").
 
@@ -183,9 +183,8 @@ What the app is allowed to touch. Default is "very little"; manifest opts in to 
 permissions:
   internet: true                      # outbound internet allowed
   lan: false                          # can talk to LAN devices (macvlan; see APP_ISOLATION.md)
-  user_folders:                       # access to per-user content (see below)
+  folders:                            # access to use-case content folders (see below)
     - { folder: photos, mode: write }
-  shared_folders:                     # access to /srv/malmo/shared/* (see below)
     - { folder: movies, mode: read }
   devices: [/dev/ttyUSB0]             # explicit device paths (Zigbee/Z-Wave dongles, webcams)
   gpu: true                           # platform-appropriate GPU runtime (NVIDIA / Intel / AMD)
@@ -200,27 +199,34 @@ Store review checks the declared permissions match the app's actual usage.
 
 **No added Linux capabilities for store apps.** The brain's override is `cap_drop: [ALL]` and adds none; admission rejects any `cap_add` (`APP_LIFECYCLE.md` # admission policy). Apps that genuinely need a capability, `privileged`, or the Docker socket go through the **Door-2 custom path** (the user wrote the compose, owns the consequences) or, for curated OS integrations, **Tier 2** (`SERVICE_PROVISIONING.md`). A raw-capability escape hatch *in a store manifest* is intentionally absent. (`APP_ISOLATION.md` sketches a reviewed `permissions.capabilities` list; that is not part of the v1 store schema and is tracked as an open item — see `NEXT.md`.)
 
-#### `user_folders` — access to per-user content
+#### `folders` — access to use-case content
 
-How an app reads/writes the user's use-case folders (`STORAGE.md` # What apps and users actually see). For each folder, declare scope and mode:
+How an app reads/writes content in the use-case folders (`STORAGE.md` # What apps and users actually see). For each folder, declare the folder name, mode, and subfolder scope:
 
 ```yaml
 permissions:
-  user_folders:
+  folders:
     - folder: photos                  # photos | music | movies | documents | notes | downloads
       mode: write                     # read | write  (default: read)
       scope: whole                    # whole | pick-subfolder  (default: whole)
     - folder: notes
       mode: write
-      scope: pick-subfolder           # user picks at install
+      scope: pick-subfolder           # user picks the subfolder at install
       default: Notes/Obsidian         # default subfolder; user can override
 ```
 
 - **`mode`** defaults to **`read`** when unspecified — least privilege, and `write` is a deliberate choice the catalog reviewer notices. `mode: write` shows up on the install screen as "this app can ADD, CHANGE, AND DELETE files in your X folder" — read-only declarations are visibly different.
-- **`scope: whole`** (default) — brain bind-mounts the entire folder (e.g., all of `~/Photos/`) into the container.
+- **`scope: whole`** (default) — brain bind-mounts the entire folder (e.g., all of the chosen `Photos/`) into the container.
 - **`scope: pick-subfolder`** — install screen prompts the user: "Which folder should this app manage?" Default is the manifest's `default` (auto-created if absent), user can choose any path under the folder. Used for notes apps (one vault per "context"), media apps that should manage a subset of a library, etc.
 
-**How it's mounted — fixed path + injected env var.** The manifest declares *which* folder and *how* (`mode`/`scope`); it does **not** carry an in-container path. The brain bind-mounts each declared folder at a stable, documented path — `/malmo/<folder>` (e.g. `/malmo/photos`) — and injects the absolute path as `MALMO_FOLDER_<NAME>` (e.g. `MALMO_FOLDER_PHOTOS=/malmo/photos`). The app's compose maps that variable to whatever the app actually expects:
+**Source is the installer's choice, not the author's.** The manifest declares *what* content the app touches and *how* (`mode`/`scope`); it deliberately does **not** declare whether the folder is the user's **personal** `~/<Folder>/` or the **household-shared** `/srv/malmo/shared/<Folder>/`. The author can't know a given household's intent — "I want *my own* Jellyfin on *my* movies" and "I want it on the *family* library" are both valid and the app code is identical. So source is elected per folder at install (`DASHBOARD.md` # install authorization, `DECISIONS.md` 2026-05-30):
+
+- **Personal instance** — the install screen offers, per folder, **your `<Folder>`** (default) or the **household Shared `<Folder>`**. Choosing shared adds the container to the `malmo-shared` group; it reaches exactly what the owner can already reach as a household member.
+- **Household instance** — always the household Shared `<Folder>` (a shared instance has no single owner whose `~/` it could bind). No per-folder toggle.
+
+This supersedes the earlier `user_folders` / `shared_folders` split, where the author picked the source by choosing the key.
+
+**How it's mounted — fixed path + injected env var.** The brain bind-mounts each declared folder at a stable, documented path — `/malmo/<folder>` (e.g. `/malmo/photos`) — and injects the absolute path as `MALMO_FOLDER_<NAME>` (e.g. `MALMO_FOLDER_PHOTOS=/malmo/photos`). The app's compose maps that variable to whatever the app actually expects:
 
 ```yaml
 # inside the app's docker-compose.yml
@@ -228,22 +234,11 @@ environment:
   PHOTOPRISM_ORIGINALS_PATH: ${MALMO_FOLDER_PHOTOS}
 ```
 
-This is the same injection convention as managed services (`MALMO_SERVICE_*`) and `MALMO_DATA_DIR` — the manifest stays declarative about *intent*, the app does the wiring, and the app stays portable. It also keeps `scope: pick-subfolder` clean: the **source** path varies with the user's pick, but the in-container mount path and the env var are stable. For a personal instance the source is the owner's `~/<Folder>/`; the source side is resolved by the brain at install time (the brain learns the owner's home path and UID from host-agent — `BRAIN_HOST_PROTOCOL.md`), never declared by the author.
-
-#### `shared_folders` — access to household-shared content
-
-Same shape as `user_folders`, but bind-mounts from `/srv/malmo/shared/<folder>/`. The container is added to the `malmo-shared` group. Typical use: a Tier-1 household Jellyfin reading from `Shared/Movies/`.
-
-```yaml
-permissions:
-  shared_folders:
-    - { folder: movies, mode: read }
-    - { folder: music, mode: read }
-```
+This is the same injection convention as managed services (`MALMO_SERVICE_*`) and `MALMO_DATA_DIR` — the manifest stays declarative about *intent*, the app does the wiring, and the app stays portable. The in-container mount path and the env var are stable regardless of the elected source or subfolder; only the **host source** varies (personal `~/<Folder>/` vs shared `/srv/malmo/shared/<Folder>/`, narrowed further by a `pick-subfolder` choice). The source side is resolved by the brain at install time — it learns the owner's home path and UID from host-agent (`BRAIN_HOST_PROTOCOL.md`), never declared by the author.
 
 #### External-storage convention for popular apps
 
-The malmo-tuned manifest for an app whose upstream supports external libraries (Immich, Photoprism, Jellyfin, Nextcloud, Paperless-ngx, Navidrome, ...) declares `user_folders` and configures the app via env vars or post-install steps to **point its internal "library path" at the bind-mounted use-case folder**. The user's files stay at `~/Photos/`, the app indexes them there, uninstalling the app keeps the files. This is the path that earns the manifest a "files first-class" badge in the store.
+The malmo-tuned manifest for an app whose upstream supports external libraries (Immich, Photoprism, Jellyfin, Nextcloud, Paperless-ngx, Navidrome, ...) declares `folders` and configures the app via env vars or post-install steps to **point its internal "library path" at the bind-mounted use-case folder**. The user's files stay at `~/Photos/`, the app indexes them there, uninstalling the app keeps the files. This is the path that earns the manifest a "files first-class" badge in the store.
 
 Apps that don't support external libraries fall back to `storage.app_managed_user_content: true` (`STORAGE.md` # Files are first-class). For v1, the store catalog is hand-curated by malmo — we write manifests that follow the external-storage pattern wherever upstream supports it.
 
@@ -311,8 +306,8 @@ services:
 
 permissions:
   internet: true
-  user_folders:
-    - { folder: photos, mode: write }   # PhotoPrism reads/writes ~/Photos/
+  folders:
+    - { folder: photos, mode: write }   # PhotoPrism reads/writes the chosen Photos folder
   gpu: true                             # hardware-accelerated thumbnails / transcode
 ```
 
@@ -353,8 +348,9 @@ No managed services by default. Best-effort backup of all volumes (we can't tell
 - **`resources.recommended` is advice, never a cap.** No `limit` field exists in the manifest; authors can't see the user's hardware. Default runtime is uncapped burst; user-set memory caps and control-plane OOM protection live in `APP_ISOLATION.md` # Resource limits.
 - **Permissions are declared and enforced.** Not just metadata.
 - **User content vs. app state are separate stores.** User content (`/home/<user>/Photos/`, etc.) accessed by manifest-declared bind mounts of use-case folders; app state in `/var/lib/malmo/instances/<id>/data/`. Apps reach user content by reference, never by copy.
-- **`scope: pick-subfolder`** for `user_folders` — install-time prompt for apps that should manage a subset (notes apps, media subsets). Default is provided by the manifest; user can override.
-- **`user_folders` mount at a fixed path + injected env var.** The manifest declares folder + `mode` + `scope` but no in-container path; the brain mounts each at `/malmo/<folder>` and injects `MALMO_FOLDER_<NAME>`. The app's compose maps that variable to its own library path. `mode` defaults to `read`. Same injection pattern as `MALMO_SERVICE_*` / `MALMO_DATA_DIR`.
+- **`scope: pick-subfolder`** for `folders` — install-time prompt for apps that should manage a subset (notes apps, media subsets). Default is provided by the manifest; user can override.
+- **Folder source (personal vs household-shared) is installer-elected, not a manifest field.** The manifest declares only the folder + `mode` + `scope`; whether it binds the owner's `~/<Folder>/` or the household `/srv/malmo/shared/<Folder>/` is the installer's per-folder choice (personal instances pick, defaulting to personal; household instances are always shared). Replaces the old `user_folders` / `shared_folders` keys. See `DECISIONS.md` 2026-05-30.
+- **`folders` mount at a fixed path + injected env var.** The manifest declares folder + `mode` + `scope` but no in-container path; the brain mounts each at `/malmo/<folder>` and injects `MALMO_FOLDER_<NAME>`. The app's compose maps that variable to its own library path. `mode` defaults to `read`. Same injection pattern as `MALMO_SERVICE_*` / `MALMO_DATA_DIR`.
 - **`gpu` is its own field, separate from `devices`.** `devices` passes through explicit `/dev/...` paths; `gpu: true` selects the platform GPU runtime. No-GPU box fails at the capacity check.
 - **`app_managed_user_content: true`** is the opt-in for apps that don't expose user content via use-case folders. Triggers an install-time warning. Curated store prefers apps without it.
 - **Scope (household vs. personal) is installer-elected, not a manifest field.** No `multi_user.mode`. Admins choose household or personal; members install personal only (`DASHBOARD.md`, `DECISIONS.md` 2026-05-29). Guest-sharing and household visibility are deferred and not manifest fields.
@@ -366,7 +362,7 @@ No managed services by default. Best-effort backup of all volumes (we can't tell
 - **Env-var injection: app-defined naming.** App's compose maps malmo's stable `MALMO_SERVICE_*` variables to whatever names the app expects. No auto-rewrite. Authors adapt; we document.
 - **Permissions granularity: medium for v1.** Internet, LAN, shared storage, devices, privileged, network isolation. Not coarse-only, not fine-grained Kubernetes-style.
 - **Custom apps can request managed services.** Allowed, not encouraged.
-- **No inter-app dependencies in v1.** Apps are self-contained. If they need multiple services, they go in the same compose. Cross-app sharing only via shared use-case folders (`user_folders` for same-user apps; `shared_folders` for household-wide apps).
+- **No inter-app dependencies in v1.** Apps are self-contained. If they need multiple services, they go in the same compose. Cross-app sharing only via shared use-case folders (two of the same user's apps both binding the same `folders` entry; the installer points each at the same personal or shared source).
 - **Manifest can live in-repo or in malmo's catalog repo.** Both patterns supported indefinitely. Schema is identical in both cases. We bootstrap by writing manifests for popular apps; over time, upstreams ship their own.
 - **Image references use version tags; the store catalog resolves digests.** Authors write `image: foo/bar:1.2.3`; malmo's CI pins the bytes via a `sha256:` digest in the signed catalog (`APP_STORE.md`). Door-2 custom apps fall back to TOFU digest pinning in the brain.
 

@@ -2,7 +2,7 @@
 
 > Working spec for how the brain enforces what apps can do at runtime. Companion to `SPEC.md`, `CONTROL_PLANE.md`, `APP_MANIFEST.md`, `SERVICE_PROVISIONING.md`, `STORAGE.md`, `FIRST_RUN.md`.
 
-The manifest declares *intent* (`internet: true`, `lan: false`, `user_folders: [{folder: photos}]`). This document describes what those declarations mean concretely — what Linux/Docker primitives back them, what the defaults are, and where the trust boundaries sit.
+The manifest declares *intent* (`internet: true`, `lan: false`, `folders: [{folder: photos}]`). This document describes what those declarations mean concretely — what Linux/Docker primitives back them, what the defaults are, and where the trust boundaries sit.
 
 ## Principles
 
@@ -33,7 +33,7 @@ Whether an instance is **household** (admin-owned, shared — one instance, the 
 A personal instance is the per-owner compose-project shape locked in `APP_LIFECYCLE.md` # an app instance is a Docker Compose project: an independent project named `malmo-<instance-id>`, with its own instance id, data dir, and slug `<slug>--<user>`. If two users each install the same app personally, two independent instances run.
 
 - A personal instance's main process runs as the **owner's Linux UID/GID** (assigned at user creation, in the malmo-reserved 3000+ range). The brain enforces this via the compose `user:` field; we do not rely on `PUID`/`PGID` env-var conventions. (A household instance runs as a shared service identity, not a single member's UID.)
-- The container sees only the bind-mounted use-case folders declared in the manifest (subset of `/home/<user>/Photos/`, `Documents/`, etc. — see `APP_MANIFEST.md` # `user_folders`), mounted at the fixed `/malmo/<folder>` paths. Other users' homes are not bind-mounted; they're not even on the filesystem the container can reach.
+- The container sees only the bind-mounted use-case folders declared in the manifest (the owner's `/home/<user>/Photos/`, `Documents/`, etc., or a household `/srv/malmo/shared/<Folder>/` when the installer elected the shared source — see `APP_MANIFEST.md` # `folders`), mounted at the fixed `/malmo/<folder>` paths. Other users' homes are not bind-mounted; they're not even on the filesystem the container can reach.
 - App authors write a single-user app. They do not need to know about users, sessions, or identity — malmo runs one instance per owner.
 
 ### Tier-2 apps (always shared)
@@ -95,7 +95,7 @@ Cost: each `lan: true` app burns one IP on the user's LAN. Tolerable — single-
 
 Denied. Apps that need to share data go through:
 - Managed services (`services: [postgres]`)
-- A shared use-case folder (`user_folders: [...]` — two of the same user's apps see the same `~/Photos/`) or, for Tier-1 household apps, `shared_folders: [...]` against `/srv/malmo/shared/`
+- A shared use-case folder (`folders: [...]` — two of the same user's apps pointed at the same source see the same `~/Photos/`, or the same `/srv/malmo/shared/` tree)
 
 A user who genuinely wants two apps wired directly together puts them in one Door-2 compose. Cross-app networking is not a v1 feature.
 
@@ -121,22 +121,25 @@ App state (indexes, configs, the app's own DB) lives under the instance dir at `
 
 ### User content (use-case folders)
 
-Each Tier-3 app instance is scoped to its user's private home directory. Apps reach user content by **bind-mounting use-case folders** declared in the manifest (`APP_MANIFEST.md` # `user_folders`):
+Apps reach user content by **bind-mounting use-case folders** declared in the manifest (`APP_MANIFEST.md` # `folders`):
 
 ```yaml
 permissions:
-  user_folders:
+  folders:
     - { folder: photos, mode: write }
     - { folder: documents, mode: read }
 ```
 
-Each declared folder is bind-mounted at a fixed in-container path `/malmo/<folder>` and the absolute path injected as `MALMO_FOLDER_<NAME>`; the app's compose maps that variable to its own library path (`APP_MANIFEST.md` # `user_folders`). `mode` defaults to `read` if unspecified — least privilege, and `write` is a deliberate choice the catalog reviewer notices.
+Each declared folder is bind-mounted at a fixed in-container path `/malmo/<folder>` and the absolute path injected as `MALMO_FOLDER_<NAME>`; the app's compose maps that variable to its own library path (`APP_MANIFEST.md` # `folders`). `mode` defaults to `read` if unspecified — least privilege, and `write` is a deliberate choice the catalog reviewer notices.
 
-Use-case folder taxonomy v1 (fixed): `photos`, `documents`, `movies`, `music`, `notes`, `downloads` — mapped to capitalized directories under `/home/<user>/` (`Photos/`, `Documents/`, etc., per `STORAGE.md`). User-defined folders deferred.
+Use-case folder taxonomy v1 (fixed): `photos`, `documents`, `movies`, `music`, `notes`, `downloads` — mapped to capitalized directories (`Photos/`, `Documents/`, etc., per `STORAGE.md`). User-defined folders deferred.
 
-**Layout.** Use-case folders live at `/home/<user>/<Folder>/`, owned by that user (UID in the malmo 3000+ range), with `/home/<user>/` mode `0750` (`STORAGE.md` # Permissions). The container runs as the user's UID and sees only the folders declared in its manifest, bind-mounted in — it has no path to other users' homes at all.
+**The host source is the installer's per-folder election, not the manifest's.** A declared folder binds one of two sources, chosen at install:
 
-**Household-shared content (`/srv/malmo/shared/`) is not exposed to per-user app instances at MVP.** It exists for the v1 cross-user sharing story (drop a file in `Shared/`, every user's file browser sees it via the `malmo-shared` group — `STORAGE.md`, `USERS_AND_GROUPS.md`), but Tier-3 per-user containers do not bind-mount it. Tier-1 household apps (e.g., a household Jellyfin) reach this content via `shared_folders` in their manifest (`APP_MANIFEST.md` # `shared_folders`). Allowing Tier-3 per-user apps to read across the per-user/shared boundary is a deferred feature — tracked in `NEXT.md`.
+- **Personal source** — the owner's `/home/<user>/<Folder>/`, owned by that user (UID in the malmo 3000+ range), with `/home/<user>/` mode `0750` (`STORAGE.md` # Permissions). The container runs as the owner's UID and reaches no other user's home. This is the default offered for a personal instance.
+- **Shared source** — `/srv/malmo/shared/<Folder>/`, the household tree every member can already reach via the `malmo-shared` group (`STORAGE.md`, `USERS_AND_GROUPS.md`). The brain adds the container to `malmo-shared` (compose `group_add`) so it has exactly that group's access — no new privilege. Always used by a household instance; offered to a personal instance when the installer elects it.
+
+A personal instance reading the shared tree (the "my own Jellyfin on the family library" case) is now a supported election — **this supersedes the earlier MVP carve-out** that forbade Tier-3 per-user apps from crossing the per-user/shared boundary (`DECISIONS.md` 2026-05-30). The boundary still holds in the one direction that matters: a household (shared) instance never binds a single member's private `~/`, because there is no one owner to scope it to.
 
 The `PUID`/`PGID` env-var pattern from earlier drafts is gone — we set the container's runtime UID directly via the compose `user:` field, so file ownership lines up natively. Apps that hardcode an internal UID and ignore the runtime user override will hit permission errors and get pulled from the catalog.
 
@@ -184,8 +187,8 @@ The common case is expressed through high-level fields in the manifest, not raw 
 | `lan: true` | macvlan attachment + multicast |
 | `devices: [...]` | device cgroup entries |
 | `gpu: true` | platform-appropriate GPU runtime |
-| `user_folders: [...]` | bind mount of `/home/<user>/<Folder>/` at `/malmo/<folder>` + injected `MALMO_FOLDER_<NAME>` |
-| `shared_folders: [...]` | bind mount of `/srv/malmo/shared/<folder>/` + `malmo-shared` group membership |
+| `folders: [...]` (personal source) | bind mount of `/home/<user>/<Folder>/` at `/malmo/<folder>` + injected `MALMO_FOLDER_<NAME>` |
+| `folders: [...]` (shared source) | bind mount of `/srv/malmo/shared/<Folder>/` at `/malmo/<folder>` + `malmo-shared` group membership (`group_add`) + injected `MALMO_FOLDER_<NAME>` |
 
 App authors think "I need to control the network," not "I need `NET_ADMIN`." The brain does the translation.
 

@@ -146,7 +146,7 @@ Third-party stores, external tooling, and (later) `malmoctl` need non-interactiv
 
 A user granted Immich access to `~/Photos/`. Six months later they want to revoke it without uninstalling. Today the manifest declares permissions at install; nothing covers the *change* path. UX: per-app permissions screen mirroring iOS/Android's, with consequences spelled out ("Immich will no longer be able to see your photos"). Brain side: re-render compose, restart instance, audit-event.
 
-**Context:** `APP_MANIFEST.md` (`permissions.user_folders`), `APP_ISOLATION.md`, `APP_LIFECYCLE.md`, `LOGGING.md` (audit).
+**Context:** `APP_MANIFEST.md` (`permissions.folders`), `APP_ISOLATION.md`, `APP_LIFECYCLE.md`, `LOGGING.md` (audit).
 **Why Tier 3:** install-time grant works for v1; revocation is the second-order feature users will ask for once they've lived with the box for a while.
 
 ### Hostname / box-name rename
@@ -229,7 +229,7 @@ Both deferred from v1 (`DECISIONS.md` 2026-05-15). Shape is pinned in `RELEASE_M
 
 The architecture and the install/wizard/add-drive/eject mechanics are locked (`STORAGE.md`, `FIRST_RUN.md`, `AUTH.md`, `BRAIN_HOST_PROTOCOL.md`, `HEALTH.md` # `disk-full`). What remains is design-time copy + screen-layout: card shape for OS drive vs. data drive at Level 0/1, where the "Show recovery passphrase" affordance lives under Advanced, eject-drive confirmation copy, disk-pressure banner copy + top-space-hogs enumeration, single-drive "add a data drive later" dashboard hint, and the file-access permission block on the app-install dialog ("Photos will read and write your Photos folder").
 
-**Context:** `STORAGE.md`, `FIRST_RUN.md`, `HEALTH.md`, `APP_MANIFEST.md` # `permissions.user_folders`.
+**Context:** `STORAGE.md`, `FIRST_RUN.md`, `HEALTH.md`, `APP_MANIFEST.md` # `permissions.folders`.
 **Why Tier 3:** doesn't block bring-up — the brain endpoints and health-issue flags exist. UX iteration belongs with the designer and the first user-test pass, not the spec.
 
 ### Reboot scheduling UX
@@ -319,7 +319,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Read-only root rollout as a catalog requirement. `APP_ISOLATION.md`.
 - Egress allowlist for `internet: true`. `APP_ISOLATION.md`.
 - Per-app firewall rules (apps as L4 endpoints). `APP_ISOLATION.md`.
-- Tier-3 per-user app access to household-shared content (`/srv/malmo/shared/`). Tier-1 apps reach it via `shared_folders`; per-user instances do not at MVP. `APP_ISOLATION.md`, `APP_MANIFEST.md`.
+- Author-declared default/hint for folder source (e.g. an `allow_shared`-style flag) so a manifest can bias the install-time personal-vs-shared toggle without removing the installer's choice. Resolved-for-now as fully installer-elected (`DECISIONS.md` 2026-05-30); revisit if catalog demand appears. `APP_MANIFEST.md` # `folders`.
 - fscrypt coverage for per-user app state under `/var/lib/malmo/instances/<id>/`. When per-home fscrypt lands, does it extend to managed-service data (per-user Postgres, etc.)? `APP_ISOLATION.md` # Managed services placement, `STORAGE.md` # Future: per-user encryption.
 
 **Storage & first-run**
