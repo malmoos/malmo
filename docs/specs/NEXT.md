@@ -280,7 +280,9 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 
 **Manifests & catalog**
 - Exact `MALMO_SERVICE_*` variable schema per service type — `APP_MANIFEST.md`, `SERVICE_PROVISIONING.md`.
-- `permissions.devices` syntax — paths vs. categories (`gpu`, `webcam`). `APP_MANIFEST.md`.
+- `permissions.devices` syntax — paths vs. categories (`webcam`, etc.). `APP_MANIFEST.md`. *(GPU split out into its own `gpu: true` field — `DECISIONS.md` 2026-05-30; this item now covers only non-GPU device shorthand.)*
+- **Store `permissions.capabilities` escape hatch (deferred).** A reviewed-at-submission list (`NET_ADMIN`, `SYS_TIME`) for the rare store app that legitimately needs one capability. Cut from the v1 schema (`DECISIONS.md` 2026-05-30 — store apps get `cap_drop: [ALL]`, no `cap_add`); capability needs go through Door-2 / Tier 2 today. Revisit if a curated app genuinely can't fit either path. `APP_MANIFEST.md`, `APP_ISOLATION.md`.
+- **Door-2 vs. Door-1 admission asymmetry.** `APP_ISOLATION.md`'s trust-tier model says Door-2 custom compose may carry `privileged` / `cap_add` / the Docker socket ("the user wrote it"), but the implemented admission policy (`internal/admission`, run for *both* doors in `install()`) rejects all three uniformly. Decide whether Door-2 actually relaxes admission, and if so exactly which primitives — vs. holding the line and pushing those use cases to Tier 2 only. `APP_LIFECYCLE.md` # admission policy, `APP_ISOLATION.md` # Trust tiers.
 - Manifest signing / provenance for third-party stores. `APP_MANIFEST.md`.
 - App icon & screenshot handling — bundled vs. URL. `APP_MANIFEST.md`.
 - Update-strategy declarations (in-place vs. needs-migration). `APP_MANIFEST.md` (folds into hooks).

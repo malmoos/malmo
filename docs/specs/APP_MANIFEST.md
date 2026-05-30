@@ -182,19 +182,23 @@ What the app is allowed to touch. Default is "very little"; manifest opts in to 
 ```yaml
 permissions:
   internet: true                      # outbound internet allowed
-  lan: false                          # can talk to LAN devices
+  lan: false                          # can talk to LAN devices (macvlan; see APP_ISOLATION.md)
   user_folders:                       # access to per-user content (see below)
     - { folder: photos, mode: write }
   shared_folders:                     # access to /srv/malmo/shared/* (see below)
     - { folder: movies, mode: read }
-  devices: [/dev/dri]                 # GPU access etc.
-  privileged: false                   # almost never true
+  devices: [/dev/ttyUSB0]             # explicit device paths (Zigbee/Z-Wave dongles, webcams)
+  gpu: true                           # platform-appropriate GPU runtime (NVIDIA / Intel / AMD)
   network_isolation: per_app          # per_app | shared
 ```
 
-Permissions are **declared and enforced.** Not metadata — the brain actually configures Docker networks, bind mounts, and capabilities to match. Apps cannot reach what they didn't declare.
+Permissions are **declared and enforced.** Not metadata — the brain actually configures Docker networks, bind mounts, and devices to match. Apps cannot reach what they didn't declare. The concrete Linux/Docker primitive behind each field is owned by `APP_ISOLATION.md` # Capabilities & privilege; this doc is the schema, that doc is the enforcement.
 
 Store review checks the declared permissions match the app's actual usage.
+
+**`devices` and `gpu`.** `devices` lists explicit `/dev/...` paths the app needs passed through (a Zigbee dongle, a webcam); the brain validates each exists before start. `gpu: true` is **separate from `devices`** because driver wiring is platform-specific — the OS selects the right runtime (NVIDIA container runtime, Intel/AMD `/dev/dri`) and the app introspects what's present via standard tooling; if no GPU exists the install fails at the capacity check.
+
+**No added Linux capabilities for store apps.** The brain's override is `cap_drop: [ALL]` and adds none; admission rejects any `cap_add` (`APP_LIFECYCLE.md` # admission policy). Apps that genuinely need a capability, `privileged`, or the Docker socket go through the **Door-2 custom path** (the user wrote the compose, owns the consequences) or, for curated OS integrations, **Tier 2** (`SERVICE_PROVISIONING.md`). A raw-capability escape hatch *in a store manifest* is intentionally absent. (`APP_ISOLATION.md` sketches a reviewed `permissions.capabilities` list; that is not part of the v1 store schema and is tracked as an open item — see `NEXT.md`.)
 
 #### `user_folders` — access to per-user content
 
@@ -204,7 +208,7 @@ How an app reads/writes the user's use-case folders (`STORAGE.md` # What apps an
 permissions:
   user_folders:
     - folder: photos                  # photos | music | movies | documents | notes | downloads
-      mode: write                     # read | write
+      mode: write                     # read | write  (default: read)
       scope: whole                    # whole | pick-subfolder  (default: whole)
     - folder: notes
       mode: write
@@ -212,10 +216,19 @@ permissions:
       default: Notes/Obsidian         # default subfolder; user can override
 ```
 
+- **`mode`** defaults to **`read`** when unspecified — least privilege, and `write` is a deliberate choice the catalog reviewer notices. `mode: write` shows up on the install screen as "this app can ADD, CHANGE, AND DELETE files in your X folder" — read-only declarations are visibly different.
 - **`scope: whole`** (default) — brain bind-mounts the entire folder (e.g., all of `~/Photos/`) into the container.
 - **`scope: pick-subfolder`** — install screen prompts the user: "Which folder should this app manage?" Default is the manifest's `default` (auto-created if absent), user can choose any path under the folder. Used for notes apps (one vault per "context"), media apps that should manage a subset of a library, etc.
 
-`mode: write` shows up on the install screen as "this app can ADD, CHANGE, AND DELETE files in your X folder" — read-only declarations are visibly different.
+**How it's mounted — fixed path + injected env var.** The manifest declares *which* folder and *how* (`mode`/`scope`); it does **not** carry an in-container path. The brain bind-mounts each declared folder at a stable, documented path — `/malmo/<folder>` (e.g. `/malmo/photos`) — and injects the absolute path as `MALMO_FOLDER_<NAME>` (e.g. `MALMO_FOLDER_PHOTOS=/malmo/photos`). The app's compose maps that variable to whatever the app actually expects:
+
+```yaml
+# inside the app's docker-compose.yml
+environment:
+  PHOTOPRISM_ORIGINALS_PATH: ${MALMO_FOLDER_PHOTOS}
+```
+
+This is the same injection convention as managed services (`MALMO_SERVICE_*`) and `MALMO_DATA_DIR` — the manifest stays declarative about *intent*, the app does the wiring, and the app stays portable. It also keeps `scope: pick-subfolder` clean: the **source** path varies with the user's pick, but the in-container mount path and the env var are stable. For a personal instance the source is the owner's `~/<Folder>/`; the source side is resolved by the brain at install time (the brain learns the owner's home path and UID from host-agent — `BRAIN_HOST_PROTOCOL.md`), never declared by the author.
 
 #### `shared_folders` — access to household-shared content
 
@@ -251,19 +264,17 @@ hooks:
 
 The brain will run the hook image as a transient container with the app's volumes attached. This respects closed-source images (no shell-in-app-container required) and gives commercial vendors a clean integration path. `pre_update`, when supplied, replaces the brain's brute-force tar for that app — the snapshot remains the default for apps without a hook. `post_update_rollback` fires only when the update fails after the new container started; it's the right shape for apps with bespoke recovery (e.g., a destructive schema migration that needs explicit reversal). Tracked in `APP_LIFECYCLE.md` # "Deferred: lifecycle hooks".
 
-### G. Multi-user behavior
+### G. Multi-user behavior — not a manifest concern
 
-How the app is shared across malmo accounts.
+**The manifest does not decide how an app is shared across accounts.** Whether an instance is *household* (one shared instance, app-internal multi-user separates people inside it) or *personal* (one instance per owner, binding only the owner's folders) is **elected by the installing user**, not declared by the author (`DASHBOARD.md` # instances are owner-scoped, `DECISIONS.md` 2026-05-29):
 
-```yaml
-multi_user:
-  mode: shared                        # shared | per_user
-  guest_shareable: true               # can be shared with mesh guests
-  default_visibility: household       # household | admin_only
-```
+- An **admin** chooses Household or "Just for me" at install.
+- A **member** can only create a **personal** instance.
+- Every user sees their own personal instances plus the household instances they're permitted to open.
 
-- **`shared`** — one app instance, multiple malmo users log in to it (e.g., a household grocery list). Default for most apps.
-- **`per_user`** — each malmo user gets their own instance, with separate data. For inherently personal apps (private notes).
+There is deliberately **no `multi_user.mode` field** — an earlier draft had `shared | per_user`, removed because scope is a runtime election, not a static property of the app. The brain realizes a personal instance as the per-owner compose-project shape already locked in `APP_LIFECYCLE.md` # an app instance is a Docker Compose project; folder bindings resolve to the owner's `~/<Folder>/`.
+
+Mesh-guest sharing (`guest_shareable`) and per-app household visibility (which members may open a given household instance) are **deferred** — guest sharing rides on the mesh (deferred), and the visibility/authorization model is owned by `AUTH.md` / `DASHBOARD.md`, not the manifest. Neither is a v1 manifest field.
 
 ## Complete sample manifest
 
@@ -302,14 +313,10 @@ permissions:
   internet: true
   user_folders:
     - { folder: photos, mode: write }   # PhotoPrism reads/writes ~/Photos/
-  devices: [/dev/dri]
-
-multi_user:
-  mode: shared
-  guest_shareable: true
+  gpu: true                             # hardware-accelerated thumbnails / transcode
 ```
 
-~30 lines for a real-world app. The compose file is what the author already had.
+~28 lines for a real-world app. The compose file is what the author already had. Whether this installs as a household or personal instance is the installer's choice, not declared here (# G).
 
 ## Custom container — synthetic manifest
 
@@ -331,11 +338,9 @@ storage:
 permissions:
   internet: true                      # default-on for custom apps
   lan: false
-multi_user:
-  mode: shared
 ```
 
-No managed services by default. Best-effort backup of all volumes (we can't tell cache from data without the author's input). User can edit the synthetic manifest later to add managed services, hooks, refined storage classification — same schema, same fields.
+No managed services by default. Best-effort backup of all volumes (we can't tell cache from data without the author's input). Scope (household vs. personal) is the installer's election, not synthesized into the manifest (# G). User can edit the synthetic manifest later to add managed services, hooks, refined storage classification — same schema, same fields.
 
 **Custom apps may request managed services.** Allowed, not encouraged. A power user pasting compose can manually add `services: { database: { type: postgres, version: "15" } }` and gets the same managed Postgres treatment. We document the path; we don't gate it.
 
@@ -349,8 +354,11 @@ No managed services by default. Best-effort backup of all volumes (we can't tell
 - **Permissions are declared and enforced.** Not just metadata.
 - **User content vs. app state are separate stores.** User content (`/home/<user>/Photos/`, etc.) accessed by manifest-declared bind mounts of use-case folders; app state in `/var/lib/malmo/instances/<id>/data/`. Apps reach user content by reference, never by copy.
 - **`scope: pick-subfolder`** for `user_folders` — install-time prompt for apps that should manage a subset (notes apps, media subsets). Default is provided by the manifest; user can override.
+- **`user_folders` mount at a fixed path + injected env var.** The manifest declares folder + `mode` + `scope` but no in-container path; the brain mounts each at `/malmo/<folder>` and injects `MALMO_FOLDER_<NAME>`. The app's compose maps that variable to its own library path. `mode` defaults to `read`. Same injection pattern as `MALMO_SERVICE_*` / `MALMO_DATA_DIR`.
+- **`gpu` is its own field, separate from `devices`.** `devices` passes through explicit `/dev/...` paths; `gpu: true` selects the platform GPU runtime. No-GPU box fails at the capacity check.
 - **`app_managed_user_content: true`** is the opt-in for apps that don't expose user content via use-case folders. Triggers an install-time warning. Curated store prefers apps without it.
-- **No `cap_add` for Tier-3 store apps.** Apps needing Linux capabilities belong in Tier 2.
+- **Scope (household vs. personal) is installer-elected, not a manifest field.** No `multi_user.mode`. Admins choose household or personal; members install personal only (`DASHBOARD.md`, `DECISIONS.md` 2026-05-29). Guest-sharing and household visibility are deferred and not manifest fields.
+- **No added Linux capabilities for store apps.** Override is `cap_drop: [ALL]`, adds none; admission rejects `cap_add`. Capability / `privileged` / Docker-socket needs go through Door-2 or Tier 2. A reviewed `permissions.capabilities` escape hatch is not in the v1 store schema (open in `NEXT.md`).
 - **Bind mounts only — no Docker named volumes for app data.** All data lives under the instance's `data/` dir.
 - **Hooks deferred from MVP.** When reintroduced, they will be one-shot container images, not in-container scripts.
 - **`needs_secure_context` is an install-time warning, not a routing override or install block.** Apps declare it honestly; the brain warns the user if the current URL scheme is HTTP. The URL each app uses is determined by the global toggle in Settings, not the manifest.
