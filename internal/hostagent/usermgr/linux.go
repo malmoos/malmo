@@ -243,6 +243,38 @@ func (m *LinuxUserManager) ResolveHome(username string) (home string, uid, gid i
 	return u.HomeDir, parsedUID, parsedGID, nil
 }
 
+// WellKnownIdentity implements hostagent.UserManager. Resolves the malmo-app
+// system user (UID/GID) and the malmo-shared group (GID) from the host's
+// /etc/passwd and /etc/group via os/user. These system accounts are provisioned
+// by the box build, not by host-agent; the lookups here are read-only.
+//
+// NOTE: malmo-app and malmo-shared are not present on the dev box — only the
+// fake branch runs in the dev loop. This implementation is correct for prod and
+// must compile cleanly even when the accounts are absent.
+func (m *LinuxUserManager) WellKnownIdentity() (appUID, appGID, sharedGID int, err error) {
+	u, err := user.Lookup("malmo-app")
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("lookup malmo-app user: %w", err)
+	}
+	parsedUID, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("parse malmo-app uid %q: %w", u.Uid, err)
+	}
+	parsedGID, err := strconv.Atoi(u.Gid)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("parse malmo-app gid %q: %w", u.Gid, err)
+	}
+	g, err := user.LookupGroup("malmo-shared")
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("lookup malmo-shared group: %w", err)
+	}
+	parsedSharedGID, err := strconv.Atoi(g.Gid)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("parse malmo-shared gid %q: %w", g.Gid, err)
+	}
+	return parsedUID, parsedGID, parsedSharedGID, nil
+}
+
 func runChpasswd(slug, password string) error {
 	cmd := exec.Command("chpasswd")
 	cmd.Stdin = strings.NewReader(slug + ":" + password + "\n")

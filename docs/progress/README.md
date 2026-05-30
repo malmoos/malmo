@@ -84,3 +84,4 @@ Oldest first; append new entries to the bottom.
 | [install-permissions-folders-schema.md](install-permissions-folders-schema.md) — Parse permission fields (`folders`/`devices`/`gpu`) + collapse `user_folders`/`shared_folders` into `folders` with installer-elected source (slice 1 of install consent flow) | done |
 | [host-agent-resolve-home.md](host-agent-resolve-home.md) — host-agent `GET /v1/users/{username}/home` → `{home_path, uid, gid}` (slice 2 of install consent flow) | done |
 | [install-plan-endpoint.md](install-plan-endpoint.md) — `GET /api/v1/catalog/{id}/install-plan`: role-derived scope options + per-folder source menus for the install consent screen (slice 3 of install consent flow) | done |
+| [host-agent-well-known-identity.md](host-agent-well-known-identity.md) — host-agent `GET /v1/identity/well-known` → `{malmo_app_uid, malmo_app_gid, malmo_shared_gid}` for household `user:`/shared `group_add` (slice 4a of install consent flow) | done |

@@ -91,6 +91,14 @@ func startFakeAuthAgent(t *testing.T) string {
 		})
 	})
 
+	mux.HandleFunc("GET /v1/identity/well-known", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(protocol.WellKnownIdentityResponse{
+			MalmoAppUID:    2000,
+			MalmoAppGID:    2000,
+			MalmoSharedGID: 2001,
+		})
+	})
+
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() {
@@ -121,6 +129,25 @@ func TestResolveHome(t *testing.T) {
 	_, err = c.ResolveHome(ctx, "ghost")
 	if !errors.Is(err, ErrUnknownUser) {
 		t.Fatalf("ResolveHome(unknown user) = %v; want ErrUnknownUser", err)
+	}
+}
+
+func TestWellKnownIdentity(t *testing.T) {
+	c := New(startFakeAuthAgent(t))
+	ctx := context.Background()
+
+	resp, err := c.WellKnownIdentity(ctx)
+	if err != nil {
+		t.Fatalf("WellKnownIdentity: %v", err)
+	}
+	if resp.MalmoAppUID != 2000 {
+		t.Errorf("malmo_app_uid: want 2000, got %d", resp.MalmoAppUID)
+	}
+	if resp.MalmoAppGID != 2000 {
+		t.Errorf("malmo_app_gid: want 2000, got %d", resp.MalmoAppGID)
+	}
+	if resp.MalmoSharedGID != 2001 {
+		t.Errorf("malmo_shared_gid: want 2001, got %d", resp.MalmoSharedGID)
 	}
 }
 

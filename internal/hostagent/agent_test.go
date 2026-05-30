@@ -146,18 +146,24 @@ func TestSetPasswordAndVerifyWithFakeVerifier(t *testing.T) {
 // --- stub user manager ---
 
 type stubUserMgr struct {
-	calls            []struct{ user, password string }
-	roleCalls        []struct{ user, role string }
-	deleteCalls      []string
-	resolveHomeCalls []string
-	err              error
-	roleErr          error
-	deleteErr        error
-	resolveHomeErr   error
+	calls                  []struct{ user, password string }
+	roleCalls              []struct{ user, role string }
+	deleteCalls            []string
+	resolveHomeCalls       []string
+	wellKnownIdentityCalls int
+	err                    error
+	roleErr                error
+	deleteErr              error
+	resolveHomeErr         error
+	wellKnownIdentityErr   error
 	// resolveHomeResult is returned on ResolveHome success; zero value = /home/<user>, 3000, 3000.
 	resolveHomeResult *struct {
 		home     string
 		uid, gid int
+	}
+	// wellKnownIdentityResult is returned on WellKnownIdentity success; zero value = 2000, 2000, 2001.
+	wellKnownIdentityResult *struct {
+		appUID, appGID, sharedGID int
 	}
 }
 
@@ -185,6 +191,17 @@ func (s *stubUserMgr) ResolveHome(user string) (string, int, int, error) {
 		return s.resolveHomeResult.home, s.resolveHomeResult.uid, s.resolveHomeResult.gid, nil
 	}
 	return "/home/" + user, 3000, 3000, nil
+}
+
+func (s *stubUserMgr) WellKnownIdentity() (int, int, int, error) {
+	s.wellKnownIdentityCalls++
+	if s.wellKnownIdentityErr != nil {
+		return 0, 0, 0, s.wellKnownIdentityErr
+	}
+	if s.wellKnownIdentityResult != nil {
+		return s.wellKnownIdentityResult.appUID, s.wellKnownIdentityResult.appGID, s.wellKnownIdentityResult.sharedGID, nil
+	}
+	return 2000, 2000, 2001, nil
 }
 
 func TestSetPassword_DelegatesToUserMgrWhenSet(t *testing.T) {
@@ -655,5 +672,62 @@ func TestStorageHealth_AlwaysReturns200OnSourceError(t *testing.T) {
 	sh := decodeBody[protocol.StorageHealth](t, w)
 	if sh.Findings == nil {
 		t.Fatal("findings must be non-nil slice")
+	}
+}
+
+// --- well-known-identity tests ---
+
+func TestWellKnownIdentity_FakeBranch_ReturnsFixedConstants(t *testing.T) {
+	_, mux := newTestAgent(&stubVerifier{})
+
+	w := get(t, mux, "/v1/identity/well-known")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	resp := decodeBody[protocol.WellKnownIdentityResponse](t, w)
+	if resp.MalmoAppUID != 2000 {
+		t.Errorf("malmo_app_uid: want 2000, got %d", resp.MalmoAppUID)
+	}
+	if resp.MalmoAppGID != 2000 {
+		t.Errorf("malmo_app_gid: want 2000, got %d", resp.MalmoAppGID)
+	}
+	if resp.MalmoSharedGID != 2001 {
+		t.Errorf("malmo_shared_gid: want 2001, got %d", resp.MalmoSharedGID)
+	}
+}
+
+func TestWellKnownIdentity_DelegatesToUserMgrWhenSet(t *testing.T) {
+	mgr := &stubUserMgr{wellKnownIdentityResult: &struct{ appUID, appGID, sharedGID int }{1500, 1500, 1501}}
+	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a.UserMgr = mgr
+	mux := http.NewServeMux()
+	a.Mount(mux)
+
+	w := get(t, mux, "/v1/identity/well-known")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	resp := decodeBody[protocol.WellKnownIdentityResponse](t, w)
+	if resp.MalmoAppUID != 1500 || resp.MalmoAppGID != 1500 || resp.MalmoSharedGID != 1501 {
+		t.Errorf("unexpected response: %+v", resp)
+	}
+	if mgr.wellKnownIdentityCalls != 1 {
+		t.Errorf("WellKnownIdentity not called once: called %d times", mgr.wellKnownIdentityCalls)
+	}
+}
+
+func TestWellKnownIdentity_UserMgrError_Returns500(t *testing.T) {
+	mgr := &stubUserMgr{wellKnownIdentityErr: errors.New("lookup malmo-app user: user: unknown user malmo-app")}
+	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a.UserMgr = mgr
+	mux := http.NewServeMux()
+	a.Mount(mux)
+
+	w := get(t, mux, "/v1/identity/well-known")
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", w.Code)
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte("malmo-app")) {
+		t.Errorf("response leaked system detail: %s", w.Body.String())
 	}
 }

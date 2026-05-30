@@ -117,6 +117,18 @@ func (c *Client) ResolveHome(ctx context.Context, username string) (protocol.Res
 	return out, nil
 }
 
+// WellKnownIdentity returns the fixed service-account UIDs/GIDs for malmo-app
+// and malmo-shared from the host. The brain calls this during install to build
+// user: and group_add directives for household-scope app instances.
+//
+// All non-200 responses are generic host errors (there is no unknown-user case
+// here); propagated via the standard do helper.
+func (c *Client) WellKnownIdentity(ctx context.Context) (protocol.WellKnownIdentityResponse, error) {
+	var out protocol.WellKnownIdentityResponse
+	err := c.do(ctx, "GET", "/v1/identity/well-known", nil, &out)
+	return out, err
+}
+
 func (c *Client) SystemStatus(ctx context.Context) (protocol.SystemStatus, error) {
 	var out protocol.SystemStatus
 	err := c.do(ctx, "GET", "/v1/system/status", nil, &out)

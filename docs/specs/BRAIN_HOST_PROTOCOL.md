@@ -126,6 +126,15 @@ GET /v1/users/{username}/home
 
 The brain maps `unknown-user` to an installation error (not a 500 retry) — the user was deleted between the install-plan call and the install commit. The fake host-agent returns a deterministic result derived from the username (UID in [3000, 3999]) so the dev loop is coherent without a real `/etc/passwd`. See `APP_ISOLATION.md` # User content for the personal-scope bind-mount contract this feeds.
 
+For a **household-scope** app the owner's UID doesn't apply — the instance runs as a shared service identity (`malmo-app`) and any folder electing a shared source is added to the `malmo-shared` group. The brain learns those fixed identities through a companion Pattern A endpoint:
+
+```
+GET /v1/identity/well-known
+→ 200 OK  { "malmo_app_uid": 2000, "malmo_app_gid": 2000, "malmo_shared_gid": 2001 }
+```
+
+`malmo_app_uid`/`malmo_app_gid` is the shared service identity stamped as the compose `user:` for household instances; `malmo_shared_gid` is the GID added via `group_add` whenever any folder elects the shared source (`/srv/malmo/shared/<Folder>/`), in either scope. The real host-agent resolves these from `/etc/passwd` and `/etc/group` (`os/user.Lookup("malmo-app")`, `os/user.LookupGroup("malmo-shared")`); these accounts are provisioned by the box build, not by host-agent. The fake host-agent returns fixed dev constants (`2000`/`2000`/`2001`) that sit below the per-user `[3000, 3999]` range so service identities never collide with hashed user UIDs. See `APP_ISOLATION.md` # User content and `USERS_AND_GROUPS.md` # Group reference.
+
 **Network endpoints (NetworkManager-backed).** host-agent exposes Pattern A routes that wrap NetworkManager's DBus surface:
 
 ```

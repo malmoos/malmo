@@ -62,13 +62,15 @@ type HealthSource interface {
 // password. SetRole updates Linux group membership to match the role
 // (admin → in `sudo`, member → not in `sudo`); idempotent. ResolveHome returns
 // the user's home directory path and POSIX UID/GID; returns ErrUnknownUser when
-// the user does not exist. See BRAIN_HOST_PROTOCOL.md # User info endpoints and
-// USERS_AND_GROUPS.md # Roles.
+// the user does not exist. WellKnownIdentity returns the fixed service-account
+// UIDs/GIDs for malmo-app and malmo-shared. See BRAIN_HOST_PROTOCOL.md # User
+// info endpoints and USERS_AND_GROUPS.md # Roles.
 type UserManager interface {
 	UpsertPassword(user, password string) error
 	SetRole(user, role string) error
 	DeleteUser(user string) error
 	ResolveHome(user string) (home string, uid, gid int, err error)
+	WellKnownIdentity() (appUID, appGID, sharedGID int, err error)
 }
 
 // Agent is the HTTP handler set for host-agent. It holds both the
@@ -139,6 +141,7 @@ func (a *Agent) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/auth/delete-user", a.deleteUser)
 	mux.HandleFunc("GET /v1/health/storage", a.storageHealth)
 	mux.HandleFunc("GET /v1/users/{username}/home", a.resolveHome)
+	mux.HandleFunc("GET /v1/identity/well-known", a.wellKnownIdentity)
 }
 
 func (a *Agent) publish(w http.ResponseWriter, r *http.Request) {
@@ -412,6 +415,39 @@ func (a *Agent) resolveHome(w http.ResponseWriter, r *http.Request) {
 		HomePath: "/home/" + username,
 		UID:      uid,
 		GID:      uid,
+	})
+}
+
+// wellKnownIdentity returns the fixed service-account UIDs/GIDs for the
+// malmo-app system user and the malmo-shared group.
+//
+// When UserMgr is wired (cmd/host-agent-real), delegates to WellKnownIdentity
+// which resolves the real system user/group via os/user.Lookup. When nil
+// (cmd/host-agent fake), returns fixed dev constants that sit below the
+// per-user FNV hash range [3000, 3999] so service identities don't collide.
+func (a *Agent) wellKnownIdentity(w http.ResponseWriter, r *http.Request) {
+	if a.UserMgr != nil {
+		appUID, appGID, sharedGID, err := a.UserMgr.WellKnownIdentity()
+		if err != nil {
+			slog.Error("well-known-identity: user-manager error", "err", err)
+			writeErr(w, http.StatusInternalServerError, "well-known-identity-failed", "well-known-identity failed")
+			return
+		}
+		writeJSON(w, http.StatusOK, protocol.WellKnownIdentityResponse{
+			MalmoAppUID:    appUID,
+			MalmoAppGID:    appGID,
+			MalmoSharedGID: sharedGID,
+		})
+		return
+	}
+
+	// Fake branch: fixed dev constants.
+	// 2000/2001 sit below the per-user FNV hash range [3000, 3999] so service
+	// identities don't collide with hashed user UIDs in the fake host-agent.
+	writeJSON(w, http.StatusOK, protocol.WellKnownIdentityResponse{
+		MalmoAppUID:    2000,
+		MalmoAppGID:    2000,
+		MalmoSharedGID: 2001,
 	})
 }
 
