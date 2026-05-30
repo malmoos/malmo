@@ -10,6 +10,7 @@ The brain's unit of management is a **compose project**, not an individual conta
 - Every container the brain manages carries labels: `malmo.managed=true`, `malmo.instance_id=<id>`, `malmo.manifest_id=<id>`.
 - `main_service` (from the manifest) is the service the brain routes to and watches for health. Other services in the compose are siblings managed by the same lifecycle ops.
 - Tier-3 per-user apps are N independent compose projects pointing at the same manifest+compose. Each has its own instance id, data dir, and slug.
+- **Slug derivation (locked, see `DASHBOARD.md` # instance naming):** a household (shared) instance takes the bare manifest slug `<slug>`; a personal instance takes `<slug>--<user>` (double-dash separator, owner's username trailing). Flat and single-label so it fits the one wildcard cert `*.<box-id>.malmo.network` and resolves cleanly over mDNS. Slugs and usernames may not contain `--` or produce an `xn--` label prefix.
 
 Door-1 (store) and Door-2 (custom compose) converge here: both produce a manifest+compose pair that the brain installs identically. The Door-2 path just synthesizes the manifest first.
 

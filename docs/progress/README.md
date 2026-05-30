@@ -1,24 +1,28 @@
 # Implementation progress
 
-Numbered, ADR-style entries — one per unit of work. Each records **what was
-done** and **what's next**, so the history of the build is legible without
-reading every commit. New entries get the next number; never renumber.
+ADR-style entries — one per unit of work. Each records **what was done** and
+**what's next**, so the history of the build is legible without reading every
+commit. Entries are named by kebab-slug (`<slug>.md`) and are **not numbered** —
+sequential numbering was dropped because parallel branches kept colliding on the
+next number. (Entries through 2026-05-30 carry a historical `NNNN-` prefix,
+frozen in place — don't renumber or rename them.)
 
 Every change ships with a progress entry or an update to one (see
 [`../../CLAUDE.md`](../../CLAUDE.md) # Documentation discipline).
 
 ## Up next
 
-The implementation slice queue, ordered. Each item links back to the progress entry whose "what's next" it satisfies. Pull the top item; when it lands, write the next numbered entry and re-order. Design topics (not implementation slices) live in [`../specs/NEXT.md`](../specs/NEXT.md).
+The implementation slice queue, ordered. Each item links back to the progress entry whose "what's next" it satisfies. Pull the top item; when it lands, write the next entry and re-order. Design topics (not implementation slices) live in [`../specs/NEXT.md`](../specs/NEXT.md).
 
 This is the **maintainer's critical-path** queue. Work carved off for **parallel contributors** lives in [GitHub Issues](https://github.com/onel/malmo/issues) (some items there are pulled from these "what's next" follow-ups). The two are kept from overlapping on purpose. See [`../dev/contributing.md`](../dev/contributing.md) for the contributor loop.
 
-1. **Notification follow-ups: mute settings UI + retention.** [0029](0029-notification-category-mute.md) landed per-user **per-category mute** (brain: `notification_mutes` table + read-time filter on list/count/mark-all + `GET`/`PUT`/`DELETE` mute API); [0028](0028-notification-clears-transparency.md) the member **transparency variant** and the **"all clear"** on resolve; [0027](0027-notification-web-ui.md) the dashboard bell (UI); [0026](0026-notification-read-surface.md) the read surface; [0025](0025-health-notifications.md) the write seam. Remaining: the **mute settings-toggle UI** (`WEB_UI.md`) — a per-category toggle list over the new mute API; then **retention/pruning** for `notifications` + `notification_reads` (`NEXT.md` # Observability). Follow-up from [0029](0029-notification-category-mute.md).
+1. **Notification follow-ups: mute settings UI + retention.** [notification-category-mute.md](notification-category-mute.md) landed per-user **per-category mute** (brain: `notification_mutes` table + read-time filter on list/count/mark-all + `GET`/`PUT`/`DELETE` mute API); [notification-clears-transparency.md](notification-clears-transparency.md) the member **transparency variant** and the **"all clear"** on resolve; [notification-web-ui.md](notification-web-ui.md) the dashboard bell (UI); [notification-read-surface.md](notification-read-surface.md) the read surface; [health-notifications.md](health-notifications.md) the write seam. Remaining: the **mute settings-toggle UI** (`WEB_UI.md`) — a per-category toggle list over the new mute API; then **retention/pruning** for `notifications` + `notification_reads` (`NEXT.md` # Observability). Follow-up from [notification-category-mute.md](notification-category-mute.md).
+2. **Store install UX: scope picker + warn-don't-block dialog.** The home grid landed ([0026-dashboard-chassis-home-grid.md](0026-dashboard-chassis-home-grid.md)) but Store still installs with the brain's default scope. Add the admin Household / "Just for me" picker and the duplicate-confirm dialog against the `409 duplicate-install` wire shape (pinned in [0025-owner-scoped-instances.md](0025-owner-scoped-instances.md)). Gated by the per-app member grant mechanism for the visibility half. Follow-up from [0026-dashboard-chassis-home-grid.md](0026-dashboard-chassis-home-grid.md).
 
 ## Entry template
 
 ```markdown
-# NNNN — <title>
+# <title>
 
 - **Status:** done | in progress
 - **Date:** YYYY-MM-DD
@@ -38,6 +42,9 @@ Ordered follow-ups. Update as they land.
 ```
 
 ## Index
+
+Newest last. The leading column is the historical sequence number for numbered
+entries and `—` for slug-named ones added after numbering was dropped.
 
 | # | Title | Status |
 |---|-------|--------|
@@ -64,8 +71,10 @@ Ordered follow-ups. Update as they land.
 | [0022](0022-health-persistence.md) | SQLite persistence for health issues (`health_issues` table, store write-through, boot-time restore) | done |
 | [0023](0023-luks-tpm-enrollment.md) | LUKS root + first-boot TPM enrollment + PCR-7 unseal verification | done |
 | [0024](0024-per-issue-health-audit.md) | Per-issue health audit records (`ApplyStorageFindings` returns affected keys; one `health.issue.*` record per issue) | done |
-| [0025](0025-health-notifications.md) | Health raise/clear → dashboard notifications (`notifications` table + `internal/notify` emitter; coalesced, admin-routed, resolved-on-clear) | done |
-| [0026](0026-notification-read-surface.md) | Notification read surface: `/api/v1/notifications` family + `notification_reads` per-recipient read/dismiss + `notification.created`/`.updated` SSE kinds | done |
-| [0027](0027-notification-web-ui.md) | Notification Web UI: dashboard bell + unread badge + dropdown inbox (`useNotifications()`, SSE-invalidated TanStack Query, plain CSS) | done |
-| [0028](0028-notification-clears-transparency.md) | Notification clears + member transparency variant (`members` audience, info-only member notice, "all clear" on resolve, flap retraction) | done |
-| [0029](0029-notification-category-mute.md) | Per-category notification mute (`notification_mutes` table, read-time filter on list/count/mark-all, `GET`/`PUT`/`DELETE` mute API) | done |
+| [0025](0025-owner-scoped-instances.md) | Owner-scoped app instances (owner_user_id + scope, `<slug>--<user>` derivation, install authorization, warn-don't-block) | done |
+| [0026](0026-dashboard-chassis-home-grid.md) | Dashboard frontend: stack chassis (Router/Pinia/Tailwind 4/reka-ui/lucide) + grouped Household/Yours home grid + four-item dock | done |
+| — | [health-notifications.md](health-notifications.md) | Health raise/clear → dashboard notifications (`notifications` table + `internal/notify` emitter; coalesced, admin-routed, resolved-on-clear) | done |
+| — | [notification-read-surface.md](notification-read-surface.md) | Notification read surface: `/api/v1/notifications` family + `notification_reads` per-recipient read/dismiss + `notification.created`/`.updated` SSE kinds | done |
+| — | [notification-web-ui.md](notification-web-ui.md) | Notification Web UI: dashboard bell + unread badge + dropdown inbox (`useNotifications()`, SSE-invalidated TanStack Query, plain CSS) | done |
+| — | [notification-clears-transparency.md](notification-clears-transparency.md) | Notification clears + member transparency variant (`members` audience, info-only member notice, "all clear" on resolve, flap retraction) | done |
+| — | [notification-category-mute.md](notification-category-mute.md) | Per-category notification mute (`notification_mutes` table, read-time filter on list/count/mark-all, `GET`/`PUT`/`DELETE` mute API) | done |

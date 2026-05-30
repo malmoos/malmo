@@ -80,12 +80,20 @@ func (m *Manager) instanceDir(id string) string {
 }
 
 // Install runs the install transaction for a catalog (Door-1) manifest_id.
-func (m *Manager) Install(ctx context.Context, manifestID string, progress func(step string)) (store.Instance, error) {
+// Owner identifies the user an instance is installed for. Username is the
+// trailing label in a personal instance's `<slug>--<user>` slug; UserID is the
+// stable owner reference persisted on the row.
+type Owner struct {
+	UserID   string
+	Username string
+}
+
+func (m *Manager) Install(ctx context.Context, manifestID string, owner Owner, scope string, progress func(step string)) (store.Instance, error) {
 	man, composeBytes, err := m.catalog.Load(manifestID)
 	if err != nil {
 		return store.Instance{}, err
 	}
-	return m.install(ctx, man, composeBytes, progress)
+	return m.install(ctx, man, composeBytes, owner, scope, progress)
 }
 
 // CustomSpec is a user-pasted (Door-2) app: a raw compose plus the bits the
@@ -100,18 +108,18 @@ type CustomSpec struct {
 // InstallCustom synthesizes a manifest from a pasted compose (APP_MANIFEST.md #
 // Custom container — synthetic manifest) and installs it through the same
 // transaction as catalog apps.
-func (m *Manager) InstallCustom(ctx context.Context, spec CustomSpec, progress func(step string)) (store.Instance, error) {
+func (m *Manager) InstallCustom(ctx context.Context, spec CustomSpec, owner Owner, scope string, progress func(step string)) (store.Instance, error) {
 	man, composeBytes, err := manifest.Synthesize(spec.Name, []byte(spec.Compose), spec.MainService, spec.MainPort)
 	if err != nil {
 		return store.Instance{}, err
 	}
-	return m.install(ctx, man, composeBytes, progress)
+	return m.install(ctx, man, composeBytes, owner, scope, progress)
 }
 
 // install is the shared transaction both doors converge on (APP_MANIFEST.md #
 // one model, two doors): a manifest + verbatim compose pair, whether loaded
 // from the catalog or synthesized from a pasted compose.
-func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBytes []byte, progress func(step string)) (store.Instance, error) {
+func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBytes []byte, owner Owner, scope string, progress func(step string)) (store.Instance, error) {
 	step := func(s string) {
 		if progress != nil {
 			progress(s)
@@ -126,16 +134,19 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 		return store.Instance{}, err
 	}
 
-	// 3. Allocate slug, write SQLite row (state: installing).
+	// 3. Allocate slug, write SQLite row (state: installing). Household instances
+	// take the bare slug; personal instances take `<slug>--<user>`
+	// (DASHBOARD.md # instance naming).
 	step("allocating_slug")
-	slug, err := m.allocateSlug(man)
+	slug, err := m.allocateSlug(man, scope, owner.Username)
 	if err != nil {
 		return store.Instance{}, err
 	}
 	id := newInstanceID(man.ID)
 	inst := store.Instance{
 		ID: id, ManifestID: man.ID, Name: man.Name, Slug: slug,
-		Version: man.Version, State: "installing", CreatedAt: time.Now(),
+		Version: man.Version, State: "installing",
+		OwnerUserID: owner.UserID, Scope: scope, CreatedAt: time.Now(),
 	}
 	if err := m.store.Create(inst); err != nil {
 		return store.Instance{}, fmt.Errorf("write instance row: %w", err)
@@ -446,12 +457,19 @@ func (m *Manager) loadInstanceManifest(id string) (*manifest.Manifest, error) {
 	return manifest.Parse(b)
 }
 
-func (m *Manager) allocateSlug(man *manifest.Manifest) (string, error) {
-	cands := man.PreferredSlugs
-	if len(cands) == 0 {
-		cands = []string{man.ID}
+// allocateSlug derives a free, routable slug from the manifest's preferred
+// slugs. For a personal instance the routable name is `<base>--<user>` (the
+// owner trails after a double-dash, DASHBOARD.md # instance naming); the
+// numeric suffix variants cover the same user installing the same app twice.
+func (m *Manager) allocateSlug(man *manifest.Manifest, scope, username string) (string, error) {
+	bases := man.PreferredSlugs
+	if len(bases) == 0 {
+		bases = []string{man.ID}
 	}
-	for _, base := range cands {
+	for _, base := range bases {
+		if scope == store.ScopePersonal {
+			base = base + "--" + username
+		}
 		for _, slug := range []string{base, base + "-2", base + "-3"} {
 			if reservedSlugs[slug] {
 				continue
@@ -465,7 +483,7 @@ func (m *Manager) allocateSlug(man *manifest.Manifest) (string, error) {
 			}
 		}
 	}
-	return "", fmt.Errorf("no free slug among %v", cands)
+	return "", fmt.Errorf("no free slug for %s", man.ID)
 }
 
 func (m *Manager) emitState(inst store.Instance, prev string) {

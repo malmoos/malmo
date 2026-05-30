@@ -1,4 +1,4 @@
-# 0029 — Per-category notification mute
+# Per-category notification mute
 
 - **Status:** done
 - **Date:** 2026-05-29
@@ -6,7 +6,7 @@
 
 ## What was done
 
-Implemented the brain-side of **per-user, per-category mute** (`NOTIFICATIONS.md` # Configuration) — the last v1 notification-config item. Backend only (table + store filter + API + tests); the settings-toggle UI is the follow-up slice, mirroring how the read surface ([0026](0026-notification-read-surface.md)) landed before its bell UI ([0027](0027-notification-web-ui.md)).
+Implemented the brain-side of **per-user, per-category mute** (`NOTIFICATIONS.md` # Configuration) — the last v1 notification-config item. Backend only (table + store filter + API + tests); the settings-toggle UI is the follow-up slice, mirroring how the read surface ([notification-read-surface.md](notification-read-surface.md)) landed before its bell UI ([notification-web-ui.md](notification-web-ui.md)).
 
 - **`notification_mutes` table** (`internal/store/store.go`). Keyed `(user_id, category)` — the PK alone fully models the mute. Presence of a row means the category is muted for that user; absence means on — so a new user has no rows and sees everything ("everything on by default"). Unmute is a `DELETE`. `ON DELETE CASCADE` on `user_id` cleans up when a user is deleted. Created in the `migrate()` DDL block — a fresh additive table, no `ALTER`/backfill needed.
 - **Mute is a read-time filter, never emit-time suppression** (`internal/store/notify.go`). A box-wide `admins`/`members` notification is one row shared by many recipients, so it can't be withheld per-user at write time. A new `notificationMuteClause()` (`AND n.category NOT IN (SELECT category FROM notification_mutes WHERE user_id = ?)`) is threaded into the three aggregate read queries — `ListNotificationsForRecipient`, `CountUnreadNotifications`, and `MarkAllNotificationsRead`. The per-id `GetNotification` path (used by mark-read/dismiss) is deliberately **mute-agnostic**, so a user can still act on a specific notification in a muted category (e.g. one they read before muting).
@@ -22,7 +22,7 @@ Tests: `internal/store` covers hide-from-list/count, unmute-restores, per-user i
 - `NOTIFICATIONS.md` # Configuration — realized: per-user, per-category mute; everything on by default; presence-row model; read-time filter on list/count/mark-all. Added a "Delivery (as implemented)" note in the same change.
 - `NOTIFICATIONS.md` # Knock-ons (`BRAIN_UI_PROTOCOL.md`) — the `/api/v1/notifications` family's "per-category mute" endpoints are now real (`GET` list, `PUT`/`DELETE` toggle).
 - `NOTIFICATIONS.md` # Locked decisions — "Per-user, per-category mute; everything on by default. No quiet hours / severity tuning in v1." exercised exactly; severity stays non-tunable.
-- Reuses the locked audience model and `notification_reads` read-state join from [0026](0026-notification-read-surface.md)/[0028](0028-notification-clears-transparency.md) unchanged.
+- Reuses the locked audience model and `notification_reads` read-state join from [notification-read-surface.md](notification-read-surface.md)/[notification-clears-transparency.md](notification-clears-transparency.md) unchanged.
 
 ## Known gaps & deviations
 

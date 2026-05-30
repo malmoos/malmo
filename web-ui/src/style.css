@@ -1,0 +1,36 @@
+/* Tailwind 4 entry (WEB_UI.md: CSS-based config via @theme, no tailwind.config.js).
+   Design tokens follow the shadcn-vue variable convention so shadcn components
+   added later via the CLI inherit the palette. Light theme only for now; the
+   dark-mode trigger is a downstream decision (WEB_UI.md). */
+@import "tailwindcss";
+
+@theme {
+  /* Calm-launcher palette: near-white canvas, muted ink, one quiet accent. */
+  --color-background: #f6f6f7;
+  --color-foreground: #1a1a1a;
+  --color-card: #ffffff;
+  --color-card-foreground: #1a1a1a;
+  --color-muted: #eeeeef;
+  --color-muted-foreground: #6b7280;
+  --color-border: #e6e6e8;
+  --color-accent: #2b6cb0;
+  --color-accent-foreground: #ffffff;
+  --color-destructive: #a11;
+  --color-success: #1b6b34;
+
+  --radius: 0.75rem;
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+}

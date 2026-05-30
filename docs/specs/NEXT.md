@@ -17,20 +17,7 @@ When a topic is **decided**, remove its entry here and add the rationale to `DEC
 
 ## Tier 1 — Blocking
 
-*(Last audit: 2026-05-29 — promoted the dashboard-shell and file-manager gaps to Tier 1 after an Umbrel-comparison pass. The infrastructure spine (boot/storage/health/updates/auth) is well-specified; the gaps are now at the product surface — the things the user touches after the box boots. The two items below are what make malmo "work end to end" as a product rather than a control plane. Implementation slice queue lives in [`../progress/README.md`](../progress/README.md) # Up next.)*
-
-### Dashboard shell / home IA — no doc owns the logged-in product surface
-
-Every subsystem we've specced *feeds* the dashboard, but nothing defines what the dashboard **is**. `WEB_UI.md` is deliberately stack-and-deploy only (separate container, deploy model, stack, degraded-mode surfacing) — it does not own the logged-in information architecture. Unowned today:
-
-- **Home screen / app launcher** — the app grid, the "open app" interaction, what a tile shows (icon, status, per-user vs. shared), empty state.
-- **Global navigation / IA** — where Apps, Store, Files, Activity (audit), Settings, Users, the notification bell, and the live system-resources dropdown sit relative to each other.
-- **Search**, and the first-arrival experience (the existing Tier-2 "Dashboard at first arrival" entry is a fragment of this larger whole — fold it in when this is opened).
-- **Widgets** — Umbrel apps contribute home-screen widgets; malmo has no concept. Given "the app ecosystem is the strongest pillar," widgets are how apps earn home-screen presence. At minimum pin a yes/no for v1.
-
-**Proposed home:** a new `DASHBOARD.md` (or `SHELL.md`) owning the logged-in IA; `WEB_UI.md` stays the stack/deploy doc. Folds in the Tier-2 "Dashboard at first arrival" entry.
-**Context:** `WEB_UI.md`, `FIRST_RUN.md` (Phase 3), `LOCAL_ANALYTICS.md` (top-bar live-resources dropdown), `NOTIFICATIONS.md` (the bell), `AUTH.md` (role-gated nav).
-**Why Tier 1:** this is the product. It's the surface the whole spine exists to serve, and the one piece of "boots and works end to end" that has no owning doc. Prior art: Umbrel's entire `ui` package + home-screen/widgets model; Synology DSM's desktop. (Compare: Umbrel ships `widgets` as a first-class `umbreld` module.)
+*(Last audit: 2026-05-29 — the dashboard-shell gap is now **resolved** by the new `DASHBOARD.md` (logged-in IA + the owner-scoped apps model; see `DECISIONS.md` 2026-05-29 # App instances are owner-scoped). That also resolved the apps model, the widgets yes/no (no), and the per-user-instance naming scheme. The file-manager gap below remains the one Tier-1 product-surface item. The infrastructure spine (boot/storage/health/updates/auth) is well-specified. Implementation slice queue lives in [`../progress/README.md`](../progress/README.md) # Up next.)*
 
 ### In-dashboard file manager — "files are first-class" has no in-product browse surface
 
@@ -72,13 +59,6 @@ The actual paste-compose UX. Field-by-field interaction, main-port inference, wh
 
 **Context:** `APP_MANIFEST.md` ("Custom container — synthetic manifest").
 **Why Tier 2:** Door 2 is the bridge to the "tinkerer adoption" audience. The synthetic-manifest mechanic is sketched; the UX isn't.
-
-### Dashboard at first arrival
-
-Empty, "get started" suggestions, or a starter bundle. Tradeoffs: friction vs. opinionated push vs. discovery. **Folds into the Tier-1 "Dashboard shell / home IA" entry** — kept here as a pointer until that doc is opened, since first-arrival is the empty state of the home screen.
-
-**Context:** `FIRST_RUN.md` (Phase 3), Tier-1 "Dashboard shell / home IA".
-**Why Tier 2:** first-impression UX; gates the wizard-to-steady-state hand-off.
 
 ### Store catalog curation policy
 
@@ -310,7 +290,8 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Per-app kill switch in `catalog.json` (distinct from `RELEASE_MANIFEST.md`'s `rollback_to`, which targets brain/UI versions). For "CVE dropped in app X, stop it everywhere on next catalog refresh." `APP_STORE.md`, `APP_LIFECYCLE.md`.
 - Catalog removal / delisted-app behavior — installed instances when an app is pulled (keep-running-with-warning vs. force-uninstall vs. read-only). `APP_STORE.md`, `APP_LIFECYCLE.md`.
 - App dependency model — pin "no" (managed services are the answer) so authors don't build the assumption. `APP_MANIFEST.md`.
-- User-driven multi-instance of the same app (distinct from Tier-3 per-user instances) — "two Nextclouds for testing." Pin "no" or design. `APP_LIFECYCLE.md`, `APP_MANIFEST.md`.
+- *(Resolved 2026-05-29 — user-driven multi-instance is **yes**: duplicate installs warn but don't block (`DASHBOARD.md` # warn, don't block). Each becomes a personal instance with its own owner/slug/data. The remaining sub-question — two instances owned by the *same* user — folds into the same machinery; pin it if it ever bites.)*
+- Same-user repeat-install slug cap + error UX. `allocateSlug` (`internal/lifecycle`, slice [0025]) tries only `<slug>--<user>`, `-2`, `-3`, then fails *inside the install job* with an opaque "no free slug" error. Two open bits: (a) the cap of three same-app personal copies per user is arbitrary and tight for power users; (b) exhaustion should surface as a clear pre-job `422`/`409`, not a mid-job failure. `APP_LIFECYCLE.md`, `DASHBOARD.md`.
 - App publisher identity / verified-author badge surface (the *mechanism* folds into manifest signing above; this is the catalog-side UX). `APP_STORE.md`.
 - Per-app HTTP health-probe declaration in the manifest (beyond Docker `HEALTHCHECK`), so the brain reports "responding" vs. "up but unresponsive." `APP_MANIFEST.md`, `HEALTH.md`.
 - Container vulnerability scanning at catalog publish (Trivy/Grype in CI on every PR). `APP_STORE.md`.
@@ -414,7 +395,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Whether DLNA stays in v1 or gets cut. `SERVICE_PROVISIONING.md`.
 
 **Control plane**
-- Per-user instance hostname strategy — `<slug>-<user>.malmo.local` vs. `<user>.<slug>.malmo.local`. The publish mechanism is settled (`DISCOVERY.md`: one Avahi service file per name, written by the reconciler); only the slug-shape choice is open. `APP_LIFECYCLE.md`, `DISCOVERY.md`.
+- *(Resolved 2026-05-29 — per-user instance naming is locked as `<slug>--<user>` (bare `<slug>` for household), flat single-label, forced by the wildcard-cert + mDNS constraints. See `DASHBOARD.md` # instance naming and `DECISIONS.md` 2026-05-29.)*
 - Re-import path for archived ("keep data") instances after uninstall. `APP_LIFECYCLE.md`.
 
 **Build & distribution**

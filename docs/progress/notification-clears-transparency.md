@@ -1,4 +1,4 @@
-# 0028 — Notification clears + member transparency variant
+# Notification clears + member transparency variant
 
 - **Status:** done
 - **Date:** 2026-05-29
@@ -6,7 +6,7 @@
 
 ## What was done
 
-Completed the brain-side emit path for the two notification follow-ups that the bell already knew how to render (slice [0027](0027-notification-web-ui.md)): the **member transparency variant** and the **"all clear" on resolve** (`NOTIFICATIONS.md` # Member transparency variant, # Clears). Backend-only — no web-ui change.
+Completed the brain-side emit path for the two notification follow-ups that the bell already knew how to render (slice [notification-web-ui.md](notification-web-ui.md)): the **member transparency variant** and the **"all clear" on resolve** (`NOTIFICATIONS.md` # Member transparency variant, # Clears). Backend-only — no web-ui change.
 
 - **Member transparency variant** (`internal/notify/notify.go`). On a raise of a box-blocking storage drive issue (`data-drive-missing`, `data-drive-wrong`, `data-drive-readonly`), the notifier now emits — alongside the admin actionable notification — an **info-only, non-actionable** notice broadcast to members: summary "Saving is paused", body pointing at the admin, no fix link. Gated by a per-rule `memberTransparency` flag on the curated allowlist, **not** by the issue's `blocks_writes` flag: `canary-mismatch` / `mergerfs-assembly-failed` also block writes but stay admin-only (they are System/state plumbing, not the member-legible "your saving is paused" condition — matching the spec's allowlist table exactly).
 - **New `members` audience** (`internal/notify`, `internal/store`, `internal/api`). Added `AudienceMembers` (+ `VariantTransparency`) — a class broadcast that is the mirror of `admins`: visible to every non-admin, to no admin (admins get the actionable copy). The store's single `notificationVisibilityClause` chokepoint now routes members to `'members'` rows; the API's per-id visibility guard (404-not-403) accepts a member acting on a `members` row. Per-recipient read/dismiss rides the existing `notification_reads` join unchanged. No schema migration — `audience` was already free `TEXT`.
@@ -22,7 +22,7 @@ Tests: `internal/notify` gained focused coverage for the member notice, the non-
 - `NOTIFICATIONS.md` # Member transparency variant — realized: info-only, non-actionable, broadcast to members; actionable copy to admins; curated allowlist gate; clears with the issue.
 - `NOTIFICATIONS.md` # Clears — realized: resolve-and-emit-all-clear; original kept resolved, not deleted ("the timeline stays honest").
 - `NOTIFICATIONS.md` # Routing — `members` added as the transparency broadcast audience (reconciled the model's `audience` enum and the Recipients list in the spec, same change).
-- Reuses the locked per-recipient read-state model (`notification_reads`) and the coalescing/dedup invariant from slices [0025](0025-health-notifications.md)/[0026](0026-notification-read-surface.md) without changing them.
+- Reuses the locked per-recipient read-state model (`notification_reads`) and the coalescing/dedup invariant from slices [health-notifications.md](health-notifications.md)/[notification-read-surface.md](notification-read-surface.md) without changing them.
 
 ## Known gaps & deviations
 

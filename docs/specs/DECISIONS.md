@@ -21,6 +21,27 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-05-29 — App instances are owner-scoped; shared is an admin-elected mode (+ the `<slug>--<user>` naming scheme)
+
+**Previously:** `SPEC.md` # Accounts & users said *"single shared app instance is the default for shared use cases"* — one Immich, one grocery list, every household member logs into the same instance. Per-user instances were a deferred Tier-3 concept (`APP_LIFECYCLE.md:12`), and `NEXT.md` carried the dashboard apps model and the per-user-instance hostname scheme as open items.
+
+**Now:** **Every app instance has an owner.** A *household* instance is admin-owned and shared (one instance, app-internal multi-user separates people inside it). A *personal* instance is owned by one user, with its own data dir, route, managed-service DB, and folder bindings (it binds the owner's `~/` folders only). Admins choose Household or personal at install; members can only create personal instances. Duplicate installs **warn, don't block** ("Jellyfin is already installed as a household app — install your own copy?"). This is now the v1 model, owned by the new `DASHBOARD.md`, not deferred.
+
+The per-user instance **naming scheme is locked**: bare `<slug>` for household, `<slug>--<user>` (double-dash) for personal — flat, single-label.
+
+**Why:**
+- **Files-first-class forces it.** A single shared Immich would have to read every user's `~/Photos`, violating the per-user `0750` isolation in `STORAGE.md`. A personal Immich binds only its owner's `~/Photos`. Owner-scoping *resolves* the tension instead of creating it. The user's own example — "my photo backup ≠ my partner's" — is the canonical case.
+- **The plumbing already exists.** Per-user instances are exactly `APP_LIFECYCLE.md:12`'s N-compose-projects shape, and managed services are already per-instance (`SERVICE_PROVISIONING.md`: a DB + role per instance inside the shared Postgres server). The marginal cost over the shared-only floor is an owner column + an install guard + a naming decision + a two-group grid — not a new subsystem. Building shared-only first would bake single-tenant assumptions into the grid, install flow, and storage bindings, making this a painful retrofit.
+- **It's the differentiator.** A May-2026 scan (Umbrel single-user; ZimaOS apps owner-bound; TrueNAS multi-instance is manual admin charts; Synology multi-instance is manual Docker) shows *nobody* ships identity-driven per-user app instances — everyone punts on the routing/cert/DB plumbing malmo already has. Squarely on "app ecosystem is the strongest pillar."
+
+**Why `<slug>--<user>` and not the prettier `<user>.<slug>`:** the cert architecture decides it. `MALMO_NETWORK.md` (27, 138–139) issues **one** wildcard cert `*.<box-id>.malmo.network`, and a TLS wildcard spans exactly one label. `immich--alex.<box-id>…` is one label (covered); `alex.immich.<box-id>…` is two (not covered → a per-app wildcard issued on every install, killing the "one cert, renew quietly" model). mDNS agrees — multi-label `.local` names resolve inconsistently on Android/Windows. Double-dash because kebab-case slugs make a single `-` ambiguous. Constraint: slugs/usernames may not contain `--` or produce an `xn--` prefix.
+
+**Deferred (unchanged):** per-user resource quotas (surfaced as a tightness *warning*, not a cap), cross-user shared-folder access for personal instances (`APP_ISOLATION.md` carve-out), and SSO (which would later make shared the *encouraged* path for multi-user-capable apps).
+
+**Affected docs:** `DASHBOARD.md` (new — owns the apps model, naming scheme, and the logged-in IA); `SPEC.md` # Accounts & users (flipped from "shared is the default" to "instances are owner-scoped"); `docs/README.md` (Frontend list); `NEXT.md` (Tier-1 dashboard-shell item removed; Tier-2 first-arrival folded; control-plane per-user-instance-hostname open item resolved; per-user-instance work re-tiered from deferred to v1); `APP_LIFECYCLE.md` + `DISCOVERY.md` (slug-derivation note).
+
+---
+
 ## 2026-05-29 — Health detector catalog: who measures what, and the SMART-don't-block call
 
 **Previously:** `HEALTH.md` locked the issue *model* and listed ~15 issue *types* in a taxonomy table, but never said how any of them is detected — it deferred debounce/retry policy to "inside each detector" and named no thresholds, cadences, or data sources. The concrete check set was a `NEXT.md` Tier-4 open item.

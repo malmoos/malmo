@@ -129,8 +129,11 @@ Two roles in v1 (`FIRST_RUN.md` # Identity):
 | Configure box (network, storage, telemetry) | ✅    | ❌     |
 | Install Tier-2 apps                         | ✅    | ❌     |
 | Access Tier-2 admin UIs                     | ✅    | ❌     |
-| Install Tier-3 apps                         | ✅    | ✅ (per-user) |
-| Use Tier-3 apps                             | ✅    | ✅ (per-user) |
+| Install Tier-3 apps as **household** (shared, admin-owned) | ✅ | ❌ |
+| Install Tier-3 apps as **personal** (per-user instance)    | ✅ | ✅ |
+| Use Tier-3 apps                             | ✅    | ✅ (own + permitted household) |
+
+App instances are **owner-scoped** (`DASHBOARD.md` # the apps model): an admin elects household vs. personal at install; a member can only create personal instances they own. Duplicate installs warn but don't block. This is an authorization rule, enforced server-side like the rest of this table.
 
 **Enforcement:** role is checked **server-side in the brain** on every authenticated request. The UI also hides admin-only sections from members — defense in depth, not the security boundary.
 
