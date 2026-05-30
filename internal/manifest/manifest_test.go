@@ -24,6 +24,25 @@ main_port: 80
 	}
 }
 
+func TestParseRejectsNonKebabSlugs(t *testing.T) {
+	// Each slug must stay parseable in the `<slug>--<user>` scheme
+	// (DASHBOARD.md # instance naming).
+	for _, bad := range []string{"whoami-", "-whoami", "who--ami", "xn--abc", "Whoami", "who_ami"} {
+		src := []byte(`
+id: ` + bad + `
+manifest_version: 1
+name: Whoami
+version: "1.10"
+compose_file: compose.yml
+main_service: whoami
+main_port: 80
+`)
+		if _, err := Parse(src); err == nil {
+			t.Fatalf("slug %q accepted, want rejection", bad)
+		}
+	}
+}
+
 func TestParseRejectsMissingFields(t *testing.T) {
 	base := map[string]string{
 		"id":               "whoami",

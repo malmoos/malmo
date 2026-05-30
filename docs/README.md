@@ -5,8 +5,7 @@ The map of all documentation. Three homes:
 - **[`specs/`](specs/)** — design source of truth. What malmo *is* and the
   locked decisions behind it. Read the relevant spec end-to-end before changing
   behavior in that area.
-- **[`progress/`](progress/)** — implementation log. Numbered, ADR-style entries
-  recording **what was done** and **what's next** for each unit of work.
+- **[`progress/`](progress/)** — implementation log. ADR-style entries recording **what was done** and **what's next** for each unit of work.
 - **[`dev/`](dev/)** — developer how-to. Running locally, code-level
   architecture, tooling.
 
@@ -30,7 +29,7 @@ Orientation:
 - **Start here:** `SPEC.md`, `CONTROL_PLANE.md`.
 - **Apps:** `APP_LIFECYCLE.md`, `APP_MANIFEST.md`, `APP_STORE.md`, `APP_ISOLATION.md`, `SERVICE_PROVISIONING.md`.
 - **Protocols:** `BRAIN_UI_PROTOCOL.md`, `BRAIN_HOST_PROTOCOL.md`.
-- **Frontend:** `WEB_UI.md`.
+- **Frontend:** `WEB_UI.md` (stack/deploy), `DASHBOARD.md` (logged-in IA + the owner-scoped apps model).
 - **System:** `STORAGE.md`, `BOOT.md`, `DISCOVERY.md`, `MALMO_NETWORK.md`, `TIME.md`, `USERS_AND_GROUPS.md`, `AUTH.md`.
 - **Operations:** `UPDATES.md`, `RELEASE_MANIFEST.md`, `BUILD.md`, `TESTING.md`, `HEALTH.md`, `LOGGING.md`, `TELEMETRY.md`, `LOCAL_ANALYTICS.md`, `NOTIFICATIONS.md`, `FIRST_RUN.md`.
 - **Cross-cutting:** `THREAT_MODEL.md`, `DECISIONS.md` (decision log), `NEXT.md` (open questions).
@@ -40,16 +39,25 @@ Orientation:
 See [`progress/README.md`](progress/README.md) for the full index and the
 **Up next** queue (next implementation slices). Latest:
 
-- [`0026-notification-read-surface.md`](progress/0026-notification-read-surface.md)
+- [`notification-read-surface.md`](progress/notification-read-surface.md)
   — the read half of the bell: `/api/v1/notifications` family (audience-scoped
   list, unread-count, mark-read, mark-all-read, dismiss), the
   `notification_reads` per-recipient join, and `notification.created` /
   `notification.updated` SSE kinds. Backend only — Vue bell deferred.
-- [`0025-health-notifications.md`](progress/0025-health-notifications.md)
+- [`health-notifications.md`](progress/health-notifications.md)
   — first consumer of the notification seam: `notifications` SQLite table +
   `internal/notify` emitter. Health raise → admin-routed notification
   (coalesced by `dedup_key`); clear → resolved. Write seam only — bell API,
   SSE, and read-state deferred.
+- [`0026-dashboard-chassis-home-grid.md`](progress/0026-dashboard-chassis-home-grid.md)
+  — `web-ui` brought up to the `WEB_UI.md` stack (Vue Router, Pinia, Tailwind 4,
+  reka-ui, lucide); the dev screen replaced with the `DASHBOARD.md` shell: the
+  grouped Household / Yours home grid + four-item dock against the scoped
+  `GET /apps`. First dashboard frontend slice.
+- [`0025-owner-scoped-instances.md`](progress/0025-owner-scoped-instances.md)
+  — `owner_user_id` + `scope` on instances, `<slug>--<user>` slug derivation,
+  install authorization (member→personal, admin→choice), warn-don't-block
+  duplicate installs, caller-scoped app reads. First dashboard backend slice.
 - [`0024-per-issue-health-audit.md`](progress/0024-per-issue-health-audit.md)
   — `ApplyStorageFindings` returns affected `IssueKey`s; one per-issue
   `health.issue.raised`/`cleared` audit record (`target_kind: health_issue`)
@@ -60,6 +68,8 @@ See [`progress/README.md`](progress/README.md) for the full index and the
 - [`0021-qemu-medium-lane-scaffolding.md`](progress/0021-qemu-medium-lane-scaffolding.md)
   — QEMU+swtpm medium-lane scaffolding (real kernel + real systemd + TPM
   plumbing); runway for the LUKS/TPM slice.
+- [`0020-nspawn-boot-chain-lane.md`](progress/0020-nspawn-boot-chain-lane.md)
+  — nspawn `--boot` of `dist/systemd/` units + dependency-shape assertions.
 - [`0019-boot-pipeline-units.md`](progress/0019-boot-pipeline-units.md)
   — boot pipeline slice #1: `malmo-storage-ready.target`,
   `malmo-storage-verify` reporter, host-agent `GET /v1/health/storage`,

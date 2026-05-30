@@ -28,9 +28,15 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ code: "unknown", message: res.statusText }));
+    const err = await res.json().catch(() => ({}));
     if (res.status === 401 && onUnauthenticated) onUnauthenticated();
-    throw new ApiError(err.code ?? "unknown", err.message ?? res.statusText, res.status);
+    // The brain uses huma's default error model: { detail, title, errors:[{message}] }.
+    // Some endpoints (jobs) carry an explicit { code, message }. Accept both, and
+    // surface the first per-field message (e.g. the duplicate-install summary).
+    const code = err.code ?? err.detail ?? "unknown";
+    const message =
+      err.message ?? err.errors?.[0]?.message ?? err.detail ?? err.title ?? res.statusText;
+    throw new ApiError(code, message, res.status);
   }
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
 }
@@ -65,6 +71,8 @@ export interface CatalogEntry {
   version: string;
 }
 
+export type Scope = "household" | "personal";
+
 export interface Instance {
   id: string;
   manifest_id: string;
@@ -73,6 +81,9 @@ export interface Instance {
   version: string;
   state: string;
   url: string;
+  owner_user_id: string;
+  owner_username: string;
+  scope: Scope;
 }
 
 export interface Job {

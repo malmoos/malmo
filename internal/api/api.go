@@ -115,16 +115,19 @@ func (s *Server) register(api huma.API) {
 // --- DTOs ----------------------------------------------------------------
 
 type InstanceDTO struct {
-	ID         string `json:"id"`
-	ManifestID string `json:"manifest_id"`
-	Name       string `json:"name"`
-	Slug       string `json:"slug"`
-	Version    string `json:"version"`
-	State      string `json:"state"`
-	URL        string `json:"url"`
+	ID            string `json:"id"`
+	ManifestID    string `json:"manifest_id"`
+	Name          string `json:"name"`
+	Slug          string `json:"slug"`
+	Version       string `json:"version"`
+	State         string `json:"state"`
+	URL           string `json:"url"`
+	OwnerUserID   string `json:"owner_user_id"`
+	OwnerUsername string `json:"owner_username"`
+	Scope         string `json:"scope"`
 }
 
-func toDTO(i store.Instance) InstanceDTO {
+func toDTO(i store.Instance, ownerUsername string) InstanceDTO {
 	url := ""
 	if i.Slug != "" {
 		url = "http://" + i.Slug + ".malmo.local"
@@ -132,6 +135,7 @@ func toDTO(i store.Instance) InstanceDTO {
 	return InstanceDTO{
 		ID: i.ID, ManifestID: i.ManifestID, Name: i.Name, Slug: i.Slug,
 		Version: i.Version, State: i.State, URL: url,
+		OwnerUserID: i.OwnerUserID, OwnerUsername: ownerUsername, Scope: i.Scope,
 	}
 }
 
@@ -160,9 +164,17 @@ func (s *Server) listApps(ctx context.Context, _ *struct{}) (*struct {
 		Apps []InstanceDTO `json:"apps"`
 	}
 }, error) {
-	insts, err := s.store.List()
+	id, ok := auth.FromContext(ctx)
+	if !ok {
+		return nil, huma.Error401Unauthorized("unauthenticated")
+	}
+	insts, err := s.store.ListVisibleTo(id.User.ID, id.IsAdmin())
 	if err != nil {
 		return nil, huma.Error500InternalServerError("list failed", err)
+	}
+	names, err := s.ownerUsernames()
+	if err != nil {
+		return nil, huma.Error500InternalServerError("owner lookup failed", err)
 	}
 	out := &struct {
 		Body struct {
@@ -171,7 +183,7 @@ func (s *Server) listApps(ctx context.Context, _ *struct{}) (*struct {
 	}{}
 	out.Body.Apps = []InstanceDTO{}
 	for _, i := range insts {
-		out.Body.Apps = append(out.Body.Apps, toDTO(i))
+		out.Body.Apps = append(out.Body.Apps, toDTO(i, names[i.OwnerUserID]))
 	}
 	return out, nil
 }
@@ -179,6 +191,10 @@ func (s *Server) listApps(ctx context.Context, _ *struct{}) (*struct {
 func (s *Server) getApp(ctx context.Context, in *struct {
 	ID string `path:"id"`
 }) (*struct{ Body InstanceDTO }, error) {
+	id, ok := auth.FromContext(ctx)
+	if !ok {
+		return nil, huma.Error401Unauthorized("unauthenticated")
+	}
 	i, err := s.store.Get(in.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, huma.Error404NotFound("no such app")
@@ -186,23 +202,66 @@ func (s *Server) getApp(ctx context.Context, in *struct {
 	if err != nil {
 		return nil, huma.Error500InternalServerError("get failed", err)
 	}
-	return &struct{ Body InstanceDTO }{Body: toDTO(i)}, nil
+	// Leak guard: a member asking for someone else's personal instance gets 404
+	// (not 403), so existence of another user's app isn't disclosed.
+	if !canSee(id, i) {
+		return nil, huma.Error404NotFound("no such app")
+	}
+	owner, err := s.store.GetUser(i.OwnerUserID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, huma.Error500InternalServerError("owner lookup failed", err)
+	}
+	return &struct{ Body InstanceDTO }{Body: toDTO(i, owner.Username)}, nil
+}
+
+// canSee mirrors store.ListVisibleTo's visibility predicate for a single
+// instance: admins see all; members see household instances and their own
+// personal instances. KEEP IN SYNC with store.ListVisibleTo's SQL WHERE clause
+// and with checkDuplicate/uninstallApp's callers — when per-app member grants
+// land (NEXT.md), both this and the SQL must change together.
+func canSee(id auth.Identity, i store.Instance) bool {
+	return id.IsAdmin() || i.Scope == store.ScopeHousehold || i.OwnerUserID == id.User.ID
+}
+
+// ownerUsernames maps user id -> username for rendering instance ownership in
+// the list response. One query; N is small at v1 user counts.
+func (s *Server) ownerUsernames() (map[string]string, error) {
+	users, err := s.store.ListUsers()
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]string, len(users))
+	for _, u := range users {
+		m[u.ID] = u.Username
+	}
+	return m, nil
 }
 
 func (s *Server) installApp(ctx context.Context, in *struct {
 	Body struct {
 		ManifestID string `json:"manifest_id"`
+		Scope      string `json:"scope,omitempty"`   // "household" | "personal"; default household for admins, forced personal for members
+		Confirm    bool   `json:"confirm,omitempty"` // proceed past the duplicate-install warning
 	}
 }) (*struct{ Body Job }, error) {
 	manifestID := in.Body.ManifestID
 	if manifestID == "" {
 		return nil, huma.Error422UnprocessableEntity("manifest_id is required")
 	}
+	owner, scope, err := s.resolveOwnerScope(ctx, in.Body.Scope, audit.ActionAppInstall, map[string]any{"manifest_id": manifestID})
+	if err != nil {
+		return nil, err
+	}
+	if err := s.checkDuplicate(ctx, manifestID, in.Body.Confirm, audit.ActionAppInstall); err != nil {
+		return nil, err
+	}
 	jobCtx := ctx // capture for audit inside the job goroutine
 	job := s.jobs.run("app-install", func(job *Job) (map[string]any, error) {
-		inst, err := s.life.Install(context.Background(), manifestID, job.setStep)
+		inst, err := s.life.Install(context.Background(), manifestID, owner, scope, job.setStep)
 		target := audit.Target{Kind: "app"}
-		meta := map[string]any{"manifest_id": manifestID}
+		// confirm records a deliberate override of the duplicate-install warning,
+		// so the Activity view can see "installed a second copy on purpose".
+		meta := map[string]any{"manifest_id": manifestID, "scope": scope, "owner_user_id": owner.UserID, "confirm": in.Body.Confirm}
 		if err == nil {
 			target.ID = inst.ID
 			meta["slug"] = inst.Slug
@@ -216,12 +275,83 @@ func (s *Server) installApp(ctx context.Context, in *struct {
 	return &struct{ Body Job }{Body: job.snapshot()}, nil
 }
 
+// resolveOwnerScope applies the install authorization table (DASHBOARD.md #
+// install authorization): members always install a personal instance owned by
+// themselves; admins choose household (the default) or personal. It audits a
+// failed attempt when a member explicitly requests a household install.
+// meta is the action-specific audit metadata (e.g. {"manifest_id": …} for a
+// catalog install, {"name": …} for a custom one); resolveOwnerScope adds the
+// requested scope before recording a rejected attempt.
+func (s *Server) resolveOwnerScope(ctx context.Context, requested, action string, meta map[string]any) (lifecycle.Owner, string, error) {
+	id, ok := auth.FromContext(ctx)
+	if !ok {
+		return lifecycle.Owner{}, "", huma.Error401Unauthorized("unauthenticated")
+	}
+	owner := lifecycle.Owner{UserID: id.User.ID, Username: id.User.Username}
+	scope := requested
+	if id.IsAdmin() {
+		if scope == "" {
+			scope = store.ScopeHousehold
+		}
+	} else {
+		if scope == store.ScopeHousehold {
+			meta["scope"] = scope
+			s.auditor.Record(ctx, action, audit.Target{Kind: "app"}, meta, false)
+			return lifecycle.Owner{}, "", huma.Error403Forbidden("members can only install personal instances")
+		}
+		scope = store.ScopePersonal
+	}
+	if scope != store.ScopeHousehold && scope != store.ScopePersonal {
+		return lifecycle.Owner{}, "", huma.Error422UnprocessableEntity("scope must be household or personal")
+	}
+	return owner, scope, nil
+}
+
+// checkDuplicate implements warn-don't-block (DASHBOARD.md # warn, don't block).
+// This is an API-layer UX guarantee, NOT a lifecycle invariant: lifecycle.Install
+// does not enforce it, so any non-API caller (a CLI, reconciler, import script)
+// installs without the warning by design. Duplicate installs are always allowed;
+// this only gates the interactive confirm step.
+// When an instance of this manifest already exists that the caller could see
+// (a household instance or their own personal one) and they haven't confirmed,
+// return 409 "duplicate-install" carrying a summary of the existing copies so
+// the UI can offer "open it" or "install my own copy". A confirmed retry skips
+// the check.
+func (s *Server) checkDuplicate(ctx context.Context, manifestID string, confirm bool, action string) error {
+	if confirm {
+		return nil
+	}
+	id, _ := auth.FromContext(ctx)
+	existing, err := s.store.InstancesByManifest(manifestID)
+	if err != nil {
+		return huma.Error500InternalServerError("duplicate check failed", err)
+	}
+	var summaries []error
+	for _, i := range existing {
+		if !canSee(id, i) {
+			continue
+		}
+		if i.Scope == store.ScopeHousehold {
+			summaries = append(summaries, fmt.Errorf("%s is already installed as a household app", i.Name))
+		} else {
+			summaries = append(summaries, fmt.Errorf("%s is already installed as your personal app", i.Name))
+		}
+	}
+	if len(summaries) == 0 {
+		return nil
+	}
+	s.auditor.Record(ctx, action, audit.Target{Kind: "app"},
+		map[string]any{"manifest_id": manifestID, "duplicate": true}, false)
+	return huma.Error409Conflict("duplicate-install", summaries...)
+}
+
 func (s *Server) installCustomApp(ctx context.Context, in *struct {
 	Body struct {
 		Name        string `json:"name"`
 		Compose     string `json:"compose"`
 		MainService string `json:"main_service,omitempty"`
 		MainPort    int    `json:"main_port"`
+		Scope       string `json:"scope,omitempty"` // "household" | "personal"; default household for admins, forced personal for members
 	}
 }) (*struct{ Body Job }, error) {
 	spec := lifecycle.CustomSpec{
@@ -229,6 +359,10 @@ func (s *Server) installCustomApp(ctx context.Context, in *struct {
 		Compose:     in.Body.Compose,
 		MainService: in.Body.MainService,
 		MainPort:    in.Body.MainPort,
+	}
+	owner, scope, err := s.resolveOwnerScope(ctx, in.Body.Scope, audit.ActionAppCustomCreate, map[string]any{"name": spec.Name})
+	if err != nil {
+		return nil, err
 	}
 
 	// Sync pre-checks so the user gets immediate, specific feedback instead of
@@ -243,9 +377,9 @@ func (s *Server) installCustomApp(ctx context.Context, in *struct {
 
 	jobCtx := ctx
 	job := s.jobs.run("app-install", func(job *Job) (map[string]any, error) {
-		inst, err := s.life.InstallCustom(context.Background(), spec, job.setStep)
+		inst, err := s.life.InstallCustom(context.Background(), spec, owner, scope, job.setStep)
 		target := audit.Target{Kind: "app"}
-		meta := map[string]any{"name": spec.Name}
+		meta := map[string]any{"name": spec.Name, "scope": scope, "owner_user_id": owner.UserID}
 		if err == nil {
 			target.ID = inst.ID
 			meta["slug"] = inst.Slug
@@ -263,8 +397,26 @@ func (s *Server) uninstallApp(ctx context.Context, in *struct {
 	ID string `path:"id"`
 }) (*struct{ Body Job }, error) {
 	id := in.ID
-	if _, err := s.store.Get(id); errors.Is(err, store.ErrNotFound) {
+	actor, ok := auth.FromContext(ctx)
+	if !ok {
+		return nil, huma.Error401Unauthorized("unauthenticated")
+	}
+	inst, err := s.store.Get(id)
+	if errors.Is(err, store.ErrNotFound) {
 		return nil, huma.Error404NotFound("no such app")
+	}
+	if err != nil {
+		return nil, huma.Error500InternalServerError("get failed", err)
+	}
+	// Leak guard, then authorization: a member can uninstall only their own
+	// personal instances; household instances are admin-only (DASHBOARD.md #
+	// install authorization — uninstall mirrors it).
+	if !canSee(actor, inst) {
+		return nil, huma.Error404NotFound("no such app")
+	}
+	if !actor.IsAdmin() && inst.Scope == store.ScopeHousehold {
+		s.auditor.Record(ctx, audit.ActionAppUninstall, audit.Target{Kind: "app", ID: id}, nil, false)
+		return nil, huma.Error403Forbidden("only an admin can uninstall a household app")
 	}
 	jobCtx := ctx
 	job := s.jobs.run("app-uninstall", func(job *Job) (map[string]any, error) {

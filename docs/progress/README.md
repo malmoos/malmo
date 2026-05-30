@@ -1,25 +1,28 @@
 # Implementation progress
 
-Numbered, ADR-style entries — one per unit of work. Each records **what was
-done** and **what's next**, so the history of the build is legible without
-reading every commit. New entries get the next number; never renumber.
+ADR-style entries — one per unit of work. Each records **what was done** and
+**what's next**, so the history of the build is legible without reading every
+commit. Entries are named by kebab-slug (`<slug>.md`) and are **not numbered** —
+sequential numbering was dropped because parallel branches kept colliding on the
+next number. (Entries through 2026-05-30 carry a historical `NNNN-` prefix,
+frozen in place — don't renumber or rename them.)
 
 Every change ships with a progress entry or an update to one (see
 [`../../CLAUDE.md`](../../CLAUDE.md) # Documentation discipline).
 
 ## Up next
 
-The implementation slice queue, ordered. Each item links back to the progress entry whose "what's next" it satisfies. Pull the top item; when it lands, write the next numbered entry and re-order. Design topics (not implementation slices) live in [`../specs/NEXT.md`](../specs/NEXT.md).
+The implementation slice queue, ordered. Each item links back to the progress entry whose "what's next" it satisfies. Pull the top item; when it lands, write the next entry and re-order. Design topics (not implementation slices) live in [`../specs/NEXT.md`](../specs/NEXT.md).
 
 This is the **maintainer's critical-path** queue. Work carved off for **parallel contributors** lives in [GitHub Issues](https://github.com/onel/malmo/issues) (some items there are pulled from these "what's next" follow-ups). The two are kept from overlapping on purpose. See [`../dev/contributing.md`](../dev/contributing.md) for the contributor loop.
 
-1. **0023 — LUKS root + first-boot TPM enrollment + unseal verification.** Builds on [0021](0021-qemu-medium-lane-scaffolding.md)'s QEMU+swtpm medium-lane scaffolding. Critical-path slice: realizes the encryption posture in `STORAGE.md` and the boot ordering in `BOOT.md`, exercises the medium lane the scaffolding was built for. *(In-flight follow-up from 0021 / 0022.)*
-2. **Notification Web UI + transparency variant.** [0026](0026-notification-read-surface.md) landed the backend read surface (`/api/v1/notifications` family, `notification_reads` per-recipient join, `notification.created` / `notification.updated` SSE kinds); nothing renders it yet. Next: the dashboard bell + dropdown inbox, Pinia store, SSE subscription, `useNotifications()` (`WEB_UI.md`); then the info-only member **transparency variant** + the "all clear" resolved follow-up on clear (`NOTIFICATIONS.md`); per-category mute and retention/pruning trail behind. Follow-up from [0026](0026-notification-read-surface.md).
+1. **Notification Web UI + transparency + mute.** The notification backend landed (write seam + read surface: `notifications` table + `internal/notify` emitter, `/api/v1/notifications` family, `notification_reads` per-recipient join, `notification.created`/`.updated` SSE kinds); nothing renders it yet. Next: the dashboard bell + dropdown inbox wired into the chrome (`TopBar`), `useNotifications()` (`WEB_UI.md`); then the info-only member **transparency variant** + the resolved-on-clear "all clear" follow-up (`NOTIFICATIONS.md`); then per-category mute. Follow-up from [notification-read-surface](notification-read-surface.md).
+2. **Store install UX: scope picker + warn-don't-block dialog.** The home grid landed ([0026](0026-dashboard-chassis-home-grid.md)) but Store still installs with the brain's default scope. Add the admin Household / "Just for me" picker and the duplicate-confirm dialog against the `409 duplicate-install` wire shape (pinned in [0025](0025-owner-scoped-instances.md)). Gated by the per-app member grant mechanism for the visibility half. Follow-up from [0026](0026-dashboard-chassis-home-grid.md).
 
 ## Entry template
 
 ```markdown
-# NNNN — <title>
+# <title>
 
 - **Status:** done | in progress
 - **Date:** YYYY-MM-DD
@@ -39,6 +42,9 @@ Ordered follow-ups. Update as they land.
 ```
 
 ## Index
+
+Newest last. The leading column is the historical sequence number for numbered
+entries and `—` for slug-named ones added after numbering was dropped.
 
 | # | Title | Status |
 |---|-------|--------|
@@ -65,5 +71,7 @@ Ordered follow-ups. Update as they land.
 | [0022](0022-health-persistence.md) | SQLite persistence for health issues (`health_issues` table, store write-through, boot-time restore) | done |
 | [0023](0023-luks-tpm-enrollment.md) | LUKS root + first-boot TPM enrollment + PCR-7 unseal verification | done |
 | [0024](0024-per-issue-health-audit.md) | Per-issue health audit records (`ApplyStorageFindings` returns affected keys; one `health.issue.*` record per issue) | done |
-| [0025](0025-health-notifications.md) | Health raise/clear → dashboard notifications (`notifications` table + `internal/notify` emitter; coalesced, admin-routed, resolved-on-clear) | done |
-| [0026](0026-notification-read-surface.md) | Notification read surface: `/api/v1/notifications` family + `notification_reads` per-recipient read/dismiss + `notification.created`/`.updated` SSE kinds | done |
+| [0025](0025-owner-scoped-instances.md) | Owner-scoped app instances (owner_user_id + scope, `<slug>--<user>` derivation, install authorization, warn-don't-block) | done |
+| [0026](0026-dashboard-chassis-home-grid.md) | Dashboard frontend: stack chassis (Router/Pinia/Tailwind 4/reka-ui/lucide) + grouped Household/Yours home grid + four-item dock | done |
+| — | [health-notifications.md](health-notifications.md) | Health raise/clear → dashboard notifications (`notifications` table + `internal/notify` emitter; coalesced, admin-routed, resolved-on-clear) | done |
+| — | [notification-read-surface.md](notification-read-surface.md) | Notification read surface: `/api/v1/notifications` family + `notification_reads` per-recipient read/dismiss + `notification.created`/`.updated` SSE kinds | done |

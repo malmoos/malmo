@@ -31,7 +31,7 @@ Three categories of records, all driven by the brain via host-agent:
 
 ### 2. Per-app A records
 
-For each installed app with slug `<slug>`: `<slug>.malmo.local A <lan-ip>`.
+For each installed app instance with slug `<slug>`: `<slug>.malmo.local A <lan-ip>`. The slug is the *instance* slug, which for a personal (per-user) instance is `<base>--<user>` — e.g. `immich--alex.malmo.local` — while a household instance keeps the bare `<base>` (`immich.malmo.local`). The single-label, double-dash shape is deliberate: it resolves on every mDNS client (multi-label `.local` does not) and fits the one wildcard cert on the `.malmo.network` side. See `DASHBOARD.md` # instance naming and `APP_LIFECYCLE.md` # slug derivation.
 
 **Mechanism: Avahi DBus `EntryGroup.AddAddress`.** The install reconciler calls
 `org.freedesktop.Avahi.Server.EntryGroupNew`, then

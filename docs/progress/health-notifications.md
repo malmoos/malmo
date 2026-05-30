@@ -1,4 +1,4 @@
-# 0025 — Health raise/clear → dashboard notifications
+# Health raise/clear → dashboard notifications
 
 - **Status:** done
 - **Date:** 2026-05-29
@@ -59,7 +59,7 @@ This slice is the first to make the issue→notification severity mapping observ
 
 ## What's next
 
-- **Bell API + SSE.** `/api/v1/notifications` list (audience-scoped, newest-first, cursor), mark-read, dismiss, per-category mute; `notification.created` / `notification.updated` SSE kinds (`BRAIN_UI_PROTOCOL.md`). `ListNotifications` grows a filter then. *(Landed in [0026](0026-notification-read-surface.md) — list/unread-count/mark-read/mark-all-read/dismiss + both SSE kinds; per-category mute still deferred.)*
-- **Per-recipient read state.** `notification_reads(notification_id, user_id)` join + unread-badge count per user. *(Landed in [0026](0026-notification-read-surface.md).)*
+- **Bell API + SSE.** `/api/v1/notifications` list (audience-scoped, newest-first, cursor), mark-read, dismiss, per-category mute; `notification.created` / `notification.updated` SSE kinds (`BRAIN_UI_PROTOCOL.md`). `ListNotifications` grows a filter then. *(Landed in [notification-read-surface.md](notification-read-surface.md) — list/unread-count/mark-read/mark-all-read/dismiss + both SSE kinds; per-category mute still deferred.)*
+- **Per-recipient read state.** `notification_reads(notification_id, user_id)` join + unread-badge count per user. *(Landed in [notification-read-surface.md](notification-read-surface.md).)*
 - **Member transparency variant.** Emit the info-only member copy for box-blocking criticals; the "all clear" resolved notification on clear.
 - **Web UI.** Bell + dropdown inbox in the chrome, Pinia store, `useNotifications()` (`WEB_UI.md`).

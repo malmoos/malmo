@@ -1,6 +1,6 @@
 # Web UI
 
-> Working spec for the malmo dashboard — the web app that the browser talks to. Companion to `CONTROL_PLANE.md` (where the API server lives), `BRAIN_UI_PROTOCOL.md` (the contract the UI consumes), `AUTH.md` (session cookie), `UPDATES.md` (UI bundle update path).
+> Working spec for the malmo dashboard — the web app that the browser talks to. Companion to `CONTROL_PLANE.md` (where the API server lives), `BRAIN_UI_PROTOCOL.md` (the contract the UI consumes), `AUTH.md` (session cookie), `UPDATES.md` (UI bundle update path). This doc owns the **stack and deploy model**; the **logged-in information architecture** (home screen, app model, navigation, top bar) lives in `DASHBOARD.md`.
 
 ## Locked: separate codebase, separate container
 

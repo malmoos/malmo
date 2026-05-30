@@ -1,10 +1,10 @@
-# 0026 — Notification read surface: bell API + SSE + per-recipient read state
+# Notification read surface: bell API + SSE + per-recipient read state
 
 - **Status:** done
 - **Date:** 2026-05-29
 - **Specs touched:** `NOTIFICATIONS.md` (read-state implementation note — uniform `notification_reads` join; no decision flipped)
 
-The read half of the bell. [0025](0025-health-notifications.md) landed the write seam (the `notifications` table + the health raise/clear emitter) but nothing read it back over the wire. This slice adds the `/api/v1/notifications` API family, the `notification_reads` join that makes read/dismiss state per-recipient, and the SSE `notification.created` / `notification.updated` kinds so the dashboard bell can update live. Backend only — the Vue bell is still deferred.
+The read half of the bell. [health-notifications.md](health-notifications.md) landed the write seam (the `notifications` table + the health raise/clear emitter) but nothing read it back over the wire. This slice adds the `/api/v1/notifications` API family, the `notification_reads` join that makes read/dismiss state per-recipient, and the SSE `notification.created` / `notification.updated` kinds so the dashboard bell can update live. Backend only — the Vue bell is still deferred.
 
 ## What was done
 
