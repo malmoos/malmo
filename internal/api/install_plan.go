@@ -3,12 +3,16 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/malmo/malmo/internal/auth"
 	"github.com/malmo/malmo/internal/catalog"
+	"github.com/malmo/malmo/internal/lifecycle"
 	"github.com/malmo/malmo/internal/manifest"
 	"github.com/malmo/malmo/internal/store"
 )
@@ -81,6 +85,19 @@ func scopeMenu(isAdmin bool) (options []string, def string) {
 	return []string{store.ScopePersonal}, store.ScopePersonal
 }
 
+// folderSourceMenu returns the allowed source options and default for a folder
+// under the given install scope. Household forces shared (the household share is
+// the single /srv/malmo/shared/<Folder>/ path); personal offers personal
+// (~/<Folder>/, default) or shared. This is the single source of truth for both
+// the advisory install-plan menus (buildInstallPlan) and the authoritative
+// write-path validation (resolveElections) — keep them sharing it.
+func folderSourceMenu(scope string) (options []string, def string) {
+	if scope == store.ScopeHousehold {
+		return []string{sourceShared}, sourceShared
+	}
+	return []string{sourcePersonal, sourceShared}, sourcePersonal
+}
+
 // buildInstallPlan maps a parsed manifest and the caller's role into an
 // InstallPlanDTO. Pure function — no I/O, trivially unit-testable.
 func buildInstallPlan(man *manifest.Manifest, isAdmin bool) InstallPlanDTO {
@@ -88,19 +105,14 @@ func buildInstallPlan(man *manifest.Manifest, isAdmin bool) InstallPlanDTO {
 
 	folders := make([]InstallPlanFolder, 0, len(man.Permissions.Folders))
 	for _, f := range man.Permissions.Folders {
-		// Per-scope source menus. Household always forces shared (the household
-		// share lives under /srv/malmo/shared/<Folder>/, which is the single
-		// shared path). Personal offers personal (~/Folder/) or shared, defaulting
-		// to personal. Built per-folder so a future author-declared source hint
-		// can vary the personal default without a wire-shape change.
-		householdMenu := SourceMenu{
-			Options: []string{sourceShared},
-			Default: sourceShared,
-		}
-		personalMenu := SourceMenu{
-			Options: []string{sourcePersonal, sourceShared},
-			Default: sourcePersonal,
-		}
+		// Per-scope source menus, from the same helper resolveElections uses on
+		// the write path so the advisory plan and the authoritative validation
+		// never drift. Household forces shared; personal offers personal (default)
+		// or shared.
+		ho, hd := folderSourceMenu(store.ScopeHousehold)
+		po, pd := folderSourceMenu(store.ScopePersonal)
+		householdMenu := SourceMenu{Options: ho, Default: hd}
+		personalMenu := SourceMenu{Options: po, Default: pd}
 		folders = append(folders, InstallPlanFolder{
 			Folder:           f.Folder,
 			Mode:             f.Mode,
@@ -132,6 +144,66 @@ func buildInstallPlan(man *manifest.Manifest, isAdmin bool) InstallPlanDTO {
 			Folders:  folders,
 		},
 	}
+}
+
+// FolderElection is one per-folder install-time choice from the consent screen
+// (BRAIN_UI_PROTOCOL.md Pattern B config). Source is personal|shared; Subfolder
+// narrows a pick-subfolder folder. Both optional — an omitted election defaults
+// to the folder's menu default.
+type FolderElection struct {
+	Folder    string `json:"folder"`
+	Source    string `json:"source,omitempty"`
+	Subfolder string `json:"subfolder,omitempty"`
+}
+
+// resolveElections is the authoritative validation of the user's per-folder
+// elections against the manifest's declared folders and the resolved install
+// scope. The install-plan endpoint is advisory; this is the gate. It returns one
+// fully-resolved lifecycle.FolderMount per declared folder (every declared
+// folder is bound — an omitted election just takes the menu default), or a 422
+// huma error the caller surfaces and audits. Rejects: an election for a folder
+// the app never declared, a duplicate election, a source not allowed for the
+// scope, and a subfolder on a non-pick-subfolder folder or one that escapes it.
+func resolveElections(man *manifest.Manifest, scope string, elections []FolderElection) ([]lifecycle.FolderMount, error) {
+	declared := make(map[string]bool, len(man.Permissions.Folders))
+	for _, f := range man.Permissions.Folders {
+		declared[f.Folder] = true
+	}
+	byFolder := make(map[string]FolderElection, len(elections))
+	for _, e := range elections {
+		if !declared[e.Folder] {
+			return nil, huma.Error422UnprocessableEntity(fmt.Sprintf("config.folders: %q is not a folder this app requested", e.Folder))
+		}
+		if _, dup := byFolder[e.Folder]; dup {
+			return nil, huma.Error422UnprocessableEntity(fmt.Sprintf("config.folders: duplicate election for %q", e.Folder))
+		}
+		byFolder[e.Folder] = e
+	}
+
+	mounts := make([]lifecycle.FolderMount, 0, len(man.Permissions.Folders))
+	for _, f := range man.Permissions.Folders {
+		options, src := folderSourceMenu(scope) // src starts at the menu default
+		sub := f.Default                        // "" unless the manifest declared a pick-subfolder default
+		if e, ok := byFolder[f.Folder]; ok {
+			if e.Source != "" {
+				if !slices.Contains(options, e.Source) {
+					return nil, huma.Error422UnprocessableEntity(fmt.Sprintf("config.folders[%s]: source %q is not allowed for a %s install (allowed: %s)", f.Folder, e.Source, scope, strings.Join(options, ", ")))
+				}
+				src = e.Source
+			}
+			if e.Subfolder != "" {
+				if f.Scope != "pick-subfolder" {
+					return nil, huma.Error422UnprocessableEntity(fmt.Sprintf("config.folders[%s]: a subfolder may only be chosen when the app declares scope: pick-subfolder", f.Folder))
+				}
+				if strings.HasPrefix(e.Subfolder, "/") || strings.Contains(e.Subfolder, "..") {
+					return nil, huma.Error422UnprocessableEntity(fmt.Sprintf("config.folders[%s]: subfolder must be a relative path under the folder", f.Folder))
+				}
+				sub = e.Subfolder
+			}
+		}
+		mounts = append(mounts, lifecycle.FolderMount{Folder: f.Folder, Source: src, Subfolder: sub})
+	}
+	return mounts, nil
 }
 
 func (s *Server) installPlan(ctx context.Context, in *struct {

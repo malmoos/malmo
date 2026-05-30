@@ -228,6 +228,10 @@ type fakeHost struct {
 	mu        sync.Mutex
 	published map[string]bool
 	calls     []call
+
+	// resolveHomeErr, when set, is returned by ResolveHome (e.g.
+	// hostclient.ErrUnknownUser to exercise the deleted-owner path).
+	resolveHomeErr error
 }
 
 func newFakeHost() *fakeHost { return &fakeHost{published: map[string]bool{}} }
@@ -249,11 +253,35 @@ func (h *fakeHost) Unpublish(_ context.Context, slug string) error {
 }
 
 func (h *fakeHost) ResolveHome(_ context.Context, user string) (protocol.ResolveHomeResponse, error) {
+	h.mu.Lock()
+	h.calls = append(h.calls, call{method: "ResolveHome", args: []any{user}})
+	h.mu.Unlock()
+	if h.resolveHomeErr != nil {
+		return protocol.ResolveHomeResponse{}, h.resolveHomeErr
+	}
 	return protocol.ResolveHomeResponse{HomePath: "/home/" + user, UID: 3000, GID: 3000}, nil
+}
+
+func (h *fakeHost) WellKnownIdentity(_ context.Context) (protocol.WellKnownIdentityResponse, error) {
+	h.mu.Lock()
+	h.calls = append(h.calls, call{method: "WellKnownIdentity"})
+	h.mu.Unlock()
+	return protocol.WellKnownIdentityResponse{MalmoAppUID: 2000, MalmoAppGID: 2000, MalmoSharedGID: 2001}, nil
 }
 
 func (h *fakeHost) isPublished(slug string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.published[slug]
+}
+
+func (h *fakeHost) called(method string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, c := range h.calls {
+		if c.method == method {
+			return true
+		}
+	}
+	return false
 }
