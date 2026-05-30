@@ -146,12 +146,19 @@ func TestSetPasswordAndVerifyWithFakeVerifier(t *testing.T) {
 // --- stub user manager ---
 
 type stubUserMgr struct {
-	calls       []struct{ user, password string }
-	roleCalls   []struct{ user, role string }
-	deleteCalls []string
-	err         error
-	roleErr     error
-	deleteErr   error
+	calls            []struct{ user, password string }
+	roleCalls        []struct{ user, role string }
+	deleteCalls      []string
+	resolveHomeCalls []string
+	err              error
+	roleErr          error
+	deleteErr        error
+	resolveHomeErr   error
+	// resolveHomeResult is returned on ResolveHome success; zero value = /home/<user>, 3000, 3000.
+	resolveHomeResult *struct {
+		home     string
+		uid, gid int
+	}
 }
 
 func (s *stubUserMgr) UpsertPassword(user, password string) error {
@@ -167,6 +174,17 @@ func (s *stubUserMgr) SetRole(user, role string) error {
 func (s *stubUserMgr) DeleteUser(user string) error {
 	s.deleteCalls = append(s.deleteCalls, user)
 	return s.deleteErr
+}
+
+func (s *stubUserMgr) ResolveHome(user string) (string, int, int, error) {
+	s.resolveHomeCalls = append(s.resolveHomeCalls, user)
+	if s.resolveHomeErr != nil {
+		return "", 0, 0, s.resolveHomeErr
+	}
+	if s.resolveHomeResult != nil {
+		return s.resolveHomeResult.home, s.resolveHomeResult.uid, s.resolveHomeResult.gid, nil
+	}
+	return "/home/" + user, 3000, 3000, nil
 }
 
 func TestSetPassword_DelegatesToUserMgrWhenSet(t *testing.T) {
@@ -372,6 +390,92 @@ func TestDeleteUser_UserMgrError_Returns500(t *testing.T) {
 		t.Fatalf("want 500, got %d", w.Code)
 	}
 	if bytes.Contains(w.Body.Bytes(), []byte("userdel")) || bytes.Contains(w.Body.Bytes(), []byte("4242")) {
+		t.Errorf("response leaked system detail: %s", w.Body.String())
+	}
+}
+
+// --- resolve-home tests ---
+
+func TestResolveHome_FakeBranch_ReturnsDetministicResult(t *testing.T) {
+	_, mux := newTestAgent(&stubVerifier{})
+
+	w := get(t, mux, "/v1/users/alice/home")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	resp := decodeBody[protocol.ResolveHomeResponse](t, w)
+	if resp.HomePath != "/home/alice" {
+		t.Errorf("home_path: want /home/alice, got %q", resp.HomePath)
+	}
+	if resp.UID < 3000 || resp.UID >= 4000 {
+		t.Errorf("uid: want in [3000,4000), got %d", resp.UID)
+	}
+	if resp.GID != resp.UID {
+		t.Errorf("gid: want gid==uid, got uid=%d gid=%d", resp.UID, resp.GID)
+	}
+}
+
+func TestResolveHome_FakeBranch_StableAcrossCalls(t *testing.T) {
+	_, mux := newTestAgent(&stubVerifier{})
+
+	w1 := get(t, mux, "/v1/users/bob/home")
+	w2 := get(t, mux, "/v1/users/bob/home")
+	r1 := decodeBody[protocol.ResolveHomeResponse](t, w1)
+	r2 := decodeBody[protocol.ResolveHomeResponse](t, w2)
+	if r1.UID != r2.UID || r1.HomePath != r2.HomePath {
+		t.Errorf("fake result not stable: first=%+v second=%+v", r1, r2)
+	}
+}
+
+func TestResolveHome_DelegatesToUserMgrWhenSet(t *testing.T) {
+	mgr := &stubUserMgr{}
+	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a.UserMgr = mgr
+	mux := http.NewServeMux()
+	a.Mount(mux)
+
+	w := get(t, mux, "/v1/users/cindy/home")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	resp := decodeBody[protocol.ResolveHomeResponse](t, w)
+	if resp.HomePath != "/home/cindy" {
+		t.Errorf("home_path: want /home/cindy, got %q", resp.HomePath)
+	}
+	if len(mgr.resolveHomeCalls) != 1 || mgr.resolveHomeCalls[0] != "cindy" {
+		t.Errorf("ResolveHome not called as expected: %v", mgr.resolveHomeCalls)
+	}
+}
+
+func TestResolveHome_UnknownUser_Returns404(t *testing.T) {
+	mgr := &stubUserMgr{resolveHomeErr: ErrUnknownUser}
+	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a.UserMgr = mgr
+	mux := http.NewServeMux()
+	a.Mount(mux)
+
+	w := get(t, mux, "/v1/users/ghost/home")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", w.Code)
+	}
+	resp := decodeBody[protocol.Error](t, w)
+	if resp.Code != "unknown-user" {
+		t.Errorf("code: want unknown-user, got %q", resp.Code)
+	}
+}
+
+func TestResolveHome_UserMgrError_Returns500(t *testing.T) {
+	mgr := &stubUserMgr{resolveHomeErr: errors.New("nss lookup failed")}
+	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a.UserMgr = mgr
+	mux := http.NewServeMux()
+	a.Mount(mux)
+
+	w := get(t, mux, "/v1/users/dave/home")
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", w.Code)
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte("nss lookup")) {
 		t.Errorf("response leaked system detail: %s", w.Body.String())
 	}
 }

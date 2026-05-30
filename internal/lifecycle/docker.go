@@ -46,6 +46,10 @@ type CaddyDriver interface {
 type HostDriver interface {
 	Publish(ctx context.Context, slug string) (protocol.PublishResponse, error)
 	Unpublish(ctx context.Context, slug string) error
+	// ResolveHome returns the owner's home directory path, UID, and GID. Used
+	// by writeOverride (slice 4) to build bind-mount sources and user: directives
+	// for personal app instances.
+	ResolveHome(ctx context.Context, user string) (protocol.ResolveHomeResponse, error)
 }
 
 // Admitter validates a verbatim compose. Default impl is admission.Check; tests

@@ -248,6 +248,10 @@ func (h *fakeHost) Unpublish(_ context.Context, slug string) error {
 	return nil
 }
 
+func (h *fakeHost) ResolveHome(_ context.Context, user string) (protocol.ResolveHomeResponse, error) {
+	return protocol.ResolveHomeResponse{HomePath: "/home/" + user, UID: 3000, GID: 3000}, nil
+}
+
 func (h *fakeHost) isPublished(slug string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()

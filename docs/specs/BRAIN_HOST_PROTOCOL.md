@@ -116,6 +116,16 @@ POST /v1/auth/delete-user
 
 `set-password` is **upsert**: it creates the user if missing (real impl: `useradd` + `passwd` + Samba sync as one atomic op via `AUTH.md` # Password change) and otherwise just updates the password. The brain stays oblivious to "is this a create or an update" — single endpoint, single round-trip during `/v1/setup`. `set-role` updates Linux group membership in the `sudo` group to match the new role — admin → in `sudo`, member → not in `sudo` (real impl: `gpasswd -a`/`-d`; idempotent on both ends); see `USERS_AND_GROUPS.md` # Roles for the owning policy. The fake host-agent stores the role in memory only. `delete-user` is idempotent: unknown user returns 200 (real impl: `userdel -r -f` — `-r` removes the home dir, `-f` forces removal even with a live session; see `docs/progress/host-agent-delete-user.md` for the session-termination matrix). None of these endpoints return credential material; the brain holds no password material.
 
+**User info endpoints.** The brain runs containerized and has no access to `/etc/passwd`. When installing a personal-scope app, the brain needs the owner's home directory path and POSIX UID/GID to emit a correct bind-mount source and `user:` directive in the compose override. Pattern A:
+
+```
+GET /v1/users/{username}/home
+→ 200 OK  { "home_path": "/home/alex", "uid": 3001, "gid": 3001 }
+→ 404     { "code": "unknown-user", "message": "user not found" }
+```
+
+The brain maps `unknown-user` to an installation error (not a 500 retry) — the user was deleted between the install-plan call and the install commit. The fake host-agent returns a deterministic result derived from the username (UID in [3000, 3999]) so the dev loop is coherent without a real `/etc/passwd`. See `APP_ISOLATION.md` # User content for the personal-scope bind-mount contract this feeds.
+
 **Network endpoints (NetworkManager-backed).** host-agent exposes Pattern A routes that wrap NetworkManager's DBus surface:
 
 ```

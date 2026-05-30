@@ -3,6 +3,7 @@ package hostclient
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -75,6 +76,21 @@ func startFakeAuthAgent(t *testing.T) string {
 	})
 	_ = roles
 
+	mux.HandleFunc("GET /v1/users/{username}/home", func(w http.ResponseWriter, r *http.Request) {
+		username := r.PathValue("username")
+		if username == "ghost" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(protocol.Error{Code: "unknown-user", Message: "user not found"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(protocol.ResolveHomeResponse{
+			HomePath: "/home/" + username,
+			UID:      3001,
+			GID:      3001,
+		})
+	})
+
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() {
@@ -83,6 +99,29 @@ func startFakeAuthAgent(t *testing.T) string {
 		_ = srv.Shutdown(ctx)
 	})
 	return sock
+}
+
+func TestResolveHome(t *testing.T) {
+	c := New(startFakeAuthAgent(t))
+	ctx := context.Background()
+
+	resp, err := c.ResolveHome(ctx, "alice")
+	if err != nil {
+		t.Fatalf("ResolveHome: %v", err)
+	}
+	if resp.HomePath != "/home/alice" {
+		t.Errorf("home_path: want /home/alice, got %q", resp.HomePath)
+	}
+	if resp.UID != 3001 || resp.GID != 3001 {
+		t.Errorf("uid/gid: want 3001/3001, got %d/%d", resp.UID, resp.GID)
+	}
+
+	// Unknown user: 404 must surface as ErrUnknownUser so the brain can
+	// errors.Is-discriminate it from a generic host failure (abort vs. retry).
+	_, err = c.ResolveHome(ctx, "ghost")
+	if !errors.Is(err, ErrUnknownUser) {
+		t.Fatalf("ResolveHome(unknown user) = %v; want ErrUnknownUser", err)
+	}
 }
 
 func TestSetRole(t *testing.T) {

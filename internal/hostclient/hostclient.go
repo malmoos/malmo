@@ -6,9 +6,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/malmo/malmo/internal/protocol"
@@ -68,6 +71,52 @@ func (c *Client) DeleteUser(ctx context.Context, user string) error {
 	return c.do(ctx, "POST", "/v1/auth/delete-user", protocol.DeleteUserRequest{User: user}, nil)
 }
 
+// ErrUnknownUser is returned by ResolveHome when the host reports the user
+// does not exist. The brain maps this to an installation error, not a retry.
+// Check with errors.Is — the value is stable across versions.
+var ErrUnknownUser = errors.New("unknown user")
+
+// ResolveHome returns the user's home directory path, UID, and GID from the
+// host. The brain calls this during install to build bind-mount sources and
+// user: directives for personal app instances.
+//
+// Returns ErrUnknownUser (checkable with errors.Is) when the host reports the
+// user does not exist — the brain maps this to an installation error, not a
+// retry. Any other non-200 is a generic host error.
+//
+// Does not go through do because do flattens all errors to opaque strings;
+// the 404 → typed-sentinel discrimination must survive to the caller.
+func (c *Client) ResolveHome(ctx context.Context, username string) (protocol.ResolveHomeResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		"http://agent/v1/users/"+url.PathEscape(username)+"/home", http.NoBody)
+	if err != nil {
+		return protocol.ResolveHomeResponse{}, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return protocol.ResolveHomeResponse{}, fmt.Errorf("host-agent unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return protocol.ResolveHomeResponse{}, ErrUnknownUser
+	}
+	if resp.StatusCode >= 300 {
+		var e protocol.Error
+		_ = json.NewDecoder(resp.Body).Decode(&e)
+		if e.Code == "" {
+			e.Code = "host-agent-error"
+			e.Message = resp.Status
+		}
+		return protocol.ResolveHomeResponse{}, fmt.Errorf("host-agent /v1/users/%s/home: %s (%s)",
+			url.PathEscape(username), e.Message, e.Code)
+	}
+	var out protocol.ResolveHomeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return protocol.ResolveHomeResponse{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) SystemStatus(ctx context.Context) (protocol.SystemStatus, error) {
 	var out protocol.SystemStatus
 	err := c.do(ctx, "GET", "/v1/system/status", nil, &out)
@@ -92,11 +141,17 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 			return err
 		}
 	}
-	req, err := http.NewRequestWithContext(ctx, method, "http://agent"+path, &buf)
+	var reqBody io.Reader = http.NoBody
+	if body != nil {
+		reqBody = &buf
+	}
+	req, err := http.NewRequestWithContext(ctx, method, "http://agent"+path, reqBody)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("host-agent unreachable: %w", err)

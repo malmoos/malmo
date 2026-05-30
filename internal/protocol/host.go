@@ -103,6 +103,16 @@ type Finding struct {
 	Details string `json:"details,omitempty"`
 }
 
+// ResolveHomeResponse is GET /v1/users/{username}/home. Returns the owner's home
+// directory path and POSIX UID/GID so the brain (containerized, no /etc/passwd
+// access) can emit correct bind-mount sources and user: directives in the
+// compose override. 404 with code "unknown-user" if the user does not exist.
+type ResolveHomeResponse struct {
+	HomePath string `json:"home_path"`
+	UID      int    `json:"uid"`
+	GID      int    `json:"gid"`
+}
+
 // Error is the JSON error body shape on non-2xx responses.
 type Error struct {
 	Code    string `json:"code"`
