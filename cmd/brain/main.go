@@ -106,6 +106,14 @@ func main() {
 	checkAgentVersion(pollCtx, host, healthMgr, auditor, notifier)
 	go versionCheckPollLoop(pollCtx, host, healthMgr, auditor, notifier, cfg.healthPollPeriod)
 
+	// Locus-C brain-DB integrity check (HEALTH.md # Detector catalog): PRAGMA
+	// integrity_check at boot + every 6h, reconciling brain-db-corrupt. Runs
+	// entirely on its own goroutine — the boot run is inside the loop, never
+	// before ListenAndServe — because a corrupt DB must raise a banner, never
+	// gate startup (HEALTH.md # Stance: a brain that can't boot has no UI; that
+	// path is bootstrap-state-mismatch / recovery, not this issue).
+	go brainDBIntegrityLoop(pollCtx, st, healthMgr, auditor, notifier, dbIntegrityCheckPeriod)
+
 	srv := api.NewServer(st, cat, life, bus, authMgr, host, auditor, healthMgr)
 	httpSrv := &http.Server{Addr: cfg.listen, Handler: srv.Handler()}
 	slog.Info("malmo-brain listening",
@@ -373,6 +381,65 @@ func versionCheckPollLoop(ctx context.Context, host agentStatusReader, healthMgr
 			return
 		case <-t.C:
 			checkAgentVersion(ctx, host, healthMgr, auditor, notifier)
+		}
+	}
+}
+
+// dbIntegrityCheckPeriod is the locus-C brain-db-corrupt cadence (HEALTH.md #
+// Detector catalog: "boot + 6h"). A constant, not an env knob: the spec pins
+// the value and there's no reason to tune it per-deployment.
+const dbIntegrityCheckPeriod = 6 * time.Hour
+
+// integrityChecker is the consumer-side seam for the store's PRAGMA
+// integrity_check (CLAUDE.md: interfaces live with the consumer). *store.Store
+// satisfies it; tests pass a fake to drive each branch without a real database.
+type integrityChecker interface {
+	IntegrityCheck() (string, error)
+}
+
+// checkBrainDBIntegrity runs one PRAGMA integrity_check and reconciles the
+// brain-db-corrupt issue (HEALTH.md # Detector catalog, locus C): a result
+// other than "ok" raises it, "ok" clears it. The result is authoritative and
+// 1-shot — corruption isn't a noisy threshold sample, so there's no debounce.
+// A query error is best-effort: it can't conclude corrupt *or* sound, so it
+// logs and leaves the issue state untouched (a transient blip neither raises a
+// false banner nor clears a real one). Transitions are audited per issue and
+// fan out to the notification center, mirroring pullStorageHealth.
+func checkBrainDBIntegrity(ctx context.Context, db integrityChecker, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier) {
+	result, err := db.IntegrityCheck()
+	if err != nil {
+		slog.Warn("integrity check: query failed; leaving brain-db-corrupt unchanged", "err", err)
+		return
+	}
+	var raised, cleared []health.IssueKey
+	if result != "ok" {
+		details := fmt.Sprintf("SQLite integrity check failed:\n%s", result)
+		if healthMgr.Raise("brain-db-corrupt", "", details) {
+			raised = []health.IssueKey{{ID: "brain-db-corrupt"}}
+			slog.Error("integrity check: brain database is corrupt", "output", result)
+		}
+	} else if healthMgr.Clear("brain-db-corrupt", "") {
+		cleared = []health.IssueKey{{ID: "brain-db-corrupt"}}
+		slog.Info("integrity check: brain database recovered; cleared brain-db-corrupt")
+	}
+	emitHealthTransitions(ctx, auditor, raised, cleared)
+	emitHealthNotifications(notifier, healthMgr, raised, cleared)
+}
+
+// brainDBIntegrityLoop runs the boot integrity check and then re-checks on the
+// 6h cadence. The boot run lives *inside* this goroutine (not synchronously in
+// main before serving) on purpose — see the call site: the check must never
+// gate brain startup.
+func brainDBIntegrityLoop(ctx context.Context, db integrityChecker, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier, interval time.Duration) {
+	checkBrainDBIntegrity(ctx, db, healthMgr, auditor, notifier) // boot run
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			checkBrainDBIntegrity(ctx, db, healthMgr, auditor, notifier)
 		}
 	}
 }

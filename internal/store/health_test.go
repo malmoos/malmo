@@ -313,3 +313,19 @@ func TestBatchUpsertAndDelete_TransactionIsolation(t *testing.T) {
 		t.Fatalf("s2: want canary-mismatch only after s1 batch, got %v", got)
 	}
 }
+
+// TestIntegrityCheck_HealthyDBReturnsOk is the store-layer half of the
+// brain-db-corrupt detector (#36 Done-when): a freshly-migrated, sound database
+// passes PRAGMA integrity_check and reports exactly "ok". The corrupt path is
+// driven at the cmd/brain layer with a fake checker — deliberately corrupting a
+// live SQLite file to make integrity_check fail is flaky and not worth it here.
+func TestIntegrityCheck_HealthyDBReturnsOk(t *testing.T) {
+	s := open(t)
+	got, err := s.IntegrityCheck()
+	if err != nil {
+		t.Fatalf("IntegrityCheck on a healthy DB: %v", err)
+	}
+	if got != "ok" {
+		t.Errorf("IntegrityCheck = %q, want %q", got, "ok")
+	}
+}

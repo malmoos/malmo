@@ -1,10 +1,42 @@
 package store
 
 import (
+	"strings"
 	"time"
 
 	"github.com/malmo/malmo/internal/health"
 )
+
+// IntegrityCheck runs SQLite's PRAGMA integrity_check and returns its result.
+// A sound database returns the single line "ok"; a corrupt one returns one or
+// more rows describing the damage (capped by SQLite at 100). The rows are
+// joined with newlines, so the result is "ok" exactly when the database is
+// sound and a multi-line corruption report otherwise — the caller compares
+// against "ok" and uses the report as the issue's details.
+//
+// This is the persistence-boundary detector for the locus-C brain-db-corrupt
+// health issue (HEALTH.md # Detector catalog): the SQLite query lives here, in
+// the store, not in the health package. The check is read-only and runs against
+// the live database on the brain's single serialized connection.
+func (s *Store) IntegrityCheck() (string, error) {
+	rows, err := s.db.Query(`PRAGMA integrity_check`)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			return "", err
+		}
+		lines = append(lines, line)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return strings.Join(lines, "\n"), nil
+}
 
 // UpsertHealthIssue inserts or replaces one health issue row. Called on every
 // Raise — both on first raise (new row) and on re-raise (updates last_checked_at
