@@ -91,10 +91,11 @@ func writeUnauthenticated(w http.ResponseWriter) {
 // --- DTOs ----------------------------------------------------------------
 
 type UserDTO struct {
-	ID        string `json:"id"`
-	Username  string `json:"username"`
-	Role      string `json:"role"`
-	CreatedAt int64  `json:"created_at"`
+	ID             string `json:"id"`
+	Username       string `json:"username"`
+	Role           string `json:"role"`
+	CreatedAt      int64  `json:"created_at"`
+	SingleUserMode *bool  `json:"single_user_mode,omitempty"`
 }
 
 func userDTO(u store.User) UserDTO {
@@ -102,6 +103,20 @@ func userDTO(u store.User) UserDTO {
 		ID: u.ID, Username: u.Username, Role: u.Role,
 		CreatedAt: u.CreatedAt.Unix(),
 	}
+}
+
+// fullUserDTO builds a UserDTO with box-level context (single_user_mode).
+// Used by /setup, /login, and /me so the flag is always present on the
+// session-bearing responses — no page refresh needed for the UI to know.
+func (s *Server) fullUserDTO(u store.User) (UserDTO, error) {
+	dto := userDTO(u)
+	count, err := s.store.UserCount()
+	if err != nil {
+		return UserDTO{}, err
+	}
+	single := count == 1
+	dto.SingleUserMode = &single
+	return dto, nil
 }
 
 // --- registration --------------------------------------------------------
@@ -268,7 +283,10 @@ func (s *Server) setup(ctx context.Context, in *struct {
 		}
 	}{}
 	out.SetCookie = s.auth.Cookie(sess.Token).String()
-	out.Body.User = userDTO(u)
+	out.Body.User, err = s.fullUserDTO(u)
+	if err != nil {
+		return nil, huma.Error500InternalServerError("user count")
+	}
 	// AUTH.md # Recovery: recovery code is shown exactly once. The brain
 	// stores only the hash; this is the user's single chance to record it.
 	out.Body.RecoveryCode = recoveryCode
@@ -321,7 +339,10 @@ func (s *Server) login(ctx context.Context, in *struct {
 		}
 	}{}
 	out.SetCookie = s.auth.Cookie(sess.Token).String()
-	out.Body.User = userDTO(u)
+	out.Body.User, err = s.fullUserDTO(u)
+	if err != nil {
+		return nil, huma.Error500InternalServerError("user count")
+	}
 	return out, nil
 }
 
@@ -448,10 +469,13 @@ func (s *Server) logout(ctx context.Context, _ *struct{}) (*struct {
 func (s *Server) me(ctx context.Context, _ *struct{}) (*struct{ Body UserDTO }, error) {
 	id, ok := auth.FromContext(ctx)
 	if !ok {
-		// Defensive — middleware should have already 401'd.
 		return nil, huma.Error401Unauthorized("unauthenticated")
 	}
-	return &struct{ Body UserDTO }{Body: userDTO(id.User)}, nil
+	dto, err := s.fullUserDTO(id.User)
+	if err != nil {
+		return nil, huma.Error500InternalServerError("user count")
+	}
+	return &struct{ Body UserDTO }{Body: dto}, nil
 }
 
 // AuditEventDTO is the wire representation of one audit_events row.

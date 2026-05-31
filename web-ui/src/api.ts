@@ -54,6 +54,7 @@ export interface User {
   username: string;
   role: string;
   created_at: number;
+  single_user_mode?: boolean;
 }
 
 export interface AuthState {

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 // Store — browse/install apps (DASHBOARD.md # global navigation). Catalog
-// installs now go through a consent + configuration dialog: clicking Install
-// fetches GET /api/v1/catalog/:id/install-plan (advisory), renders InstallDialog
-// with the scope picker (admins only) and per-folder source/subfolder elections,
-// then submits the elections to POST /api/v1/apps as config.folders[].
+// installs go through a consent + configuration dialog: clicking Install (or
+// "Install for the whole household" from the split-button dropdown) fetches
+// GET /api/v1/catalog/:id/install-plan (advisory), renders InstallDialog with
+// the scope pre-set and per-folder source/subfolder elections, then submits to
+// POST /api/v1/apps as config.folders[].
 // Duplicate-install (409 duplicate-install) surfaces the existing-copy summary
 // and offers "Install my own copy" which re-submits with confirm:true.
 // 422 election-validation errors are passed into the dialog and displayed inline.
@@ -21,11 +22,13 @@ import {
   type Job,
   type InstallPlan,
   type InstallRequest,
+  type Scope,
 } from "../api";
 import InstallDialog from "../components/InstallDialog.vue";
+import SplitButton from "../components/SplitButton.vue";
 
 const qc = useQueryClient();
-const { currentUser } = useAuth();
+const { currentUser, singleUserMode } = useAuth();
 
 const catalog = useQuery({
   queryKey: ["catalog"],
@@ -41,6 +44,8 @@ const apps = useQuery({
 
 // planFor is the catalog id whose install-plan we're fetching/showing.
 const planFor = ref<string | null>(null);
+// dialogScope is the scope the split-button selected before opening the dialog.
+const dialogScope = ref<Scope>("personal");
 // dialogError is passed into InstallDialog for 422 inline display.
 const dialogError = ref<string | null>(null);
 // duplicateInfo holds the ApiError.message from a 409 duplicate-install response.
@@ -72,10 +77,11 @@ const activePlan = computed<InstallPlan | null>(() =>
   planFor.value !== null ? (installPlanQuery.data.value ?? null) : null,
 );
 
-function openInstallDialog(catalogId: string) {
+function openInstallDialog(catalogId: string, scope: Scope = "personal") {
   dialogError.value = null;
   duplicateInfo.value = null;
   pendingRequest.value = null;
+  dialogScope.value = scope;
   planFor.value = catalogId;
 }
 
@@ -166,6 +172,17 @@ function ownPersonalInstance(manifestId: string): Instance | undefined {
   return rowInstances.value.get(manifestId)?.ownPersonal;
 }
 
+// householdDropdownItems is a computed map from manifest_id → dropdown items
+// for the split-button. Recomputed only when role or singleUserMode changes,
+// not on every render cycle. Empty array = plain button (no chevron).
+const householdDropdownItems = computed(() => {
+  const showDropdown = currentUser.value?.role === "admin" && !singleUserMode.value;
+  return (catalogId: string) =>
+    showDropdown
+      ? [{ label: "Install for the whole household", action: () => openInstallDialog(catalogId, "household") }]
+      : [];
+});
+
 // ── Custom app install ────────────────────────────────────────────────────────
 
 const customName = ref("");
@@ -217,13 +234,12 @@ const installCustom = useMutation({
               >
                 Open shared app
               </a>
-              <button
-                class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+              <SplitButton
+                :label="installingId === c.id ? 'Installing…' : 'Install'"
                 :disabled="installingId === c.id"
+                :items="householdDropdownItems(c.id)"
                 @click="openInstallDialog(c.id)"
-              >
-                {{ installingId === c.id ? "Installing…" : "Install" }}
-              </button>
+              />
             </template>
 
             <!-- Caller's own personal instance exists: "Open" link only -->
@@ -240,13 +256,12 @@ const installCustom = useMutation({
 
             <!-- No visible instance: Install button -->
             <template v-else>
-              <button
-                class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+              <SplitButton
+                :label="installingId === c.id ? 'Installing…' : 'Install'"
                 :disabled="installingId === c.id"
+                :items="householdDropdownItems(c.id)"
                 @click="openInstallDialog(c.id)"
-              >
-                {{ installingId === c.id ? "Installing…" : "Install" }}
-              </button>
+              />
             </template>
           </div>
         </li>
@@ -294,6 +309,7 @@ const installCustom = useMutation({
     <InstallDialog
       v-if="activePlan && !duplicateInfo"
       :plan="activePlan"
+      :scope="dialogScope"
       :submit-error="dialogError"
       @submit="handleSubmit"
       @cancel="closeDialog"

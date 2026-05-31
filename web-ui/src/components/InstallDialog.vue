@@ -8,24 +8,22 @@
 // UI owns ALL wording — the brain returns structured enums; we write sentences.
 // Write-mode folder warnings are visually distinct (warning/red) per spec
 // (APP_MANIFEST.md:218, APP_ISOLATION.md # User content).
-import { ref, computed, watch } from "vue";
+import { ref } from "vue";
 import type { InstallPlan, InstallRequest, FolderElection, Scope } from "../api";
+import { useAuth } from "../auth";
 
 const props = defineProps<{
   plan: InstallPlan;
+  scope: Scope;
   submitError?: string | null;
 }>();
+
+const { singleUserMode } = useAuth();
 
 const emit = defineEmits<{
   submit: [req: InstallRequest];
   cancel: [];
 }>();
-
-// ── Scope election ────────────────────────────────────────────────────────────
-
-const electedScope = ref<Scope>(props.plan.scope_default);
-
-const hasMultipleScopes = computed(() => props.plan.scope_options.length > 1);
 
 // ── Per-folder elections ──────────────────────────────────────────────────────
 
@@ -41,29 +39,16 @@ function initFolderDefaults(scope: Scope) {
     const menu = f.sources[scope];
     sources[f.folder] = menu.default;
     if (f.scope === "pick-subfolder") {
-      // keep existing user entry if already typed, otherwise take the plan default
       subfolders[f.folder] = folderSubfolders.value[f.folder] ?? (f.subfolder_default ?? "");
     }
   }
   folderSources.value = sources;
-  // only overwrite subfolders on first init (don't clobber user input on scope flip)
   if (Object.keys(folderSubfolders.value).length === 0) {
     folderSubfolders.value = subfolders;
   }
 }
 
-// Initialise on mount
-initFolderDefaults(electedScope.value);
-
-// Re-derive source defaults when scope flips (subfolder user input is preserved)
-watch(electedScope, (newScope) => {
-  const sources: Record<string, string> = {};
-  for (const f of props.plan.permissions.folders) {
-    const menu = f.sources[newScope];
-    sources[f.folder] = menu.default;
-  }
-  folderSources.value = sources;
-});
+initFolderDefaults(props.scope);
 
 // ── Human-readable helpers ────────────────────────────────────────────────────
 
@@ -77,12 +62,12 @@ function folderDisplayName(folder: string): string {
 
 function sourceLabel(folder: string, source: string): string {
   const name = folderDisplayName(folder);
-  if (source === "shared") return `The household's shared ${name}`;
+  if (source === "shared") {
+    return singleUserMode.value
+      ? `Shared ${name} (accessible from your other devices)`
+      : `The household's shared ${name}`;
+  }
   return `Your ${name}`;
-}
-
-function scopeLabel(scope: Scope): string {
-  return scope === "household" ? "For the whole household" : "Just for me";
 }
 
 // ── Submit ────────────────────────────────────────────────────────────────────
@@ -90,7 +75,9 @@ function scopeLabel(scope: Scope): string {
 function handleSubmit() {
   const folderElections: FolderElection[] = props.plan.permissions.folders.map((f) => {
     const election: FolderElection = { folder: f.folder };
-    election.source = folderSources.value[f.folder];
+    if (f.sources[props.scope].options.length > 1) {
+      election.source = folderSources.value[f.folder];
+    }
     if (f.scope === "pick-subfolder") {
       const sub = folderSubfolders.value[f.folder];
       if (sub) election.subfolder = sub;
@@ -100,7 +87,7 @@ function handleSubmit() {
 
   const req: InstallRequest = {
     manifest_id: props.plan.manifest_id,
-    scope: electedScope.value,
+    scope: props.scope,
     config: { folders: folderElections },
   };
 
@@ -126,32 +113,6 @@ function handleSubmit() {
       </div>
 
       <div class="space-y-5 px-5 py-4">
-
-        <!-- Scope picker (admins only, when more than one option) -->
-        <div v-if="hasMultipleScopes" class="space-y-1.5">
-          <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Install for</p>
-          <div class="flex flex-col gap-1">
-            <label
-              v-for="opt in plan.scope_options"
-              :key="opt"
-              class="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted"
-              :class="electedScope === opt ? 'border-accent bg-muted' : ''"
-            >
-              <input
-                type="radio"
-                :value="opt"
-                v-model="electedScope"
-                class="accent-accent"
-              />
-              {{ scopeLabel(opt) }}
-            </label>
-          </div>
-        </div>
-
-        <!-- Fixed scope display (members — no picker) -->
-        <div v-else class="text-sm text-muted-foreground">
-          Installing as a personal app.
-        </div>
 
         <!-- Permissions section -->
         <div class="space-y-1.5">
@@ -213,16 +174,16 @@ function handleSubmit() {
 
             <!-- Single option: fixed/disabled display -->
             <p
-              v-if="f.sources[electedScope].options.length === 1"
+              v-if="f.sources[scope].options.length === 1"
               class="text-sm text-muted-foreground"
             >
-              {{ sourceLabel(f.folder, f.sources[electedScope].options[0] ?? "") }}
+              {{ sourceLabel(f.folder, f.sources[scope].options[0] ?? "") }}
             </p>
 
             <!-- Multiple options: radio picker -->
             <div v-else class="flex flex-col gap-1">
               <label
-                v-for="opt in f.sources[electedScope].options"
+                v-for="opt in f.sources[scope].options"
                 :key="opt"
                 class="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-2.5 py-1.5 text-sm hover:bg-muted"
                 :class="folderSources[f.folder] === opt ? 'border-accent bg-muted' : ''"

@@ -13,7 +13,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/vue-query";
 import { api, waitForJob, type Instance, type Job } from "../api";
 import { useAuth } from "../auth";
 
-const { currentUser } = useAuth();
+const { currentUser, singleUserMode } = useAuth();
 const qc = useQueryClient();
 
 const apps = useQuery({
@@ -57,7 +57,7 @@ const uninstall = useMutation({
         >
           <div class="flex items-baseline gap-2">
             <strong class="text-sm">{{ a.name }}</strong>
-            <span class="text-xs text-muted-foreground">{{ a.scope === "household" ? "Shared" : a.owner_username }}</span>
+            <span v-if="!singleUserMode" class="text-xs text-muted-foreground">{{ a.scope === "household" ? "Shared" : a.owner_username }}</span>
             <span class="text-xs text-muted-foreground">· {{ a.state }}</span>
           </div>
           <button

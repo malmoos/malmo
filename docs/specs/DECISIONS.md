@@ -51,6 +51,21 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-05-31 — Single-user simplification: suppress household/personal UI when only one user exists
+
+**Previously:** the dashboard always rendered Household/Yours section groupings, app tiles always showed a "Shared"/"Personal" label, and the install consent dialog contained a scope radio picker (admins saw "For the whole household" / "Just for me"; members saw a fixed "Installing as a personal app" message). The picker was inside the dialog regardless of how many users the box had.
+
+**Now:** when `single_user_mode` is true (one registered user), the household/personal distinction is suppressed everywhere: section headers hidden, tile scope label hidden, Settings owner label hidden, install button is a plain button (no split-button/chevron). The scope radio is removed from the dialog entirely for everyone; scope is pre-decided by which button variant the user clicked before the dialog opens. For admins on a multi-user box the store row shows a split-button: primary = personal (just for me), dropdown = household. The shared folder source label is relabeled from "The household's shared X" to "Shared X (accessible from your other devices)" when `single_user_mode`, since "household" is confusing without a second user even though the Samba use-case (cross-device file access) is valid solo.
+
+**Why:**
+- A single-user box has no audience for the household/personal distinction. Showing the grouping, the label, and the picker is noise that adds cognitive load and implies a multi-user model the user hasn't entered yet.
+- Moving scope selection out of the dialog and onto the Install button (split-button pattern) is cleaner for multi-user too: the user decides who the app is for before entering the consent flow, rather than being asked mid-flow.
+- The "just for me" action is the dominant action (personal scope is the silent default) so it gets the primary button slot; "for the whole household" is secondary and gets the dropdown.
+
+**Affected docs:** `DASHBOARD.md` (new # Single-user simplification section; install-flow description updated); `BRAIN_UI_PROTOCOL.md` (`single_user_mode` on session-bearing responses; scope-picker note on install-plan). Code: `internal/store` (`UserCount`), `internal/api/auth` (`fullUserDTO`, `single_user_mode` on `/me`+`/login`+`/setup`), `web-ui` (`SplitButton.vue`, `InstallDialog` scope prop, `singleUserMode` in `useAuth`, home grid headers, tile label, settings label, shared folder relabel). Progress: `single-user-simplification.md`.
+
+---
+
 ## 2026-05-30 — Folder source is installer-elected; `user_folders` / `shared_folders` collapse into one `folders` declaration
 
 **Previously:** the permission schema reconciled earlier the same day (entry below) declared content access through two keys that *encoded the source in the key name*: `user_folders` (bound the owner's `~/<Folder>/`) and `shared_folders` (bound `/srv/malmo/shared/<Folder>/` + `malmo-shared` group). The author chose the source by choosing the key; a personal instance could not read household-shared content (an explicit `APP_ISOLATION.md` MVP carve-out, deferred in `NEXT.md`). The consent model was specced as "inputs = scope + pick-subfolder + acknowledgements only."

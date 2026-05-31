@@ -32,7 +32,9 @@ A member installing an app binds *their own* user folders into *their own* insta
 
 **Folder source is a per-folder install choice.** For each folder an app declares (`APP_MANIFEST.md` # `folders`), the install screen resolves a *source*: a personal instance offers the owner's folder (default) or the household Shared folder per folder; a household instance always uses Shared. The author declares only the folder + mode, never the source — "my own Jellyfin on my movies" vs "on the family library" is the installer's call, not the author's (`DECISIONS.md` 2026-05-30). This is the only folder-related input on the otherwise all-or-nothing consent screen, alongside the `pick-subfolder` prompt.
 
-**The consent screen is driven by `GET /api/v1/catalog/:id/install-plan`** (`BRAIN_UI_PROTOCOL.md` # GET /api/v1/catalog/:id/install-plan). The brain computes the screen's inputs from the parsed manifest and the caller's role: the role-derived scope options (admin gets Household + Just-for-me, member gets personal only), the declared permissions, and a per-folder per-scope source menu (household → Shared only; personal → owner's folder or Shared). The endpoint is read-only and advisory — it makes no host calls and mutates nothing; the user's elections are validated and stamped into the compose override only at `POST /api/v1/apps` install time.
+**The consent screen is driven by `GET /api/v1/catalog/:id/install-plan`** (`BRAIN_UI_PROTOCOL.md` # GET /api/v1/catalog/:id/install-plan). The brain computes the screen's inputs from the parsed manifest and the caller's role: the declared permissions and a per-folder per-scope source menu (household → Shared only; personal → owner's folder or Shared). The endpoint is read-only and advisory — it makes no host calls and mutates nothing; the user's elections are validated and stamped into the compose override only at `POST /api/v1/apps` install time.
+
+**Scope is selected by the Install button, not inside the dialog.** The consent dialog shows permissions + folder sources only; scope is pre-decided by which button variant the user clicked. In the store row, admins on a multi-user box see a split-button: the primary **Install** action installs as personal (just for them); the chevron dropdown offers **Install for the whole household**. Members and single-user-mode admins see a plain Install button (personal, no choice needed). See # Single-user simplification below.
 
 ### Warn, don't block, on duplicate install
 
@@ -156,6 +158,24 @@ Umbrel ships app-contributed home-screen widgets as a first-class `umbreld` modu
 - The information widgets would carry (health, resources, storage) already has homes: the storage pill, the bell, the live-resources surface (`LOCAL_ANALYTICS.md`), and the degraded-state cards that appear *only* when something's wrong.
 
 This is a pin-a-no decision, recorded so a future "add widgets" PR is a deliberate reopening, not a drift. If widgets ever return, they'd be an app-manifest feature designed alongside the security model — out of scope now.
+
+---
+
+## Locked: single-user simplification
+
+When `single_user_mode` is true (the box has exactly one registered user), the household/personal distinction is meaningless — suppress it everywhere. The UI should read as a simple, personal launcher with no multi-user vocabulary.
+
+**Home grid:** the Household and Yours section headers are hidden. All apps render in a flat grid; sections still render only when non-empty, so the layout is unchanged, just unlabeled.
+
+**Install button:** a plain **Install** button with no chevron. Scope is silently personal. The split-button (with the household dropdown) only appears when `role == admin && !single_user_mode`.
+
+**App tiles:** the "Shared" / "Personal" scope label is hidden. The tile shows name only.
+
+**Settings manage-apps list:** the scope/owner label (e.g. "Shared" or the owner's username) is hidden.
+
+**Folder source labels in the consent dialog:** "The household's shared X" is relabeled to "Shared X (accessible from your other devices)" — the Samba angle is real and valid even solo, but "household" is confusing with one user.
+
+**Transition:** `single_user_mode` is recomputed on every session-bearing response (`/login`, `/setup`, `/me`). When a second user is created and the admin next logs in or refreshes, `single_user_mode` becomes false and all suppressed UI reappears. No migration of existing app instances needed — scope and owner metadata is always stored; it just wasn't surfaced.
 
 ---
 
