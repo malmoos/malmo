@@ -35,6 +35,12 @@ Two real options:
 
 **Recommendation: backports kernel.** BYO hardware is a stated pillar (`SPEC.md`); shipping a kernel that doesn't recognize last year's Wi-Fi chips defeats it. Cost is a slightly larger update surface — acceptable.
 
+### Kernel cmdline
+
+The installed GRUB config must set these kernel parameters (`GRUB_CMDLINE_LINUX`):
+
+- **`psi=1`** — enables the Pressure Stall Information accounting (`/proc/pressure/*`) that the `ram-pressure` health detector (`HEALTH.md` # Detector catalog) reads. Debian builds the kernel with `CONFIG_PSI=y` but `CONFIG_PSI_DEFAULT_DISABLED=y`, so PSI returns no useful data at runtime unless `psi=1` is on the cmdline. Without it the detector silently reads zeros and never fires — a false all-clear. Cost is negligible (a few per-cgroup counters).
+
 ### Firmware
 
 - Include `firmware-linux`, `firmware-iwlwifi`, `firmware-realtek`, `firmware-amd-graphics`, `firmware-misc-nonfree` and similar. Non-free firmware is now in Debian's official installer by default (since Bookworm); we follow suit. Without this, half of laptops won't have working Wi-Fi at first boot.

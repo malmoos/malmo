@@ -21,6 +21,13 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-05-31 — `clock-not-synced` is detected by host-agent (locus B), not the brain
+
+**Previously:** `TIME.md` # Drift monitoring read "Brain polls `chronyc tracking` once a minute." Written before the health-detector locus model landed.
+**Now:** host-agent samples `chronyc tracking` every 5 minutes and reports findings; the brain reconciles. Detection is **locus B** per `HEALTH.md` # Detector catalog, and findings ride the generalized `GET /v1/health/system` report. The "Force sync now" action (`chronyc -a makestep`) likewise runs in host-agent, driven by the brain.
+**Why:** the 2026-05-29 detector catalog established that the brain runs in a container behind the Docker socket-proxy and **cannot exec host tooling** — "no `smartctl`, no `systemctl is-active`, no `chronyc`." The old `TIME.md` line contradicted that fact directly; a contributor following it would build the poll in the brain and hit the socket-proxy wall. Cadence also reconciled: `HEALTH.md`'s 5 min wins over `TIME.md`'s 1 min — clock drift is slow and the lighter poll is sufficient. Thresholds (6h-since-sync OR offset >10s) already agreed across both docs and are unchanged.
+**Affected docs:** `TIME.md` (# Drift monitoring rewritten to host-agent/5 min), `HEALTH.md` (already correct — the source of truth here).
+
 ## 2026-05-31 — App LAN URLs go single-label `<slug>.local` (was `<slug>.malmo.local`)
 
 **Previously:** every app instance was reachable on the LAN at `<slug>.malmo.local` — e.g. `photos.malmo.local`, `immich--alex.malmo.local`. `DISCOVERY.md` justified the double-dash slug shape as "single-label … resolves on every mDNS client (multi-label `.local` does not)" and asserted Linux desktops resolve it with `nss-mdns` and need "nothing to do."

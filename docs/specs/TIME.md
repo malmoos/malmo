@@ -86,7 +86,7 @@ This is the same pattern as `HEALTH.md` # Stance — degraded mode over hard fai
 
 ## Drift monitoring and the `clock-not-synced` health issue
 
-Brain polls `chronyc tracking` once a minute. Parses two values: time-since-last-sync and current offset estimate.
+**host-agent** samples `chronyc tracking` every 5 minutes and reports the result; the brain reconciles it into the `clock-not-synced` issue. Two values are parsed: time-since-last-sync and current offset estimate. This is a **locus-B (host-agent periodic) detector** — the brain runs in a container behind the Docker socket-proxy and cannot exec `chronyc` on the host, so every `chronyc` interaction (this poll and the "Force sync now" action below) runs in host-agent and is driven by the brain over `BRAIN_HOST_PROTOCOL.md` (`HEALTH.md` # Detector catalog, # Where detectors run).
 
 **Raise `clock-not-synced` when:**
 
