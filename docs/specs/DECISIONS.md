@@ -21,6 +21,51 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-05-31 — App LAN URLs go single-label `<slug>.local` (was `<slug>.malmo.local`)
+
+**Previously:** every app instance was reachable on the LAN at `<slug>.malmo.local` — e.g. `photos.malmo.local`, `immich--alex.malmo.local`. `DISCOVERY.md` justified the double-dash slug shape as "single-label … resolves on every mDNS client (multi-label `.local` does not)" and asserted Linux desktops resolve it with `nss-mdns` and need "nothing to do."
+
+**Now:** apps are reachable at single-label `<slug>.local` — `photos.local`, `immich--alex.local`. The box/dashboard stays `malmo.local`; the `<slug>.<box-id>.malmo.network` HTTPS scheme is unchanged. On an Avahi name collision the publisher retries once with a box-qualified fallback `<slug>-<box>.local` (e.g. `photos-malmo.local`) and the brain uses the *returned* name for the URL it shows and the Caddy route it writes.
+
+**Why:** the old shape never resolved on Linux. `<slug>.malmo.local` is multi-label relative to `.local`, and `nss-mdns` rejects any name with a dot before `.local` outright (verified empirically on a dev box: instant NXDOMAIN in ~23ms, no network query; a single-label name published by the same Avahi resolved fine via the same `getaddrinfo` path). `systemd-resolved`'s mDNS rejected it too. So the foundational, no-cloud LAN URL — the thing `.local` exists to provide — was broken on Linux and the dev loop, exactly the early-adopter (tinkerer) base. The `.malmo` infix bought nothing in return: mDNS (RFC 6762) has no zones, delegation, or wildcards, so `<slug>.malmo.local` is not a subdomain of `malmo.local` — it's a flat name that merely *contains* dots, published individually like any other. Dropping the infix is the smallest change that makes the friendly-name default actually resolve, while preserving browser origin-isolation (each app keeps a distinct host) and the `<slug>` prefix symmetry with the `.malmo.network` scheme. Competitor research backs the difficulty: Umbrel, ZimaOS, and Synology all avoid per-app `.local` subdomains entirely (ports on one single-label host for LAN; real DNS + reverse proxy for named external access) — per-app `.local` names are a genuine differentiator, but only if single-label. Ports remain the spec's opt-in fallback (`SPEC.md` # Optional port-based routing) for LANs where even single-label mDNS is flaky. The flat-namespace collision risk (`photos.local` vs a printer) is handled by the `<slug>-<box>.local` fallback plus Avahi's RFC 6762 conflict-resolution.
+
+**Affected docs:** `DISCOVERY.md` (# Per-app A records rewritten to single-label + collision fallback; client-compat matrix corrected — Linux was the casualty, not "nothing to do"). `MALMO_NETWORK.md` (# URL-scheme table). `SPEC.md` (# LAN routing examples; the multi-name-mDNS cost note is now categorical-on-Linux, not edge-case). `DASHBOARD.md`, `APP_LIFECYCLE.md` (URL examples; reconciler binds Caddy to the published name). `AUTH.md` + `THREAT_MODEL.md` (cookie-`Domain` warnings restated for the single-label scheme). Mechanical example updates in `APP_ISOLATION.md`, `BRAIN_HOST_PROTOCOL.md`, `SERVICE_PROVISIONING.md`, `CONTROL_PLANE.md`, `BUILD.md`. Code: `internal/protocol` (`AppHostSuffix` constant), `internal/hostagent/avahipublisher` (collision fallback), `internal/lifecycle` + `internal/api` (trust the published name). Progress: `single-label-app-local.md`.
+
+---
+
+## 2026-05-31 — App hostname encodes uniqueness, not ownership
+
+**Previously:** `DASHBOARD.md` # instance naming specified that the hostname encodes scope — bare `<slug>` for household, `<slug>--<user>` for personal. "Ownership is legible in the URL itself" was a stated pro. Every personal instance was always suffixed, even on a single-user box where no disambiguation was necessary.
+
+**Now:** The bare `<slug>` is **first-come, any scope.** The first instance of any app installed wins the clean name (`immich.local`) regardless of whether it's household or personal. Collisions use the `--<user>` suffix for personal instances (no owner name otherwise available) and a numeric suffix (`-2`, `-3`) for household instances. The hostname encodes uniqueness, not ownership; scope and owner are surfaced in the dashboard grid (Household / Yours grouping + owner label on the tile).
+
+**Why:**
+- **Single-user boxes got noisy hostnames for no reason.** With the old rule, a single-admin household installing Immich as a personal instance got `immich--admin.local` — a suffix signaling a disambiguation that never happened. The natural name is `immich.local`.
+- **First-come is the global DNS model.** DNS registrations are first-come regardless of who registered them; routing correctness doesn't require the hostname to encode the registrant's identity.
+- **Ownership belongs in the dashboard, not the URL.** The dashboard already groups apps into Household / Yours and labels the owner — that's the right surface for ownership legibility. The URL needs to be unique and stable; it doesn't need to be inferrable.
+- **Reduces the mDNS username leak.** Under the old rule every personal instance leaked `username ↔ app` to the LAN via its mDNS record. Under the new rule bare names (the common case on a lightly loaded box) reveal nothing about scope or ownership; the `--<user>` suffix appears only when a second instance of the same app actually exists and disambiguation is necessary.
+
+**Note:** The `<slug>--<user>` separator and flat-label constraints from the 2026-05-29 decision still hold — the separator rationale (kebab ambiguity), the catalog slug and username `--` prohibition, and the `xn--` guard are all unchanged. What changes is which cases actually trigger the suffix.
+
+**Affected docs:** `DASHBOARD.md` (# instance naming table + bullets rewritten; pros/cons updated; privacy leak note revised); `DISCOVERY.md` (# Per-app A records — slug description updated); `APP_LIFECYCLE.md` (# slug derivation note); `APP_ISOLATION.md` (# Routing per instance). Code: `internal/lifecycle/lifecycle.go` (`allocateSlug` now tries bare first for any scope, appends `--<user>` on personal collision, numeric on household collision). Progress: `hostname-uniqueness-not-ownership.md`.
+
+---
+
+## 2026-05-31 — Single-user simplification: suppress household/personal UI when only one user exists
+
+**Previously:** the dashboard always rendered Household/Yours section groupings, app tiles always showed a "Shared"/"Personal" label, and the install consent dialog contained a scope radio picker (admins saw "For the whole household" / "Just for me"; members saw a fixed "Installing as a personal app" message). The picker was inside the dialog regardless of how many users the box had.
+
+**Now:** when `single_user_mode` is true (one registered user), the household/personal distinction is suppressed everywhere: section headers hidden, tile scope label hidden, Settings owner label hidden, install button is a plain button (no split-button/chevron). The scope radio is removed from the dialog entirely for everyone; scope is pre-decided by which button variant the user clicked before the dialog opens. For admins on a multi-user box the store row shows a split-button: primary = personal (just for me), dropdown = household. The shared folder source label is relabeled from "The household's shared X" to "Shared X (accessible from your other devices)" when `single_user_mode`, since "household" is confusing without a second user even though the Samba use-case (cross-device file access) is valid solo.
+
+**Why:**
+- A single-user box has no audience for the household/personal distinction. Showing the grouping, the label, and the picker is noise that adds cognitive load and implies a multi-user model the user hasn't entered yet.
+- Moving scope selection out of the dialog and onto the Install button (split-button pattern) is cleaner for multi-user too: the user decides who the app is for before entering the consent flow, rather than being asked mid-flow.
+- The "just for me" action is the dominant action (personal scope is the silent default) so it gets the primary button slot; "for the whole household" is secondary and gets the dropdown.
+
+**Affected docs:** `DASHBOARD.md` (new # Single-user simplification section; install-flow description updated); `BRAIN_UI_PROTOCOL.md` (`single_user_mode` on session-bearing responses; scope-picker note on install-plan). Code: `internal/store` (`UserCount`), `internal/api/auth` (`fullUserDTO`, `single_user_mode` on `/me`+`/login`+`/setup`), `web-ui` (`SplitButton.vue`, `InstallDialog` scope prop, `singleUserMode` in `useAuth`, home grid headers, tile label, settings label, shared folder relabel). Progress: `single-user-simplification.md`.
+
+---
+
 ## 2026-05-30 — Folder source is installer-elected; `user_folders` / `shared_folders` collapse into one `folders` declaration
 
 **Previously:** the permission schema reconciled earlier the same day (entry below) declared content access through two keys that *encoded the source in the key name*: `user_folders` (bound the owner's `~/<Folder>/`) and `shared_folders` (bound `/srv/malmo/shared/<Folder>/` + `malmo-shared` group). The author chose the source by choosing the key; a personal instance could not read household-shared content (an explicit `APP_ISOLATION.md` MVP carve-out, deferred in `NEXT.md`). The consent model was specced as "inputs = scope + pick-subfolder + acknowledgements only."

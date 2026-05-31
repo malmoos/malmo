@@ -69,10 +69,24 @@ export async function logout() {
   }
 }
 
+// refreshCurrentUser re-fetches /me and updates currentUser. Call this in the
+// onSettled hook of any user-management mutation (create/delete/role-change) so
+// single_user_mode stays accurate without a page reload.
+export async function refreshCurrentUser() {
+  try {
+    currentUser.value = await api.get<User>("/me");
+  } catch {
+    // 401 means the session is gone; the unauthenticated handler already clears
+    // currentUser, so nothing extra to do here.
+  }
+}
+
 export function useAuth() {
   return {
     currentUser: computed(() => currentUser.value),
     hasUsers: computed(() => hasUsers.value),
     booted: computed(() => booted.value),
+    singleUserMode: computed(() => currentUser.value?.single_user_mode ?? false),
+    refreshCurrentUser,
   };
 }

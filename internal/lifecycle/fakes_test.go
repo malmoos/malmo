@@ -241,7 +241,7 @@ func (h *fakeHost) Publish(_ context.Context, slug string) (protocol.PublishResp
 	h.calls = append(h.calls, call{method: "Publish", args: []any{slug}})
 	h.published[slug] = true
 	h.mu.Unlock()
-	return protocol.PublishResponse{Name: slug + ".malmo.local"}, nil
+	return protocol.PublishResponse{Name: slug + ".local"}, nil
 }
 
 func (h *fakeHost) Unpublish(_ context.Context, slug string) error {

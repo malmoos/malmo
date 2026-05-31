@@ -10,7 +10,7 @@ The brain's unit of management is a **compose project**, not an individual conta
 - Every container the brain manages carries labels: `malmo.managed=true`, `malmo.instance_id=<id>`, `malmo.manifest_id=<id>`.
 - `main_service` (from the manifest) is the service the brain routes to and watches for health. Other services in the compose are siblings managed by the same lifecycle ops.
 - Tier-3 per-user apps are N independent compose projects pointing at the same manifest+compose. Each has its own instance id, data dir, and slug.
-- **Slug derivation (locked, see `DASHBOARD.md` # instance naming):** a household (shared) instance takes the bare manifest slug `<slug>`; a personal instance takes `<slug>--<user>` (double-dash separator, owner's username trailing). Flat and single-label so it fits the one wildcard cert `*.<box-id>.malmo.network` and resolves cleanly over mDNS. Slugs and usernames may not contain `--` or produce an `xn--` label prefix.
+- **Slug derivation (locked, see `DASHBOARD.md` # instance naming):** the bare manifest slug `<slug>` is first-come for any scope — the first instance installed wins the clean name. On a collision, a personal instance appends the owner (`<slug>--<user>`, double-dash separator); a household instance (no owner to name) gets a numeric suffix (`<slug>-2`, `<slug>-3`). Flat and single-label so it fits the one wildcard cert `*.<box-id>.malmo.network` and resolves cleanly over mDNS. Slugs and usernames may not contain `--` or produce an `xn--` label prefix.
 
 Door-1 (store) and Door-2 (custom compose) converge here: both produce a manifest+compose pair that the brain installs identically. The Door-2 path just synthesizes the manifest first.
 
@@ -139,7 +139,7 @@ Rejection messages name the exact field that failed. Catalog CI runs the same ch
 Brain writes a `.env` file in the instance dir; compose auto-loads it. MVP variable set:
 
 - `MALMO_INSTANCE_ID` — opaque instance identifier.
-- `MALMO_APP_URL` — the routable URL for this instance (e.g. `https://photos.malmo.local`).
+- `MALMO_APP_URL` — the routable URL for this instance (e.g. `http://photos.local`).
 - `MALMO_DATA_DIR` — absolute path to the instance's `data/` dir, for compose to reference in bind mounts.
 
 The app's compose maps these to whatever variable names the app expects. No auto-rewrite.
@@ -229,7 +229,7 @@ Avahi runs on the host as a normal Debian service (`avahi-daemon`). It needs hos
 
 The `host-agent` owns the Avahi integration and exposes a narrow `publish/unpublish hostname` RPC over the host-agent ↔ brain channel. The brain calls this RPC during install (publish) and uninstall (unpublish). The brain never talks to Avahi directly.
 
-**Mechanism:** `publish` writes a static service file at `/etc/avahi/services/app-<slug>.service` declaring an A-record alias for `<slug>.malmo.local`. Avahi watches that directory and announces on file create — handling re-announcement on link-up and IP change for free, durable across daemon restarts. `unpublish` removes the file. Preferred over a long-lived `avahi-publish` process per app, which would need supervision for no upside. The full mechanism (record types, interface scoping, conflict handling) lives in `DISCOVERY.md`.
+**Mechanism:** `publish` calls Avahi's DBus API (`EntryGroupNew` → `AddAddress` → `Commit`) to announce an A record for `<slug>.local` pointing at the box's LAN IP; on a name collision it retries once with the box-qualified `<slug>-<box>.local` and returns whichever name won. `unpublish` frees the entry group. (An earlier static-service-file approach was abandoned — Avahi static files announce *services*, not bare A-record aliases; see `DISCOVERY.md` # Per-app A records and `DECISIONS.md` 2026-05-24.) The brain uses the **returned** name for both the Caddy route and the displayed URL, so the two never disagree. The full mechanism (record types, interface scoping, conflict handling, single-label rationale) lives in `DISCOVERY.md`.
 
 **Readiness gate:** `publish` is a Pattern-B job (`BRAIN_HOST_PROTOCOL.md`) — host-agent writes the file, then waits on Avahi's DBus for `EntryGroup.StateChanged → ESTABLISHED` (typically <1s, but a real propagation step) before returning success. The brain does not mark the app `ready` until publish completes; an unannounced name behind a live Caddy route is a confusing "browser timeout" failure mode we structurally prevent.
 
@@ -241,7 +241,7 @@ Side benefit: host-agent already needs a brain-facing channel for OS updates and
 
 When the install transaction reaches step 8, the brain registers the Caddy route immediately, pointing at a malmo-served splash page ("Photos is starting up…", auto-refreshing). Once `main_service` is healthy, the brain flips the Caddy upstream from the splash to the real container (step 11).
 
-**Why:** registering only after the container is healthy leaves `photos.malmo.local` returning *connection refused* (or NXDOMAIN, since mDNS isn't published yet) for up to 120 seconds after the user clicks install. That looks broken; the splash looks intentional.
+**Why:** registering only after the container is healthy leaves `photos.local` returning *connection refused* (or NXDOMAIN, since mDNS isn't published yet) for up to 120 seconds after the user clicks install. That looks broken; the splash looks intentional.
 
 The same splash machinery serves three user-visible states with consistent vocabulary:
 

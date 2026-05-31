@@ -10,8 +10,10 @@
 import { computed } from "vue";
 import { AppWindow, AlertTriangle } from "lucide-vue-next";
 import type { Instance } from "../api";
+import { useAuth } from "../auth";
 
 const props = defineProps<{ instance: Instance }>();
+const { singleUserMode } = useAuth();
 
 const running = computed(() => props.instance.state === "running");
 const label = computed(() => (props.instance.scope === "household" ? "Shared" : "Personal"));
@@ -36,7 +38,7 @@ const label = computed(() => (props.instance.scope === "household" ? "Shared" : 
     </div>
     <div class="min-w-0">
       <div class="truncate text-sm font-medium">{{ instance.name }}</div>
-      <div class="text-xs text-muted-foreground">{{ label }}</div>
+      <div v-if="!singleUserMode" class="text-xs text-muted-foreground">{{ label }}</div>
     </div>
   </component>
 </template>

@@ -3,7 +3,7 @@
 #
 # What this verifies:
 #   1. host-agent-real builds and starts
-#   2. POST /v1/discovery/publish causes Avahi to announce <slug>.malmo.local
+#   2. POST /v1/discovery/publish causes Avahi to announce <slug>.local
 #   3. avahi-resolve actually returns an A record for that name
 #   4. POST /v1/discovery/unpublish withdraws the announcement
 #
@@ -18,7 +18,7 @@
 # Usage:
 #   dev/test-avahi-publisher.sh [slug]
 #
-# Default slug is "malmotest". Tests against ${slug}.malmo.local.
+# Default slug is "malmotest". Tests against ${slug}.local.
 #
 # Cleanup: kills host-agent-real and removes the socket on exit, even on
 # failure. Avahi withdraws the name automatically when the DBus connection
@@ -27,7 +27,7 @@
 set -euo pipefail
 
 SLUG="${1:-malmotest}"
-NAME="${SLUG}.malmo.local"
+NAME="${SLUG}.local"
 SOCK="/tmp/malmo-agent-test.sock"
 BIN=".dev/host-agent-real"
 

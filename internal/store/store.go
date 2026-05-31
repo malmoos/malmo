@@ -559,11 +559,17 @@ func (s *Store) CountAdmins() (int, error) {
 	return n, err
 }
 
+// UserCount returns the total number of registered users.
+func (s *Store) UserCount() (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n)
+	return n, err
+}
+
 // HasAnyUser is the bootstrap probe: /v1/auth/state uses it to route the UI
 // between /setup and /login.
 func (s *Store) HasAnyUser() (bool, error) {
-	var n int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n)
+	n, err := s.UserCount()
 	return n > 0, err
 }
 

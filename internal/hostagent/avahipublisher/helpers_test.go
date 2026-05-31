@@ -56,7 +56,7 @@ func TestSlugRE_AcceptsValidSlugs(t *testing.T) {
 // without needing a real DBus connection — the validation fires before any
 // network call.
 func TestPublish_RejectsInvalidSlug(t *testing.T) {
-	p := &DBusPublisher{HostSuffix: ".malmo.local"}
+	p := &DBusPublisher{HostSuffix: ".local"}
 
 	badSlugs := []string{"", "UPPER", "has.dot", "has space", "../etc/passwd"}
 	for _, slug := range badSlugs {
@@ -76,5 +76,31 @@ func TestErrCollision_Sentinel(t *testing.T) {
 	}
 	if errors.Is(errors.New("other"), ErrCollision) {
 		t.Error("errors.Is(other, ErrCollision) should be false")
+	}
+}
+
+// --- Collision-fallback box label -------------------------------------------
+
+// TestSanitizeBoxLabel covers the host→label reduction used to build the
+// collision-fallback name "<slug>-<box>.local".
+func TestSanitizeBoxLabel(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"malmo", "malmo"},
+		{"claw-stack", "claw-stack"},
+		{"MALMO", "malmo"},         // lowercased
+		{"box.lan.example", "box"}, // first label only
+		{"box.local", "box"},       //
+		{"my_box!", "mybox"},       // drops chars outside [a-z0-9-]
+		{"Föö-box", "f-box"},       // non-ASCII dropped, hyphen kept
+		{"", "malmo"},              // empty → fallback
+		{"...", "malmo"},           // sanitizes to empty → fallback
+		{"123", "123"},             // digits ok
+	}
+	for _, c := range cases {
+		t.Run(c.in, func(t *testing.T) {
+			if got := sanitizeBoxLabel(c.in); got != c.want {
+				t.Errorf("sanitizeBoxLabel(%q) = %q; want %q", c.in, got, c.want)
+			}
+		})
 	}
 }

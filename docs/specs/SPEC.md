@@ -104,7 +104,7 @@ The full `manifest.yml` schema is **deliberately deferred** until we understand 
 
 ### LAN routing — subdomain-based
 
-- Each installed app is reachable at its own subdomain: `photos.malmo.local`, `grocery.malmo.local`, etc.
+- Each installed app is reachable at its own single-label `.local` name: `photos.local`, `grocery.local`, etc. (Single-label, not `photos.malmo.local` — the `.malmo` infix made the name multi-label, which Linux resolvers reject; see `DISCOVERY.md` # Per-app A records and `DECISIONS.md` 2026-05-31.)
 - App authors **suggest preferred slugs** in priority order in their manifest; the OS picks the first one that's free.
 - The OS publishes each app's hostname via mDNS (Avahi) at install time.
 - LAN traffic is plain HTTP; HTTPS is available on the same apps via the opt-in `<box-id>.malmo.network` subdomain (see `MALMO_NETWORK.md`).
@@ -139,7 +139,8 @@ We considered path-based routing (`malmo.local/photos`, `malmo.local/grocery`) a
 
 **Subdomain costs we accept:**
 - mDNS doesn't do wildcards — the OS has to publish each hostname individually via Avahi at install time. Plumbing, but well-trodden.
-- Some old/cheap routers and edge cases (certain iOS quirks, corporate networks) have flaky multi-name mDNS resolution. We mitigate with the optional port-based fallback below.
+- The names must be **single-label** (`photos.local`, not `photos.malmo.local`): Linux's `nss-mdns` rejects multi-label `.local` outright, so a `.malmo` infix breaks resolution there entirely (not just on edge-case hardware). This is the single-label-`.local` decision in `DISCOVERY.md` / `DECISIONS.md` (2026-05-31).
+- Some old/cheap routers and edge cases (certain iOS quirks, corporate networks) have flaky multi-name mDNS resolution even for single-label names. We mitigate with the optional port-based fallback below.
 
 ### Optional port-based routing
 
@@ -150,7 +151,7 @@ We considered path-based routing (`malmo.local/photos`, `malmo.local/grocery`) a
 
 ### TLS and remote access — see `MALMO_NETWORK.md`
 
-Networking concerns beyond the LAN — TLS, the malmo.network apex, cloud DNS, cert issuance, the mesh, device pairing, sharing — live in `MALMO_NETWORK.md`. The MVP slice is the **hybrid access model**: every app is reachable both at `<slug>.malmo.local` (HTTP, mDNS, no cloud) and at `<slug>.<box-id>.malmo.network` (HTTPS, real Let's Encrypt cert via opt-in cloud enrollment). Mesh / identity-based remote access is captured in the same doc but deferred from v1.
+Networking concerns beyond the LAN — TLS, the malmo.network apex, cloud DNS, cert issuance, the mesh, device pairing, sharing — live in `MALMO_NETWORK.md`. The MVP slice is the **hybrid access model**: every app is reachable both at `<slug>.local` (HTTP, mDNS, no cloud) and at `<slug>.<box-id>.malmo.network` (HTTPS, real Let's Encrypt cert via opt-in cloud enrollment). Mesh / identity-based remote access is captured in the same doc but deferred from v1.
 
 ## OS update model
 

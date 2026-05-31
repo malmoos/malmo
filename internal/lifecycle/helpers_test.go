@@ -152,20 +152,33 @@ func TestAllocateSlug(t *testing.T) {
 		}
 	})
 
-	t.Run("personal scope suffixes the owner", func(t *testing.T) {
+	t.Run("personal scope gets the bare name first-come", func(t *testing.T) {
 		m := newMgr(t)
+		// First-come, first-served: a personal install on an empty store takes
+		// the bare slug, not `immich--alex`. The owner suffix is reserved for
+		// disambiguating a collision (DASHBOARD.md # instance naming).
+		slug, err := m.allocateSlug(&manifest.Manifest{ID: "immich"}, store.ScopePersonal, "alex")
+		if err != nil || slug != "immich" {
+			t.Fatalf("slug=%q err=%v, want immich", slug, err)
+		}
+	})
+
+	t.Run("personal scope suffixes the owner on collision", func(t *testing.T) {
+		m := newMgr(t)
+		mark(t, m.store, "immich") // someone already holds the bare name
 		slug, err := m.allocateSlug(&manifest.Manifest{ID: "immich"}, store.ScopePersonal, "alex")
 		if err != nil || slug != "immich--alex" {
 			t.Fatalf("slug=%q err=%v, want immich--alex", slug, err)
 		}
 	})
 
-	t.Run("same owner installing twice falls back to -2", func(t *testing.T) {
+	t.Run("personal double collision falls back to numeric", func(t *testing.T) {
 		m := newMgr(t)
-		mark(t, m.store, "immich--alex")
+		mark(t, m.store, "immich")       // bare taken
+		mark(t, m.store, "immich--alex") // owner-qualified taken
 		slug, err := m.allocateSlug(&manifest.Manifest{ID: "immich"}, store.ScopePersonal, "alex")
-		if err != nil || slug != "immich--alex-2" {
-			t.Fatalf("slug=%q err=%v, want immich--alex-2", slug, err)
+		if err != nil || slug != "immich-2" {
+			t.Fatalf("slug=%q err=%v, want immich-2", slug, err)
 		}
 	})
 }

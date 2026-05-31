@@ -32,7 +32,9 @@ A member installing an app binds *their own* user folders into *their own* insta
 
 **Folder source is a per-folder install choice.** For each folder an app declares (`APP_MANIFEST.md` # `folders`), the install screen resolves a *source*: a personal instance offers the owner's folder (default) or the household Shared folder per folder; a household instance always uses Shared. The author declares only the folder + mode, never the source — "my own Jellyfin on my movies" vs "on the family library" is the installer's call, not the author's (`DECISIONS.md` 2026-05-30). This is the only folder-related input on the otherwise all-or-nothing consent screen, alongside the `pick-subfolder` prompt.
 
-**The consent screen is driven by `GET /api/v1/catalog/:id/install-plan`** (`BRAIN_UI_PROTOCOL.md` # GET /api/v1/catalog/:id/install-plan). The brain computes the screen's inputs from the parsed manifest and the caller's role: the role-derived scope options (admin gets Household + Just-for-me, member gets personal only), the declared permissions, and a per-folder per-scope source menu (household → Shared only; personal → owner's folder or Shared). The endpoint is read-only and advisory — it makes no host calls and mutates nothing; the user's elections are validated and stamped into the compose override only at `POST /api/v1/apps` install time.
+**The consent screen is driven by `GET /api/v1/catalog/:id/install-plan`** (`BRAIN_UI_PROTOCOL.md` # GET /api/v1/catalog/:id/install-plan). The brain computes the screen's inputs from the parsed manifest and the caller's role: the declared permissions and a per-folder per-scope source menu (household → Shared only; personal → owner's folder or Shared). The endpoint is read-only and advisory — it makes no host calls and mutates nothing; the user's elections are validated and stamped into the compose override only at `POST /api/v1/apps` install time.
+
+**Scope is selected by the Install button, not inside the dialog.** The consent dialog shows permissions + folder sources only; scope is pre-decided by which button variant the user clicked. In the store row, admins on a multi-user box see a split-button: the primary **Install** action installs as personal (just for them); the chevron dropdown offers **Install for the whole household**. Members and single-user-mode admins see a plain Install button (personal, no choice needed). See # Single-user simplification below.
 
 ### Warn, don't block, on duplicate install
 
@@ -50,18 +52,19 @@ Rationale: two people may want genuinely different things from the same app — 
 
 ---
 
-## Locked: instance naming / routing — `<slug>--<user>`, bare `<slug>` for shared
+## Locked: instance naming / routing — first-come bare slug, `--<user>` on collision
 
 Every instance needs a stable, unique, routable name — it's the LAN `.local` record (`DISCOVERY.md` # Per-app A records), the `.malmo.network` subdomain (`MALMO_NETWORK.md`), and the Caddy site block, all keyed on the instance slug.
 
 **The scheme:**
 
-| Instance | Slug | LAN | Public |
+| Scenario | Slug | LAN | Public |
 |---|---|---|---|
-| Household | `<slug>` | `immich.malmo.local` | `immich.<box-id>.malmo.network` |
-| Personal (owner `alex`) | `<slug>--<user>` | `immich--alex.malmo.local` | `immich--alex.<box-id>.malmo.network` |
+| First install of any scope (no conflict) | `<slug>` | `immich.local` | `immich.<box-id>.malmo.network` |
+| Personal install when bare slug is taken | `<slug>--<user>` | `immich--alex.local` | `immich--alex.<box-id>.malmo.network` |
+| Household install when bare slug is taken | `<slug>-2` | `immich-2.local` | `immich-2.<box-id>.malmo.network` |
 
-- **Bare slug = the household instance; suffixed = personal.** Ownership is legible in the URL itself.
+- **The bare slug is first-come, any scope.** The first instance of any app installed — whether household or personal — wins the clean name. On a collision, a personal instance appends the owner (`--<user>`); a household instance without an owner to name gets a numeric suffix (`-2`, `-3`). Scope is an attribute shown in the dashboard (Household / Yours grouping, owner label on the tile), not encoded in the hostname.
 - **Double dash (`--`) as the separator.** App slugs are kebab-case and can contain single hyphens (`home-assistant`), so a single `-` is ambiguous — `home-assistant-alex` can't be parsed into slug + user, but `home-assistant--alex` can.
 - **`<slug>` leads, `<user>` trails** (not `<user>--<slug>`) so an app's instances sort together by app identity rather than collide-sorting under each user.
 
@@ -71,7 +74,7 @@ The obvious alternative — `<user>.<slug>.<box-id>.malmo.network` (`alex.immich
 
 - `MALMO_NETWORK.md` (lines 27, 138–139) locks **one** wildcard DNS record `*.<box-id>.malmo.network` and **one** wildcard Let's Encrypt cert `*.<box-id>.malmo.network`, renewed quietly every ~60 days via ACME DNS-01.
 - **A TLS wildcard spans exactly one label — it does not cross dots.** `immich--alex.<box-id>.malmo.network` is one label → covered. `alex.immich.<box-id>.malmo.network` is *two* labels → **not** covered by `*.<box-id>…`. The dotted form would force a *separate* wildcard cert (`*.immich.<box-id>…`) issued per app, a new ACME round and DNS record on every install — destroying the "one cert, renew quietly" model.
-- The LAN side agrees: Avahi publishes each instance as a flat A record (`DISCOVERY.md`). A single-label name resolves everywhere; a multi-label `.local` name (`alex.immich.malmo.local`) is handled inconsistently by Android and Windows mDNS stacks — exactly the clients `DISCOVERY.md` already worries about.
+- The LAN side agrees: Avahi publishes each instance as a flat, single-label A record `<slug>.local` (`DISCOVERY.md`). A single-label name resolves on every mDNS client; a multi-label `.local` name (the dotted `alex.immich.local`, or the old `<slug>.malmo.local` infix shape) is **rejected outright by Linux's `nss-mdns`** and handled inconsistently by Android/Windows mDNS stacks. This — not just the cert architecture — is why both dimensions (app and user) collapse into one `--`-joined label. See `DISCOVERY.md` # Per-app A records.
 
 So both transports independently force **flat, single-label**. The dotted form was rejected not on taste but on the cert and mDNS constraints. The aesthetic cost is small in practice: these hostnames are clicked from dashboard tiles, rarely typed or read raw.
 
@@ -80,13 +83,13 @@ So both transports independently force **flat, single-label**. The dotted form w
 **Pros**
 - One wildcard cert covers every app and every personal instance, forever — no per-install ACME churn.
 - Works on every mDNS client (flat single label).
-- Ownership is visible in the name; bare = canonical/household, suffixed = personal.
-- Reuses the existing per-instance slug field (`APP_LIFECYCLE.md` # instance is a compose project) — the slug is just *derived* differently for personal instances.
+- On a single-user box every app gets the clean bare slug; the `--<user>` suffix appears only when a second instance of the same app actually exists and disambiguation is necessary.
+- Reuses the existing per-instance slug field (`APP_LIFECYCLE.md` # instance is a compose project) — the slug is just *derived* differently on collision.
 
 **Cons (accepted)**
 - `immich--alex` is less elegant than `alex.immich`. Mitigated: rarely seen raw.
 - The `--` separator must be reserved: catalog slugs and usernames may not contain `--`, and neither may produce an `xn--` label prefix (reserved for IDN/punycode). We control both the catalog and username validation, so this is a validation rule, not a real limit. Documented as a constraint on `APP_STORE.md` slug validation and `USERS_AND_GROUPS.md` username rules.
-- **The personal-instance hostname leaks the `username ↔ app` mapping to the LAN.** `immich--alex.malmo.local` is a published mDNS/DNS record (`DISCOVERY.md`), so any device on the network can enumerate which user installed which app by passive discovery — usernames are first names (`FIRST_RUN.md`), so this is mildly identifying. Accepted: this is a closed-by-default, single-household LAN (`THREAT_MODEL.md` treats the LAN as semi-trusted), the same record set has to exist for routing regardless, and ownership-in-the-URL is the deliberate legibility choice above. Noted so it's a conscious tradeoff, not a surprise; revisit if malmo ever targets shared/untrusted LANs.
+- **A collision-triggered `--<user>` hostname leaks the `username ↔ app` mapping to the LAN.** `immich--alex.local` is a published mDNS record (`DISCOVERY.md`), so any device on the network can observe which user triggered a disambiguation. Bare names (the common case on a lightly loaded box) reveal nothing about scope or ownership; the leak occurs only when two instances of the same app coexist. Net improvement over the old scheme where every personal instance was always suffixed. Accepted for the same reasons: closed-by-default, single-household LAN (`THREAT_MODEL.md` treats the LAN as semi-trusted), and the record must exist for routing regardless. Revisit if malmo ever targets shared/untrusted LANs.
 
 ---
 
@@ -109,7 +112,7 @@ A tile shows: icon, app name, and a category/role label. In the calm default it 
 
 ### Open-app interaction
 
-Clicking a tile **opens the app in a new browser tab** at its own subdomain (`<slug>[--<user>].malmo.local`, or the `.malmo.network` host when the remote toggle is on). The app runs on its own origin — that's the whole point of subdomain routing (`SPEC.md`: browser same-origin isolation). The dashboard is the launcher, not a frame/proxy around apps.
+Clicking a tile **opens the app in a new browser tab** at its own host (`<slug>.local` or `<slug>--<user>.local` depending on whether disambiguation was needed, or the `.malmo.network` host when the remote toggle is on). The app runs on its own origin — that's the whole point of subdomain routing (`SPEC.md`: browser same-origin isolation). The dashboard is the launcher, not a frame/proxy around apps.
 
 ### First arrival / empty state
 
@@ -158,6 +161,24 @@ This is a pin-a-no decision, recorded so a future "add widgets" PR is a delibera
 
 ---
 
+## Locked: single-user simplification
+
+When `single_user_mode` is true (the box has exactly one registered user), the household/personal distinction is meaningless — suppress it everywhere. The UI should read as a simple, personal launcher with no multi-user vocabulary.
+
+**Home grid:** the Household and Yours section headers are hidden. All apps render in a flat grid; sections still render only when non-empty, so the layout is unchanged, just unlabeled.
+
+**Install button:** a plain **Install** button with no chevron. Scope is silently personal. The split-button (with the household dropdown) only appears when `role == admin && !single_user_mode`.
+
+**App tiles:** the "Shared" / "Personal" scope label is hidden. The tile shows name only.
+
+**Settings manage-apps list:** the scope/owner label (e.g. "Shared" or the owner's username) is hidden.
+
+**Folder source labels in the consent dialog:** "The household's shared X" is relabeled to "Shared X (accessible from your other devices)" — the Samba angle is real and valid even solo, but "household" is confusing with one user.
+
+**Transition:** `single_user_mode` is recomputed on every session-bearing response (`/login`, `/setup`, `/me`). When a second user is created and the admin next logs in or refreshes, `single_user_mode` becomes false and all suppressed UI reappears. No migration of existing app instances needed — scope and owner metadata is always stored; it just wasn't surfaced.
+
+---
+
 ## Why this is a differentiator
 
 A scan of the neighbors (May 2026) shows everyone separates *files* per user but **nobody makes app *instances* a per-user, self-service concept**:
@@ -174,7 +195,7 @@ The universal fallback is "one shared instance + the app's own internal multi-us
 ## Relationship to other docs
 
 - `WEB_UI.md` — stack, container, deploy, API-version handshake. Unchanged by this doc; this doc is its IA complement.
-- `APP_LIFECYCLE.md` — owns the instance-as-compose-project model and the slug field this scheme derives. The `<slug>--<user>` derivation rule is recorded there too.
+- `APP_LIFECYCLE.md` — owns the instance-as-compose-project model and the slug field this scheme derives. The first-come + collision-suffix derivation rule is recorded there too.
 - `DISCOVERY.md` — publishes the per-instance `.local` name; "slug" there now means "the (possibly suffixed) instance slug."
 - `AUTH.md` — the role gating behind the dock, Settings routes, and install authorization.
 - `STORAGE.md` — per-user `~/` folders that personal instances bind; the model owner-scoping is designed to respect.

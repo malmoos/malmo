@@ -12,7 +12,7 @@ The malmo session governs **malmo's own surfaces only**:
 
 The malmo session does **not** govern:
 
-- **Tier-3 apps** (`photos.malmo.local`, etc.). Each app has its own auth — explicit no-SSO call (`SPEC.md` # Accounts & users). Subdomain isolation is load-bearing for security; the malmo cookie is scoped to the dashboard host and never reaches app subdomains.
+- **Tier-3 apps** (`photos.local`, etc.). Each app has its own auth — explicit no-SSO call (`SPEC.md` # Accounts & users). Subdomain isolation is load-bearing for security; the malmo cookie is scoped to the dashboard host and never reaches app subdomains.
 - **Device access (SSH + SMB).** Linux PAM + Samba directly. These services authenticate against the same password the user uses for the dashboard (PAM is the source of truth), but the brain's session cookie does not apply to them. Each protocol is opt-in per user — see "Device access (SSH + SMB)" below.
 
 ## Identity primitive: password
@@ -44,9 +44,9 @@ The brain has a `sessions` table in SQLite. Login mints a row, returns a 256-bit
 | Name        | `malmo_session`                                                       |
 | Value       | 256 bits of CSPRNG entropy, base64url-encoded                         |
 | `HttpOnly`  | yes                                                                   |
-| `Secure`    | yes on `.malmo.network`, no on `.malmo.local` (HTTP-only there)       |
+| `Secure`    | yes on `.malmo.network`, no on `malmo.local` (HTTP-only there)        |
 | `SameSite`  | `Lax`                                                                 |
-| `Domain`    | *unset* — scoped to the exact host. Critical: do NOT use `.malmo.local`, which would leak to app subdomains and defeat subdomain isolation. |
+| `Domain`    | *unset* — scoped to the exact host (`malmo.local`). Critical: do NOT set a broader `Domain` such as `.local`, which would leak the session to every `.local` host on the LAN — all app origins (`<slug>.local`) and any other `.local` device — defeating origin isolation. Apps are single-label siblings (`<slug>.local`), not subdomains of `malmo.local`, so host-scoping keeps the dashboard session off every app origin. |
 | `Path`      | `/`                                                                   |
 
 **Why opaque cookies over JWTs:** JWTs win when multiple services need to verify without a roundtrip. We have one backend (the brain). JWTs would just give us non-revocable tokens with bigger payloads. Opaque cookies give us instant server-side revocation (logout, password change, "sign out everywhere"), tiny client cookies, and no JWT-key rotation theater. The DB hit per request is negligible at home-server scale.

@@ -52,7 +52,7 @@ func newHealthHarness(t *testing.T) *healthHarness {
 	src := hostagent.NewFakeHealthSource()
 	a := hostagent.New(
 		&alwaysValidVerifier{}, // /setup needs verify-password to succeed
-		hostagent.NewFakePublisher(".malmo.local"),
+		hostagent.NewFakePublisher(".local"),
 	)
 	a.Health = src
 	mux := http.NewServeMux()

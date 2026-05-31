@@ -45,7 +45,7 @@ Minimum to be a malmo box:
 
 - `systemd`, `systemd-cryptenroll`, `cryptsetup` — boot, encryption, TPM auto-unlock (`STORAGE.md`).
 - `docker-ce` (or `docker.io` from Debian; see below) — runtime for everything.
-- `avahi-daemon` — mDNS publishing for `*.malmo.local` and SMB service discovery (`_smb._tcp`).
+- `avahi-daemon` — mDNS publishing for `*.local` app hostnames and SMB service discovery (`_smb._tcp`).
 - `caddy` — only if we ship it on host; if it runs as a container under the brain (per `CONTROL_PLANE.md`), skip on host.
 - `malmo-host-agent` — our own `.deb`.
 - `openssh-server` — SSH daemon, scoped to LAN + mesh via nftables (see "SSH" below).

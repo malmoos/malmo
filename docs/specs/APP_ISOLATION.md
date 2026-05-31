@@ -30,7 +30,7 @@ malmo is multi-user (`FIRST_RUN.md`). Every user has private data; admins manage
 
 Whether an instance is **household** (admin-owned, shared — one instance, the app's own internal multi-user separates people inside it) or **personal** (owned by one user, its own data, folders, and route) is **elected by the installing user**, not derived from a tier or declared in the manifest (`APP_MANIFEST.md` # G). Admins choose household or personal; members install personal only.
 
-A personal instance is the per-owner compose-project shape locked in `APP_LIFECYCLE.md` # an app instance is a Docker Compose project: an independent project named `malmo-<instance-id>`, with its own instance id, data dir, and slug `<slug>--<user>`. If two users each install the same app personally, two independent instances run.
+A personal instance is the per-owner compose-project shape locked in `APP_LIFECYCLE.md` # an app instance is a Docker Compose project: an independent project named `malmo-<instance-id>`, with its own instance id, data dir, and slug (bare `<slug>` if it wins first-come, `<slug>--<user>` on collision — `DASHBOARD.md` # instance naming). If two users each install the same app personally, two independent instances run.
 
 - A personal instance's main process runs as the **owner's Linux UID/GID** (assigned at user creation, in the malmo-reserved 3000+ range). The brain enforces this via the compose `user:` field; we do not rely on `PUID`/`PGID` env-var conventions. (A household instance runs as a shared service identity, not a single member's UID.)
 - The container sees only the bind-mounted use-case folders declared in the manifest (the owner's `/home/<user>/Photos/`, `Documents/`, etc., or a household `/srv/malmo/shared/<Folder>/` when the installer elected the shared source — see `APP_MANIFEST.md` # `folders`), mounted at the fixed `/malmo/<folder>` paths. Other users' homes are not bind-mounted; they're not even on the filesystem the container can reach.
@@ -46,9 +46,9 @@ Household-vs-personal is an install-time election, not a static property of the 
 
 ### Routing per instance
 
-Each instance has its own subdomain: bare `<slug>.malmo.local` for the household instance, `<slug>--<user>.malmo.local` for a personal one (`DASHBOARD.md` # instance naming). Ownership is legible in the URL itself, and one wildcard cert covers every instance.
+Each instance has its own subdomain: `<slug>.local` for whichever instance won first-come; `<slug>--<user>.local` for a personal instance that collided with an existing bare name; `<slug>-2.local` for a household collision (`DASHBOARD.md` # instance naming). One wildcard cert covers every instance regardless of suffix. Scope and ownership are surfaced in the dashboard, not inferred from the hostname.
 
-Consequence: a personal instance's URL is owner-specific — `immich--alex.malmo.local` is Alex's. Granular cross-user sharing (intentionally exposing one user's content to another) is a future feature; v1 sharing is "drop it in `~/Shared/`" only (`STORAGE.md`).
+Consequence: a personal instance's URL is owner-specific — `immich--alex.local` is Alex's. Granular cross-user sharing (intentionally exposing one user's content to another) is a future feature; v1 sharing is "drop it in `~/Shared/`" only (`STORAGE.md`).
 
 ### User lifecycle
 
@@ -68,7 +68,7 @@ Per-user data lives at `/home/<user>/` with `0750` perms owned by the user (`STO
 
 Every app gets its own Docker bridge network. Inter-container DNS works inside it (the app's own compose services resolve each other by name). Inter-*app* traffic is denied by default — apps live on separate networks.
 
-The brain reaches the app's web port over this network for reverse-proxy routing. Apps **do not bind to host ports** in store mode; the brain owns 80/443 for the subdomain proxy + TLS termination. Manifest declares `web.port: 8080` and the brain wires `myapp.malmo.local → container:8080`. Door-2 compose can publish host ports if the user wrote it that way.
+The brain reaches the app's web port over this network for reverse-proxy routing. Apps **do not bind to host ports** in store mode; the brain owns 80/443 for the subdomain proxy + TLS termination. Manifest declares `web.port: 8080` and the brain wires `myapp.local → container:8080`. Door-2 compose can publish host ports if the user wrote it that way.
 
 ### `internet: true` / `false`
 

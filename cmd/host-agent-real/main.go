@@ -34,7 +34,7 @@ import (
 )
 
 func main() {
-	pub := &avahipublisher.DBusPublisher{HostSuffix: ".malmo.local"}
+	pub := &avahipublisher.DBusPublisher{HostSuffix: protocol.AppHostSuffix}
 
 	sockPath := os.Getenv("MALMO_AGENT_SOCK")
 	if sockPath == "" {

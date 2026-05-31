@@ -42,6 +42,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"sync"
 
 	"github.com/godbus/dbus/v5"
@@ -78,7 +79,7 @@ var ErrCollision = errors.New("avahipublisher: name collision")
 // Safe for concurrent use.
 type DBusPublisher struct {
 	// HostSuffix is appended to each slug to form the announced hostname
-	// (production: ".malmo.local").
+	// (production: protocol.AppHostSuffix, ".local").
 	HostSuffix string
 
 	// localIP may be set in tests (via a subtype or field override); otherwise
@@ -90,13 +91,24 @@ type DBusPublisher struct {
 	groups map[string]dbus.ObjectPath // slug → Avahi EntryGroup object path
 }
 
-// Publish announces <slug><HostSuffix> as an A record pointing at the box's
-// local IPv4 address. Returns the announced hostname on success.
+// Publish announces an A record for the slug pointing at the box's local IPv4
+// address and returns the announced hostname.
+//
+// The primary name is "<slug>" + HostSuffix (e.g. "photos.local"). If Avahi
+// reports a name collision (another device on the LAN already owns it), Publish
+// retries once with a box-qualified fallback, "<slug>-<box>" + HostSuffix (e.g.
+// "photos-malmo.local"), where <box> is this host's name. The caller (the
+// brain) must use the *returned* name for the URL it shows and the Caddy route
+// it writes — it may differ from the primary on collision. See DISCOVERY.md.
 //
 // If the slug is already published (e.g. replay on brain restart), the old
 // group is freed first and a fresh one is committed — idempotent.
 //
-// Returns ErrCollision if Avahi rejects the name due to a conflict.
+// Returns ErrCollision only if both the primary and the fallback collide.
+//
+// Limitation: collision is detected on the synchronous AddAddress error. Avahi
+// can also report a conflict asynchronously after Commit (EntryGroup state
+// COLLISION); that path is not yet watched here — see the progress doc.
 func (p *DBusPublisher) Publish(slug string) (string, error) {
 	if !slugRE.MatchString(slug) {
 		return "", fmt.Errorf("avahipublisher: invalid slug %q (must match [a-z0-9-]+)", slug)
@@ -121,7 +133,30 @@ func (p *DBusPublisher) Publish(slug string) (string, error) {
 	}
 
 	hostname := slug + p.HostSuffix
+	groupPath, err := p.tryPublish(hostname, localIP)
+	if errors.Is(err, ErrCollision) {
+		fallback := slug + "-" + p.boxLabel() + p.HostSuffix
+		slog.Warn("avahi name collision; retrying with box-qualified name",
+			"slug", slug, "name", hostname, "fallback", fallback)
+		hostname = fallback
+		groupPath, err = p.tryPublish(hostname, localIP)
+	}
+	if err != nil {
+		return "", err
+	}
 
+	if p.groups == nil {
+		p.groups = make(map[string]dbus.ObjectPath)
+	}
+	p.groups[slug] = groupPath
+	slog.Info("avahi publish", "slug", slug, "name", hostname, "ip", localIP)
+	return hostname, nil
+}
+
+// tryPublish creates a fresh entry group, adds the A record, and commits it.
+// On an Avahi collision it returns ErrCollision (wrapped) so Publish can retry
+// with a box-qualified name. The group is freed on any error.
+func (p *DBusPublisher) tryPublish(hostname, localIP string) (dbus.ObjectPath, error) {
 	groupPath, err := p.newEntryGroup()
 	if err != nil {
 		return "", fmt.Errorf("avahipublisher: EntryGroupNew: %w", err)
@@ -139,13 +174,18 @@ func (p *DBusPublisher) Publish(slug string) (string, error) {
 		_ = p.freeGroup(groupPath)
 		return "", fmt.Errorf("avahipublisher: Commit(%s): %w", hostname, err)
 	}
+	return groupPath, nil
+}
 
-	if p.groups == nil {
-		p.groups = make(map[string]dbus.ObjectPath)
+// boxLabel returns this host's name as a single DNS label for use in the
+// collision-fallback name ("<slug>-<box>.local"). Sanitization lives in
+// sanitizeBoxLabel (slug.go) so it can be unit-tested without DBus.
+func (p *DBusPublisher) boxLabel() string {
+	h, err := os.Hostname()
+	if err != nil {
+		return "malmo"
 	}
-	p.groups[slug] = groupPath
-	slog.Info("avahi publish", "slug", slug, "name", hostname, "ip", localIP)
-	return hostname, nil
+	return sanitizeBoxLabel(h)
 }
 
 // Unpublish withdraws the A record for the given slug.

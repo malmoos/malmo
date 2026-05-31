@@ -5,13 +5,13 @@
 #   0. Catch-all 404: unmatched hostname → HTTP 404 + "No app at this hostname"
 #   1. Brain is reachable and Caddy is up (proxy + admin)
 #   2. Installing whoami registers a subdomain route in Caddy
-#   3. GET http://whoami.malmo.local:8088/ (via Host header) → 2xx with whoami body
-#   4. GET http://localhost:8088/whoami/   (path-based)       → exactly 404 (subdomain-only routing)
-#   5. GET http://localhost:8088/ with Host: nobody.malmo.local → exactly 404
+#   3. GET http://whoami.local:80/ (via Host header) → 2xx with whoami body
+#   4. GET http://localhost:80/whoami/   (path-based)       → exactly 404 (subdomain-only routing)
+#   5. GET http://localhost:80/ with Host: nobody.local → exactly 404
 #   6. Uninstalling whoami withdraws the route (same Host → exactly 404)
 #
 # Requirements:
-#   - `make dev` running: brain on :8080, Caddy admin on :2019, Caddy proxy on :8088
+#   - `make dev` running: brain on :8080, Caddy admin on :2019, Caddy proxy on :80
 #   - curl, jq
 #
 # On first run this script will bootstrap a test user (caddytest / caddytest-pw).
@@ -24,7 +24,7 @@ set -euo pipefail
 
 BRAIN="http://localhost:8080"
 CADDY_ADMIN="http://localhost:2019"
-CADDY_PROXY="http://localhost:8088"
+CADDY_PROXY="http://localhost:80"
 
 TEST_USER="caddytest"
 TEST_PASS="caddytest-pw"
@@ -110,7 +110,7 @@ fi
 
 echo "==> [TEST 0] Catch-all: unmatched hostname → expect HTTP 404 + catch-all body"
 T0_CODE=$(curl -s -o /tmp/malmo-catchall-body.txt -w "%{http_code}" \
-  -H "Host: nobody.malmo.local" "http://localhost:8088/") || true
+  -H "Host: nobody.local" "http://localhost:80/") || true
 T0_BODY=$(cat /tmp/malmo-catchall-body.txt)
 if [[ "$T0_CODE" != "404" ]]; then
   fail "Expected HTTP 404 for unmatched host, got $T0_CODE"
@@ -185,12 +185,12 @@ echo "    instance_id=$INSTANCE_ID  slug=$SLUG"
 # --- wait for container to be ready ----------------------------------------
 # Caddy adds the route during install, but the container needs a moment to come up.
 
-echo "==> Waiting for $SLUG.malmo.local to respond (up to 10s)..."
+echo "==> Waiting for $SLUG.local to respond (up to 10s)..."
 APP_OK=0
 for i in {1..20}; do
   HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
-    --resolve "$SLUG.malmo.local:8088:127.0.0.1" \
-    "http://$SLUG.malmo.local:8088/" 2>/dev/null) || true
+    --resolve "$SLUG.local:80:127.0.0.1" \
+    "http://$SLUG.local:80/" 2>/dev/null) || true
   if [[ "$HTTP" == "200" ]]; then
     APP_OK=1; break
   fi
@@ -201,13 +201,13 @@ done
 
 echo "==> [TEST 1] Positive: Host-based routing → expect 2xx with whoami body"
 if [[ $APP_OK -eq 0 ]]; then
-  fail "Host: $SLUG.malmo.local on :8088 never returned 200 (last HTTP code: $HTTP)"
+  fail "Host: $SLUG.local on :80 never returned 200 (last HTTP code: $HTTP)"
 fi
 
 BODY=$(curl -sf \
-  --resolve "$SLUG.malmo.local:8088:127.0.0.1" \
-  "http://$SLUG.malmo.local:8088/") \
-  || fail "curl with Host: $SLUG.malmo.local returned non-2xx"
+  --resolve "$SLUG.local:80:127.0.0.1" \
+  "http://$SLUG.local:80/") \
+  || fail "curl with Host: $SLUG.local returned non-2xx"
 
 printf '%s' "$BODY" | grep -qi "Hostname:" \
   || fail "whoami body did not contain 'Hostname:' — unexpected response: $BODY"
@@ -217,11 +217,11 @@ echo "    PASS: subdomain route works, body contains 'Hostname:'"
 
 echo "==> [TEST 2] Negative: path-based routing → expect exactly 404 with catch-all body"
 PATH_BODY=$(curl -s -o /tmp/malmo-path-body.txt -w "%{http_code}" \
-  "http://localhost:8088/$SLUG/") || true
+  "http://localhost:80/$SLUG/") || true
 PATH_CODE="$PATH_BODY"
 PATH_BODY=$(cat /tmp/malmo-path-body.txt)
 if [[ "$PATH_CODE" == "200" ]]; then
-  fail "ROUTING BUG: path-based request http://localhost:8088/$SLUG/ returned 200 — subdomain-only routing is broken"
+  fail "ROUTING BUG: path-based request http://localhost:80/$SLUG/ returned 200 — subdomain-only routing is broken"
 fi
 if [[ "$PATH_CODE" != "404" ]]; then
   fail "Expected 404 for path-based request, got $PATH_CODE"
@@ -234,11 +234,11 @@ echo "    PASS: path-based request returned 404 with catch-all body — no path 
 
 echo "==> [TEST 3] Negative: wrong Host header → expect exactly 404 with catch-all body"
 WRONG_BODY=$(curl -s -o /tmp/malmo-wrong-body.txt -w "%{http_code}" \
-  -H "Host: nobody.malmo.local" "http://localhost:8088/") || true
+  -H "Host: nobody.local" "http://localhost:80/") || true
 WRONG_CODE="$WRONG_BODY"
 WRONG_BODY=$(cat /tmp/malmo-wrong-body.txt)
 if [[ "$WRONG_CODE" == "200" ]]; then
-  fail "Wrong Host: nobody.malmo.local returned 200 — catch-all routing is leaking"
+  fail "Wrong Host: nobody.local returned 200 — catch-all routing is leaking"
 fi
 if [[ "$WRONG_CODE" != "404" ]]; then
   fail "Expected 404 for unregistered host, got $WRONG_CODE"
@@ -267,19 +267,19 @@ echo "==> [TEST 4] Verify route withdrawn after uninstall → expect exactly 404
 # Give Caddy a moment to process the route removal.
 sleep 1
 GONE_BODY=$(curl -s -o /tmp/malmo-gone-body.txt -w "%{http_code}" \
-  --resolve "$SLUG.malmo.local:8088:127.0.0.1" \
-  "http://$SLUG.malmo.local:8088/") || true
+  --resolve "$SLUG.local:80:127.0.0.1" \
+  "http://$SLUG.local:80/") || true
 GONE_CODE="$GONE_BODY"
 GONE_BODY=$(cat /tmp/malmo-gone-body.txt)
 if [[ "$GONE_CODE" == "200" ]]; then
-  fail "Route for $SLUG.malmo.local still returns 200 after uninstall — Caddy route not removed"
+  fail "Route for $SLUG.local still returns 200 after uninstall — Caddy route not removed"
 fi
 if [[ "$GONE_CODE" != "404" ]]; then
   fail "Expected 404 after uninstall, got $GONE_CODE"
 fi
 printf '%s' "$GONE_BODY" | grep -q "No app at this hostname" \
   || fail "Post-uninstall 404 body missing catch-all text — got: $GONE_BODY"
-echo "    PASS: $SLUG.malmo.local returned 404 with catch-all body after uninstall (route gone)"
+echo "    PASS: $SLUG.local returned 404 with catch-all body after uninstall (route gone)"
 
 echo ""
 echo "==> ALL CHECKS PASSED"

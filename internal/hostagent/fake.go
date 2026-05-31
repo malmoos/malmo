@@ -44,16 +44,17 @@ func (f *FakeVerifier) Verify(user, password string) (bool, error) {
 // as a write-through cache — no separate state, no synchronization gap.
 //
 // Used by cmd/host-agent (the fake binary). Matches current fake behavior:
-// returns "<slug>.malmo.local" as the name and reports "established" immediately.
+// returns "<slug>.local" as the name and reports "established" immediately.
 type FakePublisher struct {
 	hostSuffix string
 }
 
-// NewFakePublisher returns a FakePublisher. hostSuffix should be ".malmo.local"
-// in both dev and test contexts.
+// NewFakePublisher returns a FakePublisher. hostSuffix should be
+// protocol.AppHostSuffix (".local") in both dev and test contexts; an empty
+// string defaults to it.
 func NewFakePublisher(hostSuffix string) *FakePublisher {
 	if hostSuffix == "" {
-		hostSuffix = ".malmo.local"
+		hostSuffix = protocol.AppHostSuffix
 	}
 	return &FakePublisher{hostSuffix: hostSuffix}
 }
