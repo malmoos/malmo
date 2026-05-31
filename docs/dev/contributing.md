@@ -35,10 +35,6 @@ Pick the highest-priority issue (`P1` > `P2` > `P3`) that is **unassigned** and 
 
 If a task turns out to need a **design decision that isn't in a spec**, stop — that's a `NEXT.md` item, not implementation. Surface it (comment on the issue + flag the maintainer); don't invent the answer (see [`../specs/NEXT.md`](../specs/NEXT.md) and CLAUDE.md # Working style).
 
-### ⛔ Owned / in-flight — don't touch
-
-The **boot / storage / LUKS+TPM track** is actively in flight ([`../progress/luks-tpm-enrollment.md`](../progress/luks-tpm-enrollment.md)). Stay out of: `dev/test-qemu/**`, `cmd/malmo-storage-verify/`, `internal/storageverify/`, `dist/systemd/**`, and the `BOOT.md` / `STORAGE.md` specs. Coordinate with the maintainer before starting anything in that area.
-
 ## Step 2 — Branch off `main`
 
 Always work on a branch; **never commit to `main`**. Every change lands via a PR into `main`.
