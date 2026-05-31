@@ -139,9 +139,10 @@ A floating bottom dock with exactly four destinations:
 
 ## Locked: the top bar
 
-Three elements, top corners, quiet by default:
+Four elements, top corners, quiet by default:
 
 - **Storage pill** — a small always-present capacity readout (e.g. `1.2 / 4 TB`). Present but never loud; clicking it goes to Settings → Storage. It turns insistent only under disk pressure (`HEALTH.md` `disk-full`).
+- **Live-resources chevron** — a small chevron next to the avatar menu opens a compact, live-updating panel (CPU / RAM / net in-out / disk IO) streamed over `GET /api/v1/system/live`. Available to **every** signed-in user — host-level state isn't per-user data. Opening the panel opens the SSE stream; closing it closes the stream (`LOCAL_ANALYTICS.md` # Real-time system resources). Added to the locked set 2026-05-31 (`DECISIONS.md`).
 - **Avatar / account menu** — the current user; the menu is the path to account settings, sign-out, and (for admins) the gated routes that also live under Settings.
 - **Notification bell** — the in-product notification center (`NOTIFICATIONS.md`). A small dot indicates unread count. This is the dashboard-only v1 transport; off-box transports (email, push) are the deferred seam in `NOTIFICATIONS.md`.
 
