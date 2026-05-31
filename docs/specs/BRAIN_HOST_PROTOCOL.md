@@ -192,6 +192,30 @@ Implementation: `publish` writes `/etc/avahi/services/app-<slug>.service`, waits
 
 **`enroll-drive` and `eject-drive` carry credentials inline** because host-agent verifies them via PAM as the first step of the job and uses them to authorize reading `/etc/malmo/secrets/luks-recovery.key`. The brain does not cache or forward the password beyond the single request. On invalid credentials the job fails immediately with `error.code = "auth-failed"`; otherwise host-agent proceeds with format → LUKS → TPM enrollment → mount → mergerfs add (enroll) or stop apps → unmount → marker removal (eject). Declared attributes: `Dangerous: true`, `ResourceClass: "disk"`, `MaxDuration: 10m`. See `STORAGE.md` # Adding a data drive and # Ejecting a data drive for the user-facing flow; `AUTH.md` # Roles for the fresh-password requirement.
 
+**Files endpoints (`/v1/files/*`).** Back the in-dashboard file manager (`FILES.md`). The brain is containerized and cannot touch `/home` or `/srv/malmo`, so every file operation runs here, **with host-agent dropping to the requesting user's Linux UID/GID for the duration of the op** (`setresuid`/`setresgid` to the malmo 3000+ UID, or a forked child). This makes POSIX `0750`/`02770` the kernel-enforced backstop — a member's op cannot read another user's `0750` home even past a brain-side bug — and gives created files correct ownership natively, the same contract the compose `user:` directive gives app instances (`APP_ISOLATION.md` # User content). host-agent owns logical-root resolution: `root` is `home` (→ the user's home, resolved as in `/v1/users/{username}/home`) or `shared` (→ `/srv/malmo/shared/`); it re-validates path containment before acting. The brain passes `user` on every call; there is no "act as a different user" parameter.
+
+Metadata ops are Pattern A:
+
+```
+POST /v1/files/list     { "user": "alex", "root": "home", "path": "Photos/2024" }
+  → 200 OK  { "entries": [ { "name": "img.jpg", "dir": false, "size_bytes": 81002, "mtime": "...", "hidden": false }, ... ] }
+POST /v1/files/mkdir    { "user": "alex", "root": "home", "path": "Photos/New" }   → 200 OK {}
+POST /v1/files/move     { "user": "alex", "from": {...}, "to": {...} }             → 200 OK {}
+POST /v1/files/copy     { "user": "alex", "from": {...}, "to": {...} }             → 200 OK {}
+POST /v1/files/delete   { "user": "alex", "root": "home", "path": "Photos/old.jpg" } → 200 OK {}
+```
+
+Errors use the standard `{code, message}` — `permission-denied`, `not-found`, `exists`, `no-space` (`507`-class, ties to `disk-full`, `HEALTH.md`), `blocked-by-health-issue` when `data-drive-missing` is active (`HEALTH.md` # blocks_writes).
+
+**Content transfer is a streamed binary body, not a job.** Download and upload carry file bytes as `application/octet-stream`; host-agent streams as the UID and the brain pipes bytes between the dashboard and host-agent without buffering whole files:
+
+```
+GET  /v1/files/content?user=alex&root=home&path=Movies/clip.mp4   → 200 OK, application/octet-stream (streamed)
+PUT  /v1/files/content?user=alex&root=home&path=Photos/new.jpg    ← request body streamed; → 200 OK {}
+```
+
+This is a **deliberate exception to the ">5s = job" rule** — a transfer can take minutes, but it is pure I/O streaming with transport-native progress (the browser's own upload/download progress) and no server-side job state to poll, the same reasoning that exempts SSE log tails. See `FILES.md` # Transfers and `BRAIN_UI_PROTOCOL.md` # files for the dashboard-facing half.
+
 ### Pattern B — Jobs (long-running ops)
 
 For anything that **may exceed 5 seconds** or that needs progress / cancel:

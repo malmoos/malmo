@@ -21,6 +21,15 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-05-31 — In-dashboard file manager: ops execute as the user's UID in host-agent; own + Shared only
+
+**Previously:** the in-dashboard file manager was an unwritten `NEXT.md` Tier-1 gap. "Files are first-class" was true on disk but had no in-product browse surface — the only specced access to a user's own content was SMB + a desktop file manager.
+**Now:** specced as `FILES.md`. Three load-bearing calls: (a) **file operations execute inside host-agent, dropping to the requesting user's Linux UID/GID per operation** — the brain is policy + a transparent byte-pipe, never touching user content itself; (b) **scope is own `/home/<user>/` + the `Shared` tree for everyone, admins included** — no admin "browse all homes" view; (c) **thumbnails/preview deferred** (generic icons + download-to-view in v1).
+**Why:** (a) the brain is containerized behind the docker-socket-proxy and cannot touch `/home` (`BRAIN_HOST_PROTOCOL.md` # Scope) — same constraint that puts physical health and `/proc` reads in host-agent. Running ops as the user's UID makes POSIX `0750`/`02770` the kernel-enforced backstop (authz bugs degrade to "denied," not "leaked"), gives created files correct ownership natively (same contract as the compose `user:` directive), contains symlink attacks for free, and is the exact shape fscrypt wants later. (b) Admin-over-all-homes would violate the already-locked fscrypt-forward discipline — `STORAGE.md` # Future: per-user encryption ("no admin-keyed cross-user search or indexing") and `APP_ISOLATION.md` # Privacy ceiling ("design as if fscrypt were already on"). Admin reach into other homes stays where it is: SSH/`sudo` rescue. (c) The rich Photos grid is an app's job (Immich) — "apps are windows." Transfers introduce one new wire shape (a streamed binary body), a deliberate exception to the ">5s = job" rule justified like SSE log tails (transport-native progress, no server-side job state).
+**Affected docs:** `FILES.md` (new), `docs/README.md` (specs map), `NEXT.md` (Tier-1 item removed, Tier-4 data-import folded), `DASHBOARD.md` (Files dock destination de-qualified), `BRAIN_UI_PROTOCOL.md` (`/api/v1/files/*`), `BRAIN_HOST_PROTOCOL.md` (`/v1/files/*` + streaming body).
+
+---
+
 ## 2026-05-31 — Live system-resources: host-agent owns the `/proc` read; chevron is a fourth locked top-bar element
 
 **Previously:** `LOCAL_ANALYTICS.md` said the brain "reads `/proc` once per second" for the real-time view, and its top-bar dropdown was referenced only in passing — `DASHBOARD.md` # the top bar was **Locked: three elements** (storage pill, avatar, bell) and didn't list it.
