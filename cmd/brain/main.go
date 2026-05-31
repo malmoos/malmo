@@ -46,7 +46,11 @@ func main() {
 	host := hostclient.New(cfg.agentSock)
 	cd := caddy.New(cfg.caddyAdmin)
 	bus := events.NewBus()
-	life := lifecycle.NewManager(st, cat, host, cd, lifecycle.NewCLIDocker(), bus, cfg.stateDir)
+	// One Docker driver, shared by the lifecycle manager and the
+	// container-restart-loop detector — the detector reuses lifecycle's seam
+	// rather than opening a parallel Docker client (issue #35).
+	dock := lifecycle.NewCLIDocker()
+	life := lifecycle.NewManager(st, cat, host, cd, dock, bus, cfg.stateDir)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	life.EnsureIngress(ctx, cfg.caddyListen)
@@ -90,6 +94,14 @@ func main() {
 	defer pollCancel()
 	pullSystemHealth(pollCtx, host, healthMgr, auditor, notifier)
 	go systemHealthPollLoop(pollCtx, host, healthMgr, auditor, notifier, cfg.healthPollPeriod)
+
+	// Locus-D container-restart-loop detector (HEALTH.md # Detector catalog):
+	// sample managed containers' cumulative RestartCount on the health-poll
+	// cadence and raise per-instance when restarts climb past the threshold
+	// within the window. Brain-only — reads Docker through the shared lifecycle
+	// seam (no host-agent change, no EVENTS proxy grant needed).
+	rld := newRestartLoopDetector(dock, healthMgr, auditor, notifier)
+	go rld.run(pollCtx, cfg.healthPollPeriod)
 
 	// Bound the notifications table (NOTIFICATIONS.md # Locked decisions, the
 	// retention bullet): prune aged / over-cap rows once at boot, then on a slow
@@ -442,4 +454,154 @@ func brainDBIntegrityLoop(ctx context.Context, db integrityChecker, healthMgr *h
 			checkBrainDBIntegrity(ctx, db, healthMgr, auditor, notifier)
 		}
 	}
+}
+
+const (
+	// restartLoopThreshold / restartLoopWindow define the container-restart-loop
+	// trip condition: more than 3 container restarts within a 5-minute sliding
+	// window. Conservative defaults — HEALTH.md pins the detector's shape, not
+	// the constants (issue #35); tune at first soak if they prove noisy.
+	restartLoopThreshold = 3
+	restartLoopWindow    = 5 * time.Minute
+)
+
+// restartCountReader is the brain's consumer-side slice of the Docker seam:
+// just the per-instance restart counts the loop detector needs.
+// lifecycle.DockerDriver satisfies it; tests pass a fake (CLAUDE.md:
+// consumer-side interfaces).
+type restartCountReader interface {
+	RestartCounts(ctx context.Context) (map[string]int, error)
+}
+
+// restartSample is one (time, cumulative RestartCount) reading for an instance.
+type restartSample struct {
+	t     time.Time
+	count int
+}
+
+// restartLoopDetector samples managed containers' cumulative RestartCount and
+// reconciles the per-instance container-restart-loop health issue (HEALTH.md #
+// Detector catalog, locus D). Not thread-safe: it holds per-instance sample
+// history and is driven from a single poll goroutine (run).
+type restartLoopDetector struct {
+	docker    restartCountReader
+	healthMgr *health.Manager
+	auditor   *audit.Recorder
+	notifier  *notify.Notifier
+	window    time.Duration
+	threshold int
+	now       func() time.Time
+	history   map[string][]restartSample // instance_id -> samples within the window
+}
+
+func newRestartLoopDetector(docker restartCountReader, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier) *restartLoopDetector {
+	return &restartLoopDetector{
+		docker:    docker,
+		healthMgr: healthMgr,
+		auditor:   auditor,
+		notifier:  notifier,
+		window:    restartLoopWindow,
+		threshold: restartLoopThreshold,
+		now:       func() time.Time { return time.Now().UTC() },
+		history:   map[string][]restartSample{},
+	}
+}
+
+// run takes the first sample immediately (establishing baselines) then re-samples
+// every interval. Locus-D is reactive in spirit, but the socket-proxy allowlist
+// grants CONTAINERS, not EVENTS (CONTROL_PLANE.md), so polling RestartCount is
+// the no-proxy-change path the issue prefers.
+func (d *restartLoopDetector) run(ctx context.Context, interval time.Duration) {
+	d.check(ctx)
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			d.check(ctx)
+		}
+	}
+}
+
+// check samples every managed container's RestartCount once and reconciles the
+// container-restart-loop issue per instance: raise where the within-window
+// restart delta exceeds the threshold, clear where it no longer does (the app
+// stabilized) or the instance is gone (uninstalled). RestartCount is cumulative
+// since container creation, so we threshold the delta over a sliding window, not
+// the raw counter — a container that crashed a lot yesterday but is quiet now
+// reads as zero recent restarts.
+func (d *restartLoopDetector) check(ctx context.Context) {
+	counts, err := d.docker.RestartCounts(ctx)
+	if err != nil {
+		slog.Warn("restart-loop check: docker unreachable; skipping", "err", err)
+		return
+	}
+	now := d.now()
+	cutoff := now.Add(-d.window)
+
+	looping := map[string]bool{}
+	var raised []health.IssueKey
+	for id, count := range counts {
+		prev := d.history[id]
+		// Container recreation (app update / reinstall) resets RestartCount to 0.
+		// A count below the last sample means a fresh container — restart the
+		// window from here so a stale high baseline can't mask the new container's
+		// restarts (negative delta) or distort the count.
+		if n := len(prev); n > 0 && count < prev[n-1].count {
+			prev = nil
+		}
+		var samples []restartSample
+		for _, s := range prev {
+			if !s.t.Before(cutoff) {
+				samples = append(samples, s)
+			}
+		}
+		samples = append(samples, restartSample{t: now, count: count})
+		d.history[id] = samples
+
+		// Baseline is the oldest sample still inside the window; the delta against
+		// it is how many times this container restarted within the window. The
+		// first sample for an instance has delta 0 — no false raise from history.
+		if count-samples[0].count > d.threshold {
+			looping[id] = true
+			details := fmt.Sprintf("This app's container restarted %d times in about %d minutes.",
+				count-samples[0].count, int(d.window.Minutes()))
+			if d.healthMgr.Raise("container-restart-loop", id, details) {
+				raised = append(raised, health.IssueKey{ID: "container-restart-loop", InstanceKey: id})
+			}
+		}
+	}
+
+	// Forget instances Docker no longer reports (stopped / uninstalled) so the
+	// history map can't grow without bound.
+	for id := range d.history {
+		if _, ok := counts[id]; !ok {
+			delete(d.history, id)
+		}
+	}
+
+	// Clear any active restart-loop whose instance isn't looping this poll — it
+	// stabilized, or its app was uninstalled (absent from counts entirely).
+	var cleared []health.IssueKey
+	for _, iss := range d.healthMgr.List() {
+		if iss.ID != "container-restart-loop" || looping[iss.InstanceKey] {
+			continue
+		}
+		if d.healthMgr.Clear("container-restart-loop", iss.InstanceKey) {
+			cleared = append(cleared, health.IssueKey{ID: "container-restart-loop", InstanceKey: iss.InstanceKey})
+		}
+	}
+
+	// Stable order (all keys share the ID) so the per-issue audit records and
+	// tests see a deterministic sequence.
+	sortByInstanceKey(raised)
+	sortByInstanceKey(cleared)
+	emitHealthTransitions(ctx, d.auditor, raised, cleared)
+	emitHealthNotifications(d.notifier, d.healthMgr, raised, cleared)
+}
+
+func sortByInstanceKey(ks []health.IssueKey) {
+	sort.Slice(ks, func(i, j int) bool { return ks[i].InstanceKey < ks[j].InstanceKey })
 }

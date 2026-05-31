@@ -444,3 +444,306 @@ func TestCheckBrainDBIntegrity_QueryErrorLeavesStateUnchanged(t *testing.T) {
 		t.Errorf("a query error must not audit, got %d records", len(fs.events))
 	}
 }
+
+// --- container-restart-loop detector (issue #35) -------------------------
+
+// fakeRestartReader is a scriptable restartCountReader: `counts` is the map the
+// next check() observes; setting `err` makes RestartCounts fail so the
+// docker-unreachable path can be exercised. Both are mutated between checks to
+// drive a scenario, mirroring how the real Docker counter evolves over polls.
+type fakeRestartReader struct {
+	counts map[string]int
+	err    error
+}
+
+func (f *fakeRestartReader) RestartCounts(context.Context) (map[string]int, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := make(map[string]int, len(f.counts))
+	for k, v := range f.counts {
+		out[k] = v
+	}
+	return out, nil
+}
+
+// stepClock is a hand-advanced clock so detector tests assert window math
+// deterministically without sleeping.
+type stepClock struct{ t time.Time }
+
+func (c *stepClock) now() time.Time      { return c.t }
+func (c *stepClock) add(d time.Duration) { c.t = c.t.Add(d) }
+
+// newTestDetector wires a restartLoopDetector to in-memory fakes and a
+// hand-advanced clock, at the production threshold (3) and window (5m).
+func newTestDetector(reader restartCountReader, clk *stepClock) (*restartLoopDetector, *health.Manager, *fakeEventStore, *fakeNotifStore) {
+	mgr := health.NewManager(nil)
+	es := &fakeEventStore{}
+	ns := &fakeNotifStore{}
+	d := &restartLoopDetector{
+		docker:    reader,
+		healthMgr: mgr,
+		auditor:   audit.New(es),
+		notifier:  notify.New(ns, nil),
+		window:    restartLoopWindow,
+		threshold: restartLoopThreshold,
+		now:       clk.now,
+		history:   map[string][]restartSample{},
+	}
+	return d, mgr, es, ns
+}
+
+func auditCount(es *fakeEventStore, action string) int {
+	n := 0
+	for _, e := range es.events {
+		if e.Action == action {
+			n++
+		}
+	}
+	return n
+}
+
+// loopIssues returns the active container-restart-loop issues, ignoring any
+// other category that might be present.
+func loopIssues(mgr *health.Manager) []health.Issue {
+	var out []health.Issue
+	for _, iss := range mgr.List() {
+		if iss.ID == "container-restart-loop" {
+			out = append(out, iss)
+		}
+	}
+	return out
+}
+
+// A within-window restart delta over the threshold raises the issue keyed to
+// the owning instance, with one health.issue.raised audit record. RestartCount
+// is cumulative, so the first sample only establishes a baseline; the raise
+// comes from the climb on the second poll.
+func TestRestartLoop_RaisesKeyedToInstance(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	r := &fakeRestartReader{counts: map[string]int{"immich--abby": 0}}
+	d, mgr, es, _ := newTestDetector(r, clk)
+
+	d.check(context.Background()) // baseline at 0 — no raise
+	if len(loopIssues(mgr)) != 0 {
+		t.Fatalf("first sample must not raise (delta 0), got %v", mgr.List())
+	}
+
+	clk.add(time.Minute)
+	r.counts["immich--abby"] = 6
+	d.check(context.Background()) // delta 6 > 3 → raise
+
+	got := loopIssues(mgr)
+	if len(got) != 1 {
+		t.Fatalf("want 1 active restart-loop issue, got %d (%v)", len(got), mgr.List())
+	}
+	if got[0].InstanceKey != "immich--abby" {
+		t.Errorf("InstanceKey: want immich--abby, got %q", got[0].InstanceKey)
+	}
+	if got[0].Details == "" {
+		t.Error("Details should describe the restart count")
+	}
+	if n := auditCount(es, audit.ActionHealthIssueRaised); n != 1 {
+		t.Errorf("want 1 raised audit record, got %d", n)
+	}
+}
+
+// Once the container stops restarting, the old samples age out of the window,
+// the delta falls to 0, and the issue clears with a paired audit record.
+func TestRestartLoop_ClearsWhenStabilized(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	r := &fakeRestartReader{counts: map[string]int{"app": 0}}
+	d, mgr, es, _ := newTestDetector(r, clk)
+
+	d.check(context.Background())
+	clk.add(time.Minute)
+	r.counts["app"] = 6
+	d.check(context.Background())
+	if len(loopIssues(mgr)) != 1 {
+		t.Fatalf("expected raise before stabilizing, got %v", mgr.List())
+	}
+
+	// Six minutes later with no new restarts: every prior sample is older than
+	// the 5-minute window, so the baseline becomes the current count → delta 0.
+	clk.add(6 * time.Minute)
+	d.check(context.Background())
+	if len(loopIssues(mgr)) != 0 {
+		t.Fatalf("issue should clear once restarts stop, got %v", mgr.List())
+	}
+	if n := auditCount(es, audit.ActionHealthIssueCleared); n != 1 {
+		t.Errorf("want 1 cleared audit record, got %d", n)
+	}
+}
+
+// An uninstalled app drops out of RestartCounts entirely; the detector clears
+// its issue and forgets its sample history so the map can't grow unbounded.
+func TestRestartLoop_ClearsWhenInstanceAbsent(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	r := &fakeRestartReader{counts: map[string]int{"app": 0}}
+	d, mgr, _, _ := newTestDetector(r, clk)
+
+	d.check(context.Background())
+	clk.add(time.Minute)
+	r.counts["app"] = 6
+	d.check(context.Background())
+	if len(loopIssues(mgr)) != 1 {
+		t.Fatalf("expected raise, got %v", mgr.List())
+	}
+
+	clk.add(time.Minute)
+	r.counts = map[string]int{} // app uninstalled
+	d.check(context.Background())
+	if len(loopIssues(mgr)) != 0 {
+		t.Fatalf("issue should clear when the instance is gone, got %v", mgr.List())
+	}
+	if len(d.history) != 0 {
+		t.Errorf("history should drop the absent instance, still holds %v", d.history)
+	}
+}
+
+// A high cumulative RestartCount observed on the very first sample (e.g. after a
+// brain restart, with the crashes long in the past) must not raise: the
+// detector thresholds the within-window delta, not the raw counter.
+func TestRestartLoop_NoFalseRaiseOnHistoricalCount(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	r := &fakeRestartReader{counts: map[string]int{"app": 100}}
+	d, mgr, _, _ := newTestDetector(r, clk)
+
+	d.check(context.Background()) // first sample → baseline 100
+	clk.add(time.Minute)
+	d.check(context.Background()) // still 100, no new restarts → delta 0
+
+	if len(loopIssues(mgr)) != 0 {
+		t.Fatalf("a quiet container with a high historical count must not raise, got %v", mgr.List())
+	}
+}
+
+// The threshold is strict (delta > N): exactly N restarts in the window does not
+// raise; N+1 does.
+func TestRestartLoop_ThresholdIsStrict(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	r := &fakeRestartReader{counts: map[string]int{"app": 0}}
+	d, mgr, _, _ := newTestDetector(r, clk)
+
+	d.check(context.Background()) // baseline 0
+	clk.add(time.Minute)
+	r.counts["app"] = restartLoopThreshold // delta == 3, not > 3
+	d.check(context.Background())
+	if len(loopIssues(mgr)) != 0 {
+		t.Fatalf("delta == threshold must not raise, got %v", mgr.List())
+	}
+
+	clk.add(time.Minute)
+	r.counts["app"] = restartLoopThreshold + 1 // delta == 4 > 3
+	d.check(context.Background())
+	if len(loopIssues(mgr)) != 1 {
+		t.Fatalf("delta > threshold must raise, got %v", mgr.List())
+	}
+}
+
+// Per-instance isolation: a looping container raises only its own instance's
+// issue, leaving a quiet sibling untouched.
+func TestRestartLoop_PerInstanceIsolation(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	r := &fakeRestartReader{counts: map[string]int{"loud": 0, "quiet": 0}}
+	d, mgr, _, _ := newTestDetector(r, clk)
+
+	d.check(context.Background())
+	clk.add(time.Minute)
+	r.counts["loud"] = 6 // only loud climbs
+	d.check(context.Background())
+
+	got := loopIssues(mgr)
+	if len(got) != 1 || got[0].InstanceKey != "loud" {
+		t.Fatalf("want exactly the loud instance raised, got %v", mgr.List())
+	}
+}
+
+// Container recreation (app update / reinstall) resets RestartCount to 0. The
+// detector must restart the window from the lower value rather than computing a
+// negative delta against the stale high baseline — so a recreated container that
+// is now quiet clears, and only its post-recreation restarts count toward a new
+// raise.
+func TestRestartLoop_ContainerRecreationResetsBaseline(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	r := &fakeRestartReader{counts: map[string]int{"app": 0}}
+	d, mgr, _, _ := newTestDetector(r, clk)
+
+	d.check(context.Background())
+	clk.add(time.Minute)
+	r.counts["app"] = 6
+	d.check(context.Background())
+	if len(loopIssues(mgr)) != 1 {
+		t.Fatalf("expected raise before recreation, got %v", mgr.List())
+	}
+
+	// Container recreated: counter drops to 0. Quiet now → clears.
+	clk.add(time.Minute)
+	r.counts["app"] = 0
+	d.check(context.Background())
+	if len(loopIssues(mgr)) != 0 {
+		t.Fatalf("recreated+quiet container should clear, got %v", mgr.List())
+	}
+
+	// A small climb off the fresh baseline stays under threshold — proving the
+	// baseline reset to 0, not to the stale 6 (which would read as delta -5..+).
+	clk.add(time.Minute)
+	r.counts["app"] = 2
+	d.check(context.Background())
+	if len(loopIssues(mgr)) != 0 {
+		t.Fatalf("post-recreation delta of 2 must not raise, got %v", mgr.List())
+	}
+}
+
+// When Docker is unreachable, check() skips the poll and leaves health state and
+// sample history exactly as they were — a transient inspect failure must not
+// spuriously clear an active issue.
+func TestRestartLoop_DockerErrorLeavesStateUnchanged(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	r := &fakeRestartReader{counts: map[string]int{"app": 0}}
+	d, mgr, es, _ := newTestDetector(r, clk)
+
+	d.check(context.Background())
+	clk.add(time.Minute)
+	r.counts["app"] = 6
+	d.check(context.Background())
+	if len(loopIssues(mgr)) != 1 {
+		t.Fatalf("expected raise, got %v", mgr.List())
+	}
+	histBefore := len(d.history["app"])
+
+	clk.add(time.Minute)
+	r.err = errors.New("docker unreachable")
+	d.check(context.Background())
+
+	if len(loopIssues(mgr)) != 1 {
+		t.Errorf("active issue must survive a docker error, got %v", mgr.List())
+	}
+	if n := auditCount(es, audit.ActionHealthIssueCleared); n != 0 {
+		t.Errorf("docker error must not clear (got %d cleared records)", n)
+	}
+	if len(d.history["app"]) != histBefore {
+		t.Errorf("history must be untouched on error: before %d, after %d", histBefore, len(d.history["app"]))
+	}
+}
+
+// container-restart-loop is not on the notify allowlist (NOTIFICATIONS.md stages
+// app-lifecycle notifications behind their detectors), so a raise surfaces in the
+// health registry but emits no bell notification. This pins that staging
+// decision until the allowlist entry lands as a separate change.
+func TestRestartLoop_RaiseEmitsNoBellNotification(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	r := &fakeRestartReader{counts: map[string]int{"app": 0}}
+	d, mgr, _, ns := newTestDetector(r, clk)
+
+	d.check(context.Background())
+	clk.add(time.Minute)
+	r.counts["app"] = 6
+	d.check(context.Background())
+	if len(loopIssues(mgr)) != 1 {
+		t.Fatalf("expected raise, got %v", mgr.List())
+	}
+	if len(ns.raised) != 0 {
+		t.Errorf("container-restart-loop must not emit a notification (not allowlisted), got %v", ns.raised)
+	}
+}

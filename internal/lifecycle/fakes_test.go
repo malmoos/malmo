@@ -39,11 +39,12 @@ func (c call) String() string {
 type fakeDocker struct {
 	mu sync.Mutex
 
-	digests   map[string]string // image → digest returned by ImageInspect
-	pullErr   map[string]error  // per-image Pull error (nil = success)
-	composeUp func(dir, project string) (string, error)
-	inspect   func(id, mainService string) (running bool, health string, err error)
-	psManaged map[string]bool // returned by PSManaged
+	digests       map[string]string // image → digest returned by ImageInspect
+	pullErr       map[string]error  // per-image Pull error (nil = success)
+	composeUp     func(dir, project string) (string, error)
+	inspect       func(id, mainService string) (running bool, health string, err error)
+	psManaged     map[string]bool // returned by PSManaged
+	restartCounts map[string]int  // returned by RestartCounts
 
 	composeUpErr   error // simple "always fail compose up"
 	composeDownErr error
@@ -150,6 +151,15 @@ func (f *fakeDocker) PSManaged(_ context.Context) (map[string]bool, error) {
 	f.record("PSManaged")
 	out := make(map[string]bool, len(f.psManaged))
 	for k, v := range f.psManaged {
+		out[k] = v
+	}
+	return out, nil
+}
+
+func (f *fakeDocker) RestartCounts(_ context.Context) (map[string]int, error) {
+	f.record("RestartCounts")
+	out := make(map[string]int, len(f.restartCounts))
+	for k, v := range f.restartCounts {
 		out[k] = v
 	}
 	return out, nil

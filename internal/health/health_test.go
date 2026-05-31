@@ -157,6 +157,37 @@ func TestList_BrainDBCorruptDefinition(t *testing.T) {
 	}
 }
 
+// container-restart-loop (issue #35) is a per-app, advisory detector: warning
+// severity, Tier-2 (view logs / stop the app), CategoryVersion, and it blocks
+// nothing — the app is already failing, so we surface it rather than gate. The
+// instance_key carries the owning instance_id, so the Issue echoes it back.
+func TestList_ContainerRestartLoopDefinition(t *testing.T) {
+	m := NewManager(nil)
+	if !m.Raise("container-restart-loop", "immich--abby", "restarted 6 times") {
+		t.Fatal("first raise should transition")
+	}
+
+	got := m.List()[0]
+	if got.InstanceKey != "immich--abby" {
+		t.Errorf("InstanceKey: want immich--abby (per-app keying), got %q", got.InstanceKey)
+	}
+	if got.Category != CategoryVersion {
+		t.Errorf("Category: want version, got %s", got.Category)
+	}
+	if got.Severity != SeverityWarning {
+		t.Errorf("Severity: want warning, got %s", got.Severity)
+	}
+	if got.Tier != 2 {
+		t.Errorf("Tier: want 2, got %d", got.Tier)
+	}
+	if got.BlocksWrites || got.BlocksApps || got.BlocksUsers {
+		t.Errorf("blocks_*: want all false (advisory), got %+v", got)
+	}
+	if got.Summary == "" {
+		t.Error("Summary must be populated from definition")
+	}
+}
+
 func TestApplyStorageFindings_RaiseAndClear(t *testing.T) {
 	m := NewManager(nil)
 

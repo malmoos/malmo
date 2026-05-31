@@ -561,5 +561,17 @@ func builtinDefinitions() []Definition {
 			BlocksWrites: true, BlocksApps: true, BlocksUsers: true,
 			Summary: "malmo's database is damaged; some actions are turned off until it's fixed.",
 		},
+		// Version/app-runtime (HEALTH.md # Version). container-restart-loop is a
+		// locus-D detector: the brain samples each managed container's cumulative
+		// Docker RestartCount and raises when it climbs past the threshold within
+		// a window (cmd/brain restartLoopDetector). Per-app — keyed by instance_id.
+		// The app is already failing, so we surface it rather than block; warning,
+		// Tier-2 (view logs / stop the app).
+		{
+			ID: "container-restart-loop", Category: CategoryVersion,
+			Severity: SeverityWarning, Tier: 2,
+			BlocksWrites: false, BlocksApps: false, BlocksUsers: false,
+			Summary: "An app keeps crashing and restarting.",
+		},
 	}
 }

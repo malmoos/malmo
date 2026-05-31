@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/malmo/malmo/internal/protocol"
@@ -24,6 +25,12 @@ type DockerDriver interface {
 	NetworkCreate(ctx context.Context, name string, internal bool) error
 	NetworkRemove(ctx context.Context, name string) error
 	PSManaged(ctx context.Context) (map[string]bool, error)
+	// RestartCounts reports each managed instance's cumulative container
+	// RestartCount (max across the instance's containers), keyed by
+	// instance_id. Used by the brain's container-restart-loop detector to
+	// sample restart deltas over a window (HEALTH.md # Detector catalog, locus
+	// D). Read-only; needs only the proxy's CONTAINERS endpoint family.
+	RestartCounts(ctx context.Context) (map[string]int, error)
 	// RemoveContainersByInstance is the orphan-teardown escape hatch: when the
 	// instance dir is gone, compose can't drive the cleanup, so we kill all
 	// containers labeled malmo.instance_id=<id> directly.
@@ -164,6 +171,43 @@ func (cliDocker) RemoveContainersByInstance(ctx context.Context, instanceID stri
 		_ = exec.CommandContext(ctx, "docker", "rm", "-f", cid).Run()
 	}
 	return nil
+}
+
+func (cliDocker) RestartCounts(ctx context.Context) (map[string]int, error) {
+	ids, err := exec.CommandContext(ctx, "docker", "ps", "-aq",
+		"--filter", "label=malmo.managed=true").Output()
+	if err != nil {
+		return nil, err
+	}
+	idList := strings.Fields(string(ids))
+	res := map[string]int{}
+	if len(idList) == 0 {
+		return res, nil
+	}
+	// One `docker inspect` over all managed containers: one line each, mapping
+	// the owning instance_id to that container's cumulative RestartCount.
+	args := append([]string{"inspect", "--format",
+		`{{index .Config.Labels "malmo.instance_id"}} {{.RestartCount}}`}, idList...)
+	out, err := exec.CommandContext(ctx, "docker", args...).Output()
+	if err != nil {
+		return nil, err
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.Fields(line)
+		if len(parts) != 2 {
+			continue
+		}
+		n, err := strconv.Atoi(parts[1])
+		if err != nil {
+			continue
+		}
+		// An instance can have several containers; the loop is per-container, so
+		// take the max — raise if any one container is crash-looping.
+		if n > res[parts[0]] {
+			res[parts[0]] = n
+		}
+	}
+	return res, nil
 }
 
 func (cliDocker) PSManaged(ctx context.Context) (map[string]bool, error) {
