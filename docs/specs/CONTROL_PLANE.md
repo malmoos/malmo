@@ -13,7 +13,7 @@
 ## What the control plane is responsible for
 
 - **App lifecycle** — install, start, stop, update, uninstall. Talks to Docker. Full spec in `APP_LIFECYCLE.md`.
-- **Routing** — dynamically configures the reverse proxy as apps come and go (`photos.malmo.local` → container).
+- **Routing** — dynamically configures the reverse proxy as apps come and go (`photos.local` → container).
 - **mDNS publishing** — registers each app's hostname with Avahi (via `host-agent`).
 - **API + UI** — HTTP + SSE + (future) WebSocket API for the web UI; ships the UI. Wire spec in `BRAIN_UI_PROTOCOL.md`; client-side stack in `WEB_UI.md`.
 - **Identity** — user accounts, sessions, admin/root account, sharing/ACLs. See `AUTH.md`.

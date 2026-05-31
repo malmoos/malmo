@@ -116,7 +116,7 @@ The richest boundary. The right question is not "can an app be compromised" (ass
 
 | Threat | Mitigation (owner) | Residual |
 |---|---|---|
-| Session cookie leaks to app subdomains | Cookie host-scoped, `Domain` unset — never `.malmo.local` (`AUTH.md` # Sessions). **Load-bearing for subdomain isolation** | — |
+| Session cookie leaks to app origins | Cookie host-scoped, `Domain` unset — never broadened to `.local` (`AUTH.md` # Sessions). **Load-bearing for origin isolation** | — |
 | Credential stuffing / brute force | Per-username exponential backoff + per-IP token bucket (`AUTH.md` # Rate limiting) | Brain's own login endpoint throttling is the floor; finer lockout tuning in `NEXT.md` |
 | CSRF | `SameSite=Lax`; no state-changing GETs (`AUTH.md` # CSRF) | Future third-party API needs explicit CSRF tokens — out of scope until then |
 | Offline hash cracking | yescrypt/argon2id via PAM; brain stores no password hash (`AUTH.md` # Identity primitive) | Requires the drive to already be decrypted (B5) |

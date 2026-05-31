@@ -29,7 +29,7 @@ These cannot be regular apps because:
 
 **Home: malmo Settings UI**, not the App Store. **Curated by us** — no third-party Tier-2 modules in v1.
 
-**Implementation is locked: native Debian packages, managed under systemd, with admin UIs surfaced inside the malmo dashboard.** No Tier-2 service runs in a Docker container; no Tier-2 service exposes its upstream admin UI at its own subdomain. The user-facing surface is "Settings → Tailscale" (a malmo-built UI on `malmo.local/settings/tailscale`), not "Install Tailscale from store" or "open the Tailscale admin UI at tailscale.malmo.local." See `DECISIONS.md` 2026-05-14 and `AUTH.md` for the reasoning chain.
+**Implementation is locked: native Debian packages, managed under systemd, with admin UIs surfaced inside the malmo dashboard.** No Tier-2 service runs in a Docker container; no Tier-2 service exposes its upstream admin UI at its own subdomain. The user-facing surface is "Settings → Tailscale" (a malmo-built UI on `malmo.local/settings/tailscale`), not "Install Tailscale from store" or "open the Tailscale admin UI at tailscale.local." See `DECISIONS.md` 2026-05-14 and `AUTH.md` for the reasoning chain.
 
 ### Tier 3 — Regular apps
 

@@ -25,7 +25,7 @@ func (s *stubVerifier) Verify(_, _ string) (bool, error) {
 // --- helpers ---
 
 func newTestAgent(v PasswordVerifier) (*Agent, *http.ServeMux) {
-	a := New(v, NewFakePublisher(".malmo.local"))
+	a := New(v, NewFakePublisher(".local"))
 	mux := http.NewServeMux()
 	a.Mount(mux)
 	return a, mux
@@ -111,7 +111,7 @@ func TestVerifyPasswordVerifierError_ReturnsValidFalseNotFiveHundred(t *testing.
 // --- set-password / fake-map tests ---
 
 func TestSetPasswordAndVerifyWithFakeVerifier(t *testing.T) {
-	a := New(nil, NewFakePublisher(".malmo.local")) // verifier set after construction
+	a := New(nil, NewFakePublisher(".local")) // verifier set after construction
 	a.Verifier = NewFakeVerifier(a)
 	mux := http.NewServeMux()
 	a.Mount(mux)
@@ -206,7 +206,7 @@ func (s *stubUserMgr) WellKnownIdentity() (int, int, int, error) {
 
 func TestSetPassword_DelegatesToUserMgrWhenSet(t *testing.T) {
 	mgr := &stubUserMgr{}
-	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a := New(&stubVerifier{}, NewFakePublisher(".local"))
 	a.UserMgr = mgr
 	mux := http.NewServeMux()
 	a.Mount(mux)
@@ -233,7 +233,7 @@ func TestSetPassword_DelegatesToUserMgrWhenSet(t *testing.T) {
 
 func TestSetPassword_UserMgrError_Returns500(t *testing.T) {
 	mgr := &stubUserMgr{err: errors.New("useradd: group 'malmo' does not exist")}
-	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a := New(&stubVerifier{}, NewFakePublisher(".local"))
 	a.UserMgr = mgr
 	mux := http.NewServeMux()
 	a.Mount(mux)
@@ -264,7 +264,7 @@ func TestSetPasswordMissingFields(t *testing.T) {
 
 func TestSetRole_DelegatesToUserMgrWhenSet(t *testing.T) {
 	mgr := &stubUserMgr{}
-	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a := New(&stubVerifier{}, NewFakePublisher(".local"))
 	a.UserMgr = mgr
 	mux := http.NewServeMux()
 	a.Mount(mux)
@@ -290,7 +290,7 @@ func TestSetRole_DelegatesToUserMgrWhenSet(t *testing.T) {
 
 func TestSetRole_UserMgrError_Returns500(t *testing.T) {
 	mgr := &stubUserMgr{roleErr: errors.New("gpasswd: group sudo does not exist")}
-	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a := New(&stubVerifier{}, NewFakePublisher(".local"))
 	a.UserMgr = mgr
 	mux := http.NewServeMux()
 	a.Mount(mux)
@@ -329,7 +329,7 @@ func TestSetRole_InvalidRole(t *testing.T) {
 // --- delete-user tests ---
 
 func TestDeleteUser_RemovesFromFakeMap(t *testing.T) {
-	a := New(nil, NewFakePublisher(".malmo.local"))
+	a := New(nil, NewFakePublisher(".local"))
 	a.Verifier = NewFakeVerifier(a)
 	mux := http.NewServeMux()
 	a.Mount(mux)
@@ -373,7 +373,7 @@ func TestDeleteUser_EmptyUser_Returns400(t *testing.T) {
 
 func TestDeleteUser_DelegatesToUserMgrWhenSet(t *testing.T) {
 	mgr := &stubUserMgr{}
-	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a := New(&stubVerifier{}, NewFakePublisher(".local"))
 	a.UserMgr = mgr
 	// Seed the in-memory map to prove the wired path does NOT touch it.
 	a.passwords["cindy"] = []byte("seed")
@@ -397,7 +397,7 @@ func TestDeleteUser_DelegatesToUserMgrWhenSet(t *testing.T) {
 
 func TestDeleteUser_UserMgrError_Returns500(t *testing.T) {
 	mgr := &stubUserMgr{deleteErr: errors.New("userdel: user 'cindy' is currently used by process 4242")}
-	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a := New(&stubVerifier{}, NewFakePublisher(".local"))
 	a.UserMgr = mgr
 	mux := http.NewServeMux()
 	a.Mount(mux)
@@ -446,7 +446,7 @@ func TestResolveHome_FakeBranch_StableAcrossCalls(t *testing.T) {
 
 func TestResolveHome_DelegatesToUserMgrWhenSet(t *testing.T) {
 	mgr := &stubUserMgr{}
-	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a := New(&stubVerifier{}, NewFakePublisher(".local"))
 	a.UserMgr = mgr
 	mux := http.NewServeMux()
 	a.Mount(mux)
@@ -466,7 +466,7 @@ func TestResolveHome_DelegatesToUserMgrWhenSet(t *testing.T) {
 
 func TestResolveHome_UnknownUser_Returns404(t *testing.T) {
 	mgr := &stubUserMgr{resolveHomeErr: ErrUnknownUser}
-	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a := New(&stubVerifier{}, NewFakePublisher(".local"))
 	a.UserMgr = mgr
 	mux := http.NewServeMux()
 	a.Mount(mux)
@@ -483,7 +483,7 @@ func TestResolveHome_UnknownUser_Returns404(t *testing.T) {
 
 func TestResolveHome_UserMgrError_Returns500(t *testing.T) {
 	mgr := &stubUserMgr{resolveHomeErr: errors.New("nss lookup failed")}
-	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a := New(&stubVerifier{}, NewFakePublisher(".local"))
 	a.UserMgr = mgr
 	mux := http.NewServeMux()
 	a.Mount(mux)
@@ -510,7 +510,7 @@ func (s *stubPublisher) Publish(slug string) (string, error) {
 		return "", s.publishErr
 	}
 	s.published = append(s.published, slug)
-	return slug + ".malmo.local", nil
+	return slug + ".local", nil
 }
 
 func (s *stubPublisher) Unpublish(slug string) error {
@@ -542,8 +542,8 @@ func TestPublishUnpublish_RoundTrip(t *testing.T) {
 		t.Fatalf("publish: want 200, got %d", w.Code)
 	}
 	pr := decodeBody[protocol.PublishResponse](t, w)
-	if pr.Name != "whoami.malmo.local" {
-		t.Errorf("want whoami.malmo.local, got %q", pr.Name)
+	if pr.Name != "whoami.local" {
+		t.Errorf("want whoami.local, got %q", pr.Name)
 	}
 
 	w = post(t, mux, "/v1/discovery/unpublish", protocol.UnpublishRequest{Slug: "whoami"})
@@ -565,8 +565,8 @@ func TestPublish_DelegatesToPublisher(t *testing.T) {
 		t.Fatalf("publish: want 200, got %d", w.Code)
 	}
 	pr := decodeBody[protocol.PublishResponse](t, w)
-	if pr.Name != "photos.malmo.local" {
-		t.Errorf("name: want photos.malmo.local, got %q", pr.Name)
+	if pr.Name != "photos.local" {
+		t.Errorf("name: want photos.local, got %q", pr.Name)
 	}
 	if pr.State != "established" {
 		t.Errorf("state: want established, got %q", pr.State)
@@ -593,14 +593,14 @@ func TestPublish_PublisherError_Returns500(t *testing.T) {
 // TestFakePublisher_MatchesCurrentBehavior verifies FakePublisher returns the
 // expected name and doesn't error on valid slugs or Unpublish.
 func TestFakePublisher_MatchesCurrentBehavior(t *testing.T) {
-	fp := NewFakePublisher(".malmo.local")
+	fp := NewFakePublisher(".local")
 
 	name, err := fp.Publish("whoami")
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	if name != "whoami.malmo.local" {
-		t.Errorf("name: want whoami.malmo.local, got %q", name)
+	if name != "whoami.local" {
+		t.Errorf("name: want whoami.local, got %q", name)
 	}
 
 	if err := fp.Unpublish("whoami"); err != nil {
@@ -698,7 +698,7 @@ func TestWellKnownIdentity_FakeBranch_ReturnsFixedConstants(t *testing.T) {
 
 func TestWellKnownIdentity_DelegatesToUserMgrWhenSet(t *testing.T) {
 	mgr := &stubUserMgr{wellKnownIdentityResult: &struct{ appUID, appGID, sharedGID int }{1500, 1500, 1501}}
-	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a := New(&stubVerifier{}, NewFakePublisher(".local"))
 	a.UserMgr = mgr
 	mux := http.NewServeMux()
 	a.Mount(mux)
@@ -718,7 +718,7 @@ func TestWellKnownIdentity_DelegatesToUserMgrWhenSet(t *testing.T) {
 
 func TestWellKnownIdentity_UserMgrError_Returns500(t *testing.T) {
 	mgr := &stubUserMgr{wellKnownIdentityErr: errors.New("lookup malmo-app user: user: unknown user malmo-app")}
-	a := New(&stubVerifier{}, NewFakePublisher(".malmo.local"))
+	a := New(&stubVerifier{}, NewFakePublisher(".local"))
 	a.UserMgr = mgr
 	mux := http.NewServeMux()
 	a.Mount(mux)

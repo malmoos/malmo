@@ -17,16 +17,16 @@ What's **deferred** (mesh / remote access via Headscale + DERP, device pairing, 
 
 ## Locked: one URL scheme at a time, governed by a global toggle
 
-Every app is **always reachable at `<slug>.malmo.local`** over plain HTTP. That route is the foundation; it works with no internet, no enrollment, no cloud dependency.
+Every app is **always reachable at `<slug>.local`** over plain HTTP. That route is the foundation; it works with no internet, no enrollment, no cloud dependency. The LAN name is single-label by necessity — `DISCOVERY.md` # Per-app A records explains why it is not `<slug>.malmo.local`. The two schemes deliberately differ in shape: the flat `.local` mDNS namespace can't carry the `<box-id>` hierarchy, while the unicast `.malmo.network` side needs it for the per-box wildcard cert. The `<slug>` prefix stays consistent across both.
 
 If the user enrolls with malmo.network and turns on the **"Use secure (HTTPS) URLs for my apps"** toggle, the brain additionally registers `<slug>.<box-id>.malmo.network` for every app and the dashboard switches to surfacing those URLs everywhere. The toggle is **all-or-nothing**: every app shows the same scheme, no per-app routing override.
 
 | URL                                       | Scheme | Resolution                      | Cert                      | When active                                |
 |-------------------------------------------|--------|---------------------------------|---------------------------|--------------------------------------------|
-| `<slug>.malmo.local`                      | HTTP   | mDNS on the LAN (Avahi)         | none                      | Always (the foundation)                    |
+| `<slug>.local`                            | HTTP   | mDNS on the LAN (Avahi)         | none                      | Always (the foundation)                    |
 | `<slug>.<box-id>.malmo.network`           | HTTPS  | malmo cloud DNS → box's LAN IP  | Let's Encrypt wildcard    | Enrolled + toggle on; surfaces in the UI   |
 
-When the toggle is on, the `.local` routes remain installed in Caddy as a fallback (so power users can still type `photos.malmo.local` directly) — but the dashboard, tile clicks, copy-link buttons, and bookmarks all show `.malmo.network`.
+When the toggle is on, the `.local` routes remain installed in Caddy as a fallback (so power users can still type `photos.local` directly) — but the dashboard, tile clicks, copy-link buttons, and bookmarks all show `.malmo.network`.
 
 See `DECISIONS.md` (2026-05-14) for why we collapsed from the earlier "two URLs always visible" model to this one.
 
@@ -39,7 +39,7 @@ See `DECISIONS.md` (2026-05-14) for why we collapsed from the earlier "two URLs 
 
 ### `.local` is a desktop URL scheme — Android needs the cloud path
 
-`.local` resolution requires the OS to wire mDNS into `getaddrinfo`. macOS, iOS, Linux (with `nss-mdns`), and Windows (with Bonjour installed) all do this. **Android does not**, and there is no app-layer workaround — Android's NSD is an API for apps that want to *browse* for services, not a system resolver browsers can use. A user typing `photos.malmo.local` into Chrome on an Android phone gets NXDOMAIN.
+`.local` resolution requires the OS to wire mDNS into `getaddrinfo`. macOS, iOS, Linux (with `nss-mdns`), and Windows (with Bonjour installed) all do this. **Android does not**, and there is no app-layer workaround — Android's NSD is an API for apps that want to *browse* for services, not a system resolver browsers can use. A user typing `photos.local` into Chrome on an Android phone gets NXDOMAIN.
 
 This makes the secure-URLs toggle the **Android compatibility path** in practice. The label doesn't say that, but the first-run wizard asks about it directly ("Will anyone in your household use this from an Android phone?") and flips the toggle pre-emptively for yes. See `FIRST_RUN.md` and `DISCOVERY.md` for the full client-compatibility matrix and gotchas (AP isolation, `.local` AD collisions, hostname conflict).
 
@@ -127,7 +127,7 @@ Previously specified as "the app cannot be installed until the user enrolls." Re
 
 Enrollment is opt-in. The first-run wizard surfaces it with plain-language framing:
 
-> *Enrolling gives every app a secure URL like `photos.cindy-fox.malmo.network`. Your data never goes through malmo's servers — only DNS lookups do. You can skip this and access your apps at `photos.malmo.local` instead.*
+> *Enrolling gives every app a secure URL like `photos.cindy-fox.malmo.network`. Your data never goes through malmo's servers — only DNS lookups do. You can skip this and access your apps at `photos.local` instead.*
 
 If the user enrolls:
 

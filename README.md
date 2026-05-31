@@ -33,13 +33,15 @@ Makefile    dev workflow — `make help`
 Requires Docker, Node 20+, and Go 1.23+ (`make` uses `~/.local/go` if `go` isn't on `PATH`). Full guide: [`docs/dev/running-locally.md`](docs/dev/running-locally.md).
 
 ```bash
-make caddy        # dev reverse proxy (container; apps on :8088, admin :2019)
+make caddy        # dev reverse proxy (container; apps on :80, admin :2019)
 make run-agent    # fake host-agent (UNIX socket)   — separate terminal
 make run-brain    # malmo-brain (:8080, native Go)   — separate terminal
 make ui           # dashboard (Vite, :5173)          — separate terminal
 ```
 
 Then open <http://localhost:5173> and install **Whoami** from the catalog.
+
+`make dev` runs all of the above in one terminal and additionally publishes each app's `<slug>.malmo.local` name over real Avahi (`MALMO_DEV_AVAHI=1`), so installed apps are reachable by their portless `.local` URL from this box and other LAN devices (non-Android). Requires `avahi-daemon` running and host port `:80` free. See [`docs/dev/running-locally.md`](docs/dev/running-locally.md).
 
 ## Documentation
 

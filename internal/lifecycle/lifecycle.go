@@ -20,6 +20,7 @@ import (
 	"github.com/malmo/malmo/internal/events"
 	"github.com/malmo/malmo/internal/hostclient"
 	"github.com/malmo/malmo/internal/manifest"
+	"github.com/malmo/malmo/internal/protocol"
 	"github.com/malmo/malmo/internal/store"
 
 	"gopkg.in/yaml.v3"
@@ -285,13 +286,21 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	// 9. Publish mDNS + register the Caddy route pointing at a splash page, so
 	// the hostname is reachable immediately (APP_LIFECYCLE.md # register early,
 	// with a splash) instead of returning connection-refused for ~120s.
-	host := slug + ".malmo.local"
+	//
+	// The published name is authoritative: Publish may return a box-qualified
+	// collision-fallback ("<slug>-<box>.local") that differs from the primary
+	// "<slug>.local", so the Caddy route and the displayed URL must follow
+	// pub.Name. We reconstruct the primary name only if publish failed, so the
+	// route still exists (host-header routing keeps working even when mDNS
+	// resolution doesn't).
+	host := slug + protocol.AppHostSuffix
 	step("publishing_mdns")
 	pub, err := m.host.Publish(ctx, slug)
 	if err != nil {
 		slog.Warn("mDNS publish failed (continuing)",
 			"instance_id", id, "slug", slug, "err", err)
 	} else {
+		host = pub.Name
 		_ = m.store.SetMDNSName(id, pub.Name)
 		inst.MDNSName = pub.Name
 	}
@@ -502,13 +511,25 @@ func (m *Manager) reassertRouting(ctx context.Context, inst store.Instance) bool
 		return false
 	}
 	avahiOK := true
-	if _, err := m.host.Publish(ctx, inst.Slug); err != nil {
+	// Use the freshly published name (which may be the box-qualified collision
+	// fallback) for the route. Persist it if it changed since install; fall
+	// back to the stored name, then to the reconstructed primary, so the route
+	// always exists even when mDNS publish fails.
+	host := inst.MDNSName
+	if pub, err := m.host.Publish(ctx, inst.Slug); err != nil {
 		slog.Warn("reconcile: mDNS publish",
 			"instance_id", inst.ID, "slug", inst.Slug, "err", err)
 		avahiOK = false
+	} else {
+		host = pub.Name
+		if pub.Name != inst.MDNSName {
+			_ = m.store.SetMDNSName(inst.ID, pub.Name)
+		}
+	}
+	if host == "" {
+		host = inst.Slug + protocol.AppHostSuffix
 	}
 	upstream := fmt.Sprintf("malmo-%s-%s:%d", inst.ID, man.MainService, man.MainPort)
-	host := inst.Slug + ".malmo.local"
 	if err := m.caddy.AddRoute(ctx, inst.ID, host, upstream); err != nil {
 		slog.Warn("reconcile: caddy route",
 			"instance_id", inst.ID, "host", host, "upstream", upstream, "err", err)
@@ -543,19 +564,28 @@ func (m *Manager) loadInstanceManifest(id string) (*manifest.Manifest, error) {
 }
 
 // allocateSlug derives a free, routable slug from the manifest's preferred
-// slugs. For a personal instance the routable name is `<base>--<user>` (the
-// owner trails after a double-dash, DASHBOARD.md # instance naming); the
-// numeric suffix variants cover the same user installing the same app twice.
+// slugs. The hostname encodes *uniqueness, not ownership* (DASHBOARD.md #
+// instance naming): the bare `<base>` is preferred by every instance regardless
+// of scope, first-come-first-served — so a single-user box gets clean
+// `photos.local`, not `photos--admin.local`. Only on a collision do we
+// disambiguate: a personal instance trails the owner (`<base>--<user>`), and a
+// household instance (no owner to name) falls back to a numeric suffix. The
+// trailing numeric variants are the last-resort for the rare double collision.
 func (m *Manager) allocateSlug(man *manifest.Manifest, scope, username string) (string, error) {
 	bases := man.PreferredSlugs
 	if len(bases) == 0 {
 		bases = []string{man.ID}
 	}
 	for _, base := range bases {
+		// Bare first (first-come). Then the owner-qualified form for personal
+		// instances. Then numeric, covering household collisions and the same
+		// owner installing the same app more than once.
+		candidates := []string{base}
 		if scope == store.ScopePersonal {
-			base = base + "--" + username
+			candidates = append(candidates, base+"--"+username)
 		}
-		for _, slug := range []string{base, base + "-2", base + "-3"} {
+		candidates = append(candidates, base+"-2", base+"-3")
+		for _, slug := range candidates {
 			if reservedSlugs[slug] {
 				continue
 			}
@@ -695,7 +725,7 @@ func (m *Manager) writeEnv(id, slug string, iso *isolation) error {
 	dataDir, _ := filepath.Abs(filepath.Join(m.instanceDir(id), "data"))
 	lines := []string{
 		"MALMO_INSTANCE_ID=" + id,
-		"MALMO_APP_URL=http://" + slug + ".malmo.local",
+		"MALMO_APP_URL=http://" + slug + protocol.AppHostSuffix,
 		"MALMO_DATA_DIR=" + dataDir,
 	}
 	// Inject the in-container path for each bound folder (APP_MANIFEST.md #

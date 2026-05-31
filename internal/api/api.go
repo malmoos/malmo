@@ -24,6 +24,7 @@ import (
 	"github.com/malmo/malmo/internal/hostclient"
 	"github.com/malmo/malmo/internal/lifecycle"
 	"github.com/malmo/malmo/internal/manifest"
+	"github.com/malmo/malmo/internal/protocol"
 	"github.com/malmo/malmo/internal/store"
 )
 
@@ -134,9 +135,16 @@ type InstanceDTO struct {
 }
 
 func toDTO(i store.Instance, ownerUsername string) InstanceDTO {
+	// Prefer the name actually announced over Avahi (MDNSName), which may be the
+	// box-qualified collision fallback "<slug>-<box>.local". Fall back to the
+	// reconstructed primary "<slug>.local" for rows predating the published-name
+	// plumbing or where mDNS publish failed.
 	url := ""
-	if i.Slug != "" {
-		url = "http://" + i.Slug + ".malmo.local"
+	switch {
+	case i.MDNSName != "":
+		url = "http://" + i.MDNSName
+	case i.Slug != "":
+		url = "http://" + i.Slug + protocol.AppHostSuffix
 	}
 	return InstanceDTO{
 		ID: i.ID, ManifestID: i.ManifestID, Name: i.Name, Slug: i.Slug,

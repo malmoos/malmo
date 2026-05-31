@@ -4,7 +4,7 @@
 
 ## Stance
 
-Discovery is the bridge between "the box is on the LAN" and "the user can type a URL and reach an app." For the `.local` URL scheme committed in `MALMO_NETWORK.md` (`photos.malmo.local`, `notes.malmo.local`, …) to work, every app slug must be a name the LAN can resolve *before* HTTP routing happens. There is no shortcut: routers don't host our zones, browsers don't synthesize subdomains, and TLS termination at Caddy is moot if the name never resolves.
+Discovery is the bridge between "the box is on the LAN" and "the user can type a URL and reach an app." For the `.local` URL scheme committed in `MALMO_NETWORK.md` (`photos.local`, `notes.local`, …) to work, every app slug must be a name the LAN can resolve *before* HTTP routing happens. There is no shortcut: routers don't host our zones, browsers don't synthesize subdomains, and TLS termination at Caddy is moot if the name never resolves.
 
 malmo's posture is **Avahi as the LAN nameserver, per-app records published by the reconciler, no client-side magic required.** Discoverability is owned by the brain in the same lifecycle as Caddy site config — install an app, two things get published; uninstall, two things get torn down.
 
@@ -31,7 +31,11 @@ Three categories of records, all driven by the brain via host-agent:
 
 ### 2. Per-app A records
 
-For each installed app instance with slug `<slug>`: `<slug>.malmo.local A <lan-ip>`. The slug is the *instance* slug, which for a personal (per-user) instance is `<base>--<user>` — e.g. `immich--alex.malmo.local` — while a household instance keeps the bare `<base>` (`immich.malmo.local`). The single-label, double-dash shape is deliberate: it resolves on every mDNS client (multi-label `.local` does not) and fits the one wildcard cert on the `.malmo.network` side. See `DASHBOARD.md` # instance naming and `APP_LIFECYCLE.md` # slug derivation.
+For each installed app instance with slug `<slug>`: `<slug>.local A <lan-ip>`. The slug is the *instance* slug: the bare `<base>` is first-come for any scope — so the first Immich installed, household or personal, gets `immich.local`. A personal instance that collides with an existing bare name trails the owner (`<base>--<user>`, e.g. `immich--alex.local`); a colliding household instance gets a numeric suffix (`immich-2.local`). See `DASHBOARD.md` # instance naming and `APP_LIFECYCLE.md` # slug derivation.
+
+**Single-label, on purpose.** The name is `<slug>.local`, *not* `<slug>.malmo.local`. The `--` in the slug keeps the user dimension within one label; there is no `.malmo` infix. This is load-bearing: a name with a dot before `.local` is *multi-label*, and `nss-mdns` (the Linux mDNS resolver) rejects multi-label `.local` names outright — it never queries the network, so `getaddrinfo` (and therefore `curl`, browsers, every normal client) returns NXDOMAIN. `systemd-resolved`'s mDNS behaves the same way. The earlier `<slug>.malmo.local` shape was multi-label and so never resolved on Linux at all. The `.malmo` infix also bought nothing: mDNS (RFC 6762) has no zones, delegation, or wildcards (see # Why subdomains can't be wildcarded), so `<slug>.malmo.local` was never a *subdomain* of `malmo.local` — just a flat name that happened to contain dots, published individually like any other. Single-label `<slug>.local` resolves on every mDNS client (verified: a single-label name published by Avahi resolves through the same Linux `getaddrinfo` path that rejects the multi-label form). The box's own name stays `malmo.local`; the `.malmo.network` HTTPS scheme keeps its hierarchical `<slug>.<box-id>.malmo.network` shape with its wildcard cert — the two namespaces are resolved by entirely different mechanisms and need not match. See `DECISIONS.md` (2026-05-31).
+
+**Collision fallback.** Single-label names share the flat `.local` namespace with every other device on the LAN, so `photos.local` could clash with, say, a printer. On an Avahi name collision the publisher retries once with a box-qualified name `<slug>-<box>.local` (e.g. `photos-malmo.local`, where `<box>` is the box's hostname label). The publish call returns the name that actually won; the reconciler uses *that* returned name for both the Caddy route and the URL shown in the dashboard, so the route and the announcement never disagree. If both the primary and the fallback collide, publish fails and the install surfaces the error (rare; same class as the box `hostname-conflict` issue below).
 
 **Mechanism: Avahi DBus `EntryGroup.AddAddress`.** The install reconciler calls
 `org.freedesktop.Avahi.Server.EntryGroupNew`, then
@@ -42,7 +46,7 @@ withdraws the announcement.
 Static service files (`/etc/avahi/services/*.service`) were the original plan
 but were verified not to work for this use case on 2026-05-24: Avahi static
 files announce *services*, not bare A-record aliases. Even with the corrected
-XML (`<host-name>` inside `<service>`), `avahi-resolve -n <slug>.malmo.local`
+XML (`<host-name>` inside `<service>`), `avahi-resolve -n <slug>.local`
 timed out — Avahi will not publish a standalone A record from a static file.
 DBus `EntryGroup.AddAddress` is the only programmatic path. See
 `DECISIONS.md` entry 2026-05-24 and `docs/progress/avahi-dbus-publisher.md`.
@@ -100,7 +104,7 @@ mDNS (RFC 6762) has no central server and no zone file. Each device announces *e
 Three options were considered:
 
 - **Per-app A records, published on install** (option A, chosen). Works on every mDNS-capable client. Symmetric with Caddy reconciliation. Scales easily to ~100 apps; multicast announcement traffic is negligible at that scale.
-- **CNAME `<slug>.malmo.local` → `malmo.local`** (option B, rejected). CNAME-following over mDNS is under-specified. Apple's mDNSResponder follows them, Windows Bonjour mostly does, systemd-resolved has had bugs, and several Linux NSS implementations don't. Compatibility loss with no upside — the reconciler still has to publish each CNAME, identical work to publishing A records.
+- **CNAME `<slug>.local` → `malmo.local`** (option B, rejected). CNAME-following over mDNS is under-specified. Apple's mDNSResponder follows them, Windows Bonjour mostly does, systemd-resolved has had bugs, and several Linux NSS implementations don't. Compatibility loss with no upside — the reconciler still has to publish each CNAME, identical work to publishing A records.
 - **Single A record + Host-header routing only** (option C, rejected). Requires the browser to resolve the subdomain before it can send a `Host:` header. mDNS doesn't resolve names that weren't announced, so the request never leaves the client. The model assumes resolution is solved; on the LAN, it isn't.
 
 ## Client compatibility
@@ -110,13 +114,13 @@ Three options were considered:
 | macOS (Safari, Chrome, Firefox, Finder) | ✅ Native | mDNSResponder built-in; this is the gold path. |
 | iOS (Safari, Chrome, Files.app) | ✅ Native | Same stack as macOS. |
 | Windows 10/11 (Edge, Chrome, Explorer) | ⚠️ With Bonjour | Native support is partial and version-dependent. Bonjour Print Services (free Apple download, also shipped by iTunes/Adobe) is the reliable path. **First-run dashboard should detect Windows without Bonjour and link to the installer.** |
-| Linux desktop | ✅ With `nss-mdns` | Almost universally installed; we don't need to do anything. |
+| Linux desktop | ✅ With `nss-mdns` | Resolves single-label `.local` names; `nss-mdns` is almost universally installed. **Caveat that drove the naming:** it rejects *multi-label* `.local` (e.g. `x.malmo.local`) outright — instant NXDOMAIN, no network query — which is exactly why app names are single-label `<slug>.local`. See # Per-app A records. |
 | **Android (any browser)** | ❌ Not at OS level | NSD is an app-API, not a system resolver. Browsers don't use it. `.local` URLs return NXDOMAIN. **No workaround at malmo's layer.** |
 | Chromecast / smart TVs / IoT | Varies | Out of scope for v1 user-facing URLs. |
 
 ## The Android problem, explicitly
 
-Android does not wire mDNS into `getaddrinfo`. A browser query for `photos.malmo.local` is sent to the configured unicast DNS server (the router), which returns NXDOMAIN. There is no fallback. This is by design — Google has battery, multicast-on-WiFi-cost, and security reasons, and their preferred discovery model is cloud-mediated (Cast, Nearby).
+Android does not wire mDNS into `getaddrinfo`. A browser query for `photos.local` is sent to the configured unicast DNS server (the router), which returns NXDOMAIN. There is no fallback. This is by design — Google has battery, multicast-on-WiFi-cost, and security reasons, and their preferred discovery model is cloud-mediated (Cast, Nearby).
 
 Implication for malmo: **households with Android users need `<box-id>.malmo.network` HTTPS URLs** (`MALMO_NETWORK.md`), where resolution goes through public DNS. The "Use secure URLs" toggle is, in practical user-facing terms, the *"my household has Android devices"* toggle.
 

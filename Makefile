@@ -171,7 +171,7 @@ dev: build caddy
 	@mkdir -p $(STATE_DIR)
 	@cd web-ui && [ -d node_modules ] || npm install
 	@trap 'kill 0' INT TERM EXIT; \
-	  ($(DEV_DIR)/host-agent 2>&1 | sed -u 's/^/[agent] /') & \
+	  (MALMO_DEV_AVAHI=1 $(DEV_DIR)/host-agent 2>&1 | sed -u 's/^/[agent] /') & \
 	  ($(DEV_DIR)/brain      2>&1 | sed -u 's/^/[brain] /') & \
 	  (cd web-ui && npm run dev 2>&1 | sed -u 's/^/[ui]    /') & \
 	  wait

@@ -22,7 +22,7 @@
 //
 // After a successful test run you can verify with:
 //
-//	avahi-resolve -n whoami.malmo.local
+//	avahi-resolve -n whoami.local
 package avahipublisher
 
 import (
@@ -33,15 +33,15 @@ import (
 // TestDBusPublisher_PublishAndUnpublish exercises the full Publish → Unpublish
 // round-trip against a real avahi-daemon.
 func TestDBusPublisher_PublishAndUnpublish(t *testing.T) {
-	p := &DBusPublisher{HostSuffix: ".malmo.local"}
+	p := &DBusPublisher{HostSuffix: ".local"}
 	defer p.Close()
 
 	name, err := p.Publish("avahitest-slug")
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	if name != "avahitest-slug.malmo.local" {
-		t.Errorf("name: want avahitest-slug.malmo.local, got %q", name)
+	if name != "avahitest-slug.local" {
+		t.Errorf("name: want avahitest-slug.local, got %q", name)
 	}
 
 	// Unpublish must succeed and remove the group.
@@ -53,7 +53,7 @@ func TestDBusPublisher_PublishAndUnpublish(t *testing.T) {
 // TestDBusPublisher_UnpublishIdempotent verifies that unpublishing a slug that
 // was never published (or already unpublished) returns nil.
 func TestDBusPublisher_UnpublishIdempotent(t *testing.T) {
-	p := &DBusPublisher{HostSuffix: ".malmo.local"}
+	p := &DBusPublisher{HostSuffix: ".local"}
 	defer p.Close()
 
 	if err := p.Unpublish("never-published"); err != nil {
@@ -64,7 +64,7 @@ func TestDBusPublisher_UnpublishIdempotent(t *testing.T) {
 // TestDBusPublisher_PublishIdempotent verifies that publishing the same slug
 // twice succeeds without leaking groups.
 func TestDBusPublisher_PublishIdempotent(t *testing.T) {
-	p := &DBusPublisher{HostSuffix: ".malmo.local"}
+	p := &DBusPublisher{HostSuffix: ".local"}
 	defer p.Close()
 
 	if _, err := p.Publish("avahitest-idem"); err != nil {

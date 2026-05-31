@@ -73,6 +73,14 @@ behavior is required.
 - **Node 20+** (`web-ui/.nvmrc` pins 20).
 - **Go 1.23+.** If `go` isn't on your `PATH`, the `Makefile` falls back to
   `~/.local/go/bin/go`.
+- **Host port `:80` free.** The dev Caddy binds `:80` (matching production) so
+  `<slug>.malmo.local` URLs work portless. If something else holds `:80` (another
+  web server, a system service), stop it first or `make caddy` will fail to bind.
+- **`avahi-daemon` running** (Linux, for the `make dev` loop). `make dev` sets
+  `MALMO_DEV_AVAHI=1`, which publishes each app's `.local` name over the real
+  Avahi DBus API so it resolves on the LAN. Without the daemon, the fake
+  host-agent still starts but app installs fail at the publish step. Check with
+  `systemctl is-active avahi-daemon`; the publisher itself needs no sudo.
 - **`libpam0g-dev`** (Linux only). Required to build/test the
   `internal/hostagent/pamverifier` package and `cmd/host-agent-real`. Without
   it, `go test ./...` will fail on those targets with `fatal error:
@@ -132,17 +140,26 @@ browser ──▶ Vite :5173 ──(proxy /api)──▶ brain :8080
                                            │  ├─ docker compose CLI ─▶ Docker
                                            │  ├─ UNIX socket ─────────▶ host-agent (fake)
                                            │  └─ admin API ───────────▶ Caddy :2019
-app HTTP:  curl -H 'Host: <slug>.malmo.local' localhost:8088 ─▶ Caddy ─▶ app container
+app HTTP:  http://<slug>.malmo.local/ ─▶ Caddy :80 ─▶ app container
 ```
 
-- **Caddy listens on host `:8088`** (not 80 — taken on the build box) and exposes
+- **Caddy listens on host `:80`** (free it first — see prerequisites) and exposes
   its admin API on `:2019`. App containers join the `malmo-ingress` network so
   Caddy reaches them by per-instance alias.
-- **`.local` URLs don't resolve yet** (no real Avahi). To hit an installed app,
-  send its `Host` header to Caddy:
+- **`.local` URLs resolve under `make dev`.** `make dev` runs the fake host-agent
+  with `MALMO_DEV_AVAHI=1`, which swaps the in-memory discovery publisher for the
+  real Avahi DBus publisher (`internal/hostagent/avahipublisher`) — the same code
+  path `host-agent-real` uses. Each installed app's `<slug>.malmo.local` is then
+  announced on the LAN, reachable by its portless URL from this box and other LAN
+  devices. Requires `avahi-daemon` running; the publisher works unprivileged.
+  Android browsers don't resolve `.local` (a production limitation too — see
+  `DISCOVERY.md`); secure URLs are the Android path.
   ```bash
-  curl -H 'Host: whoami.malmo.local' localhost:8088
+  curl http://whoami.malmo.local/        # under make dev, no Host header needed
   ```
+- **The multi-terminal path (`make run-agent`) stays pure-fake** — no Avahi, so
+  `.local` won't resolve there. Use the `Host`-header recipe below, or run
+  `make dev` for the LAN-faithful loop.
 
 ## Where state lives
 
@@ -199,24 +216,26 @@ malmo uses **Host-header-based subdomain routing** — each installed app gets a
 virtual host (`<slug>.malmo.local`), never a path prefix. This keeps apps in
 separate browser origins (same-origin policy enforcement — see `SPEC.md`).
 
-**Dev port wrinkle:** in dev, Caddy listens on `:8088` because host port 80 is
-typically taken on a laptop. In production it's `:80`. The `.local` mDNS names
-resolve to port 80, so LAN browser testing via `<slug>.malmo.local` doesn't
-work from another device against the dev stack — the port mismatch breaks it.
-The test script and the ad-hoc recipe below both work around this with `--resolve`
-or an explicit `-H Host:` header.
+**Dev port:** Caddy listens on `:80` in dev (matching production), so `<slug>.malmo.local`
+resolves portless. Under `make dev` (real Avahi) the name is announced on the LAN and
+works from a browser on this box or another LAN device. With `make run-agent` (no Avahi)
+the name won't resolve — fall back to the `Host`-header / `--resolve` recipes below, which
+work regardless of mDNS.
 
 **Quick ad-hoc check** (after installing whoami from the catalog):
 
 ```bash
-# Host-header method — should return the whoami echo page
-curl -H "Host: whoami.malmo.local" http://localhost:8088/
+# Under make dev — real Avahi, portless, no Host header
+curl http://whoami.malmo.local/
+
+# Host-header method — works without Avahi (e.g. under make run-agent)
+curl -H "Host: whoami.malmo.local" http://localhost:80/
 
 # --resolve variant — same effect, avoids quoting issues in scripts
-curl --resolve "whoami.malmo.local:8088:127.0.0.1" http://whoami.malmo.local:8088/
+curl --resolve "whoami.malmo.local:80:127.0.0.1" http://whoami.malmo.local:80/
 
 # Path-based — should NOT return 200 (route does not exist)
-curl -s -o /dev/null -w "%{http_code}" http://localhost:8088/whoami/
+curl -s -o /dev/null -w "%{http_code}" http://localhost:80/whoami/
 ```
 
 **Automated end-to-end test** (installs whoami, exercises positive/negative

@@ -6,6 +6,22 @@ package protocol
 // fake host-agent agree on a path via MALMO_AGENT_SOCK.
 const SocketPath = "/var/run/malmo/agent.sock"
 
+// AppHostSuffix is the LAN hostname suffix for app instances: an app with slug
+// <slug> is reachable at "<slug>" + AppHostSuffix, e.g. "photos.local".
+//
+// It is single-label on purpose. The earlier "<slug>.malmo.local" shape was
+// multi-label relative to .local and is rejected outright by nss-mdns on Linux
+// (and is unreliable on other resolvers), so the no-cloud LAN URL never
+// resolved there. The ".malmo" infix bought nothing in mDNS (no zones, no
+// delegation, no wildcards — each name is published individually regardless),
+// so it was dropped. See DECISIONS.md (2026-05-31) and DISCOVERY.md.
+//
+// Both sides of the host socket build the name from this constant: the brain
+// for the URL it shows and the Caddy route it writes, host-agent for the name
+// it announces over Avahi. They must agree, so the suffix lives here, in the
+// shared wire-contract package.
+const AppHostSuffix = ".local"
+
 // PublishRequest registers a per-app .local name (POST /v1/discovery/publish).
 type PublishRequest struct {
 	Slug string `json:"slug"`

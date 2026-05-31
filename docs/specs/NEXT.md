@@ -293,7 +293,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Catalog removal / delisted-app behavior — installed instances when an app is pulled (keep-running-with-warning vs. force-uninstall vs. read-only). `APP_STORE.md`, `APP_LIFECYCLE.md`.
 - App dependency model — pin "no" (managed services are the answer) so authors don't build the assumption. `APP_MANIFEST.md`.
 - *(Resolved 2026-05-29 — user-driven multi-instance is **yes**: duplicate installs warn but don't block (`DASHBOARD.md` # warn, don't block). Each becomes a personal instance with its own owner/slug/data. The remaining sub-question — two instances owned by the *same* user — folds into the same machinery; pin it if it ever bites.)*
-- Same-user repeat-install slug cap + error UX. `allocateSlug` (`internal/lifecycle`, slice [0025]) tries only `<slug>--<user>`, `-2`, `-3`, then fails *inside the install job* with an opaque "no free slug" error. Two open bits: (a) the cap of three same-app personal copies per user is arbitrary and tight for power users; (b) exhaustion should surface as a clear pre-job `422`/`409`, not a mid-job failure. `APP_LIFECYCLE.md`, `DASHBOARD.md`.
+- Same-user repeat-install slug cap + error UX. `allocateSlug` (`internal/lifecycle`) tries `<slug>` (bare, first-come), `<slug>--<user>` (personal collision), `<slug>-2`, `<slug>-3`, then fails *inside the install job* with an opaque "no free slug" error. Two open bits: (a) the cap of effectively three slugs before exhaustion is arbitrary and tight for power users who install the same app multiple times; (b) exhaustion should surface as a clear pre-job `422`/`409`, not a mid-job failure. `APP_LIFECYCLE.md`, `DASHBOARD.md`.
 - App publisher identity / verified-author badge surface (the *mechanism* folds into manifest signing above; this is the catalog-side UX). `APP_STORE.md`.
 - Per-app HTTP health-probe declaration in the manifest (beyond Docker `HEALTHCHECK`), so the brain reports "responding" vs. "up but unresponsive." `APP_MANIFEST.md`, `HEALTH.md`.
 - Container vulnerability scanning at catalog publish (Trivy/Grype in CI on every PR). `APP_STORE.md`.
@@ -398,7 +398,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Whether DLNA stays in v1 or gets cut. `SERVICE_PROVISIONING.md`.
 
 **Control plane**
-- *(Resolved 2026-05-29 — per-user instance naming is locked as `<slug>--<user>` (bare `<slug>` for household), flat single-label, forced by the wildcard-cert + mDNS constraints. See `DASHBOARD.md` # instance naming and `DECISIONS.md` 2026-05-29.)*
+- *(Resolved 2026-05-29/31 — instance naming is first-come bare `<slug>` for any scope; `<slug>--<user>` on personal collision, `<slug>-2` on household collision. Flat single-label forced by wildcard-cert + mDNS constraints. See `DASHBOARD.md` # instance naming and `DECISIONS.md` 2026-05-29 + 2026-05-31.)*
 - Re-import path for archived ("keep data") instances after uninstall. `APP_LIFECYCLE.md`.
 
 **Build & distribution**

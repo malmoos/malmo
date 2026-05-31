@@ -161,7 +161,7 @@ All network ops are Pattern A (NM DBus calls return promptly). State-change noti
 ```
 POST /v1/discovery/publish
   { "slug": "photos" }
-  → 200 OK  { "name": "photos.malmo.local", "state": "established" }
+  → 200 OK  { "name": "photos.local", "state": "established" }
   (or error.code = "hostname-conflict" | "avahi-down" | "timeout")
 
 POST /v1/discovery/unpublish
@@ -170,7 +170,7 @@ POST /v1/discovery/unpublish
 
 GET  /v1/discovery/state
   → { "publisher": "avahi", "host_name": "malmo", "renamed_to": null,
-      "published": [{ "slug": "photos", "name": "photos.malmo.local", "state": "established" }, ...],
+      "published": [{ "slug": "photos", "name": "photos.local", "state": "established" }, ...],
       "interfaces": ["eth0", "wlan0"] }
 ```
 
