@@ -33,5 +33,5 @@ Tests: `internal/store` covers hide-from-list/count, unmute-restores, per-user i
 ## What's next
 
 - **Settings UI toggle for mute** (`WEB_UI.md`) — a per-category toggle list reading `GET /mutes` and calling `PUT`/`DELETE`, with the bell badge/list reflecting it live over SSE.
-- **Retention / pruning** for `notifications` + `notification_reads` — **done** in [notification-retention-prune.md](notification-retention-prune.md) (90-day age cap, then a 1000-row resolved-first ceiling; pruned at boot + hourly).
+- **Retention / pruning** for `notifications` + `notification_reads` (`NEXT.md` # Observability) — the last v1 notification item; capped count/age, resolved-rows-first a candidate policy.
 - Out of family but adjacent: SMART/`disk-full` detectors, update-outcome and security-audit notification sources (`NOTIFICATIONS.md` # The notification list) — each new source makes its category mute-able with no further work here.
