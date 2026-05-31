@@ -185,7 +185,7 @@ These defaults apply to **every** detector unless its row overrides them. `HEALT
 | `brain-db-corrupt` | `PRAGMA integrity_check` | boot + 6h | result ≠ `ok` |
 | `schema-migration-failed` | migration runner result | boot | migration aborted |
 | `bootstrap-state-mismatch` | bootstrap marker present but DB absent | boot | mismatch |
-| `version-mismatch` | host-agent vs brain version on handshake | each handshake | not the lockstep pair |
+| `version-mismatch` | host-agent vs brain version on handshake | each handshake | not the lockstep pair *(built)* |
 | `tls-cert-near-expiry` | NotAfter of the served `.malmo.network` cert | daily | within renewal-failure window |
 | `update-available` | release/catalog manifest vs installed | per refresh | newer version present |
 | `backup-overdue` | last successful backup timestamp | hourly | older than window *(deferred with backup)* |

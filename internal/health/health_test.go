@@ -107,6 +107,31 @@ func TestList_DefinitionMetadataApplied(t *testing.T) {
 	}
 }
 
+// TestList_VersionMismatchDefinition pins the registered metadata for the
+// locus-C version-mismatch detector (HEALTH.md # Version): version category,
+// error severity, Tier 2, and blocks apps only — not writes or users.
+func TestList_VersionMismatchDefinition(t *testing.T) {
+	m := NewManager(nil)
+	m.Raise("version-mismatch", "", "agent 9.9.9 vs brain 0.0.1")
+
+	got := m.List()[0]
+	if got.Category != CategoryVersion {
+		t.Errorf("Category: want version, got %s", got.Category)
+	}
+	if got.Severity != SeverityError {
+		t.Errorf("Severity: want error, got %s", got.Severity)
+	}
+	if got.Tier != 2 {
+		t.Errorf("Tier: want 2, got %d", got.Tier)
+	}
+	if !got.BlocksApps || got.BlocksWrites || got.BlocksUsers {
+		t.Errorf("blocks_*: want only apps for version-mismatch, got %+v", got)
+	}
+	if got.Summary == "" {
+		t.Error("Summary must be populated from definition")
+	}
+}
+
 func TestApplyStorageFindings_RaiseAndClear(t *testing.T) {
 	m := NewManager(nil)
 
