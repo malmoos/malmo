@@ -50,7 +50,7 @@ When extending the implementation, keep it faithful to the locked specs and upda
 
 ## Documents
 
-**All spec docs live in `docs/specs/`.** Bare-filename cross-references throughout these docs are relative to that directory. Implementation progress lives in `docs/progress/`, developer how-to in `docs/dev/`.
+**All spec docs live in `docs/specs/`.** Bare-filename cross-references throughout these docs are relative to that directory. Implementation progress lives in `docs/progress/`, developer how-to in `docs/dev/`. **Contributing guide: [`docs/dev/contributing.md`](docs/dev/contributing.md)** — start here for the branch/build/test/document/PR workflow, including the mandatory `Closes #<N>` rule.
 
 **`docs/README.md` is the canonical, annotated map of every spec** — one line per doc, what it owns, and its headline locked decisions. Read it to orient before touching a topic; read the relevant doc(s) end-to-end before proposing changes (the docs cross-reference each other heavily and decisions in one constrain the others). Start at `SPEC.md` for top-level context.
 

@@ -51,3 +51,4 @@ doesn't duplicate the list.
 - [`dev/testing-brain.md`](dev/testing-brain.md) — six-layer test plan for
   `malmo-brain` (unit → store → lifecycle-with-fakes → API → integration
   → e2e). Companion to `specs/TESTING.md`, which covers boot-level lanes.
+- [`dev/code-review.md`](dev/code-review.md) — the review standard: what to read before reviewing, 12 lenses (correctness, security, spec fidelity, Go discipline, audit completeness, test coverage, documentation honesty, scope, migration safety, error quality, dependencies, commit hygiene), severity levels, and output format. Used by the pre-PR self-review step and the dedicated review agent.

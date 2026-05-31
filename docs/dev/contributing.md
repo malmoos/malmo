@@ -44,11 +44,13 @@ The **boot / storage / LUKS+TPM track** is actively in flight ([`../progress/luk
 Always work on a branch; **never commit to `main`**. Every change lands via a PR into `main`.
 
 ```bash
-git checkout main && git pull
-git checkout -b <area>/<short-slug>      # e.g. feat/notifications-table, fix/health-audit-ids
+git checkout main && git pull            # always start from a fresh main
+git checkout -b <area>/<N>-<short-slug>  # e.g. feat/12-health-banners, fix/8-login-lockout
 ```
 
-Branch-name shape: `feat/…`, `fix/…`, `test/…`, `docs/…` + a short kebab slug. One task per branch.
+Branch-name shape: `feat/…`, `fix/…`, `test/…`, `docs/…` + the issue number + a short kebab slug (≤4 words, no filler like "add" or "implement"). Including the issue number makes in-flight work visible in `git branch -a` without opening GitHub. One issue per branch — always.
+
+**One PR per issue.** If a task feels too big, split the issue first (file child issues, link them with `Depends on #<N>`, add the `blocked` label to dependents) — then each issue gets its own focused PR. Don't split a single issue across multiple PRs.
 
 ## Step 3 — Build it
 
@@ -57,6 +59,11 @@ The inner dev loop is all native, no VM — see [`running-locally.md`](running-l
 - **Go discipline** — CLAUDE.md # Go code discipline (consumer-side interfaces, layer boundaries, `log/slog` only, standard structured field names, typed errors only at boundaries, no premature abstraction). Match the surrounding code.
 - **Don't build host-integrated subsystems without the VM outer loop** the specs assume (CLAUDE.md # Repo state). The fake host-agent (`cmd/host-agent`) is the inner-loop stand-in.
 - **Keep specs and reality in sync** — if your implementation realizes or *diverges* from a spec, update the matching `docs/specs/` doc in the same change, and add a `DECISIONS.md` entry if a locked decision flips.
+- **Scope is exactly the issue, nothing more.** If you encounter something broken or improvable outside the issue scope: search for an existing issue (open or closed) first; if none exists, open one. Never implement it in the current PR. Maintainers decide what gets built and when — that is a product decision, not a developer one.
+- **New dependencies must be justified.** Any new `go.mod`/`go.sum` or `package.json`/`package-lock.json` entry must be called out in the PR body with the reason. When in doubt, don't add the dependency.
+- **DB schema changes are additive-only.** Never `DROP COLUMN`, `RENAME COLUMN`, or write a destructive `ALTER TABLE`. New columns on existing tables must have a `DEFAULT` or be nullable so the migration runs safely against a live database.
+- **Never swallow errors.** `_ = err` or a missing `if err != nil` is almost always wrong. Errors must be returned, logged, or explicitly handled — never silently dropped.
+- **User-facing errors must be plain English.** Raw Go error strings must not reach API responses or the dashboard UI. Translate at the API boundary; internal detail goes to `slog` only.
 
 ## Step 4 — Test it
 
@@ -90,14 +97,28 @@ A change is not complete until its docs are in the **same change** (CLAUDE.md # 
 3. **Update the spec** you touched if behavior realized or diverged from it. Update the root [`../../README.md`](../../README.md) quickstart if the dev workflow changed.
 4. **Markdown style:** no line wrapping (continuous lines, not ~70-char breaks). Never use the `§` symbol — write `#`.
 
-## Step 6 — Open the PR
+## Step 6 — Review it
+
+Before opening the PR, run a self-contained code review using a fresh agent. The agent receives only the diff and your progress document — no conversation history — so it has no attachment to the implementation choices you made.
+
+In Claude Code, run:
+
+```
+/code-review low Read docs/progress/<your-slug>.md first for context, then review the diff per docs/dev/code-review.md.
+```
+
+`/code-review low` spawns a fresh subagent with no access to your conversation history, which is what makes it impartial. The `low` effort level limits output to high-confidence findings — fast and cheap. Use `high` or `max` for a particularly complex or risky slice.
+
+Address every **Block** finding before opening the PR. If you disagree with a finding, note it in the progress entry's "Known gaps" section — never silently ignore it.
+
+## Step 7 — Open the PR
 
 ```bash
 git push -u origin <your-branch>
 gh pr create --base main --fill        # then flesh out the body
 ```
 
-PR body must include **`Closes #<N>`** (the issue it resolves — this auto-links and auto-closes the issue on merge), plus: the spec(s) touched, what you tested (and against what — real Docker? a VM boot?), and any known gaps. If your work unblocks a dependent issue, drop its `blocked` label (`gh issue edit <N> --remove-label blocked`).
+PR body must include **`Closes #<N>`** — do not delete this line. It is the only thing that tells GitHub to auto-close the linked issue when the PR merges; without it the issue stays open and the board goes stale. Replace `<N>` with the issue number. Also include: the spec(s) touched, what you tested (and against what — real Docker? a VM boot?), and any known gaps. If your work unblocks a dependent issue, drop its `blocked` label (`gh issue edit <N> --remove-label blocked`).
 
 **Don't merge your own PR** unless the maintainer has said to. PRs into `main` get a review pass first; merging closes the linked issue automatically.
 
@@ -108,7 +129,15 @@ PR body must include **`Closes #<N>`** (the issue it resolves — this auto-link
 - [ ] Progress entry written (`docs/progress/NNNN-…`); indexes in both READMEs updated; Up-next re-ordered if needed.
 - [ ] Spec doc updated if behavior realized/diverged; `DECISIONS.md` entry if a locked decision flipped.
 - [ ] No `§`, no hard-wrapped markdown, `log/slog` only, conventions per CLAUDE.md.
-- [ ] Branch off `main`, PR into `main` with `Closes #<N>`; any dependent issue un-`blocked`.
+- [ ] No out-of-scope changes; any out-of-scope finding has an existing or new issue filed, not a fix in this PR.
+- [ ] No new dependencies added silently; any new `go.mod`/`package.json` entry called out in the PR body with justification.
+- [ ] Schema changes additive-only; no dropped or renamed columns.
+- [ ] No swallowed errors (`_ = err`); user-facing error messages are plain English, not raw Go error strings.
+- [ ] Commits are logical units with "why" messages; no micro-commit or WIP history.
+- [ ] Self-review run (`/code-review low` with progress doc as context per [`code-review.md`](code-review.md)); all Block findings addressed, disagreements noted in Known gaps.
+- [ ] Branched off a fresh `main` (`git checkout main && git pull` before branching); branch named `<area>/<N>-<short-slug>`.
+- [ ] One PR closes exactly one issue; if scope grew, the issue was split first.
+- [ ] PR into `main` with `Closes #<N>` (do not delete — GitHub won't auto-close the issue otherwise); any dependent issue un-`blocked`.
 
 ## When you're stuck or unsure
 
