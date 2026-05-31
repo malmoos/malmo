@@ -21,6 +21,13 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-05-31 — `service-down` detection splits by locus: host units (B) vs Caddy container (C)
+
+**Previously:** `HEALTH.md` # Detector catalog had one `service-down` row — "`systemctl is-active` over the core-unit allowlist" — whose summary listed Docker, **Caddy**, Avahi, chrony, Samba, host-agent.
+**Now:** the host units (`docker`, `avahi-daemon`, `chrony`, `smbd`, `host-agent`) are checked by host-agent via `systemctl is-active` (locus B); **Caddy is checked by the brain via the Docker API + Caddy admin-API reachability (locus C)**. Both raise the same `service-down` issue with a per-unit `instance_key`; each reporter is authoritative only over its own keys (reconcile rule added to `HEALTH.md`).
+**Why:** `CONTROL_PLANE.md` locks Caddy as a **brain-started container, not a systemd unit** — there is no `caddy.service` for `systemctl is-active` to query, so the original row was unbuildable for the Caddy entry. Wrapping Caddy in a systemd unit was rejected: it would flip the locked "Caddy runs as a container, updates on the brain+UI stream" decision and create dual ownership of Caddy's lifecycle (systemd vs brain). The brain already owns Docker access and Caddy's admin API, and a brain-side check is *strictly better* — it verifies Caddy is **serving** (admin API answers / catch-all route present), catching a wedged-but-not-exited Caddy that process-liveness would miss. The socket-proxy is not separately monitored; its failure surfaces as the brain losing all Docker access at once.
+**Affected docs:** `HEALTH.md` (# State summary row, # Detector catalog locus-B row scoped to host units + new locus-C Caddy row + per-reporter reconcile rule).
+
 ## 2026-05-31 — `clock-not-synced` is detected by host-agent (locus B), not the brain
 
 **Previously:** `TIME.md` # Drift monitoring read "Brain polls `chronyc tracking` once a minute." Written before the health-detector locus model landed.
