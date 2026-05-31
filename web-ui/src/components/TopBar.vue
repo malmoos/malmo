@@ -1,11 +1,13 @@
 <script setup lang="ts">
-// The top bar (DASHBOARD.md # the top bar): three quiet elements — a storage
-// pill (left), and the notification bell + account menu (right). Everything
-// here is deliberately understated; it goes loud only under pressure, which
-// none of these surfaces do yet:
+// The top bar (DASHBOARD.md # the top bar): four quiet elements — a storage
+// pill (left), and the notification bell + live-resources chevron + account
+// menu (right). Everything here is deliberately understated; it goes loud only
+// under pressure, which none of these surfaces do yet:
 //   - Storage pill — static placeholder until a capacity endpoint exists; it
 //     already routes to Settings, where Storage will live.
 //   - Bell — no unread dot until NOTIFICATIONS.md is wired (queue item #2).
+//   - Live-resources chevron — opens a compact CPU/RAM/net/disk panel backed by
+//     the GET /api/v1/system/live SSE stream; available to every signed-in user.
 //   - Account menu — username + role; sign-out is intentionally omitted in the
 //     single-user dev phase (re-enabled with the AUTH.md login screen).
 import { ref } from "vue";
@@ -13,6 +15,7 @@ import { RouterLink } from "vue-router";
 import { HardDrive } from "lucide-vue-next";
 import { useAuth } from "../auth";
 import NotificationBell from "../NotificationBell.vue";
+import LiveResources from "../LiveResources.vue";
 
 const { currentUser } = useAuth();
 const menuOpen = ref(false);
@@ -35,6 +38,8 @@ function initial(name: string | undefined): string {
 
     <div class="flex items-center gap-2">
       <NotificationBell />
+
+      <LiveResources />
 
       <div class="relative">
         <button

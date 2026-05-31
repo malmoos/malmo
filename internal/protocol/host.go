@@ -45,6 +45,60 @@ type SystemStatus struct {
 	AgentVersion string `json:"agent_version"`
 }
 
+// SystemResources is GET /v1/system/resources: one raw cumulative-counter
+// sample plus a monotonic ts_ns, the host source for the all-users live
+// system-resources view (LOCAL_ANALYTICS.md # Real-time system resources).
+// host-agent reads /proc/stat, /proc/meminfo, /proc/loadavg, /proc/net/dev,
+// /sys/block/<dev>/stat on request and computes no rates — it is stateless. The
+// brain polls this once per second while ≥1 UI subscriber is connected, diffs
+// successive samples (rate denominator = ts_ns delta), and fans the derived
+// rates out over its own SSE channel (BRAIN_HOST_PROTOCOL.md # Pattern A).
+//
+// host-agent applies the interface/device allowlist — physical LAN NICs + the
+// mesh interface, excluding lo/docker0/veth*/br-*, whole-disk devices only — so
+// the brain never sees container-bridge noise. The counters are int64 because
+// /proc byte and jiffy counters routinely exceed 2^31.
+type SystemResources struct {
+	TsNs    int64          `json:"ts_ns"`
+	CPU     CPUCounters    `json:"cpu"`
+	LoadAvg [3]float64     `json:"loadavg"`
+	Mem     MemCounters    `json:"mem"`
+	Net     []NetCounters  `json:"net"`
+	Disk    []DiskCounters `json:"disk"`
+	UptimeS int64          `json:"uptime_s"`
+}
+
+// CPUCounters are cumulative jiffy counters from the aggregate /proc/stat line.
+// cpu_pct is derived by the brain as busy/total over the sample interval, where
+// busy = total - idle.
+type CPUCounters struct {
+	TotalJiffies int64 `json:"total_jiffies"`
+	IdleJiffies  int64 `json:"idle_jiffies"`
+}
+
+// MemCounters are instantaneous memory figures from /proc/meminfo, in bytes.
+// These are levels, not rates — the brain passes them through unchanged.
+type MemCounters struct {
+	TotalBytes     int64 `json:"total_bytes"`
+	AvailableBytes int64 `json:"available_bytes"`
+	UsedBytes      int64 `json:"used_bytes"`
+}
+
+// NetCounters are cumulative per-interface byte counters from /proc/net/dev.
+type NetCounters struct {
+	Iface   string `json:"iface"`
+	RxBytes int64  `json:"rx_bytes"`
+	TxBytes int64  `json:"tx_bytes"`
+}
+
+// DiskCounters are cumulative per-device byte counters derived from
+// /sys/block/<dev>/stat (sectors × 512).
+type DiskCounters struct {
+	Dev        string `json:"dev"`
+	ReadBytes  int64  `json:"read_bytes"`
+	WriteBytes int64  `json:"write_bytes"`
+}
+
 // PublishedName is one entry in the discovery state.
 type PublishedName struct {
 	Slug  string `json:"slug"`

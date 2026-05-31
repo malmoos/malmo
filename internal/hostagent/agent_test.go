@@ -534,6 +534,41 @@ func TestSystemStatus_ReturnsOK(t *testing.T) {
 	}
 }
 
+func TestSystemResources_ReturnsAllowlistedSample(t *testing.T) {
+	_, mux := newTestAgent(&stubVerifier{})
+	w := get(t, mux, "/v1/system/resources")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	s := decodeBody[protocol.SystemResources](t, w)
+
+	if s.TsNs <= 0 {
+		t.Errorf("ts_ns must be a positive monotonic timestamp, got %d", s.TsNs)
+	}
+	if s.Mem.TotalBytes <= 0 || s.Mem.UsedBytes <= 0 {
+		t.Errorf("mem levels must be populated, got %+v", s.Mem)
+	}
+	// The allowlist is host-agent's job: the fake reports one physical NIC and
+	// one whole-disk device, never lo/docker0/veth* or a partition.
+	if len(s.Net) != 1 || s.Net[0].Iface != "eth0" {
+		t.Errorf("net: want one allowlisted iface eth0, got %+v", s.Net)
+	}
+	if len(s.Disk) != 1 || s.Disk[0].Dev != "sda" {
+		t.Errorf("disk: want one whole-disk device sda, got %+v", s.Disk)
+	}
+}
+
+// The brain diffs successive samples, so two reads must not go backwards in time
+// (a negative ts_ns delta would null every rate).
+func TestSystemResources_TimestampIsMonotonic(t *testing.T) {
+	_, mux := newTestAgent(&stubVerifier{})
+	first := decodeBody[protocol.SystemResources](t, get(t, mux, "/v1/system/resources"))
+	second := decodeBody[protocol.SystemResources](t, get(t, mux, "/v1/system/resources"))
+	if second.TsNs < first.TsNs {
+		t.Errorf("ts_ns went backwards: first=%d second=%d", first.TsNs, second.TsNs)
+	}
+}
+
 func TestPublishUnpublish_RoundTrip(t *testing.T) {
 	_, mux := newTestAgent(&stubVerifier{})
 

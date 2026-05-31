@@ -135,6 +135,7 @@ func (a *Agent) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/discovery/unpublish", a.unpublish)
 	mux.HandleFunc("GET /v1/discovery/state", a.discoveryState)
 	mux.HandleFunc("GET /v1/system/status", a.systemStatus)
+	mux.HandleFunc("GET /v1/system/resources", a.systemResources)
 	mux.HandleFunc("POST /v1/auth/verify-password", a.verifyPassword)
 	mux.HandleFunc("POST /v1/auth/set-password", a.setPassword)
 	mux.HandleFunc("POST /v1/auth/set-role", a.setRole)
@@ -208,6 +209,36 @@ func (a *Agent) systemStatus(w http.ResponseWriter, r *http.Request) {
 		UptimeS:      int64(time.Since(a.startedAt).Seconds()),
 		DiskPressure: false,
 		AgentVersion: AgentVersion,
+	})
+}
+
+// systemResources serves one raw cumulative-counter sample for the live
+// system-resources view (BRAIN_HOST_PROTOCOL.md # Pattern A). The real binary
+// reads /proc and /sys and applies the iface/device allowlist; this fake
+// synthesizes monotonically-climbing counters off a.startedAt so two successive
+// 1 Hz polls always diff to a non-zero, plausible rate in the dev loop. It is
+// stateless (no Agent field, no mutex) — the same property the spec requires of
+// the real implementation. ts_ns advances on every call so the brain's rate
+// denominator (ts_ns delta) is always positive.
+func (a *Agent) systemResources(w http.ResponseWriter, r *http.Request) {
+	elapsed := time.Since(a.startedAt)
+	secs := elapsed.Seconds()
+	writeJSON(w, http.StatusOK, protocol.SystemResources{
+		TsNs:    time.Now().UnixNano(),
+		CPU:     protocol.CPUCounters{TotalJiffies: int64(secs * 400), IdleJiffies: int64(secs * 300)},
+		LoadAvg: [3]float64{0.42, 0.51, 0.48},
+		Mem: protocol.MemCounters{
+			TotalBytes:     16728338432,
+			AvailableBytes: 9214455808,
+			UsedBytes:      7513882624,
+		},
+		Net: []protocol.NetCounters{
+			{Iface: "eth0", RxBytes: int64(secs * 120000), TxBytes: int64(secs * 48000)},
+		},
+		Disk: []protocol.DiskCounters{
+			{Dev: "sda", ReadBytes: int64(secs * 90000), WriteBytes: int64(secs * 14000)},
+		},
+		UptimeS: int64(secs),
 	})
 }
 
