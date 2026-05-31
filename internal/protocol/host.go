@@ -94,10 +94,48 @@ type SetRoleRequest struct {
 	Role string `json:"role"`
 }
 
-// StorageHealth is GET /v1/health/storage. host-agent reads the latest
-// findings written by malmo-storage-verify (BOOT.md # The storage-ready target)
-// at /run/malmo/health/storage.json and returns them to the brain, which
-// converts findings into typed health issues per HEALTH.md.
+// HealthCategory is the report/reconcile taxonomy carried on the wire by
+// SystemHealth. It is a *separate axis* from the brain's issue category
+// (health.Category: storage | state | network | version | capacity, which
+// drives display + the blocks_* nature of an issue): HealthCategory partitions
+// the locus-B report so the brain can reconcile each domain independently. The
+// full enum is pinned here (DECISIONS.md 2026-05-29 + issue #34 clarification
+// 2026-05-31) so downstream detectors land as pure follow-ups: ram-pressure
+// (#38) emits into resources, clock-not-synced (#39) into time, disk-smart
+// into drives. Today host-agent only populates storage and services.
+type HealthCategory string
+
+const (
+	HealthCategoryStorage   HealthCategory = "storage"   // filesystem / mount / canary / mergerfs
+	HealthCategoryDrives    HealthCategory = "drives"    // SMART / per-device health (reserved)
+	HealthCategoryServices  HealthCategory = "services"  // systemctl is-active (service-down)
+	HealthCategoryResources HealthCategory = "resources" // memory / CPU pressure (reserved)
+	HealthCategoryTime      HealthCategory = "time"      // clock sync (reserved)
+)
+
+// SystemHealth is GET /v1/health/system — the single locus-B findings report
+// host-agent serves and the brain polls on its 60s heartbeat (HEALTH.md
+// # Detector catalog, BRAIN_HOST_PROTOCOL.md). It carries findings across
+// categories in one payload so the brain's ApplyFindings(category, …) reconcile
+// can clear-absent / raise-present per category atomically — a storage poll
+// never clears a service finding.
+//
+// Categories is keyed by HealthCategory. A key being present means host-agent
+// measured that category this cycle: the brain reconciles it, clearing any
+// host-reported issue in that category absent from the slice. A key being
+// absent means "not measured this cycle" — the brain leaves that category's
+// issues alone. An empty slice under a present key means "measured, all
+// healthy" (clear all host-reported issues in the category).
+type SystemHealth struct {
+	CheckedAt  string                       `json:"checked_at"`
+	Categories map[HealthCategory][]Finding `json:"categories"`
+}
+
+// StorageHealth is the on-disk storage findings file
+// (/run/malmo/health/storage.json) written by malmo-storage-verify (BOOT.md
+// # The storage-ready target) and read by host-agent's storage source, which
+// folds the findings into SystemHealth's storage category. It is also the
+// boot reporter's wire shape.
 //
 // An empty Findings slice means storage looks healthy — not "no report yet."
 // A missing report file at the host-agent end is reported as empty Findings;
@@ -109,14 +147,19 @@ type StorageHealth struct {
 	Findings  []Finding `json:"findings"`
 }
 
-// Finding is one anomaly the reporter detected. ID is a stable string drawn
-// from the typed taxonomy in HEALTH.md # Storage (e.g. "data-drive-missing",
-// "canary-mismatch"). The brain looks the ID up in its registry to derive
-// category, severity, tier, and the blocks_* flags — the reporter does not
-// re-declare those, so the source of truth stays in one place.
+// Finding is one anomaly a reporter detected. ID is a stable string drawn from
+// the typed taxonomy in HEALTH.md (e.g. "data-drive-missing", "service-down").
+// The brain looks the ID up in its registry to derive category, severity, tier,
+// and the blocks_* flags — the reporter does not re-declare those, so the
+// source of truth stays in one place.
+//
+// InstanceKey scopes a per-instance finding (e.g. service-down carries the unit
+// name, so docker-down and caddy-down are distinct issues). Empty for box-wide
+// findings like data-drive-missing.
 type Finding struct {
-	ID      string `json:"id"`
-	Details string `json:"details,omitempty"`
+	ID          string `json:"id"`
+	InstanceKey string `json:"instance_key,omitempty"`
+	Details     string `json:"details,omitempty"`
 }
 
 // ResolveHomeResponse is GET /v1/users/{username}/home. Returns the owner's home

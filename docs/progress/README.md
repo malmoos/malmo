@@ -90,3 +90,4 @@ Oldest first; append new entries to the bottom.
 | [single-label-app-local.md](single-label-app-local.md) — app LAN names go single-label `<slug>.local` (was `<slug>.malmo.local`, which Linux nss-mdns rejects) + Avahi collision fallback `<slug>-<box>.local`; brain trusts the published name for route + URL | done |
 | [hostname-uniqueness-not-ownership.md](hostname-uniqueness-not-ownership.md) — Hostname encodes uniqueness, not ownership (first-come bare slug, `--<user>` only on collision) | done |
 | [single-user-simplification.md](single-user-simplification.md) — Single-user simplification + split-button install (suppress household/personal UI when one user; scope moved from dialog to button) | done |
+| [health-system-report.md](health-system-report.md) — Generalize health reporting: `GET /v1/health/system` + per-category `ApplyFindings`, with `service-down` as the first cross-category locus-B detector (two-axis category model, debounce) | done |

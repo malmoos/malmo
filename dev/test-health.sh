@@ -5,8 +5,8 @@
 #   1. malmo-storage-verify reads a marker + canary tree and writes a
 #      protocol.StorageHealth payload to /run/malmo/health/storage.json
 #      (here pointed at a tempdir).
-#   2. The fake host-agent, wired with MALMO_HEALTH_PATH, serves that file
-#      verbatim at GET /v1/health/storage.
+#   2. The fake host-agent, wired with MALMO_HEALTH_PATH, serves that file's
+#      findings in the storage category of GET /v1/health/system.
 #   3. The brain polls host-agent on a short interval, reconciles findings
 #      into health.Manager, and surfaces typed issues at GET /api/v1/health.
 #   4. Findings raise on the next poll after the fixture changes; cleared

@@ -39,7 +39,7 @@ func (s *Store) DeleteHealthIssue(id, instanceKey string) error {
 }
 
 // BatchUpsertAndDelete runs all upserts and deletes in a single transaction.
-// Used by ApplyStorageFindings so a crash mid-reconcile can't leave SQLite torn.
+// Used by ApplyFindings so a crash mid-reconcile can't leave SQLite torn.
 func (s *Store) BatchUpsertAndDelete(upserts []health.Issue, deletes []health.IssueKey) error {
 	if len(upserts) == 0 && len(deletes) == 0 {
 		return nil

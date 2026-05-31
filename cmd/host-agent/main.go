@@ -7,10 +7,11 @@
 // Env vars:
 //
 //	MALMO_AGENT_SOCK  — UNIX socket path (default protocol.SocketPath)
-//	MALMO_HEALTH_PATH — when set, serve GET /v1/health/storage from this
-//	                    file (read via the same FilesystemHealthSource the
-//	                    real binary uses). When unset, the endpoint returns
-//	                    an empty findings list ("storage looks healthy").
+//	MALMO_HEALTH_PATH — when set, back the storage category of GET
+//	                    /v1/health/system from this file (read via the same
+//	                    FilesystemHealthSource the real binary uses). When
+//	                    unset, the storage category is an empty findings list
+//	                    ("storage looks healthy").
 //	MALMO_DEV_AVAHI   — when "1", publish per-app .local names via the real
 //	                    Avahi DBus publisher instead of the in-memory fake, so
 //	                    <slug>.local resolves on the LAN (and from other

@@ -29,6 +29,7 @@ type healthHarness struct {
 	*harness
 	healthMgr *health.Manager
 	healthSrc *hostagent.FakeHealthSource
+	healthSvc *hostagent.FakeServiceReporter
 	host      *hostclient.Client
 }
 
@@ -50,11 +51,13 @@ func newHealthHarness(t *testing.T) *healthHarness {
 		t.Fatalf("listen: %v", err)
 	}
 	src := hostagent.NewFakeHealthSource()
+	svc := hostagent.NewFakeServiceReporter()
 	a := hostagent.New(
 		&alwaysValidVerifier{}, // /setup needs verify-password to succeed
 		hostagent.NewFakePublisher(".local"),
 	)
 	a.Health = src
+	a.Services = svc
 	mux := http.NewServeMux()
 	a.Mount(mux)
 	srv := &http.Server{Handler: mux}
@@ -78,21 +81,26 @@ func newHealthHarness(t *testing.T) *healthHarness {
 		},
 		healthMgr: healthMgr,
 		healthSrc: src,
+		healthSvc: svc,
 		host:      host,
 	}
 }
 
-// pull runs one reconciliation cycle (the same shape cmd/brain runs at
-// startup and every 60s). Tests call this after Set()ing findings on the
-// fake source to advance the brain's view of the world.
+// pull runs one reconciliation cycle (the same shape cmd/brain's
+// pullSystemHealth runs at startup and every 60s). Tests call this after
+// Set()ing findings on a fake source to advance the brain's view of the world.
+// Each report category is reconciled independently — categories are disjoint,
+// so iteration order doesn't matter.
 func (h *healthHarness) pull() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	sh, err := h.host.StorageHealth(ctx)
+	sh, err := h.host.SystemHealth(ctx)
 	if err != nil {
-		h.t.Fatalf("pull StorageHealth: %v", err)
+		h.t.Fatalf("pull SystemHealth: %v", err)
 	}
-	h.healthMgr.ApplyStorageFindings(sh)
+	for cat, findings := range sh.Categories {
+		h.healthMgr.ApplyFindings(cat, findings)
+	}
 }
 
 type alwaysValidVerifier struct{}
@@ -203,6 +211,50 @@ func TestHealth_ClearedFindingDisappearsOnNextPoll(t *testing.T) {
 	}](t, h.do("GET", "/api/v1/health", nil))
 	if len(out.Issues) != 0 {
 		t.Errorf("want empty after clear poll, got %v", out.Issues)
+	}
+}
+
+// TestHealth_ServiceDownDebouncesThenSurfaces exercises the first cross-category
+// locus-B detector end to end: a service-down finding from the services category
+// debounces (one bad poll surfaces nothing), raises on the second consecutive
+// bad poll as a state-category issue, and clears when the service recovers — all
+// through the production wire (GET /v1/health/system → ApplyFindings → GET
+// /api/v1/health).
+func TestHealth_ServiceDownDebouncesThenSurfaces(t *testing.T) {
+	h := newHealthHarness(t)
+	h.setupAdmin("alice", "pass1")
+
+	issues := func() []health.Issue {
+		return decodeJSON[struct {
+			Issues []health.Issue `json:"issues"`
+		}](t, h.do("GET", "/api/v1/health", nil)).Issues
+	}
+
+	h.healthSvc.Set([]protocol.Finding{
+		{ID: "service-down", InstanceKey: "docker.service", Details: "docker.service is failed"},
+	})
+
+	// First poll: debounced — nothing surfaces yet.
+	h.pull()
+	if got := issues(); len(got) != 0 {
+		t.Fatalf("service-down must debounce — want 0 issues after one bad poll, got %v", got)
+	}
+
+	// Second consecutive bad poll: raises as a state-category issue.
+	h.pull()
+	got := issues()
+	if len(got) != 1 || got[0].ID != "service-down" || got[0].InstanceKey != "docker.service" {
+		t.Fatalf("want service-down/docker.service after two bad polls, got %v", got)
+	}
+	if got[0].Category != health.CategoryState {
+		t.Errorf("service-down display category: want state, got %s", got[0].Category)
+	}
+
+	// Service recovers: clears on the next poll.
+	h.healthSvc.Set(nil)
+	h.pull()
+	if got := issues(); len(got) != 0 {
+		t.Errorf("want empty after service recovers, got %v", got)
 	}
 }
 
