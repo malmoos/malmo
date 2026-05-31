@@ -272,6 +272,13 @@ Per-user encryption is deferred but on the roadmap. Key-loading model (Model A v
 
 **Context:** `STORAGE.md`, `APP_ISOLATION.md`.
 
+### Caddy liveness self-heal (gated on brain-owned Caddy container lifecycle)
+
+The `service-down`(caddy) detector (`HEALTH.md` # Detector catalog, locus C) can't be a passive banner — Caddy fronts `malmo.local`, so when it's down there's no dashboard to show the banner. The decided shape (`DECISIONS.md` 2026-05-31) is **bounded self-heal**: the brain restarts the Caddy container on failure, capped like host-agent's `StartLimitBurst` (≈5/60s), raising the issue only when the budget is exhausted. The blocker is that **the brain does not yet own Caddy's container lifecycle** — it manages Caddy's *routes* (`EnsureServer`/`EnsureCatchAll`, `internal/lifecycle`) but never starts/stops/restarts the Caddy *container*; in prod "brain-managed Caddy" is intent, not implementation (`dev/docker-compose.yml` runs it standalone). The real prerequisite is a brain-owned Caddy container lifecycle (start/stop/restart via the socket-proxy), which is partly host-integrated and needs the VM outer loop. Once that lands, the self-heal detector is a thin layer on top (probe = Docker container-state + admin-API reachability; restart-budget; raise-on-exhaustion; reuse `internal/caddy.Client`).
+
+**Context:** `HEALTH.md` # Detector catalog (locus-C Caddy row), `CONTROL_PLANE.md` # Locked: Caddy runs as a container, `DECISIONS.md` 2026-05-31.
+**Why Tier 3:** doesn't block v1 happy-path; a fully-down Caddy is already visibly broken (dashboard unreachable). Pin the self-heal shape now (done); build it after the brain owns Caddy's container lifecycle.
+
 ---
 
 ## Tier 4 — Smaller open items
@@ -353,6 +360,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 **Observability (user-facing)**
 - Notification retention / pruning — capped-count and/or age policy for the `notifications` and `notification_reads` tables (the prunable bell store, distinct from append-only `audit_events`). Rows accumulate unbounded today; pick the cap (per-recipient? global? resolved-rows-first?) and where it runs. `NOTIFICATIONS.md` # Read / unread / dismiss, `LOGGING.md`.
 - Per-category mute vs. criticals — mute is implemented as a full read-time category filter (`NOTIFICATIONS.md` # Configuration), so muting `storage` also hides a `data-drive-readonly` critical. Spec-faithful and the user's explicit choice (defaults are everything-on), but a future "critical always rings through, mute only quiets info/warning" carve-out is plausible if support traffic shows muted criticals get missed. Deferred, not decided. `NOTIFICATIONS.md` # Configuration, # Severity.
+- Settings → System deep-view (admin route) — full 60-second graphs of CPU/RAM/net/disk with all interfaces and drives broken out, over the same `GET /api/v1/system/live` stream that powers the all-users top-bar dropdown. The dropdown ships first; this is the deeper admin surface. `LOCAL_ANALYTICS.md` # UI surfaces, `WEB_UI.md`.
 - Per-container live monitor ("Activity Monitor" view) — sortable table of all containers with live CPU/RAM/net/disk. Host-level live view is specced (top-bar dropdown); per-container live is the deferred surface. Mechanism same as system-resources SSE. `LOCAL_ANALYTICS.md`, `WEB_UI.md`.
 - App-level network bandwidth accounting (per-container veth stats). Useful for "which app is hammering my ISP" but expensive. `LOCAL_ANALYTICS.md`.
 - Storage growth attribution — what *kind* of data grew ("Photos +50 GB this month, mostly RAW files"). Compound on top of the per-app storage trend already specced. `LOCAL_ANALYTICS.md`, `STORAGE.md`.

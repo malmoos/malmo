@@ -111,7 +111,7 @@ Some brain jobs internally delegate to host-agent jobs (an app install does brai
 
 ### Pattern C — SSE (server → client streams)
 
-Two distinct stream types:
+Three distinct stream types:
 
 **1. Per-resource log / progress tails.**
 
@@ -159,6 +159,24 @@ One long-lived stream per dashboard tab. Carries typed events for: app lifecycle
 **Reconnect resilience.** Same as host-agent: monotonic event `id`, rolling buffer (~256 KB per stream), client sends `Last-Event-ID: <n>` on reconnect, brain replays from `n+1`. If the gap exceeds the buffer, brain emits one `{"lost": true}` event and resumes from current.
 
 **Stream cap.** Brain enforces ≤16 concurrent SSE streams per session — backstop for buggy dashboards or many open tabs. Excess connections receive `429 Too Many Requests`.
+
+**3. Live system-resources stream — on-demand, not persisted.**
+
+```
+GET /api/v1/system/live
+→ Content-Type: text/event-stream
+
+  event: sample
+  data: {"cpu_pct":12.4,"load":[0.42,0.51,0.48],
+         "mem":{"used_bytes":7513882624,"total_bytes":16728338432,"available_bytes":9214455808},
+         "net":[{"iface":"enp3s0","rx_bps":812000,"tx_bps":143000}],
+         "disk":[{"dev":"sda","read_bps":410000,"write_bps":92000}],
+         "uptime_s":84021}
+```
+
+Available to **every** signed-in user — host-level state isn't per-user data (`LOCAL_ANALYTICS.md` # Privacy model). The brain polls host-agent's `GET /v1/system/resources` (`BRAIN_HOST_PROTOCOL.md`) once per second, diffs the raw counters into the rates above, and fans out to all subscribers from one upstream poller. **Wire units are SI:** `*_bps` are bytes/second, `*_bytes` are bytes, `cpu_pct` and `load` are floats; the UI does the human formatting (KB/s, GiB). The stream opens on the first subscriber and the brain stops polling when the last disconnects (zero idle cost).
+
+**No reconnect replay.** This channel is exempt from the `Last-Event-ID` buffer below — replaying stale samples is wrong for a live gauge. A reconnecting client resumes at the next live `sample`; the first event after any connect reports `cpu_pct`/`*_bps` rate fields as `null` (no prior sample to diff against), with real rates from the second sample on. It still counts against the ≤16-stream cap.
 
 ### Pattern D — WebSocket (future, reserved)
 
