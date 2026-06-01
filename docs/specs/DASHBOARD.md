@@ -127,7 +127,7 @@ A floating bottom dock with exactly four destinations:
 | Item | What it is |
 |---|---|
 | **Home** | The app launcher (above). |
-| **Files** | The in-dashboard file browser over the user's use-case folders and `~/Shared/`. Owned by its own spec (the `NEXT.md` Tier-1 `FILES.md`); appears here as a top-level destination because "files are first-class." |
+| **Files** | The in-dashboard file browser over the user's use-case folders and `~/Shared/`. Owned by its own spec (`FILES.md`); appears here as a top-level destination because "files are first-class." |
 | **Store** | Browse/install apps. Install respects the authorization table above. |
 | **Settings** | Box + account settings, and the **home for gated routes**. |
 
@@ -139,9 +139,10 @@ A floating bottom dock with exactly four destinations:
 
 ## Locked: the top bar
 
-Three elements, top corners, quiet by default:
+Four elements, top corners, quiet by default:
 
 - **Storage pill** — a small always-present capacity readout (e.g. `1.2 / 4 TB`). Present but never loud; clicking it goes to Settings → Storage. It turns insistent only under disk pressure (`HEALTH.md` `disk-full`).
+- **Live-resources chevron** — a small chevron next to the avatar menu opens a compact, live-updating panel (CPU / RAM / net in-out / disk IO) streamed over `GET /api/v1/system/live`. Available to **every** signed-in user — host-level state isn't per-user data. Opening the panel opens the SSE stream; closing it closes the stream (`LOCAL_ANALYTICS.md` # Real-time system resources). Added to the locked set 2026-05-31 (`DECISIONS.md`).
 - **Avatar / account menu** — the current user; the menu is the path to account settings, sign-out, and (for admins) the gated routes that also live under Settings.
 - **Notification bell** — the in-product notification center (`NOTIFICATIONS.md`). A small dot indicates unread count. This is the dashboard-only v1 transport; off-box transports (email, push) are the deferred seam in `NOTIFICATIONS.md`.
 
@@ -200,6 +201,6 @@ The universal fallback is "one shared instance + the app's own internal multi-us
 - `AUTH.md` — the role gating behind the dock, Settings routes, and install authorization.
 - `STORAGE.md` — per-user `~/` folders that personal instances bind; the model owner-scoping is designed to respect.
 - `NOTIFICATIONS.md` / `LOCAL_ANALYTICS.md` — the bell and the (non-widget) live-resources surface.
-- `FILES.md` (`NEXT.md` Tier-1, not yet written) — the Files destination in the dock.
+- `FILES.md` — the Files destination in the dock; the in-dashboard file manager over the user's home + the Shared tree.
 
 Open items that touch this surface (per-app tile state vocabulary beyond down/stopped, search design, swipe-paging, first-arrival nudge copy) live in `NEXT.md`, not here.

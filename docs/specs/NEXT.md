@@ -17,15 +17,9 @@ When a topic is **decided**, remove its entry here and add the rationale to `DEC
 
 ## Tier 1 — Blocking
 
-*(Last audit: 2026-05-29 — the dashboard-shell gap is now **resolved** by the new `DASHBOARD.md` (logged-in IA + the owner-scoped apps model; see `DECISIONS.md` 2026-05-29 # App instances are owner-scoped). That also resolved the apps model, the widgets yes/no (no), and the per-user-instance naming scheme. The file-manager gap below remains the one Tier-1 product-surface item. The infrastructure spine (boot/storage/health/updates/auth) is well-specified. Implementation slice queue lives in [`../progress/README.md`](../progress/README.md) # Up next.)*
+*(Last audit: 2026-05-31 — Tier 1 is **clear of product-surface gaps**. The dashboard-shell gap was resolved by `DASHBOARD.md` (logged-in IA + owner-scoped apps model; `DECISIONS.md` 2026-05-29), and the in-dashboard file-manager gap is now resolved by `FILES.md` (ops execute as the user's UID in host-agent; own + Shared scope; `DECISIONS.md` 2026-05-31). The infrastructure spine (boot/storage/health/updates/auth) is well-specified. Remaining work is implementation, not design — slice queue lives in [`../progress/README.md`](../progress/README.md) # Up next. Promote an item here into Tier 1 if a new blocking design gap appears.)*
 
-### In-dashboard file manager — "files are first-class" has no in-product browse surface
-
-"Files are first-class, apps are windows" is a load-bearing differentiator, but the only specced access path to a user's own `Photos/`, `Documents/`, `Shared/` is **SMB + the desktop OS file managers**. `DISCOVERY.md` even states the browse experience "is the dashboard, not the OS file manager" — yet no in-dashboard file browser exists. For the north-star audience (the Plex/Synology user who will *not* mount an SMB share), a web file manager is table stakes — it's Synology's flagship surface (File Station) and a core Umbrel module. The Tier-4 "data-import flows" line is a fraction of this.
-
-**Proposed home:** a new `FILES.md` owning the in-dashboard file browser — view/upload/download/rename/move within the user's use-case folders and `Shared/`, per-user scoping (mirrors the FS permission model in `STORAGE.md`), and how it relates to (does not replace) SMB. Folds in the Tier-4 "data-import flows" item.
-**Context:** `STORAGE.md` (use-case folders, `0750` per-user permissions, `Shared/`), `DISCOVERY.md` (the "dashboard is the browse surface" claim this makes good on), `APP_ISOLATION.md` (how apps see the same folders), `AUTH.md` (per-user access). Prior art: Synology File Station; Umbrel's `files` module.
-**Why Tier 1:** without it, "files are first-class" is true on disk but invisible in the product for any user who hasn't set up SMB — exactly the user we're building for.
+*(No open Tier-1 design topics. Items resolved out of this tier are recorded in `DECISIONS.md`.)*
 
 ---
 
@@ -272,6 +266,13 @@ Per-user encryption is deferred but on the roadmap. Key-loading model (Model A v
 
 **Context:** `STORAGE.md`, `APP_ISOLATION.md`.
 
+### Caddy liveness self-heal (gated on brain-owned Caddy container lifecycle)
+
+The `service-down`(caddy) detector (`HEALTH.md` # Detector catalog, locus C) can't be a passive banner — Caddy fronts `malmo.local`, so when it's down there's no dashboard to show the banner. The decided shape (`DECISIONS.md` 2026-05-31) is **bounded self-heal**: the brain restarts the Caddy container on failure, capped like host-agent's `StartLimitBurst` (≈5/60s), raising the issue only when the budget is exhausted. The blocker is that **the brain does not yet own Caddy's container lifecycle** — it manages Caddy's *routes* (`EnsureServer`/`EnsureCatchAll`, `internal/lifecycle`) but never starts/stops/restarts the Caddy *container*; in prod "brain-managed Caddy" is intent, not implementation (`dev/docker-compose.yml` runs it standalone). The real prerequisite is a brain-owned Caddy container lifecycle (start/stop/restart via the socket-proxy), which is partly host-integrated and needs the VM outer loop. Once that lands, the self-heal detector is a thin layer on top (probe = Docker container-state + admin-API reachability; restart-budget; raise-on-exhaustion; reuse `internal/caddy.Client`).
+
+**Context:** `HEALTH.md` # Detector catalog (locus-C Caddy row), `CONTROL_PLANE.md` # Locked: Caddy runs as a container, `DECISIONS.md` 2026-05-31.
+**Why Tier 3:** doesn't block v1 happy-path; a fully-down Caddy is already visibly broken (dashboard unreachable). Pin the self-heal shape now (done); build it after the brain owns Caddy's container lifecycle.
+
 ---
 
 ## Tier 4 — Smaller open items
@@ -325,7 +326,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 
 **Storage & first-run**
 - UTF-8 filename normalization (NFC vs. NFD) across SMB clients — macOS uses NFD on the wire, Linux stores bytes verbatim; "files-first-class" makes this user-visible. `STORAGE.md`.
-- Data-import flows — bulk-copy from USB stick / network share into `~/Photos/` via the dashboard, or "just use SMB" as the only path. `STORAGE.md`, `FIRST_RUN.md`.
+- Data-import flows — **browser upload is now the v1 in-product path (`FILES.md`)**; what remains is *bulk* import from a USB stick / network share plugged into the box ("copy everything off this drive into ~/Photos"), which rides removable-drive auto-mount (below). `STORAGE.md`, `FIRST_RUN.md`, `FILES.md`.
 - Boot-PIN high-security mode. `STORAGE.md`.
 - Stronger TPM2 sealing policy (PCR 7+11 with signed PCR policy, or PCR 7+14). v1 seals against PCR 7 only — works across kernel updates, weaker against an attacker who can subvert Secure Boot. Upgrade is non-destructive (additional LUKS slot, re-enroll). `STORAGE.md`, `BOOT.md`.
 - Recovery-passphrase storage assistance ("email this to me", USB shard). `STORAGE.md`, `FIRST_RUN.md`.
@@ -351,8 +352,9 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Log rotation for non-journald files (Caddy access logs, anything that escapes the journal). `LOGGING.md`.
 
 **Observability (user-facing)**
-- Notification retention / pruning — capped-count and/or age policy for the `notifications` and `notification_reads` tables (the prunable bell store, distinct from append-only `audit_events`). Rows accumulate unbounded today; pick the cap (per-recipient? global? resolved-rows-first?) and where it runs. `NOTIFICATIONS.md` # Read / unread / dismiss, `LOGGING.md`.
 - Per-category mute vs. criticals — mute is implemented as a full read-time category filter (`NOTIFICATIONS.md` # Configuration), so muting `storage` also hides a `data-drive-readonly` critical. Spec-faithful and the user's explicit choice (defaults are everything-on), but a future "critical always rings through, mute only quiets info/warning" carve-out is plausible if support traffic shows muted criticals get missed. Deferred, not decided. `NOTIFICATIONS.md` # Configuration, # Severity.
+- Role-filter the mute settings list — the Settings → Notifications toggle list (`NOTIFICATIONS.md` # Configuration, Surface) shows all of `notify.Categories` to every user, but per # Routing a member never *receives* the admin-only categories (`storage`, `system`, admin `updates`), so a member muting "Storage" writes a dead row. Faithful to the backend (which validates all categories regardless of role) and harmless, but the list could be trimmed to the categories a user can actually receive. Open question is whether per-role filtering is worth the role→category map it requires. Deferred, not decided. `NOTIFICATIONS.md` # Configuration, # Routing.
+- Settings → System deep-view (admin route) — full 60-second graphs of CPU/RAM/net/disk with all interfaces and drives broken out, over the same `GET /api/v1/system/live` stream that powers the all-users top-bar dropdown. The dropdown ships first; this is the deeper admin surface. `LOCAL_ANALYTICS.md` # UI surfaces, `WEB_UI.md`.
 - Per-container live monitor ("Activity Monitor" view) — sortable table of all containers with live CPU/RAM/net/disk. Host-level live view is specced (top-bar dropdown); per-container live is the deferred surface. Mechanism same as system-resources SSE. `LOCAL_ANALYTICS.md`, `WEB_UI.md`.
 - App-level network bandwidth accounting (per-container veth stats). Useful for "which app is hammering my ISP" but expensive. `LOCAL_ANALYTICS.md`.
 - Storage growth attribution — what *kind* of data grew ("Photos +50 GB this month, mostly RAW files"). Compound on top of the per-app storage trend already specced. `LOCAL_ANALYTICS.md`, `STORAGE.md`.

@@ -85,11 +85,22 @@ Different beast. Not stored, not periodic — a live stream that only runs while
 
 ### Source
 
-`/proc/stat`, `/proc/meminfo`, `/proc/loadavg`, `/proc/net/dev`, `/sys/block/<dev>/stat`. No Docker stats subscription — this view is box-level, not per-container.
+`/proc/stat`, `/proc/meminfo`, `/proc/loadavg`, `/proc/net/dev`, `/sys/block/<dev>/stat`, `/proc/uptime`. No Docker stats subscription — this view is box-level, not per-container.
+
+**These are host reads, so host-agent owns them, not the brain.** The brain runs in a container and cannot read host `/proc`/`/sys` directly — the same constraint that puts physical health detection in locus B (`BRAIN_HOST_PROTOCOL.md` # Health findings report). host-agent exposes a single raw-counter sample endpoint; the brain polls it and derives the rates. See # Mechanism.
+
+**Interface and device selection.** The network section reports **physical LAN NICs + the mesh interface only** — the same allowlist `DISCOVERY.md` uses for Avahi. `lo`, the Docker bridge (`docker0`), per-container `veth*`, and any `br-*` bridges are excluded; summing `veth*` would double-count container traffic. The disk-IO section reports the **whole-disk block devices** backing the OS drive and the data drive (e.g. `sda`, not `sda1`); when no data drive is present, only the OS drive appears. host-agent applies this allowlist so the brain never sees container-bridge noise.
 
 ### Mechanism
 
-SSE stream from brain → UI on `GET /api/system/live` (channel naming per `BRAIN_UI_PROTOCOL.md`). Brain reads `/proc` once per second, emits the diff. **Stream opens on first subscriber, closes when the last subscriber disconnects.** Zero idle cost.
+SSE stream from brain → UI on `GET /api/v1/system/live` (`BRAIN_UI_PROTOCOL.md` # Pattern C). The data flow is two legs:
+
+- **host-agent → brain:** `GET /v1/system/resources` (`BRAIN_HOST_PROTOCOL.md`), Pattern A. Returns the **raw cumulative counters** from the sources above plus a host monotonic timestamp. host-agent is stateless — it reads on request and holds nothing.
+- **brain → UI:** the brain polls that endpoint once per second **while ≥1 UI subscriber is connected**, diffs successive samples (rate denominator = host timestamp delta), and emits the computed rates/levels to all subscribers from a single poller.
+
+**The poll is ref-counted by connected SSE subscribers: it starts on the first subscriber and stops when the last disconnects.** One upstream poller fans out to N browser tabs — never one host-agent poll per tab. Zero idle cost on both sides: no subscribers → brain doesn't poll → host-agent does nothing.
+
+**No replay.** Unlike the global event stream, this channel is **exempt from `Last-Event-ID` reconnect replay** — stale CPU/RAM samples are worse than useless on a live gauge. A (re)connecting client gets the next live sample; the first event after any connect reports rate fields as `null` (no prior sample to diff against) until the second sample arrives one second later. The channel still counts against the brain's ≤16-concurrent-SSE-per-session cap (`BRAIN_UI_PROTOCOL.md` # Stream cap).
 
 The view is available to all users — host-level resource state isn't per-user data, and "the box feels slow, what's happening" is a question every household member can legitimately ask.
 
@@ -105,10 +116,10 @@ Out of scope for v1: per-core CPU, CPU temperature, fan speeds, per-container li
 
 ### UI surfaces
 
-- **Top-bar dropdown.** Small chevron next to the user menu opens a compact panel: CPU%, RAM used/total, net in/out, disk IO. Live-updating gauges. Available to every signed-in user. Opening the dropdown opens the SSE stream; closing it closes the stream.
-- **Settings → System page** (admin route, deeper view). Same data, full graphs over the last 60 seconds, all interfaces and drives broken out. Useful when "the box is slow right now" turns into "let me actually look at what's going on."
+- **Top-bar dropdown.** Small chevron next to the user menu opens a compact panel: CPU%, RAM used/total, net in/out, disk IO. Live-updating gauges. Available to every signed-in user. Opening the dropdown opens the SSE stream; closing it closes the stream. This is the **fourth locked top-bar element** in `DASHBOARD.md` # the top bar (added alongside the storage pill, avatar menu, and bell — see `DECISIONS.md` 2026-05-31).
+- **Settings → System page** (admin route, deeper view) — same stream, full graphs over the last 60 seconds, all interfaces and drives broken out. Useful when "the box is slow right now" turns into "let me actually look at what's going on." **Deferred** to a follow-up; the all-users dropdown ships first (`NEXT.md`).
 
-The top-bar dropdown is the primary discoverability surface. The Settings page exists for admins who want to stare at it.
+The top-bar dropdown is the primary discoverability surface. The deferred Settings page exists for admins who want to stare at it.
 
 ## Dashboard surfaces (historical)
 
@@ -144,7 +155,8 @@ Out of scope: storage growth attribution ("Photos grew 50 GB this month, mostly 
 - `HEALTH.md` — typed health issues drive `health_issue_opened` events; drive-fill forecast feeds `disk-full-warning`.
 - `AUTH.md` — sign-in events sourced from dashboard / SSH / SMB; per-user visibility rules enforced via session role.
 - `WEB_UI.md` — top-bar dropdown, per-app page widgets, box overview composition.
-- `BRAIN_UI_PROTOCOL.md` — `/api/system/live` SSE channel; standard REST for historical queries.
+- `BRAIN_UI_PROTOCOL.md` — `/api/v1/system/live` SSE channel (no-replay, counts against the per-session stream cap); standard REST for historical queries.
+- `BRAIN_HOST_PROTOCOL.md` — `GET /v1/system/resources`, the host-agent raw-counter sample the brain polls and diffs for the live stream.
 - `STORAGE.md` — `/var/lib/malmo-state/brain.db` location, `/var/lib/malmo/instances/<id>/` for app storage, `/home/<user>/` for user storage.
 
 ## Open

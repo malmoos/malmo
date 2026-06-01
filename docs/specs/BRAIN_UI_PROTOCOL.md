@@ -32,6 +32,8 @@ GET  /api/v1/settings/network              → current network config
 GET  /api/v1/health/issues                 → active health issues (see HEALTH.md)
 POST /api/v1/health/:id/:act               → invoke a remediation action attached to an issue
 GET  /api/v1/catalog/:id/install-plan      → permission/scope plan for installing a catalog app (see below)
+POST /api/v1/files/list                    → directory listing (see Files below)
+POST /api/v1/files/mkdir | move | copy | delete  → file operations (see Files below)
 ```
 
 Plain HTTP. Errors: HTTP status + `{ "code": "...", "message": "...", "details": {...} }`. Codes are stable strings; messages are human-readable, not contractual.
@@ -77,6 +79,13 @@ Returns everything the install-consent screen needs before the user confirms. Re
 
 **`single_user_mode` on session-bearing responses.** `GET /api/v1/me`, `POST /api/v1/login`, and `POST /api/v1/setup` all return a `UserDTO` that includes `"single_user_mode": true|false` — computed as `user_count == 1`. The flag is present on every session-establishing response (not just `/me`) so the UI has the correct value from the moment the session is created, without a follow-up fetch. Other endpoints that return `UserDTO` (user-management list/patch) omit it (`omitempty`). The dashboard uses this flag to: (a) show a plain Install button instead of a split-button, (b) suppress the Household/Yours section headers on the home grid, (c) hide the scope label on app tiles and in Settings, and (d) relabel the shared folder source from "The household's shared X" to "Shared X (accessible from your other devices)" in the consent dialog.
 
+#### Files (`/api/v1/files/*`)
+
+Back the in-dashboard file manager (`FILES.md`). Scoped per session to two roots — `home` (the caller's `/home/<user>/`) and `shared` (`/srv/malmo/shared/`); there is no cross-user browse, for any role (`FILES.md` # Authorization). The brain validates session + root + path-containment (rejects `..`/absolute escapes) and forwards to host-agent's `/v1/files/*`, which does the real work **as the user's UID** (`BRAIN_HOST_PROTOCOL.md` # Files endpoints). `path` is `<relative>` within the named `root`.
+
+- **Metadata ops are Pattern A:** `POST /api/v1/files/list` (returns `{entries:[{name, dir, size_bytes, mtime, hidden}]}`), `mkdir`, `move`, `copy`, `delete`. Standard `{code, message}` errors — `permission-denied`, `not-found`, `exists`, plus `blocked-by-health-issue` (`409`, when `data-drive-missing` blocks writes) and `507 Insufficient Storage` (ties to `disk-full`, `HEALTH.md`).
+- **Content ops are streaming endpoints, not jobs:** `GET /api/v1/files/content?root=&path=` streams a download; `PUT /api/v1/files/content?root=&path=` streams an upload body. The brain pipes bytes to/from host-agent without buffering whole files. This is the **deliberate ">5s = job" exception** — transport-native progress, no server-side job state — mirroring the SSE log-tail exemption. File ops are **not** audited and do **not** trigger the elevation re-prompt (`FILES.md` # Audit & elevation).
+
 ### Pattern B — Jobs
 
 For anything that can exceed ~5s or needs progress / cancel: app install, app update, mkfs, Tailscale enrollment, OS update, large config migrations.
@@ -111,7 +120,7 @@ Some brain jobs internally delegate to host-agent jobs (an app install does brai
 
 ### Pattern C — SSE (server → client streams)
 
-Two distinct stream types:
+Three distinct stream types:
 
 **1. Per-resource log / progress tails.**
 
@@ -159,6 +168,24 @@ One long-lived stream per dashboard tab. Carries typed events for: app lifecycle
 **Reconnect resilience.** Same as host-agent: monotonic event `id`, rolling buffer (~256 KB per stream), client sends `Last-Event-ID: <n>` on reconnect, brain replays from `n+1`. If the gap exceeds the buffer, brain emits one `{"lost": true}` event and resumes from current.
 
 **Stream cap.** Brain enforces ≤16 concurrent SSE streams per session — backstop for buggy dashboards or many open tabs. Excess connections receive `429 Too Many Requests`.
+
+**3. Live system-resources stream — on-demand, not persisted.**
+
+```
+GET /api/v1/system/live
+→ Content-Type: text/event-stream
+
+  event: sample
+  data: {"cpu_pct":12.4,"load":[0.42,0.51,0.48],
+         "mem":{"used_bytes":7513882624,"total_bytes":16728338432,"available_bytes":9214455808},
+         "net":[{"iface":"enp3s0","rx_bps":812000,"tx_bps":143000}],
+         "disk":[{"dev":"sda","read_bps":410000,"write_bps":92000}],
+         "uptime_s":84021}
+```
+
+Available to **every** signed-in user — host-level state isn't per-user data (`LOCAL_ANALYTICS.md` # Privacy model). The brain polls host-agent's `GET /v1/system/resources` (`BRAIN_HOST_PROTOCOL.md`) once per second, diffs the raw counters into the rates above, and fans out to all subscribers from one upstream poller. **Wire units are SI:** `*_bps` are bytes/second, `*_bytes` are bytes, `cpu_pct` and `load` are floats; the UI does the human formatting (KB/s, GiB). The stream opens on the first subscriber and the brain stops polling when the last disconnects (zero idle cost).
+
+**No reconnect replay.** This channel is exempt from the `Last-Event-ID` buffer below — replaying stale samples is wrong for a live gauge. A reconnecting client resumes at the next live `sample`; the first event after any connect reports `cpu_pct`/`*_bps` rate fields as `null` (no prior sample to diff against), with real rates from the second sample on. It still counts against the ≤16-stream cap.
 
 ### Pattern D — WebSocket (future, reserved)
 

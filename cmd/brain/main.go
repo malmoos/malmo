@@ -90,6 +90,15 @@ func main() {
 	pullSystemHealth(pollCtx, host, healthMgr, auditor, notifier)
 	go systemHealthPollLoop(pollCtx, host, healthMgr, auditor, notifier, cfg.healthPollPeriod)
 
+	// Bound the notifications table (NOTIFICATIONS.md # Locked decisions, the
+	// retention bullet): prune aged / over-cap rows once at boot, then on a slow
+	// loop. Non-fatal — an unbounded
+	// table degrades gracefully (the bell just carries more history).
+	if err := st.PruneNotifications(time.Now()); err != nil {
+		slog.Warn("notification prune failed; continuing", "err", err)
+	}
+	go notificationPruneLoop(pollCtx, st, cfg.notifyPrunePeriod)
+
 	srv := api.NewServer(st, cat, life, bus, authMgr, host, auditor, healthMgr)
 	httpSrv := &http.Server{Addr: cfg.listen, Handler: srv.Handler()}
 	slog.Info("malmo-brain listening",
@@ -133,28 +142,30 @@ func fatal(msg string, args ...any) {
 }
 
 type config struct {
-	listen           string
-	stateDir         string
-	catalogDir       string
-	agentSock        string
-	caddyAdmin       string
-	caddyListen      string
-	logLevel         string
-	logFormat        string
-	healthPollPeriod time.Duration
+	listen            string
+	stateDir          string
+	catalogDir        string
+	agentSock         string
+	caddyAdmin        string
+	caddyListen       string
+	logLevel          string
+	logFormat         string
+	healthPollPeriod  time.Duration
+	notifyPrunePeriod time.Duration
 }
 
 func loadConfig() config {
 	return config{
-		listen:           env("MALMO_LISTEN", ":8080"),
-		stateDir:         env("MALMO_STATE_DIR", "./.dev/state"),
-		catalogDir:       env("MALMO_CATALOG_DIR", "./catalog"),
-		agentSock:        env("MALMO_AGENT_SOCK", protocol.SocketPath),
-		caddyAdmin:       env("MALMO_CADDY_ADMIN", "http://localhost:2019"),
-		caddyListen:      env("MALMO_CADDY_LISTEN", ":80"),
-		logLevel:         env("MALMO_LOG_LEVEL", "info"),
-		logFormat:        env("MALMO_LOG_FORMAT", "text"),
-		healthPollPeriod: envDuration("MALMO_HEALTH_POLL", 60*time.Second),
+		listen:            env("MALMO_LISTEN", ":8080"),
+		stateDir:          env("MALMO_STATE_DIR", "./.dev/state"),
+		catalogDir:        env("MALMO_CATALOG_DIR", "./catalog"),
+		agentSock:         env("MALMO_AGENT_SOCK", protocol.SocketPath),
+		caddyAdmin:        env("MALMO_CADDY_ADMIN", "http://localhost:2019"),
+		caddyListen:       env("MALMO_CADDY_LISTEN", ":80"),
+		logLevel:          env("MALMO_LOG_LEVEL", "info"),
+		logFormat:         env("MALMO_LOG_FORMAT", "text"),
+		healthPollPeriod:  envDuration("MALMO_HEALTH_POLL", 60*time.Second),
+		notifyPrunePeriod: envDuration("MALMO_NOTIFY_PRUNE", time.Hour),
 	}
 }
 
@@ -262,6 +273,26 @@ func systemHealthPollLoop(ctx context.Context, host *hostclient.Client, healthMg
 			return
 		case <-t.C:
 			pullSystemHealth(ctx, host, healthMgr, auditor, notifier)
+		}
+	}
+}
+
+// notificationPruneLoop bounds the notifications table on a slow cadence
+// (NOTIFICATIONS.md # Locked decisions, the retention bullet). Hourly by
+// default — retention is
+// housekeeping, not latency-sensitive. Each tick is independently best-effort;
+// a failure logs and the next tick retries.
+func notificationPruneLoop(ctx context.Context, st *store.Store, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := st.PruneNotifications(time.Now()); err != nil {
+				slog.Warn("notification prune failed; continuing", "err", err)
+			}
 		}
 	}
 }

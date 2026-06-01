@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -698,7 +699,246 @@ func TestNotificationMute_MembersAudience(t *testing.T) {
 	}
 }
 
+// --- retention / pruning (PruneNotifications) ----------------------------
+
+// Rows older than the age cap are deleted; rows inside the window are kept. The
+// age pass is state-blind — it deletes by ts alone.
+func TestPruneNotifications_AgeCutoff(t *testing.T) {
+	s := open(t)
+	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+
+	old := newNotification("health:old")
+	old.TS = now.Add(-91 * 24 * time.Hour).UnixMilli()
+	if err := s.RaiseNotification(old); err != nil {
+		t.Fatalf("raise old: %v", err)
+	}
+	recent := newNotification("health:recent")
+	recent.TS = now.Add(-89 * 24 * time.Hour).UnixMilli()
+	if err := s.RaiseNotification(recent); err != nil {
+		t.Fatalf("raise recent: %v", err)
+	}
+	// Exactly on the cutoff (now − 90d): kept, because the age predicate is a
+	// strict `ts < cutoff`. Pins `<` vs `<=` — a `<=` mutant deletes this row.
+	// Same expression the implementation uses, so the ms values are identical.
+	boundary := newNotification("health:boundary")
+	boundary.TS = now.Add(-notifyMaxAgeDays * 24 * time.Hour).UnixMilli()
+	if err := s.RaiseNotification(boundary); err != nil {
+		t.Fatalf("raise boundary: %v", err)
+	}
+
+	if err := s.PruneNotifications(now); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+
+	got, err := s.ListNotifications()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if !dedupSet(got, "health:recent", "health:boundary") {
+		t.Errorf("after prune list = %v, want {health:recent, health:boundary} (91d-old pruned; 89d-old and exactly-90d kept)", dedups(got))
+	}
+}
+
+// Pruning a notification cascades to its per-recipient notification_reads rows
+// (ON DELETE CASCADE + foreign_keys=ON). Fails loud if the pragma or the FK
+// ever regresses, leaving orphaned read rows.
+func TestPruneNotifications_CascadesToReads(t *testing.T) {
+	s := open(t)
+	seedUser(t, s, "u_admin", RoleAdmin)
+	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+
+	old := newNotification("health:old")
+	old.TS = now.Add(-91 * 24 * time.Hour).UnixMilli()
+	id := raiseAndID(t, s, old)
+	if err := s.MarkNotificationRead(id, "u_admin", time.UnixMilli(old.TS)); err != nil {
+		t.Fatalf("mark read: %v", err)
+	}
+	if err := s.DismissNotification(id, "u_admin", time.UnixMilli(old.TS)); err != nil {
+		t.Fatalf("dismiss: %v", err)
+	}
+	if n := countReads(t, s, id); n != 1 {
+		t.Fatalf("setup: want 1 notification_reads row, got %d", n)
+	}
+
+	if err := s.PruneNotifications(now); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+
+	if n := countReads(t, s, id); n != 0 {
+		t.Errorf("notification_reads not cascade-deleted: %d row(s) remain after prune", n)
+	}
+}
+
+// When over the row cap, the oldest excess is trimmed resolved-rows-first: an
+// equally-old resolved row is dropped before an active one (a cleared issue is
+// history; a live one is not).
+func TestPruneNotifications_CountCapDropsResolvedBeforeActive(t *testing.T) {
+	s := open(t)
+	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+
+	// The active row is deliberately OLDER than the resolved row. Under a plain
+	// ts-ASC trim — the degenerate mutant where the resolved-first key is
+	// dropped — the oldest row (the active one) would be deleted. The
+	// `(resolved_at IS NOT NULL) DESC` key must override ts so the *resolved*
+	// row goes first despite being newer. Asserting the older active row
+	// SURVIVES while the newer resolved row is DROPPED makes resolved-first the
+	// only ordering that can produce this outcome — defeating both a ts-only
+	// mutant and any rowid tie-break (the two rows have distinct ts, so no tie).
+	active := newNotification("cap:active")
+	active.TS = now.Add(-3 * 24 * time.Hour).UnixMilli()
+	if err := s.RaiseNotification(active); err != nil {
+		t.Fatalf("raise active: %v", err)
+	}
+	resolved := newNotification("cap:resolved")
+	resolved.TS = now.Add(-1 * 24 * time.Hour).UnixMilli()
+	if err := s.RaiseNotification(resolved); err != nil {
+		t.Fatalf("raise resolved: %v", err)
+	}
+	if err := s.ResolveNotification("cap:resolved", now.Add(-1*24*time.Hour)); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	// Active fillers sit between the two (older than resolved, newer than active)
+	// so with excess == 1 they're never the trim victim under any ordering — keeping
+	// the test focused on the active-vs-resolved choice. All inside the age window,
+	// so only the count pass acts.
+	bulkSeedActive(t, s, notifyMaxRows-1, now.Add(-2*24*time.Hour).UnixMilli(), "cap:filler")
+	if total := countNotifications(t, s); total != notifyMaxRows+1 {
+		t.Fatalf("setup: seeded %d rows, want %d", total, notifyMaxRows+1)
+	}
+
+	if err := s.PruneNotifications(now); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+
+	if total := countNotifications(t, s); total != notifyMaxRows {
+		t.Errorf("after count-cap prune total = %d, want %d", total, notifyMaxRows)
+	}
+	if exists(t, s, "cap:resolved") {
+		t.Errorf("newer resolved row survived the cap trim — resolved rows must be dropped before active ones")
+	}
+	if !exists(t, s, "cap:active") {
+		t.Errorf("older active row was dropped — the resolved-first clause should have dropped the newer resolved row instead")
+	}
+}
+
+// Pruning a table inside both caps is a no-op, and is idempotent: a second run
+// changes nothing.
+func TestPruneNotifications_NoOpWithinCaps(t *testing.T) {
+	s := open(t)
+	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+
+	// Empty table: harmless.
+	if err := s.PruneNotifications(now); err != nil {
+		t.Fatalf("prune empty: %v", err)
+	}
+
+	n := newNotification("health:recent")
+	n.TS = now.Add(-1 * 24 * time.Hour).UnixMilli()
+	if err := s.RaiseNotification(n); err != nil {
+		t.Fatalf("raise: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := s.PruneNotifications(now); err != nil {
+			t.Fatalf("prune %d: %v", i, err)
+		}
+		got, err := s.ListNotifications()
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("within-caps prune %d changed state: %d rows, want 1", i, len(got))
+		}
+	}
+}
+
+// Pruning fully removes a row — it doesn't merely hide it — so its dedup_key is
+// freed: a later re-raise of the same key inserts cleanly without colliding on
+// the notifications_active_dedup partial unique index.
+func TestPruneNotifications_FreesDedupForReRaise(t *testing.T) {
+	s := open(t)
+	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+
+	old := newNotification("health:flap")
+	old.TS = now.Add(-91 * 24 * time.Hour).UnixMilli()
+	if err := s.RaiseNotification(old); err != nil {
+		t.Fatalf("raise: %v", err)
+	}
+	if err := s.PruneNotifications(now); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if got, _ := s.ListNotifications(); len(got) != 0 {
+		t.Fatalf("aged row not pruned: %v", dedups(got))
+	}
+
+	reraise := newNotification("health:flap")
+	reraise.TS = now.UnixMilli()
+	if err := s.RaiseNotification(reraise); err != nil {
+		t.Fatalf("re-raise of a pruned key should insert cleanly, got: %v", err)
+	}
+	got, _ := s.ListNotifications()
+	if !dedupSet(got, "health:flap") {
+		t.Errorf("re-raised row missing: %v", dedups(got))
+	}
+}
+
 // --- small assertions helpers ---
+
+// bulkSeedActive inserts n active (unresolved) notifications at ts via a single
+// transaction — a fast seed for the count-cap test, which must exceed
+// notifyMaxRows. Reuses the canonical column values from newNotification.
+func bulkSeedActive(t *testing.T, s *Store, n int, ts int64, keyPrefix string) {
+	t.Helper()
+	tmpl := newNotification("")
+	tx, err := s.db.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	stmt, err := tx.Prepare(`INSERT INTO notifications
+		(ts, category, severity, source_kind, source_id, dedup_key, audience, variant, summary)
+		VALUES (?,?,?,?,?,?,?,?,?)`)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	defer stmt.Close()
+	for i := 0; i < n; i++ {
+		if _, err := stmt.Exec(ts, string(tmpl.Category), string(tmpl.Severity),
+			tmpl.SourceKind, tmpl.SourceID, fmt.Sprintf("%s:%d", keyPrefix, i),
+			tmpl.Audience, tmpl.Variant, tmpl.Summary); err != nil {
+			t.Fatalf("insert filler %d: %v", i, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+}
+
+func countNotifications(t *testing.T, s *Store) int {
+	t.Helper()
+	var c int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM notifications`).Scan(&c); err != nil {
+		t.Fatalf("count notifications: %v", err)
+	}
+	return c
+}
+
+func countReads(t *testing.T, s *Store, id int64) int {
+	t.Helper()
+	var c int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM notification_reads WHERE notification_id=?`, id).Scan(&c); err != nil {
+		t.Fatalf("count reads: %v", err)
+	}
+	return c
+}
+
+func exists(t *testing.T, s *Store, dedupKey string) bool {
+	t.Helper()
+	var c int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM notifications WHERE dedup_key=?`, dedupKey).Scan(&c); err != nil {
+		t.Fatalf("exists %s: %v", dedupKey, err)
+	}
+	return c > 0
+}
 
 func dedups(ns []notify.Notification) []string {
 	out := make([]string, len(ns))

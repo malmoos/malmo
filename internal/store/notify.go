@@ -3,10 +3,65 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/malmo/malmo/internal/notify"
 )
+
+const (
+	// notifyMaxAgeDays mirrors the 90-day session hard-expiry (store.go) — one
+	// retention number across the box.
+	notifyMaxAgeDays = 90
+	// notifyMaxRows is a high-water runaway ceiling, not a hard quota: the cap
+	// pass only fires when the table is over it, and trims the oldest excess.
+	notifyMaxRows = 1000
+)
+
+// PruneNotifications bounds the (mutable, prunable) notifications table
+// (NOTIFICATIONS.md # Locked decisions, the retention bullet). Two passes,
+// age-primary: (1) delete rows
+// older than notifyMaxAgeDays — state-blind, since ts is NOT NULL and
+// monotonic this is a total order; (2) if still over notifyMaxRows, drop the
+// oldest excess, resolved rows before active ones (a cleared issue is history;
+// a live one is not). notification_reads children go via ON DELETE CASCADE
+// (store.go; foreign_keys=ON is live per-connection). notification_mutes is
+// keyed by category, not notification, so it's untouched. Silent on the bus —
+// aged/resolved/dismissed rows are already invisible and the notifier holds no
+// in-memory state, so there's nothing to re-render. No transaction: writers are
+// serialized (SetMaxOpenConns(1)) and each DELETE is independently correct and
+// idempotent; the cap is soft, so a benign ±1 skew from a concurrent raise
+// self-corrects on the next run.
+func (s *Store) PruneNotifications(now time.Time) error {
+	cutoff := now.Add(-notifyMaxAgeDays * 24 * time.Hour).UnixMilli()
+	ageRes, err := s.db.Exec(`DELETE FROM notifications WHERE ts < ?`, cutoff)
+	if err != nil {
+		return err
+	}
+
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM notifications`).Scan(&count); err != nil {
+		return err
+	}
+	var capped int64
+	if excess := count - notifyMaxRows; excess > 0 {
+		capRes, err := s.db.Exec(
+			`DELETE FROM notifications WHERE id IN (
+			   SELECT id FROM notifications
+			   ORDER BY (resolved_at IS NOT NULL) DESC, ts ASC
+			   LIMIT ?)`, excess)
+		if err != nil {
+			return err
+		}
+		capped, _ = capRes.RowsAffected()
+	}
+
+	aged, _ := ageRes.RowsAffected()
+	if aged > 0 || capped > 0 {
+		slog.Info("notifications pruned", "aged", aged, "capped", capped)
+	}
+	return nil
+}
 
 // RaiseNotification coalesces by dedup_key (NOTIFICATIONS.md # One notification
 // per raise): if an active (non-dismissed) row for the same key exists it is

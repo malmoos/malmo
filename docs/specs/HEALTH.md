@@ -102,7 +102,7 @@ These are the issue types the brain knows about at v1. New issues are added by c
 | `brain-db-corrupt` | critical | nearly all ops | 2 | SQLite integrity check failed; brain is operating in a minimal-functionality mode. |
 | `bootstrap-state-mismatch` | critical | nearly all ops | 2 | The box thinks it's bootstrapped but the brain database is missing — typically a data-drive swap. |
 | `schema-migration-failed` | critical | apps, writes | 2 | A brain schema migration did not complete; the previous brain version is still callable for rollback. |
-| `service-down` | error | (nothing) | 2 | A core system service (Docker, Caddy, Avahi, chrony, Samba, host-agent) isn't running. Per-unit `instance_key`. Does **not** set block flags: operations that need the dead service fail naturally with their own errors, and blocking everything because Avahi died would be blunt. Tier-2 action restarts the unit. |
+| `service-down` | error | (nothing) | 2 | A core system service isn't running. Host units (Docker, Avahi, chrony, Samba, host-agent) are checked by host-agent via `systemctl` (locus B); Caddy is a brain-managed container checked via the Docker + admin API (locus C) — see the detector catalog. Per-unit `instance_key`. Does **not** set block flags: operations that need the dead service fail naturally with their own errors, and blocking everything because Avahi died would be blunt. Tier-2 action restarts the unit. |
 
 ### Version
 
@@ -169,12 +169,13 @@ These defaults apply to **every** detector unless its row overrides them. `HEALT
 | `disk-nearly-full` | `statfs` %used per drive | 5 min | ≥90% data / ≥85% OS | <88% / <83% |
 | `disk-full` | `statfs` %used per drive | 5 min | ≥95% either drive | <93% |
 | `disk-smart-failing` | `smartctl -H` + reallocated/pending/uncorrectable sector counts | 6h | SMART health FAIL **or** sector count >0 and growing | sticky — clears only when the drive is replaced (UUID change) |
-| `service-down` | `systemctl is-active` over the core-unit allowlist | 60s | `failed`/`inactive` | `active` |
+| `service-down` (host units) | `systemctl is-active` over the host-unit allowlist: `docker`, `avahi-daemon`, `chrony`, `smbd`, `host-agent` | 60s | `failed`/`inactive` | `active` |
 | `ram-pressure` | `/proc/pressure/memory` (PSI `some avg60`) | 60s | sustained > threshold (tune at first soak) | below threshold |
 | `clock-not-synced` | `chronyc tracking` — last sync age + offset | 5 min | >6h since sync **or** offset >10s | synced and offset <10s |
 | `mdns-down` | `systemctl is-active avahi-daemon` + publish state | 60s | not publishing | publishing |
 | `lan-unreachable` | `network-online.target` reached + primary-connection state | 60s + NM event | target not reached | reachable |
 | `journal-disk-pressure` | journal directory size vs configured cap | 1h | within 10% of cap | below |
+| `reboot-required` | presence of `/var/run/reboot-required` (+ `/var/run/reboot-required.pkgs` for the package list in the message) | 1h | file present | file absent (self-clears on reboot — `/run` is tmpfs) |
 
 `hostname-conflict` is locus **D** (Avahi name-collision signal, not polled). `data-drive-missing` / `data-drive-wrong` are primarily locus D (udev) with a 60s locus-B backstop.
 
@@ -190,6 +191,13 @@ These defaults apply to **every** detector unless its row overrides them. `HEALT
 | `update-available` | release/catalog manifest vs installed | per refresh | newer version present |
 | `backup-overdue` | last successful backup timestamp | hourly | older than window *(deferred with backup)* |
 | `store-write-failed` | store write error (reactive, not timed) | on error | any persistent write failure *(built)* |
+| `service-down` (Caddy) | Caddy container state via the Docker API + Caddy admin-API (`localhost:2019`) reachability | 60s | bounded self-heal exhausted (see below) — *deferred, see note* |
+
+**Why the `service-down` Caddy check lives at locus C, not B:** Caddy and the socket-proxy are **brain-managed containers, not host systemd units** (`CONTROL_PLANE.md` # Locked: Caddy is malmo substrate, runs as a container) — there is no `caddy.service` for `systemctl is-active` to query. The brain already owns Docker access and Caddy's admin API, so it does a *better* check than systemctl could: container-running **and** actually serving (admin API answers / catch-all route present), which catches a wedged-but-not-exited Caddy that a process-liveness check would miss. The socket-proxy itself is not separately monitored — its failure manifests as the brain losing all Docker access, a self-evident condition surfaced through every Docker-backed operation failing at once.
+
+**Detection feeds bounded self-heal, not a passive banner — and is deferred.** A fully-down Caddy means the dashboard is unreachable (Caddy fronts `malmo.local`), so a banner has nobody to show it to. Instead, the brain restarts the Caddy container on failure, bounded like host-agent's `StartLimitBurst` (≈5 restarts / 60s); `service-down`(caddy) is raised only when that budget is **exhausted** (genuinely stuck), and the issue becomes a logged incident + post-recovery surface. This is **gated on the brain owning Caddy's container lifecycle** (start/stop/restart) — today the brain manages Caddy's *routes* (`EnsureServer`/`EnsureCatchAll`) but not its *container*, so the self-heal detector is **deferred** until that prerequisite lands. See `NEXT.md` # Caddy liveness self-heal and `DECISIONS.md` 2026-05-31.
+
+**Per-reporter authority (reconcile rule).** `service-down` is one issue with a per-unit `instance_key`, but raised from two loci. Each reporter is authoritative **only over the `instance_key`s it reports** — the host-agent systemctl batch owns `{docker, avahi-daemon, chrony, smbd, host-agent}`; the brain locus-C check owns `{caddy}`. A reporter's batch clears only its own absent keys, never the other reporter's. This refines the "scoped per category" reconcile rule (`# Cross-cutting detector policy`) for the one issue that spans loci.
 
 ### Catalog — locus A (boot reporters) and D (reactive)
 
@@ -198,7 +206,6 @@ These defaults apply to **every** detector unless its row overrides them. `HEALT
 | `canary-mismatch`, `mergerfs-assembly-failed` | A | `malmo-storage-verify` finding at boot *(built)* |
 | `health-report-malformed` | A | report file unparseable *(built)* |
 | `auto-unlock-degraded` | A | boot-chain records TPM unseal fell back to passphrase |
-| `reboot-required` | C/A | `/var/run/reboot-required` present (post-update) |
 | `data-drive-missing` / `data-drive-wrong` | D | udev add/remove; brain re-verifies enrolled UUID |
 | `hostname-conflict` | D | Avahi name-collision callback |
 | `app-image-partial` | D | image pull reports incomplete |
