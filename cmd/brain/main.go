@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -81,14 +82,23 @@ func main() {
 		slog.Warn("health: failed to restore issues from store; starting empty", "err", err)
 	}
 
-	// Pull the boot-time storage findings (BOOT.md # The storage-ready
-	// target) once at startup and reconcile them into the health registry,
-	// then keep refreshing on a slow poll. Failure here is non-fatal — the
-	// brain runs degraded just like everything else.
+	// Pull host-agent's system health report (HEALTH.md # Detector catalog,
+	// locus B) once at startup and reconcile it into the health registry per
+	// category, then keep refreshing on a slow poll. Failure here is non-fatal
+	// — the brain runs degraded just like everything else.
 	pollCtx, pollCancel := context.WithCancel(context.Background())
 	defer pollCancel()
-	pullStorageHealth(pollCtx, host, healthMgr, auditor, notifier)
-	go storageHealthPollLoop(pollCtx, host, healthMgr, auditor, notifier, cfg.healthPollPeriod)
+	pullSystemHealth(pollCtx, host, healthMgr, auditor, notifier)
+	go systemHealthPollLoop(pollCtx, host, healthMgr, auditor, notifier, cfg.healthPollPeriod)
+
+	// Bound the notifications table (NOTIFICATIONS.md # Locked decisions, the
+	// retention bullet): prune aged / over-cap rows once at boot, then on a slow
+	// loop. Non-fatal — an unbounded
+	// table degrades gracefully (the bell just carries more history).
+	if err := st.PruneNotifications(time.Now()); err != nil {
+		slog.Warn("notification prune failed; continuing", "err", err)
+	}
+	go notificationPruneLoop(pollCtx, st, cfg.notifyPrunePeriod)
 
 	// Locus-C version check (HEALTH.md # Detector catalog): reconcile
 	// version-mismatch against host-agent's reported agent_version, once at
@@ -139,28 +149,30 @@ func fatal(msg string, args ...any) {
 }
 
 type config struct {
-	listen           string
-	stateDir         string
-	catalogDir       string
-	agentSock        string
-	caddyAdmin       string
-	caddyListen      string
-	logLevel         string
-	logFormat        string
-	healthPollPeriod time.Duration
+	listen            string
+	stateDir          string
+	catalogDir        string
+	agentSock         string
+	caddyAdmin        string
+	caddyListen       string
+	logLevel          string
+	logFormat         string
+	healthPollPeriod  time.Duration
+	notifyPrunePeriod time.Duration
 }
 
 func loadConfig() config {
 	return config{
-		listen:           env("MALMO_LISTEN", ":8080"),
-		stateDir:         env("MALMO_STATE_DIR", "./.dev/state"),
-		catalogDir:       env("MALMO_CATALOG_DIR", "./catalog"),
-		agentSock:        env("MALMO_AGENT_SOCK", protocol.SocketPath),
-		caddyAdmin:       env("MALMO_CADDY_ADMIN", "http://localhost:2019"),
-		caddyListen:      env("MALMO_CADDY_LISTEN", ":80"),
-		logLevel:         env("MALMO_LOG_LEVEL", "info"),
-		logFormat:        env("MALMO_LOG_FORMAT", "text"),
-		healthPollPeriod: envDuration("MALMO_HEALTH_POLL", 60*time.Second),
+		listen:            env("MALMO_LISTEN", ":8080"),
+		stateDir:          env("MALMO_STATE_DIR", "./.dev/state"),
+		catalogDir:        env("MALMO_CATALOG_DIR", "./catalog"),
+		agentSock:         env("MALMO_AGENT_SOCK", protocol.SocketPath),
+		caddyAdmin:        env("MALMO_CADDY_ADMIN", "http://localhost:2019"),
+		caddyListen:       env("MALMO_CADDY_LISTEN", ":80"),
+		logLevel:          env("MALMO_LOG_LEVEL", "info"),
+		logFormat:         env("MALMO_LOG_FORMAT", "text"),
+		healthPollPeriod:  envDuration("MALMO_HEALTH_POLL", 60*time.Second),
+		notifyPrunePeriod: envDuration("MALMO_NOTIFY_PRUNE", time.Hour),
 	}
 }
 
@@ -181,25 +193,39 @@ func env(k, def string) string {
 	return def
 }
 
-// pullStorageHealth fetches the current storage findings from host-agent and
-// reconciles them into the health registry. Non-blocking: if host-agent isn't
-// reachable yet, we log and return — the brain still starts. The poll loop
-// will catch up once host-agent comes online. Transitions are audited per
-// issue (see emitHealthTransitions) and fan out to the notification center
-// (see emitHealthNotifications).
-func pullStorageHealth(ctx context.Context, host *hostclient.Client, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier) {
+// pullSystemHealth fetches host-agent's system health report and reconciles it
+// into the health registry one category at a time. Non-blocking: if host-agent
+// isn't reachable yet, we log and return — the brain still starts. The poll loop
+// will catch up once host-agent comes online. Transitions are audited per issue
+// (see emitHealthTransitions) and fan out to the notification center (see
+// emitHealthNotifications).
+//
+// Each category the report covers is reconciled independently (clearing any
+// host-reported issue in it that's now absent); categories not in the report are
+// left alone. Sorted iteration keeps the per-issue audit / log order stable.
+func pullSystemHealth(ctx context.Context, host *hostclient.Client, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier) {
 	c, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	sh, err := host.StorageHealth(c)
+	sh, err := host.SystemHealth(c)
 	if err != nil {
-		slog.Warn("storage health: host-agent unreachable; skipping",
+		slog.Warn("system health: host-agent unreachable; skipping",
 			"err", err)
 		return
 	}
-	raised, cleared := healthMgr.ApplyStorageFindings(sh)
+	cats := make([]protocol.HealthCategory, 0, len(sh.Categories))
+	for cat := range sh.Categories {
+		cats = append(cats, cat)
+	}
+	sort.Slice(cats, func(i, j int) bool { return cats[i] < cats[j] })
+	var raised, cleared []health.IssueKey
+	for _, cat := range cats {
+		r, cl := healthMgr.ApplyFindings(cat, sh.Categories[cat])
+		raised = append(raised, r...)
+		cleared = append(cleared, cl...)
+	}
 	if len(raised) > 0 || len(cleared) > 0 {
-		slog.Info("storage health: reconciled",
-			"raised", len(raised), "cleared", len(cleared), "active_findings", len(sh.Findings))
+		slog.Info("system health: reconciled",
+			"raised", len(raised), "cleared", len(cleared), "categories", len(cats))
 	}
 	emitHealthTransitions(ctx, auditor, raised, cleared)
 	emitHealthNotifications(notifier, healthMgr, raised, cleared)
@@ -226,7 +252,7 @@ func emitHealthTransitions(ctx context.Context, auditor *audit.Recorder, raised,
 // raise, a resolve per allowlisted clear. The allowlist gate lives in
 // notify, so this dispatches every transition and lets notify drop the ones
 // that don't notify. Raises need the issue's severity/summary, which
-// ApplyStorageFindings doesn't return — look it up by key. The ok guard skips
+// ApplyFindings doesn't return — look it up by key. The ok guard skips
 // a key with no live issue; in the current sequential poll a just-raised key
 // is always still active when looked up, so this is defensive (and notify
 // would drop the resulting zero-value Issue anyway, since "" isn't allowlisted).
@@ -241,11 +267,11 @@ func emitHealthNotifications(notifier *notify.Notifier, healthMgr *health.Manage
 	}
 }
 
-// storageHealthPollLoop keeps the health registry in sync with what
-// host-agent reports. 60s is the loose-by-design cadence — storage findings
-// don't change often, and the dashboard's view of "active issues" gets a
-// refresh on every dashboard load via the same registry.
-func storageHealthPollLoop(ctx context.Context, host *hostclient.Client, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier, interval time.Duration) {
+// systemHealthPollLoop keeps the health registry in sync with what host-agent
+// reports. 60s is the loose-by-design cadence — host-measured findings don't
+// change often, and the dashboard's view of "active issues" gets a refresh on
+// every dashboard load via the same registry.
+func systemHealthPollLoop(ctx context.Context, host *hostclient.Client, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -253,7 +279,27 @@ func storageHealthPollLoop(ctx context.Context, host *hostclient.Client, healthM
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			pullStorageHealth(ctx, host, healthMgr, auditor, notifier)
+			pullSystemHealth(ctx, host, healthMgr, auditor, notifier)
+		}
+	}
+}
+
+// notificationPruneLoop bounds the notifications table on a slow cadence
+// (NOTIFICATIONS.md # Locked decisions, the retention bullet). Hourly by
+// default — retention is
+// housekeeping, not latency-sensitive. Each tick is independently best-effort;
+// a failure logs and the next tick retries.
+func notificationPruneLoop(ctx context.Context, st *store.Store, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := st.PruneNotifications(time.Now()); err != nil {
+				slog.Warn("notification prune failed; continuing", "err", err)
+			}
 		}
 	}
 }

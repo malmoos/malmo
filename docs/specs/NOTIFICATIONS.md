@@ -62,7 +62,7 @@ A notification is a typed record in the brain's SQLite. Shape:
 }
 ```
 
-**Storage note — mutable, unlike audit.** Notifications live in their own table (`notifications`), *not* in `audit_events`. The audit table is append-only and forever (`LOGGING.md`); notifications carry mutable `read_at` / `dismissed_at` and are subject to retention (capped count / age — exact policy in `NEXT.md`). Conflating them would fight both invariants. A notification may *reference* an audit row via `source_kind: "audit"` + `source_id`, but it is a separate, prunable record.
+**Storage note — mutable, unlike audit.** Notifications live in their own table (`notifications`), *not* in `audit_events`. The audit table is append-only and forever (`LOGGING.md`); notifications carry mutable `read_at` / `dismissed_at` and are subject to retention (`store.PruneNotifications`, run at boot and hourly: a 90-day age cap, then a 1000-row ceiling that trims the oldest excess resolved-rows-first; `notification_reads` children cascade). Conflating them would fight both invariants. A notification may *reference* an audit row via `source_kind: "audit"` + `source_id`, but it is a separate, prunable record.
 
 ### Severity
 
@@ -191,6 +191,8 @@ Minimal in v1:
 
 **Delivery (as implemented).** A mute is a row in `notification_mutes` keyed `(user_id, category)` — presence means muted, absence means on, so a new user has no rows and sees everything ("everything on by default"); unmute is a DELETE. It is a **read-time filter** applied uniformly to the three aggregate surfaces (the inbox list, the unread badge count, and mark-all-read), *never* emit-time suppression: a box-wide `admins`/`members` notification is one row shared by many recipients, so it cannot be withheld per-user at write time. The per-id read/dismiss path is deliberately mute-agnostic — a user can still act on a specific notification in a muted category (e.g. one they read before muting). Mark-all-read honors the filter so a muted category is left untouched and reappears in its true unread state on unmute. Mutating a mute is **not audited** (a personal view preference, not an elevation-class action — `CLAUDE.md`). The wire surface is `GET /api/v1/notifications/mutes` (the caller's muted categories), `PUT`/`DELETE /api/v1/notifications/mutes/{category}` (mute/unmute, idempotent, 422 on an unknown category validated against the full `notify.Categories` taxonomy). Muting a category currently hides *all* its severities including criticals; whether criticals should ring through a mute is an open question (`NEXT.md`).
 
+**Surface (as implemented).** The toggles live in **Settings → Notifications** as a per-category on/off list — one row per `notify.Categories` entry, *on* = receiving, *off* = muted, so a fresh account shows everything on. The dashboard owns the category labels (the brain owns only the taxonomy); flipping a row is optimistic (the switch responds immediately, rolls back on error) and then reconciles the mute set plus the now-refiltered inbox/badge against the server, riding the same `notification.updated` SSE invalidation as the bell.
+
 ## The transport-agnostic seam (why this doesn't need a rewrite later)
 
 The model above is built so off-box transports slot in without reshaping it:
@@ -219,6 +221,7 @@ When email-on-file lands (its own `NEXT.md` Tier-2 item) and/or the mobile app s
 - **Member transparency variant** — box-wide criticals that block a member-visible function emit an info-only, non-actionable notice to members; the actionable copy goes to admins.
 - **All network issues stay off the bell in v1** (HEALTH banners only).
 - **Stored in a separate, mutable, prunable `notifications` table** — distinct from the append-only forever `audit_events` table.
+- **Retention is age-primary with a row ceiling**: prune deletes rows older than 90 days, then (if still over) trims the oldest excess with resolved rows dropped before active ones — a cleared issue is history, a live one is not. Runs at boot and hourly (`MALMO_NOTIFY_PRUNE`). The 1000-row cap is a runaway ceiling, not a hard quota.
 - **One notification per issue raise**, coalesced by `dedup_key`; resolved (not deleted) on clear. No per-flap spam.
 - **Per-recipient read state**; unread badge; dismiss ≠ resolve. No modal interrupt (the existing permission-expansion login modal is the sole pre-existing exception, with a persistent notification mirror).
 - **Per-user, per-category mute; everything on by default.** No quiet hours / severity tuning in v1.

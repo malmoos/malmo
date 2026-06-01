@@ -132,13 +132,12 @@ func TestList_VersionMismatchDefinition(t *testing.T) {
 	}
 }
 
-func TestApplyStorageFindings_RaiseAndClear(t *testing.T) {
+func TestApplyFindings_RaiseAndClear(t *testing.T) {
 	m := NewManager(nil)
 
 	// First poll: data drive missing.
-	raised, cleared := m.ApplyStorageFindings(protocol.StorageHealth{
-		Findings: []protocol.Finding{{ID: "data-drive-missing", Details: "x"}},
-	})
+	raised, cleared := m.ApplyFindings(protocol.HealthCategoryStorage,
+		[]protocol.Finding{{ID: "data-drive-missing", Details: "x"}})
 	if len(raised) != 1 || len(cleared) != 0 {
 		t.Errorf("first poll: want raised=1 cleared=0, got %d/%d", len(raised), len(cleared))
 	}
@@ -147,9 +146,7 @@ func TestApplyStorageFindings_RaiseAndClear(t *testing.T) {
 	}
 
 	// Second poll: drive reattached, no findings.
-	raised, cleared = m.ApplyStorageFindings(protocol.StorageHealth{
-		Findings: []protocol.Finding{},
-	})
+	raised, cleared = m.ApplyFindings(protocol.HealthCategoryStorage, []protocol.Finding{})
 	if len(raised) != 0 || len(cleared) != 1 {
 		t.Errorf("clear poll: want raised=0 cleared=1, got %d/%d", len(raised), len(cleared))
 	}
@@ -158,27 +155,26 @@ func TestApplyStorageFindings_RaiseAndClear(t *testing.T) {
 	}
 }
 
-// TestApplyStorageFindings_ReturnsAffectedKeys pins the per-issue return
-// contract the audit hook depends on: the returned slices carry the exact
-// issue keys that transitioned (not a count), sorted by ID for a stable
-// per-issue audit-record order.
+// TestApplyFindings_ReturnsAffectedKeys pins the per-issue return contract the
+// audit hook depends on: the returned slices carry the exact issue keys that
+// transitioned (not a count), sorted by ID for a stable per-issue audit-record
+// order.
 //
 // Three findings (not two) in non-sorted input order make the sort
 // load-bearing: with only two keys, Go's map-iteration randomization is weak
 // enough that an implementation missing the sort would still pass too often
 // to guard anything.
-func TestApplyStorageFindings_ReturnsAffectedKeys(t *testing.T) {
+func TestApplyFindings_ReturnsAffectedKeys(t *testing.T) {
 	m := NewManager(nil)
 
 	// First poll raises three issues, supplied in non-sorted order. The
 	// returned slice must come back sorted by ID.
-	raised, cleared := m.ApplyStorageFindings(protocol.StorageHealth{
-		Findings: []protocol.Finding{
+	raised, cleared := m.ApplyFindings(protocol.HealthCategoryStorage,
+		[]protocol.Finding{
 			{ID: "mergerfs-assembly-failed"},
 			{ID: "data-drive-missing"},
 			{ID: "canary-mismatch"},
-		},
-	})
+		})
 	if len(cleared) != 0 {
 		t.Errorf("first poll: want 0 cleared, got %v", cleared)
 	}
@@ -193,9 +189,8 @@ func TestApplyStorageFindings_ReturnsAffectedKeys(t *testing.T) {
 
 	// Second poll keeps canary-mismatch, drops the other two: no raises, two
 	// cleared keys, also returned sorted by ID.
-	raised, cleared = m.ApplyStorageFindings(protocol.StorageHealth{
-		Findings: []protocol.Finding{{ID: "canary-mismatch"}},
-	})
+	raised, cleared = m.ApplyFindings(protocol.HealthCategoryStorage,
+		[]protocol.Finding{{ID: "canary-mismatch"}})
 	if len(raised) != 0 {
 		t.Errorf("second poll: want 0 raised, got %v", raised)
 	}
@@ -209,10 +204,9 @@ func TestApplyStorageFindings_ReturnsAffectedKeys(t *testing.T) {
 }
 
 // TestSortIssueKeys_TieBreakOnInstanceKey pins both sort dimensions: primary
-// by ID, tie-broken by InstanceKey. The InstanceKey path is unreachable
-// through ApplyStorageFindings today (protocol.Finding has no InstanceKey
-// field), so this exercises it directly to keep the contract honest for when
-// per-instance findings land.
+// by ID, tie-broken by InstanceKey. service-down now exercises the InstanceKey
+// path through ApplyFindings (per-unit findings); this exercises the sort
+// directly to keep both dimensions pinned independently of any one caller.
 func TestSortIssueKeys_TieBreakOnInstanceKey(t *testing.T) {
 	ks := []IssueKey{
 		{ID: "data-drive-missing", InstanceKey: "b"},
@@ -230,11 +224,11 @@ func TestSortIssueKeys_TieBreakOnInstanceKey(t *testing.T) {
 	}
 }
 
-func TestApplyStorageFindings_OnlyTouchesStorageCategory(t *testing.T) {
-	// If a non-storage issue gets registered later, applying an empty
-	// storage findings payload must not clear it. Today no non-storage
-	// detector exists, but the contract is load-bearing for the moment
-	// network/version detectors land.
+func TestApplyFindings_OnlyTouchesItsReportCategory(t *testing.T) {
+	// A storage poll reconciles only issues whose ReportCategory is storage.
+	// An issue in another report domain — here a network issue with no
+	// ReportCategory set — must survive an empty storage payload. The scoping
+	// is by ReportCategory, not display Category.
 	m := NewManager(nil)
 	// Pretend a network issue is active by writing directly through Raise
 	// after registering a definition for it.
@@ -247,29 +241,28 @@ func TestApplyStorageFindings_OnlyTouchesStorageCategory(t *testing.T) {
 	m.mu.Unlock()
 	m.Raise("mdns-down", "", "")
 
-	m.ApplyStorageFindings(protocol.StorageHealth{Findings: []protocol.Finding{}})
+	m.ApplyFindings(protocol.HealthCategoryStorage, []protocol.Finding{})
 
 	if len(m.List()) != 1 || m.List()[0].ID != "mdns-down" {
-		t.Errorf("non-storage issue must survive storage reconciliation, got %v", m.List())
+		t.Errorf("issue in another report domain must survive storage reconciliation, got %v", m.List())
 	}
 }
 
-// TestApplyStorageFindings_AtomicAcrossClearAndRaise pins down the locking
-// contract: a concurrent List() during a reconcile cycle must never observe
-// the moment where the old issue has been cleared but the new one hasn't yet
-// been raised. The pre-fix implementation snapshotted under the lock and
-// then dropped it before reconciling, which exposed this transient.
-func TestApplyStorageFindings_AtomicAcrossClearAndRaise(t *testing.T) {
+// TestApplyFindings_AtomicAcrossClearAndRaise pins down the locking contract: a
+// concurrent List() during a reconcile cycle must never observe the moment
+// where the old issue has been cleared but the new one hasn't yet been raised.
+// The pre-fix implementation snapshotted under the lock and then dropped it
+// before reconciling, which exposed this transient.
+func TestApplyFindings_AtomicAcrossClearAndRaise(t *testing.T) {
 	m := NewManager(nil)
 	// Seed initial state: one storage issue active.
-	m.ApplyStorageFindings(protocol.StorageHealth{
-		Findings: []protocol.Finding{{ID: "data-drive-missing"}},
-	})
+	m.ApplyFindings(protocol.HealthCategoryStorage,
+		[]protocol.Finding{{ID: "data-drive-missing"}})
 
 	done := make(chan struct{})
 	stop := make(chan struct{})
-	// Hammer ApplyStorageFindings alternating between two findings so each
-	// cycle clears the previous and raises a new one.
+	// Hammer ApplyFindings alternating between two findings so each cycle
+	// clears the previous and raises a new one.
 	go func() {
 		defer close(done)
 		flip := false
@@ -286,9 +279,8 @@ func TestApplyStorageFindings_AtomicAcrossClearAndRaise(t *testing.T) {
 				id = "canary-mismatch"
 			}
 			flip = !flip
-			m.ApplyStorageFindings(protocol.StorageHealth{
-				Findings: []protocol.Finding{{ID: id}},
-			})
+			m.ApplyFindings(protocol.HealthCategoryStorage,
+				[]protocol.Finding{{ID: id}})
 		}
 	}()
 
@@ -312,14 +304,13 @@ func TestApplyStorageFindings_AtomicAcrossClearAndRaise(t *testing.T) {
 	<-done
 }
 
-func TestApplyStorageFindings_UnknownIDsAreDropped(t *testing.T) {
+func TestApplyFindings_UnknownIDsAreDropped(t *testing.T) {
 	m := NewManager(nil)
-	raised, cleared := m.ApplyStorageFindings(protocol.StorageHealth{
-		Findings: []protocol.Finding{
+	raised, cleared := m.ApplyFindings(protocol.HealthCategoryStorage,
+		[]protocol.Finding{
 			{ID: "data-drive-missing"},
 			{ID: "not-a-real-issue-id"},
-		},
-	})
+		})
 	if len(raised) != 1 || raised[0].ID != "data-drive-missing" {
 		t.Errorf("raised: want [data-drive-missing] (the known ID), got %v", raised)
 	}
@@ -331,17 +322,150 @@ func TestApplyStorageFindings_UnknownIDsAreDropped(t *testing.T) {
 	}
 }
 
-func TestApplyStorageFindings_ReplacesDetailsOnRefresh(t *testing.T) {
+func TestApplyFindings_ReplacesDetailsOnRefresh(t *testing.T) {
 	m := NewManager(nil)
-	m.ApplyStorageFindings(protocol.StorageHealth{
-		Findings: []protocol.Finding{{ID: "data-drive-missing", Details: "first"}},
-	})
-	m.ApplyStorageFindings(protocol.StorageHealth{
-		Findings: []protocol.Finding{{ID: "data-drive-missing", Details: "second"}},
-	})
+	m.ApplyFindings(protocol.HealthCategoryStorage,
+		[]protocol.Finding{{ID: "data-drive-missing", Details: "first"}})
+	m.ApplyFindings(protocol.HealthCategoryStorage,
+		[]protocol.Finding{{ID: "data-drive-missing", Details: "second"}})
 	got := m.List()
 	if len(got) != 1 || got[0].Details != "second" {
 		t.Errorf("Details: want refreshed to 'second', got %v", got)
+	}
+}
+
+// --- service-down + cross-category reconcile (issue #34) ---
+
+// TestApplyFindings_ServiceDownDebounces pins the locus-B anti-flap default
+// (HEALTH.md # Cross-cutting detector policy): a debounced issue raises only on
+// its 2nd consecutive bad sample and clears on 1 good sample. A single bad
+// sample must leave the registry untouched so a service that blips for one poll
+// never banners.
+func TestApplyFindings_ServiceDownDebounces(t *testing.T) {
+	m := NewManager(nil)
+	down := []protocol.Finding{
+		{ID: "service-down", InstanceKey: "docker.service", Details: "docker.service is failed"},
+	}
+
+	// First bad sample: counted, not raised.
+	raised, cleared := m.ApplyFindings(protocol.HealthCategoryServices, down)
+	if len(raised) != 0 || len(cleared) != 0 {
+		t.Fatalf("first bad sample: want no transition (debounced), got raised=%d cleared=%d", len(raised), len(cleared))
+	}
+	if len(m.List()) != 0 {
+		t.Fatalf("debounced issue must not be active after one sample, got %v", m.List())
+	}
+
+	// Second consecutive bad sample: raises.
+	raised, cleared = m.ApplyFindings(protocol.HealthCategoryServices, down)
+	if len(raised) != 1 || raised[0].ID != "service-down" || raised[0].InstanceKey != "docker.service" {
+		t.Fatalf("second bad sample: want service-down/docker.service raised, got %v", raised)
+	}
+	if len(m.List()) != 1 || m.List()[0].Category != CategoryState {
+		t.Fatalf("want one active state-category issue after 2nd sample, got %v", m.List())
+	}
+
+	// One good sample: clears immediately (asymmetric — fast to reassure).
+	raised, cleared = m.ApplyFindings(protocol.HealthCategoryServices, nil)
+	if len(cleared) != 1 || cleared[0].InstanceKey != "docker.service" {
+		t.Fatalf("good sample: want service-down cleared, got %v", cleared)
+	}
+	if len(m.List()) != 0 {
+		t.Fatalf("want 0 active after recovery, got %v", m.List())
+	}
+}
+
+// TestApplyFindings_DebounceResetsOnGoodSample verifies the debounce counter is
+// consecutive: a good sample between two bad ones resets it, so the issue needs
+// two fresh consecutive bad samples to raise — it does not raise on the next
+// bad sample alone.
+func TestApplyFindings_DebounceResetsOnGoodSample(t *testing.T) {
+	m := NewManager(nil)
+	down := []protocol.Finding{{ID: "service-down", InstanceKey: "caddy.service"}}
+
+	m.ApplyFindings(protocol.HealthCategoryServices, down) // bad #1 → pending
+	m.ApplyFindings(protocol.HealthCategoryServices, nil)  // good → reset
+	if r, _ := m.ApplyFindings(protocol.HealthCategoryServices, down); len(r) != 0 {
+		t.Fatalf("bad sample after a reset must not raise (counter restarted), got %v", r)
+	}
+	if len(m.List()) != 0 {
+		t.Fatalf("still debouncing — want 0 active, got %v", m.List())
+	}
+	r, _ := m.ApplyFindings(protocol.HealthCategoryServices, down) // bad #2 consecutive → raise
+	if len(r) != 1 {
+		t.Fatalf("second consecutive bad sample must raise, got %v", r)
+	}
+}
+
+// TestApplyFindings_StoragePollLeavesServiceDownAlone is the locked
+// cross-category isolation property (issue #34): reconciling one report
+// category must never clear an active issue belonging to another. A storage
+// poll with no findings must leave an active service-down (ReportCategory
+// services) untouched.
+func TestApplyFindings_StoragePollLeavesServiceDownAlone(t *testing.T) {
+	m := NewManager(nil)
+	down := []protocol.Finding{{ID: "service-down", InstanceKey: "docker.service"}}
+	// Raise service-down (two samples — it debounces).
+	m.ApplyFindings(protocol.HealthCategoryServices, down)
+	m.ApplyFindings(protocol.HealthCategoryServices, down)
+	if len(m.List()) != 1 {
+		t.Fatalf("setup: want service-down active, got %v", m.List())
+	}
+
+	raised, cleared := m.ApplyFindings(protocol.HealthCategoryStorage, nil)
+	if len(raised) != 0 || len(cleared) != 0 {
+		t.Fatalf("a storage poll must not transition a service issue, got raised=%v cleared=%v", raised, cleared)
+	}
+	if len(m.List()) != 1 || m.List()[0].ID != "service-down" {
+		t.Fatalf("service-down must survive a storage poll, got %v", m.List())
+	}
+}
+
+// TestApplyFindings_ServicesPollLeavesStoreWriteFailedAlone protects
+// brain-owned issues. store-write-failed has no ReportCategory and shares the
+// display Category state with service-down; a services poll that clears
+// service-down must leave store-write-failed (locus C, brain-owned) untouched —
+// the empty-ReportCategory filter, not the display Category, is what guards it.
+func TestApplyFindings_ServicesPollLeavesStoreWriteFailedAlone(t *testing.T) {
+	m := NewManager(nil)
+	m.mu.Lock()
+	m.raiseLocked("store-write-failed", "", "simulated")
+	m.mu.Unlock()
+
+	_, cleared := m.ApplyFindings(protocol.HealthCategoryServices, nil)
+	if len(cleared) != 0 {
+		t.Fatalf("a services poll must not clear a brain-owned issue, got %v", cleared)
+	}
+	if len(m.List()) != 1 || m.List()[0].ID != "store-write-failed" {
+		t.Fatalf("store-write-failed (no ReportCategory) must survive a services poll, got %v", m.List())
+	}
+}
+
+// TestApplyFindings_RefreshesLastCheckedWithoutTransition pins the
+// "last-checked is always fresh" policy (HEALTH.md # Cross-cutting detector
+// policy): a steady-state re-poll of an already-active issue updates
+// LastCheckedAt (so the dashboard can show "checked 30s ago") while preserving
+// RaisedAt and emitting no transition.
+func TestApplyFindings_RefreshesLastCheckedWithoutTransition(t *testing.T) {
+	m := NewManager(nil)
+	t0 := time.Date(2026, 5, 31, 8, 0, 0, 0, time.UTC)
+	t1 := t0.Add(60 * time.Second)
+	f := []protocol.Finding{{ID: "data-drive-missing"}}
+
+	m.SetClock(func() time.Time { return t0 })
+	m.ApplyFindings(protocol.HealthCategoryStorage, f)
+
+	m.SetClock(func() time.Time { return t1 })
+	raised, cleared := m.ApplyFindings(protocol.HealthCategoryStorage, f)
+	if len(raised) != 0 || len(cleared) != 0 {
+		t.Fatalf("steady-state re-poll must not transition, got raised=%d cleared=%d", len(raised), len(cleared))
+	}
+	got := m.List()[0]
+	if !got.LastCheckedAt.Equal(t1) {
+		t.Errorf("LastCheckedAt: want refreshed to %v, got %v", t1, got.LastCheckedAt)
+	}
+	if !got.RaisedAt.Equal(t0) {
+		t.Errorf("RaisedAt: want preserved at %v, got %v", t0, got.RaisedAt)
 	}
 }
 
@@ -571,19 +695,18 @@ func TestManager_LoadFromStore_SkipsUnknownIDs(t *testing.T) {
 	}
 }
 
-func TestApplyStorageFindings_PersistsToStore(t *testing.T) {
+func TestApplyFindings_PersistsToStore(t *testing.T) {
 	fs := newFakeStore()
 	m := NewManager(fs)
-	m.ApplyStorageFindings(protocol.StorageHealth{
-		Findings: []protocol.Finding{{ID: "data-drive-missing", Details: "x"}},
-	})
+	m.ApplyFindings(protocol.HealthCategoryStorage,
+		[]protocol.Finding{{ID: "data-drive-missing", Details: "x"}})
 	if _, ok := fs.issues["data-drive-missing:"]; !ok {
-		t.Error("ApplyStorageFindings should upsert raised finding to store")
+		t.Error("ApplyFindings should upsert raised finding to store")
 	}
 
-	m.ApplyStorageFindings(protocol.StorageHealth{Findings: []protocol.Finding{}})
+	m.ApplyFindings(protocol.HealthCategoryStorage, []protocol.Finding{})
 	if _, ok := fs.issues["data-drive-missing:"]; ok {
-		t.Error("ApplyStorageFindings should delete cleared finding from store")
+		t.Error("ApplyFindings should delete cleared finding from store")
 	}
 	if fs.deletes != 1 {
 		t.Errorf("want 1 delete after clear, got %d", fs.deletes)

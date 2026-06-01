@@ -46,16 +46,33 @@ const (
 // NoPersist marks internal issues that must never be written to SQLite — used
 // for issues that exist precisely because the store itself is broken. Raise
 // and Clear skip the store for any definition with NoPersist: true.
+//
+// ReportCategory ties the issue to a host-agent GET /v1/health/system report
+// domain (protocol.HealthCategory: storage | drives | services | resources |
+// time) — a *separate axis* from Category, which is the issue's display/nature
+// taxonomy. ApplyFindings clears an issue only when its ReportCategory matches
+// the poll's category and it's absent from that slice. Brain-owned issues
+// (locus C, internal) leave it empty so a host-report poll never clears them —
+// e.g. store-write-failed is Category state, but with no ReportCategory it's
+// untouched by the services poll that reconciles service-down.
+//
+// Debounce applies the cross-cutting anti-flap default (HEALTH.md # Cross-cutting
+// detector policy): raise only on 2 consecutive bad samples (clear still on 1
+// good). Locus-A boot reporters and locus-D reactive signals are authoritative
+// and leave it false (1-shot). service-down (locus B) sets it; storage findings
+// stay 1-shot so storage detection is unchanged.
 type Definition struct {
-	ID           string
-	Category     Category
-	Severity     Severity
-	Tier         int
-	BlocksWrites bool
-	BlocksApps   bool
-	BlocksUsers  bool
-	Summary      string
-	NoPersist    bool
+	ID             string
+	Category       Category
+	Severity       Severity
+	Tier           int
+	BlocksWrites   bool
+	BlocksApps     bool
+	BlocksUsers    bool
+	Summary        string
+	NoPersist      bool
+	ReportCategory protocol.HealthCategory
+	Debounce       bool
 }
 
 // Issue is the JSON shape returned by GET /api/v1/health and the in-memory
@@ -92,8 +109,8 @@ type HealthStore interface {
 	// DeleteHealthIssue removes one issue row (used by Clear).
 	DeleteHealthIssue(id, instanceKey string) error
 	// BatchUpsertAndDelete runs upserts and deletes in a single transaction.
-	// Used by ApplyStorageFindings so a crash mid-reconcile can't leave SQLite
-	// torn between old and new state.
+	// Used by ApplyFindings so a crash mid-reconcile can't leave SQLite torn
+	// between old and new state.
 	BatchUpsertAndDelete(upserts []Issue, deletes []IssueKey) error
 	// ListHealthIssues returns all rows; used only at brain startup (LoadFromStore).
 	ListHealthIssues() ([]Issue, error)
@@ -104,8 +121,13 @@ type Manager struct {
 	mu          sync.Mutex
 	definitions map[string]Definition
 	active      map[issueKey]Issue
-	now         func() time.Time
-	store       HealthStore // nil means no persistence (tests)
+	// pending counts consecutive bad samples for debounced issues not yet
+	// raised (HEALTH.md # Cross-cutting detector policy). A key reaches the
+	// registry's active set only on its 2nd consecutive bad sample; one good
+	// sample (absent from the report) resets the counter.
+	pending map[issueKey]int
+	now     func() time.Time
+	store   HealthStore // nil means no persistence (tests)
 }
 
 type issueKey struct {
@@ -120,6 +142,7 @@ func NewManager(store HealthStore) *Manager {
 	m := &Manager{
 		definitions: map[string]Definition{},
 		active:      map[issueKey]Issue{},
+		pending:     map[issueKey]int{},
 		now:         func() time.Time { return time.Now().UTC() },
 		store:       store,
 	}
@@ -218,7 +241,7 @@ func (m *Manager) Clear(id, instanceKey string) bool {
 
 // Get returns the active issue for (id, instanceKey) and whether it is
 // currently raised. Used by the notification emitter to read an issue's
-// severity/summary at transition time — ApplyStorageFindings returns only the
+// severity/summary at transition time — ApplyFindings returns only the
 // transitioned keys, not the full Issue. Returns ok=false for a cleared or
 // never-raised issue.
 func (m *Manager) Get(id, instanceKey string) (Issue, bool) {
@@ -229,9 +252,9 @@ func (m *Manager) Get(id, instanceKey string) (Issue, bool) {
 }
 
 // raiseLocked is the lock-held core of Raise, callable from reconcilers that
-// already hold m.mu (e.g. ApplyStorageFindings, which must reconcile the
-// whole storage category atomically so List() never sees a torn state where
-// old issues are cleared but new ones haven't been raised yet).
+// already hold m.mu (e.g. ApplyFindings, which must reconcile a whole category
+// atomically so List() never sees a torn state where old issues are cleared
+// but new ones haven't been raised yet).
 func (m *Manager) raiseLocked(id, instanceKey, details string) bool {
 	def, ok := m.definitions[id]
 	if !ok {
@@ -296,31 +319,34 @@ func (m *Manager) List() []Issue {
 	return out
 }
 
-// ApplyStorageFindings reconciles the live issue set against a fresh
-// StorageHealth payload from host-agent: any storage-category issue not
-// present in findings is cleared, every finding is raised (or refreshed).
-// The clear+raise cycle runs under a single critical section so a
-// concurrent List() never sees a transient "all clear" between the clears
-// and the new raises.
+// ApplyFindings reconciles the live issue set for one report category against a
+// fresh slice of findings from host-agent's GET /v1/health/system report. The
+// category is a protocol.HealthCategory (storage | drives | services | …) — the
+// report axis, not the issue's display Category. Within the category: every
+// finding is raised (or refreshed), and every issue whose ReportCategory equals
+// it is cleared when absent from the slice. Issues of other report categories —
+// and brain-owned issues with no ReportCategory (store-write-failed) — are left
+// untouched, so a storage poll never clears a service finding and a services
+// poll never clears store-write-failed.
 //
-// All SQLite writes go through a single BatchUpsertAndDelete call so a crash
-// mid-reconcile can't leave the store torn between old and new state.
+// Debounced definitions (service-down) raise only on their 2nd consecutive bad
+// sample; one good sample (the finding absent from the report) resets the
+// pending counter. last_checked_at is refreshed on every poll for every
+// still-present active issue, even when nothing transitions, so a stale
+// timestamp itself signals a dead detector (HEALTH.md # Cross-cutting policy).
 //
-// This is the entire bridge between the host-side reporter and the brain's
-// issue model. Periodic polling of GET /v1/health/storage drives the
-// reconciliation; transitions return as the raised / cleared issue keys so
+// The clear+raise cycle runs under a single critical section so a concurrent
+// List() never sees a transient "all clear". All SQLite writes go through one
+// BatchUpsertAndDelete so a crash mid-reconcile can't tear the store. Transitions
+// return as the raised / cleared issue keys (sorted by ID, then InstanceKey) so
 // the caller can emit one per-issue audit record (target {kind: health_issue,
-// id: <id>}) rather than a bulk count. Findings whose ID is not in the
-// registry are logged at warn and dropped — that's a reporter-vs-brain
-// version skew the operator needs to see.
-func (m *Manager) ApplyStorageFindings(sh protocol.StorageHealth) (raised, cleared []IssueKey) {
-	// wantKeys uses the full issueKey (id + instanceKey) so that when Finding
-	// grows an InstanceKey field, per-instance storage findings don't collapse.
-	// Today all findings carry instanceKey="" (Finding has no InstanceKey field),
-	// but the reconcile loop is correct for the future shape already.
+// id: <id>}) rather than a bulk count. Findings whose ID isn't in the registry
+// are logged at warn and dropped — reporter-vs-brain version skew the operator
+// needs to see.
+func (m *Manager) ApplyFindings(category protocol.HealthCategory, findings []protocol.Finding) (raised, cleared []IssueKey) {
 	wantKeys := map[issueKey]string{} // key → details
-	for _, f := range sh.Findings {
-		wantKeys[issueKey{id: f.ID, instanceKey: ""}] = f.Details
+	for _, f := range findings {
+		wantKeys[issueKey{id: f.ID, instanceKey: f.InstanceKey}] = f.Details
 	}
 
 	m.mu.Lock()
@@ -331,26 +357,39 @@ func (m *Manager) ApplyStorageFindings(sh protocol.StorageHealth) (raised, clear
 	unknownIDs := []string{}
 
 	for k, details := range wantKeys {
-		if _, known := m.definitions[k.id]; !known {
+		def, known := m.definitions[k.id]
+		if !known {
 			unknownIDs = append(unknownIDs, k.id)
 			continue
 		}
+		// Debounce gate: a not-yet-active debounced issue holds (counts) its
+		// first bad sample and raises only on the second. Already-active issues
+		// skip the gate — they just refresh.
+		if _, active := m.active[k]; !active && def.Debounce && m.pending[k]+1 < 2 {
+			m.pending[k]++
+			continue
+		}
+		delete(m.pending, k)
 		if m.raiseLocked(k.id, k.instanceKey, details) {
 			raised = append(raised, IssueKey{ID: k.id, InstanceKey: k.instanceKey})
 		}
 		// Upsert on every poll tick (not just transitions) to keep last_checked_at
-		// current in SQLite. At the current 60s cadence with a handful of findings
-		// this is negligible. If the poll interval shortens materially, consider
-		// moving last_checked_at updates to a lazy write (on List() or a background
-		// sweep) to avoid per-tick writes for stable issues.
+		// current in SQLite. At the 60s cadence with a handful of findings this is
+		// negligible; if the poll interval shortens materially, consider moving
+		// last_checked_at to a lazy write to avoid per-tick writes for stable issues.
 		if m.store != nil {
-			if iss, ok := m.active[issueKey{id: k.id, instanceKey: k.instanceKey}]; ok {
+			if iss, ok := m.active[k]; ok {
 				toUpsert = append(toUpsert, iss)
 			}
 		}
 	}
-	for k, iss := range m.active {
-		if iss.Category != CategoryStorage {
+
+	// Clear-absent: any issue whose ReportCategory is THIS category and which is
+	// not in the findings. Scoping by ReportCategory keeps other report domains
+	// and brain-owned issues with no ReportCategory (store-write-failed)
+	// untouched.
+	for k := range m.active {
+		if m.definitions[k.id].ReportCategory != category {
 			continue
 		}
 		if _, keep := wantKeys[k]; keep {
@@ -364,9 +403,21 @@ func (m *Manager) ApplyStorageFindings(sh protocol.StorageHealth) (raised, clear
 		}
 	}
 
+	// One good sample (absent from the report) resets a pending, not-yet-raised
+	// debounce counter for this category. Run after the raise loop so keys still
+	// present this cycle keep their count.
+	for k := range m.pending {
+		if m.definitions[k.id].ReportCategory != category {
+			continue
+		}
+		if _, present := wantKeys[k]; !present {
+			delete(m.pending, k)
+		}
+	}
+
 	if len(unknownIDs) > 0 {
-		slog.Warn("storage health: dropped unknown finding ids",
-			"ids", unknownIDs)
+		slog.Warn("system health: dropped unknown finding ids",
+			"category", category, "ids", unknownIDs)
 	}
 
 	if m.store != nil && (len(toUpsert) > 0 || len(toDelete) > 0) {
@@ -408,45 +459,49 @@ func severityRank(s Severity) int {
 }
 
 // builtinDefinitions is the v1 typed-issue taxonomy. Mirrors the tables in
-// HEALTH.md # Taxonomy. Slice #1 wires only storage findings end-to-end —
-// the other categories are pre-registered so future detectors plug in.
+// HEALTH.md # Taxonomy. Storage findings (ReportCategory storage) and
+// service-down (ReportCategory services) are reconciled from host-agent's GET
+// /v1/health/system report; the other issues are pre-registered so future
+// detectors plug in.
 func builtinDefinitions() []Definition {
 	return []Definition{
-		// Storage (HEALTH.md # Storage)
+		// Storage (HEALTH.md # Storage). ReportCategory storage: they arrive via
+		// the host-agent system report (boot reporter + 60s poll) and clear when
+		// absent from it.
 		{
 			ID: "data-drive-missing", Category: CategoryStorage,
 			Severity: SeverityError, Tier: 1,
 			BlocksWrites: true, BlocksApps: true, BlocksUsers: true,
-			Summary: "Your data drive isn't connected.",
+			Summary: "Your data drive isn't connected.", ReportCategory: protocol.HealthCategoryStorage,
 		},
 		{
 			ID: "data-drive-wrong", Category: CategoryStorage,
 			Severity: SeverityCritical, Tier: 2,
 			BlocksWrites: true, BlocksApps: true, BlocksUsers: true,
-			Summary: "A different drive is attached than the one malmo expects.",
+			Summary: "A different drive is attached than the one malmo expects.", ReportCategory: protocol.HealthCategoryStorage,
 		},
 		// data-drive-readonly is pre-registered but not yet emitted by any
 		// detector. The findmnt-based device-backing + mount-flags check that
-		// will surface it is deferred (see docs/progress/0019 # What's next:
-		// device-backing canary check). Definition lives here so the next
-		// reporter slice plugs in without a registry edit.
+		// will surface it is deferred (see docs/progress/boot-pipeline-units.md
+		// # What's next). Definition lives here so the next reporter slice plugs
+		// in without a registry edit.
 		{
 			ID: "data-drive-readonly", Category: CategoryStorage,
 			Severity: SeverityCritical, Tier: 1,
 			BlocksWrites: true, BlocksApps: true,
-			Summary: "The data drive is mounted read-only (likely filesystem error).",
+			Summary: "The data drive is mounted read-only (likely filesystem error).", ReportCategory: protocol.HealthCategoryStorage,
 		},
 		{
 			ID: "canary-mismatch", Category: CategoryStorage,
 			Severity: SeverityCritical, Tier: 2,
 			BlocksWrites: true, BlocksApps: true,
-			Summary: "Storage assembly succeeded but the canary check failed.",
+			Summary: "Storage assembly succeeded but the canary check failed.", ReportCategory: protocol.HealthCategoryStorage,
 		},
 		{
 			ID: "mergerfs-assembly-failed", Category: CategoryStorage,
 			Severity: SeverityError, Tier: 2,
 			BlocksWrites: true, BlocksApps: true,
-			Summary: "malmo could not assemble the storage layout across your drives.",
+			Summary: "malmo could not assemble the storage layout across your drives.", ReportCategory: protocol.HealthCategoryStorage,
 		},
 		// Synthetic — host-agent's FilesystemHealthSource emits this when the
 		// report file is unparseable; the reporter emits it when its inputs are.
@@ -454,7 +509,20 @@ func builtinDefinitions() []Definition {
 			ID: "health-report-malformed", Category: CategoryStorage,
 			Severity: SeverityError, Tier: 2,
 			BlocksWrites: false, BlocksApps: false, BlocksUsers: false,
-			Summary: "malmo's storage report is unreadable; storage state is unknown.",
+			Summary: "malmo's storage report is unreadable; storage state is unknown.", ReportCategory: protocol.HealthCategoryStorage,
+		},
+		// service-down is locus B — host-agent runs `systemctl is-active` over the
+		// core-unit allowlist and reports it under the system report's *services*
+		// category, while the issue itself is display Category state (HEALTH.md
+		// # State). Per-unit instance_key. No block flags: a dead service fails its
+		// own ops naturally, and blocking everything because Avahi died would be
+		// blunt. Debounces (locus B).
+		{
+			ID: "service-down", Category: CategoryState,
+			Severity: SeverityError, Tier: 2,
+			BlocksWrites: false, BlocksApps: false, BlocksUsers: false,
+			Summary:        "A core system service isn't running.",
+			ReportCategory: protocol.HealthCategoryServices, Debounce: true,
 		},
 		// Internal — raised when any store write fails persistently. NoPersist
 		// because it exists precisely when persistence is broken: writing it to

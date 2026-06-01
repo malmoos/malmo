@@ -28,3 +28,6 @@ dev/test-qemu/mkosi.passphrase
 # Editor / OS
 .DS_Store
 *.swp
+
+# Claude Code local session state (settings.local.json, scheduled-task locks)
+.claude/

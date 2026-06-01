@@ -78,7 +78,21 @@ POST /v1/services/tailscale/enable
 GET /v1/system/status
 → 200 OK
   { "hostname": "cindy-zx9", "uptime_s": 84021, "disk_pressure": false, ... }
+
+GET /v1/system/resources
+→ 200 OK
+  {
+    "ts_ns": 84021000000000,
+    "cpu": { "total_jiffies": 12044910, "idle_jiffies": 9881233 },
+    "loadavg": [0.42, 0.51, 0.48],
+    "mem": { "total_bytes": 16728338432, "available_bytes": 9214455808, "used_bytes": 7513882624 },
+    "net":  [ { "iface": "enp3s0", "rx_bytes": 99201234, "tx_bytes": 41200934 } ],
+    "disk": [ { "dev": "sda", "read_bytes": 81002496, "write_bytes": 12300288 } ],
+    "uptime_s": 84021
+  }
 ```
+
+**Live system-resources sample (`GET /v1/system/resources`).** Pattern A; the host source for the all-users live-resources view (`LOCAL_ANALYTICS.md` # Real-time system resources). Returns the **raw cumulative counters** from `/proc/stat`, `/proc/meminfo`, `/proc/loadavg`, `/proc/net/dev`, `/sys/block/<dev>/stat` plus a monotonic `ts_ns`. host-agent is stateless — it reads on request and computes no rates; the brain polls once per second *while a UI is watching*, diffs successive samples (rate denominator = `ts_ns` delta), and fans the derived rates out over its own SSE channel. host-agent applies the interface/device allowlist — physical LAN NICs + mesh, excluding `lo`/`docker0`/`veth*`/`br-*`, whole-disk devices only — so the brain never sees container-bridge noise. Distinct from `GET /v1/health/system`, which is a coarse 60s health poll, not a 1 Hz live feed.
 
 **Health findings report (`GET /v1/health/system`).** The brain can't read host hardware directly (it's containerized behind the socket-proxy), so all *physical* health detection — SMART, `statfs`, mount flags, `systemctl is-active`, memory pressure — is host-agent's job. host-agent samples on its own cadence and the brain polls this one report on the 60s heartbeat, reconciling findings into typed health issues (`HEALTH.md` # Detector catalog, locus B). It returns findings across domains (storage, drives, services, resources) in one payload — **not** a proliferation of per-domain endpoints — so the brain's `ApplyFindings(category, …)` reconcile can clear-absent / raise-present per category atomically. This supersedes the slice-1 single-purpose storage report (`/run/malmo/health/storage.json` boot reporter stays; the polled endpoint generalizes). See `DECISIONS.md` 2026-05-29.
 
@@ -177,6 +191,30 @@ GET  /v1/discovery/state
 Implementation: `publish` writes `/etc/avahi/services/app-<slug>.service`, waits on Avahi's DBus for `EntryGroup.StateChanged → ESTABLISHED` (typically <1s), returns. `unpublish` removes the file. Both ops are idempotent — duplicate publish is a no-op, unpublish on an unknown slug returns 200. Avahi's RFC 6762 §9 conflict-resolution (host rename to `malmo-2.local`) surfaces in `state.renamed_to` and the brain raises `hostname-conflict` (`HEALTH.md`). The Avahi interface allow-list (`allow-interfaces=` in `/etc/avahi/avahi-daemon.conf`) is computed by host-agent from NetworkManager state at boot and on interface change — eth/wlan in, `tailscale0` / `docker0` / `br-*` out. See `DISCOVERY.md` for the full record model and gotchas.
 
 **`enroll-drive` and `eject-drive` carry credentials inline** because host-agent verifies them via PAM as the first step of the job and uses them to authorize reading `/etc/malmo/secrets/luks-recovery.key`. The brain does not cache or forward the password beyond the single request. On invalid credentials the job fails immediately with `error.code = "auth-failed"`; otherwise host-agent proceeds with format → LUKS → TPM enrollment → mount → mergerfs add (enroll) or stop apps → unmount → marker removal (eject). Declared attributes: `Dangerous: true`, `ResourceClass: "disk"`, `MaxDuration: 10m`. See `STORAGE.md` # Adding a data drive and # Ejecting a data drive for the user-facing flow; `AUTH.md` # Roles for the fresh-password requirement.
+
+**Files endpoints (`/v1/files/*`).** Back the in-dashboard file manager (`FILES.md`). The brain is containerized and cannot touch `/home` or `/srv/malmo`, so every file operation runs here, **with host-agent dropping to the requesting user's Linux UID/GID for the duration of the op** (`setresuid`/`setresgid` to the malmo 3000+ UID, or a forked child). This makes POSIX `0750`/`02770` the kernel-enforced backstop — a member's op cannot read another user's `0750` home even past a brain-side bug — and gives created files correct ownership natively, the same contract the compose `user:` directive gives app instances (`APP_ISOLATION.md` # User content). host-agent owns logical-root resolution: `root` is `home` (→ the user's home, resolved as in `/v1/users/{username}/home`) or `shared` (→ `/srv/malmo/shared/`); it re-validates path containment before acting. The brain passes `user` on every call; there is no "act as a different user" parameter.
+
+Metadata ops are Pattern A:
+
+```
+POST /v1/files/list     { "user": "alex", "root": "home", "path": "Photos/2024" }
+  → 200 OK  { "entries": [ { "name": "img.jpg", "dir": false, "size_bytes": 81002, "mtime": "...", "hidden": false }, ... ] }
+POST /v1/files/mkdir    { "user": "alex", "root": "home", "path": "Photos/New" }   → 200 OK {}
+POST /v1/files/move     { "user": "alex", "from": {...}, "to": {...} }             → 200 OK {}
+POST /v1/files/copy     { "user": "alex", "from": {...}, "to": {...} }             → 200 OK {}
+POST /v1/files/delete   { "user": "alex", "root": "home", "path": "Photos/old.jpg" } → 200 OK {}
+```
+
+Errors use the standard `{code, message}` — `permission-denied`, `not-found`, `exists`, `no-space` (`507`-class, ties to `disk-full`, `HEALTH.md`), `blocked-by-health-issue` when `data-drive-missing` is active (`HEALTH.md` # blocks_writes).
+
+**Content transfer is a streamed binary body, not a job.** Download and upload carry file bytes as `application/octet-stream`; host-agent streams as the UID and the brain pipes bytes between the dashboard and host-agent without buffering whole files:
+
+```
+GET  /v1/files/content?user=alex&root=home&path=Movies/clip.mp4   → 200 OK, application/octet-stream (streamed)
+PUT  /v1/files/content?user=alex&root=home&path=Photos/new.jpg    ← request body streamed; → 200 OK {}
+```
+
+This is a **deliberate exception to the ">5s = job" rule** — a transfer can take minutes, but it is pure I/O streaming with transport-native progress (the browser's own upload/download progress) and no server-side job state to poll, the same reasoning that exempts SSE log tails. See `FILES.md` # Transfers and `BRAIN_UI_PROTOCOL.md` # files for the dashboard-facing half.
 
 ### Pattern B — Jobs (long-running ops)
 

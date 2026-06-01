@@ -41,8 +41,9 @@ type Publisher interface {
 
 // HealthSource is a consumer-side interface for reading the latest storage
 // findings written by malmo-storage-verify (BOOT.md # The storage-ready
-// target). Provider packages return concrete types: FakeHealthSource for the
-// fake binary, healthsource.FilesystemHealthSource (which reads
+// target). It backs the storage category of GET /v1/health/system. Provider
+// packages return concrete types: FakeHealthSource for the fake binary,
+// healthsource.FilesystemHealthSource (which reads
 // /run/malmo/health/storage.json) for cmd/host-agent-real.
 //
 // Read must always return a usable StorageHealth — missing report = empty
@@ -51,6 +52,19 @@ type Publisher interface {
 // the brain needs a clean payload to drive its health registry.
 type HealthSource interface {
 	Read() (protocol.StorageHealth, error)
+}
+
+// ServiceReporter is a consumer-side interface for the locus-B service-down
+// detector: `systemctl is-active` over the core-unit allowlist, one
+// service-down Finding (with the unit as instance_key) per non-active unit. It
+// backs the services category of GET /v1/health/system. Provider packages return
+// concrete types: servicehealth.Reporter (real systemctl) for cmd/host-agent-real,
+// FakeServiceReporter for the fake binary and tests.
+//
+// Read always returns a usable slice (nil = all services healthy) and never
+// errors — inactive units are data, not failures.
+type ServiceReporter interface {
+	Read() []protocol.Finding
 }
 
 // UserManager is a consumer-side interface for the system-level user account
@@ -100,11 +114,19 @@ type Agent struct {
 	// Swapped per binary: FakePublisher (fake) vs avahipublisher.FilePublisher (real).
 	Publisher Publisher
 
-	// Health, when non-nil, backs GET /v1/health/storage. Swapped per binary:
-	// FakeHealthSource (fake) vs healthsource.FilesystemHealthSource (real).
-	// When nil, the handler returns an empty findings list — useful for the
-	// fake binary in dev where no storage-verify reporter is running.
+	// Health, when non-nil, backs the storage category of GET /v1/health/system.
+	// Swapped per binary: FakeHealthSource (fake) vs
+	// healthsource.FilesystemHealthSource (real). When nil, the storage category
+	// reports empty findings — useful for the fake binary in dev where no
+	// storage-verify reporter is running.
 	Health HealthSource
+
+	// Services, when non-nil, backs the services category of GET /v1/health/system
+	// (the service-down detector). Swapped per binary: servicehealth.Reporter
+	// (real systemctl) vs FakeServiceReporter. When nil, the report omits the
+	// services category entirely — the brain then leaves service issues alone
+	// rather than treating "no services measured" as "all services up".
+	Services ServiceReporter
 
 	// UserMgr, when non-nil, takes over POST /v1/auth/set-password,
 	// /v1/auth/set-role, and /v1/auth/delete-user: handlers delegate to the
@@ -139,7 +161,7 @@ func (a *Agent) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/auth/set-password", a.setPassword)
 	mux.HandleFunc("POST /v1/auth/set-role", a.setRole)
 	mux.HandleFunc("POST /v1/auth/delete-user", a.deleteUser)
-	mux.HandleFunc("GET /v1/health/storage", a.storageHealth)
+	mux.HandleFunc("GET /v1/health/system", a.systemHealth)
 	mux.HandleFunc("GET /v1/users/{username}/home", a.resolveHome)
 	mux.HandleFunc("GET /v1/identity/well-known", a.wellKnownIdentity)
 }
@@ -211,32 +233,46 @@ func (a *Agent) systemStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// storageHealth returns the latest storage findings written by
-// malmo-storage-verify. When Health is nil (fake binary with no source wired),
-// the response is an empty findings list — the brain treats that as "storage
-// looks healthy" per BOOT.md # The storage-ready target.
+// systemHealth returns the locus-B findings report across categories
+// (HEALTH.md # Detector catalog). The storage category is always present
+// (empty findings when no source is wired — "storage looks healthy" per
+// BOOT.md); the services category is present only when a service reporter is
+// wired, so the brain doesn't read "no services measured" as "all services up".
 //
-// Even when the source returns an error, the handler returns 200 with the
-// payload the source produced (the source synthesizes a
-// "health-report-malformed" finding on parse error and an empty list on
+// Even when a source returns an error, the handler returns 200 with whatever
+// payload the source produced (the storage source synthesizes a
+// "health-report-malformed" finding on parse error and an empty list on a
 // missing file). The contract: 200 always, payload always parseable. The
 // brain's polling loop must never have to retry on a 5xx for this endpoint.
-func (a *Agent) storageHealth(w http.ResponseWriter, r *http.Request) {
-	if a.Health == nil {
-		writeJSON(w, http.StatusOK, protocol.StorageHealth{
-			CheckedAt: time.Now().UTC().Format(time.RFC3339),
-			Findings:  []protocol.Finding{},
-		})
-		return
+func (a *Agent) systemHealth(w http.ResponseWriter, r *http.Request) {
+	cats := map[protocol.HealthCategory][]protocol.Finding{}
+
+	// Storage category (locus A/B): always measured.
+	storage := []protocol.Finding{}
+	if a.Health != nil {
+		sh, err := a.Health.Read()
+		if err != nil {
+			slog.Error("system-health: storage source error", "err", err)
+		}
+		if sh.Findings != nil {
+			storage = sh.Findings
+		}
 	}
-	sh, err := a.Health.Read()
-	if err != nil {
-		slog.Error("storage-health: source error", "err", err)
+	cats[protocol.HealthCategoryStorage] = storage
+
+	// Services category (locus B): only when a service reporter is wired.
+	if a.Services != nil {
+		svc := a.Services.Read()
+		if svc == nil {
+			svc = []protocol.Finding{}
+		}
+		cats[protocol.HealthCategoryServices] = svc
 	}
-	if sh.Findings == nil {
-		sh.Findings = []protocol.Finding{}
-	}
-	writeJSON(w, http.StatusOK, sh)
+
+	writeJSON(w, http.StatusOK, protocol.SystemHealth{
+		CheckedAt:  time.Now().UTC().Format(time.RFC3339),
+		Categories: cats,
+	})
 }
 
 // verifyPassword delegates to a.Verifier so the verification strategy
