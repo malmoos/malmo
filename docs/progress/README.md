@@ -91,3 +91,4 @@ Oldest first; append new entries to the bottom.
 | [single-user-simplification.md](single-user-simplification.md) — Single-user simplification + split-button install (suppress household/personal UI when one user; scope moved from dialog to button) | done |
 | [notification-retention-prune.md](notification-retention-prune.md) — Notification retention/pruning (`store.PruneNotifications`: 90-day age cap + 1000-row resolved-first ceiling, boot + hourly loop in brain) | done |
 | [notification-mute-settings-ui.md](notification-mute-settings-ui.md) — Notification mute settings UI: per-category toggle list in Settings → Notifications (reka-ui Switch, optimistic `useNotificationMutes()` over the mute API) | done |
+| [health-system-report.md](health-system-report.md) — Generalize health reporting: `GET /v1/health/system` + per-category `ApplyFindings`, with `service-down` as the first cross-category locus-B detector (two-axis category model, debounce) | done |

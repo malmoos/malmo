@@ -102,3 +102,33 @@ func (f *FakeHealthSource) Read() (protocol.StorageHealth, error) {
 		Findings:  out,
 	}, nil
 }
+
+// FakeServiceReporter implements ServiceReporter with a settable findings list,
+// used by brain integration tests that need to seed specific service-down
+// findings and assert the brain raises the matching state-category issue.
+// cmd/host-agent (the fake binary) does not wire one by default — dev has no
+// systemd units to watch.
+type FakeServiceReporter struct {
+	mu       sync.Mutex
+	findings []protocol.Finding
+}
+
+// NewFakeServiceReporter returns an empty reporter (all services healthy).
+func NewFakeServiceReporter() *FakeServiceReporter {
+	return &FakeServiceReporter{}
+}
+
+// Set replaces the current findings list. Pass nil to clear (all services up).
+func (f *FakeServiceReporter) Set(findings []protocol.Finding) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.findings = append(f.findings[:0:0], findings...)
+}
+
+func (f *FakeServiceReporter) Read() []protocol.Finding {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]protocol.Finding, len(f.findings))
+	copy(out, f.findings)
+	return out
+}
