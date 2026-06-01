@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -98,6 +99,12 @@ func main() {
 		slog.Warn("notification prune failed; continuing", "err", err)
 	}
 	go notificationPruneLoop(pollCtx, st, cfg.notifyPrunePeriod)
+
+	// Locus-C version check (HEALTH.md # Detector catalog): reconcile
+	// version-mismatch against host-agent's reported agent_version, once at
+	// startup (the first handshake) then on the same loose poll cadence.
+	checkAgentVersion(pollCtx, host, healthMgr, auditor, notifier)
+	go versionCheckPollLoop(pollCtx, host, healthMgr, auditor, notifier, cfg.healthPollPeriod)
 
 	srv := api.NewServer(st, cat, life, bus, authMgr, host, auditor, healthMgr)
 	httpSrv := &http.Server{Addr: cfg.listen, Handler: srv.Handler()}
@@ -293,6 +300,79 @@ func notificationPruneLoop(ctx context.Context, st *store.Store, interval time.D
 			if err := st.PruneNotifications(time.Now()); err != nil {
 				slog.Warn("notification prune failed; continuing", "err", err)
 			}
+		}
+	}
+}
+
+// expectedAgentVersion is the host-agent version this brain build expects to
+// talk to. It mirrors internal/hostagent.AgentVersion (the version the in-repo
+// agent advertises) — the conservative v1 reading of HEALTH.md's "lockstep
+// pair": exact string equality against a brain-side constant. The richer
+// release-manifest model (RELEASE_MANIFEST.md / UPDATES.md) will replace this
+// when it lands; until then, bump this in lockstep with hostagent.AgentVersion.
+const expectedAgentVersion = "0.0.1-fake"
+
+// agentStatusReader is the slice of the host client the version check needs — a
+// single GET /v1/system/status read. Consumer-side interface (CLAUDE.md) so
+// checkAgentVersion is unit-testable with a fake host-agent reporting a chosen
+// agent_version; *hostclient.Client satisfies it.
+type agentStatusReader interface {
+	SystemStatus(ctx context.Context) (protocol.SystemStatus, error)
+}
+
+// checkAgentVersion is the locus-C version-mismatch detector (HEALTH.md
+// # Detector catalog, locus C). It reads host-agent's reported agent_version
+// and reconciles the version-mismatch issue: raise when it differs from the
+// version this brain expects, clear when they match. There is no dedicated
+// handshake RPC, so each successful status read is the handshake (HEALTH.md:
+// "each handshake"). A version string is deterministic and authoritative — it
+// cannot flap like a threshold sample — so the check is 1-shot (no debounce):
+// it raises/clears on the first definitive reading. A transient unreachable
+// host-agent neither raises nor clears, so the issue state survives a blip.
+// Transitions are audited per issue and fanned out to notifications, mirroring
+// pullStorageHealth. NOTIFICATIONS.md's v1 allowlist routes version-mismatch
+// (error) to Admin, but it is not yet wired into internal/notify healthRules
+// (like disk-full / brain-db-corrupt — allowlisted in the spec but not yet
+// sourced), so the fan-out is a no-op until that entry lands; see the progress
+// entry for why wiring it is a separate, deferred step.
+func checkAgentVersion(ctx context.Context, host agentStatusReader, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier) {
+	c, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	status, err := host.SystemStatus(c)
+	if err != nil {
+		slog.Warn("version check: host-agent unreachable; skipping", "err", err)
+		return
+	}
+
+	var raised, cleared []health.IssueKey
+	if status.AgentVersion != expectedAgentVersion {
+		details := fmt.Sprintf("The system agent reports version %s, but this dashboard expects %s.",
+			status.AgentVersion, expectedAgentVersion)
+		if healthMgr.Raise("version-mismatch", "", details) {
+			raised = []health.IssueKey{{ID: "version-mismatch"}}
+			slog.Warn("version check: agent/brain version mismatch",
+				"agent_version", status.AgentVersion, "expected", expectedAgentVersion)
+		}
+	} else if healthMgr.Clear("version-mismatch", "") {
+		cleared = []health.IssueKey{{ID: "version-mismatch"}}
+	}
+	emitHealthTransitions(ctx, auditor, raised, cleared)
+	emitHealthNotifications(notifier, healthMgr, raised, cleared)
+}
+
+// versionCheckPollLoop re-runs the locus-C version check on the same loose
+// cadence as the storage poll — each periodic status read is a "handshake"
+// (HEALTH.md). version-mismatch only changes when a component is upgraded, so
+// the cadence is loose by design.
+func versionCheckPollLoop(ctx context.Context, host agentStatusReader, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			checkAgentVersion(ctx, host, healthMgr, auditor, notifier)
 		}
 	}
 }

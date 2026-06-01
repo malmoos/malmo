@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/malmo/malmo/internal/audit"
 	"github.com/malmo/malmo/internal/health"
 	"github.com/malmo/malmo/internal/notify"
+	"github.com/malmo/malmo/internal/protocol"
 	"github.com/malmo/malmo/internal/store"
 )
 
@@ -149,6 +151,145 @@ func containsString(ss []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// fakeStatusReader is a host client that reports a chosen agent_version (or an
+// error) so the locus-C version check can be driven without a real host-agent.
+// Satisfies agentStatusReader.
+type fakeStatusReader struct {
+	version string
+	err     error
+}
+
+func (f fakeStatusReader) SystemStatus(context.Context) (protocol.SystemStatus, error) {
+	if f.err != nil {
+		return protocol.SystemStatus{}, f.err
+	}
+	return protocol.SystemStatus{AgentVersion: f.version}, nil
+}
+
+func versionActive(mgr *health.Manager) bool {
+	_, ok := mgr.Get("version-mismatch", "")
+	return ok
+}
+
+// TestCheckAgentVersion_MismatchRaises is the headline behavior (#37 Done-when):
+// a reported agent_version that differs from the brain's expected version raises
+// version-mismatch and writes exactly one raised audit record for it.
+func TestCheckAgentVersion_MismatchRaises(t *testing.T) {
+	mgr := health.NewManager(nil)
+	fs := &fakeEventStore{}
+
+	checkAgentVersion(context.Background(), fakeStatusReader{version: "9.9.9-other"},
+		mgr, audit.New(fs), notify.New(&fakeNotifStore{}, nil))
+
+	if !versionActive(mgr) {
+		t.Fatal("want version-mismatch active after a mismatched agent version")
+	}
+	if len(fs.events) != 1 ||
+		fs.events[0].Action != audit.ActionHealthIssueRaised ||
+		fs.events[0].TargetID != "version-mismatch" {
+		t.Fatalf("want one raised audit record for version-mismatch, got %+v", fs.events)
+	}
+}
+
+// TestCheckAgentVersion_MatchClears: once raised, a subsequent matching version
+// clears version-mismatch and writes the clear audit record.
+func TestCheckAgentVersion_MatchClears(t *testing.T) {
+	mgr := health.NewManager(nil)
+	fs := &fakeEventStore{}
+	auditor := audit.New(fs)
+	notifier := notify.New(&fakeNotifStore{}, nil)
+
+	checkAgentVersion(context.Background(), fakeStatusReader{version: "9.9.9-other"}, mgr, auditor, notifier)
+	if !versionActive(mgr) {
+		t.Fatal("setup: want version-mismatch active after a mismatch")
+	}
+	checkAgentVersion(context.Background(), fakeStatusReader{version: expectedAgentVersion}, mgr, auditor, notifier)
+	if versionActive(mgr) {
+		t.Fatal("want version-mismatch cleared after a matching version")
+	}
+	if len(fs.events) != 2 ||
+		fs.events[1].Action != audit.ActionHealthIssueCleared ||
+		fs.events[1].TargetID != "version-mismatch" {
+		t.Fatalf("want a raise then a clear audit record, got %+v", fs.events)
+	}
+}
+
+// TestCheckAgentVersion_MatchNoIssueIsNoop pins the steady happy path: a matching
+// version with no active issue raises nothing and writes no audit row.
+func TestCheckAgentVersion_MatchNoIssueIsNoop(t *testing.T) {
+	mgr := health.NewManager(nil)
+	fs := &fakeEventStore{}
+
+	checkAgentVersion(context.Background(), fakeStatusReader{version: expectedAgentVersion},
+		mgr, audit.New(fs), notify.New(&fakeNotifStore{}, nil))
+
+	if versionActive(mgr) {
+		t.Error("want no version-mismatch for a matching version")
+	}
+	if len(fs.events) != 0 {
+		t.Errorf("want no audit records for a steady matching version, got %d", len(fs.events))
+	}
+}
+
+// TestCheckAgentVersion_SteadyMismatchRefreshesWithoutReaudit: a persistent
+// mismatch raises once; a second poll refreshes last_checked_at (HEALTH.md
+// last-checked-always-fresh) without re-raising or writing a second audit row,
+// and leaves raised_at untouched.
+func TestCheckAgentVersion_SteadyMismatchRefreshesWithoutReaudit(t *testing.T) {
+	mgr := health.NewManager(nil)
+	clock := time.Unix(0, 0).UTC()
+	mgr.SetClock(func() time.Time { return clock })
+	fs := &fakeEventStore{}
+	auditor := audit.New(fs)
+	notifier := notify.New(&fakeNotifStore{}, nil)
+	reader := fakeStatusReader{version: "9.9.9-other"}
+
+	checkAgentVersion(context.Background(), reader, mgr, auditor, notifier)
+	first, _ := mgr.Get("version-mismatch", "")
+
+	clock = clock.Add(60 * time.Second)
+	checkAgentVersion(context.Background(), reader, mgr, auditor, notifier)
+	second, ok := mgr.Get("version-mismatch", "")
+	if !ok {
+		t.Fatal("want version-mismatch still active on the second poll")
+	}
+	if len(fs.events) != 1 {
+		t.Fatalf("want exactly one raised audit across two mismatch polls, got %d", len(fs.events))
+	}
+	if !second.LastCheckedAt.After(first.LastCheckedAt) {
+		t.Errorf("last_checked_at must advance on a no-transition poll: first %v second %v",
+			first.LastCheckedAt, second.LastCheckedAt)
+	}
+	if !second.RaisedAt.Equal(first.RaisedAt) {
+		t.Errorf("raised_at must not move on a re-raise: first %v second %v",
+			first.RaisedAt, second.RaisedAt)
+	}
+}
+
+// TestCheckAgentVersion_UnreachableLeavesStateUnchanged: a poll that can't reach
+// host-agent must not clear an active version-mismatch (an error is not a match)
+// and must write no audit record.
+func TestCheckAgentVersion_UnreachableLeavesStateUnchanged(t *testing.T) {
+	mgr := health.NewManager(nil)
+	notifier := notify.New(&fakeNotifStore{}, nil)
+
+	checkAgentVersion(context.Background(), fakeStatusReader{version: "9.9.9-other"},
+		mgr, audit.New(&fakeEventStore{}), notifier)
+	if !versionActive(mgr) {
+		t.Fatal("setup: want version-mismatch active")
+	}
+
+	fs := &fakeEventStore{}
+	checkAgentVersion(context.Background(), fakeStatusReader{err: errors.New("dial unix: connection refused")},
+		mgr, audit.New(fs), notifier)
+	if !versionActive(mgr) {
+		t.Error("an unreachable host-agent must not clear version-mismatch")
+	}
+	if len(fs.events) != 0 {
+		t.Errorf("want no audit records on an unreachable poll, got %d", len(fs.events))
+	}
 }
 
 // A raised key with no live issue produces no notification. emitHealthNotifications

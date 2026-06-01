@@ -535,5 +535,16 @@ func builtinDefinitions() []Definition {
 			Summary:   "malmo can't save health state; issues won't survive a restart.",
 			NoPersist: true,
 		},
+		// Version (HEALTH.md # Version). version-mismatch is a locus-C brain
+		// check: host-agent's reported agent_version vs the version this brain
+		// expects (cmd/brain checkAgentVersion). Blocks apps — installing or
+		// updating an app against a mismatched agent is unsafe — but not writes
+		// or users. Error severity, Tier-2 remediation (update the lagging side).
+		{
+			ID: "version-mismatch", Category: CategoryVersion,
+			Severity: SeverityError, Tier: 2,
+			BlocksApps: true,
+			Summary:    "malmo's system agent and dashboard are running mismatched versions.",
+		},
 	}
 }
