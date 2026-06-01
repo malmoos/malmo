@@ -211,7 +211,7 @@ These defaults apply to **every** detector unless its row overrides them. `HEALT
 | `data-drive-missing` / `data-drive-wrong` | D | udev add/remove; brain re-verifies enrolled UUID |
 | `hostname-conflict` | D | Avahi name-collision callback |
 | `app-image-partial` | D | image pull reports incomplete |
-| `container-restart-loop` | D | Docker restart count > N within window |
+| `container-restart-loop` | D | Docker restart count > N within window *(built — brain polls `RestartCount`; N/window in the progress entry)* |
 | `app-unresponsive` | D | manifest HTTP health-probe fails — *deferred, needs manifest field* |
 
 ### What we deliberately do not check
