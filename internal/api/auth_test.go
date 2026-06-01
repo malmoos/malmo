@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,6 +22,7 @@ import (
 	"github.com/malmo/malmo/internal/hostclient"
 	"github.com/malmo/malmo/internal/protocol"
 	"github.com/malmo/malmo/internal/store"
+	"github.com/malmo/malmo/internal/systemlive"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -119,9 +121,16 @@ func newHarness(t *testing.T) *harness {
 	bus := events.NewBus()
 	authMgr := auth.NewManager(st)
 
+	// A live-resources hub backed by a canned sampler; inert unless a stream
+	// subscribes (only TestSystemLive_* does). hubCancel reaps any poll
+	// goroutine at test end.
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	t.Cleanup(hubCancel)
+	live := systemlive.New(hubCtx, &constSampler{}, 5*time.Millisecond)
+
 	// life is nil — install/uninstall handlers aren't exercised here. The
 	// auth middleware fences them anyway; we only assert that fence.
-	srv := NewServer(st, cat, nil, bus, authMgr, host, audit.New(st), nil)
+	srv := NewServer(st, cat, nil, bus, authMgr, host, audit.New(st), nil, live)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
@@ -340,7 +349,7 @@ func TestSetupRollsBackOnHostFailure(t *testing.T) {
 	t.Cleanup(func() { _ = hostHTTP.Close() })
 
 	srv := NewServer(st, catalog.New(t.TempDir()), nil, events.NewBus(),
-		auth.NewManager(st), hostclient.New(sock), audit.New(st), nil)
+		auth.NewManager(st), hostclient.New(sock), audit.New(st), nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
@@ -419,7 +428,7 @@ func TestSetupRollsBackOnSetRoleFailure(t *testing.T) {
 	t.Cleanup(func() { _ = hostHTTP.Close() })
 
 	srv := NewServer(st, catalog.New(t.TempDir()), nil, events.NewBus(),
-		auth.NewManager(st), hostclient.New(sock), audit.New(st), nil)
+		auth.NewManager(st), hostclient.New(sock), audit.New(st), nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
@@ -796,7 +805,7 @@ func TestRecoverHostFailureRestoresOldHash(t *testing.T) {
 	go func() { _ = hostHTTP.Serve(ln) }()
 	t.Cleanup(func() { _ = hostHTTP.Close() })
 
-	srv := NewServer(st, nil, nil, nil, auth.NewManager(st), hostclient.New(sock), audit.New(st), nil)
+	srv := NewServer(st, nil, nil, nil, auth.NewManager(st), hostclient.New(sock), audit.New(st), nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 

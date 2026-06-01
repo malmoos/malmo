@@ -26,6 +26,7 @@ import (
 	"github.com/malmo/malmo/internal/manifest"
 	"github.com/malmo/malmo/internal/protocol"
 	"github.com/malmo/malmo/internal/store"
+	"github.com/malmo/malmo/internal/systemlive"
 )
 
 type Server struct {
@@ -37,6 +38,7 @@ type Server struct {
 	host    *hostclient.Client
 	auditor *audit.Recorder
 	health  *health.Manager
+	live    *systemlive.Hub
 	jobs    *Jobs
 }
 
@@ -49,11 +51,12 @@ func NewServer(
 	host *hostclient.Client,
 	auditor *audit.Recorder,
 	healthMgr *health.Manager,
+	live *systemlive.Hub,
 ) *Server {
 	return &Server{
 		store: st, catalog: cat, life: life, bus: bus,
 		auth: authMgr, host: host, auditor: auditor,
-		health: healthMgr, jobs: newJobs(),
+		health: healthMgr, live: live, jobs: newJobs(),
 	}
 }
 
@@ -73,6 +76,7 @@ func (s *Server) Handler() http.Handler {
 	// SSE is registered raw (huma streaming adds no value here and the raw
 	// handler keeps the wire format curl-debuggable per BRAIN_UI_PROTOCOL.md).
 	mux.HandleFunc("GET /api/v1/events", s.events)
+	mux.HandleFunc("GET /api/v1/system/live", s.systemLive)
 
 	return withCORS(s.authMiddleware(mux))
 }
@@ -505,6 +509,50 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			}
 			data, _ := json.Marshal(ev.Data)
 			fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.ID, ev.Kind, data)
+			flusher.Flush()
+		}
+	}
+}
+
+// systemLive is the live system-resources stream (BRAIN_UI_PROTOCOL.md Pattern
+// C, stream 3). On-demand and ref-counted by the hub: this connection opens the
+// upstream host-agent poll if it's the first, and closing it stops the poll if
+// it's the last. No reconnect replay — a reconnecting client resumes at the next
+// `sample` (BRAIN_UI_PROTOCOL.md:179). Available to every signed-in user with no
+// role gate: host-level resource state isn't per-user data (LOCAL_ANALYTICS.md #
+// Privacy model). authMiddleware already rejected unauthenticated requests; the
+// FromContext check is belt-and-suspenders.
+func (s *Server) systemLive(w http.ResponseWriter, r *http.Request) {
+	if _, ok := auth.FromContext(r.Context()); !ok {
+		writeUnauthenticated(w)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	ch, unsub := s.live.Subscribe()
+	defer unsub()
+
+	// Initial comment so proxies flush headers immediately.
+	fmt.Fprintf(w, ": connected\n\n")
+	flusher.Flush()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case sample, ok := <-ch:
+			if !ok {
+				return
+			}
+			data, _ := json.Marshal(sample)
+			fmt.Fprintf(w, "event: sample\ndata: %s\n\n", data)
 			flusher.Flush()
 		}
 	}

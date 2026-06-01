@@ -135,6 +135,18 @@ func (c *Client) SystemStatus(ctx context.Context) (protocol.SystemStatus, error
 	return out, err
 }
 
+// SystemResources returns one raw cumulative-counter sample (CPU jiffies,
+// memory levels, per-interface and per-device byte counters, uptime) plus a
+// monotonic ts_ns. host-agent computes no rates — the caller (the brain's
+// live-resources hub) diffs two successive samples, using the ts_ns delta as
+// the rate denominator. All non-200 responses are generic host errors,
+// propagated via the standard do helper.
+func (c *Client) SystemResources(ctx context.Context) (protocol.SystemResources, error) {
+	var out protocol.SystemResources
+	err := c.do(ctx, "GET", "/v1/system/resources", nil, &out)
+	return out, err
+}
+
 // SystemHealth returns host-agent's locus-B findings report across categories
 // (HEALTH.md # Detector catalog, BRAIN_HOST_PROTOCOL.md). host-agent always
 // returns 200 with a parseable payload, so a transport error here is genuinely

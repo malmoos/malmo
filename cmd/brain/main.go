@@ -26,6 +26,7 @@ import (
 	"github.com/malmo/malmo/internal/notify"
 	"github.com/malmo/malmo/internal/protocol"
 	"github.com/malmo/malmo/internal/store"
+	"github.com/malmo/malmo/internal/systemlive"
 )
 
 func main() {
@@ -126,7 +127,14 @@ func main() {
 	// path is bootstrap-state-mismatch / recovery, not this issue).
 	go brainDBIntegrityLoop(pollCtx, st, healthMgr, auditor, notifier, dbIntegrityCheckPeriod)
 
-	srv := api.NewServer(st, cat, life, bus, authMgr, host, auditor, healthMgr)
+	// Live system-resources hub (BRAIN_UI_PROTOCOL.md Pattern C, stream 3): a
+	// ref-counted 1 Hz poller of host-agent's raw counters, fanned out as
+	// derived rates over GET /api/v1/system/live. It polls only while ≥1 SSE
+	// subscriber is connected (zero idle cost); pollCtx bounds any active poll
+	// to the process lifetime.
+	live := systemlive.New(pollCtx, host, time.Second)
+
+	srv := api.NewServer(st, cat, life, bus, authMgr, host, auditor, healthMgr, live)
 	httpSrv := &http.Server{Addr: cfg.listen, Handler: srv.Handler()}
 	slog.Info("malmo-brain listening",
 		"listen", cfg.listen, "state_dir", cfg.stateDir, "catalog_dir", cfg.catalogDir)

@@ -99,6 +99,18 @@ func startFakeAuthAgent(t *testing.T) string {
 		})
 	})
 
+	mux.HandleFunc("GET /v1/system/resources", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(protocol.SystemResources{
+			TsNs:    84021000000000,
+			CPU:     protocol.CPUCounters{TotalJiffies: 12044910, IdleJiffies: 9881233},
+			LoadAvg: [3]float64{0.42, 0.51, 0.48},
+			Mem:     protocol.MemCounters{TotalBytes: 16728338432, AvailableBytes: 9214455808, UsedBytes: 7513882624},
+			Net:     []protocol.NetCounters{{Iface: "enp3s0", RxBytes: 99201234, TxBytes: 41200934}},
+			Disk:    []protocol.DiskCounters{{Dev: "sda", ReadBytes: 81002496, WriteBytes: 12300288}},
+			UptimeS: 84021,
+		})
+	})
+
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() {
@@ -107,6 +119,32 @@ func startFakeAuthAgent(t *testing.T) string {
 		_ = srv.Shutdown(ctx)
 	})
 	return sock
+}
+
+func TestSystemResources(t *testing.T) {
+	c := New(startFakeAuthAgent(t))
+	resp, err := c.SystemResources(context.Background())
+	if err != nil {
+		t.Fatalf("SystemResources: %v", err)
+	}
+	if resp.TsNs != 84021000000000 {
+		t.Errorf("ts_ns: want 84021000000000, got %d", resp.TsNs)
+	}
+	if resp.CPU.TotalJiffies != 12044910 || resp.CPU.IdleJiffies != 9881233 {
+		t.Errorf("cpu: want {12044910, 9881233}, got %+v", resp.CPU)
+	}
+	if resp.Mem.AvailableBytes != 9214455808 {
+		t.Errorf("mem available_bytes: want 9214455808, got %d", resp.Mem.AvailableBytes)
+	}
+	if len(resp.Net) != 1 || resp.Net[0].Iface != "enp3s0" || resp.Net[0].RxBytes != 99201234 {
+		t.Errorf("net: want one enp3s0 entry, got %+v", resp.Net)
+	}
+	if len(resp.Disk) != 1 || resp.Disk[0].Dev != "sda" {
+		t.Errorf("disk: want one sda entry, got %+v", resp.Disk)
+	}
+	if resp.LoadAvg != [3]float64{0.42, 0.51, 0.48} {
+		t.Errorf("loadavg: want [0.42 0.51 0.48], got %v", resp.LoadAvg)
+	}
 }
 
 func TestResolveHome(t *testing.T) {
