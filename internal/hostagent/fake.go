@@ -125,10 +125,10 @@ func (f *FakeServiceReporter) Set(findings []protocol.Finding) {
 	f.findings = append(f.findings[:0:0], findings...)
 }
 
-func (f *FakeServiceReporter) Read() ([]protocol.Finding, error) {
+func (f *FakeServiceReporter) Read() []protocol.Finding {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := make([]protocol.Finding, len(f.findings))
 	copy(out, f.findings)
-	return out, nil
+	return out
 }

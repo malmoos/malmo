@@ -21,10 +21,7 @@ func TestRead_ReportsOnlyNonActiveUnits(t *testing.T) {
 		},
 	}
 
-	got, err := r.Read()
-	if err != nil {
-		t.Fatalf("Read: %v", err)
-	}
+	got := r.Read()
 	want := []protocol.Finding{
 		{ID: "service-down", InstanceKey: "caddy.service", Details: "caddy.service is failed"},
 	}
@@ -42,10 +39,7 @@ func TestRead_AllActiveReturnsNil(t *testing.T) {
 		isActive: func(string) (bool, string) { return true, "active" },
 	}
 
-	got, err := r.Read()
-	if err != nil {
-		t.Fatalf("Read: %v", err)
-	}
+	got := r.Read()
 	if got != nil {
 		t.Errorf("all-active: want nil findings, got %v", got)
 	}
@@ -61,7 +55,7 @@ func TestRead_OneFindingPerDownUnit(t *testing.T) {
 		isActive: func(string) (bool, string) { return false, "inactive" },
 	}
 
-	got, _ := r.Read()
+	got := r.Read()
 	if len(got) != 2 {
 		t.Fatalf("want one finding per down unit (2), got %d: %v", len(got), got)
 	}

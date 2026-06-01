@@ -47,10 +47,10 @@ func New() *Reporter {
 }
 
 // Read returns one service-down finding per non-active core unit. It always
-// returns a usable slice (nil when every unit is active) and never errors —
-// `systemctl is-active` reports a unit's state on stdout even when the unit is
-// down (and exits non-zero), so an inactive unit is data, not an error.
-func (r *Reporter) Read() ([]protocol.Finding, error) {
+// returns a usable slice (nil when every unit is active) — inactive units are
+// data, not errors. `systemctl is-active` reports the unit's state on stdout
+// even when the unit is down (and exits non-zero).
+func (r *Reporter) Read() []protocol.Finding {
 	var findings []protocol.Finding
 	for _, unit := range r.units {
 		active, state := r.isActive(unit)
@@ -63,7 +63,7 @@ func (r *Reporter) Read() ([]protocol.Finding, error) {
 			Details:     fmt.Sprintf("%s is %s", unit, state),
 		})
 	}
-	return findings, nil
+	return findings
 }
 
 // systemctlIsActive runs `systemctl is-active <unit>` and reports whether the

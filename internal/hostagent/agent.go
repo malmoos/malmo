@@ -61,10 +61,10 @@ type HealthSource interface {
 // concrete types: servicehealth.Reporter (real systemctl) for cmd/host-agent-real,
 // FakeServiceReporter for the fake binary and tests.
 //
-// Read always returns a usable slice (nil = all services healthy); any error
-// is for the handler's structured log only, never propagated as a 5xx.
+// Read always returns a usable slice (nil = all services healthy) and never
+// errors — inactive units are data, not failures.
 type ServiceReporter interface {
-	Read() ([]protocol.Finding, error)
+	Read() []protocol.Finding
 }
 
 // UserManager is a consumer-side interface for the system-level user account
@@ -262,10 +262,7 @@ func (a *Agent) systemHealth(w http.ResponseWriter, r *http.Request) {
 
 	// Services category (locus B): only when a service reporter is wired.
 	if a.Services != nil {
-		svc, err := a.Services.Read()
-		if err != nil {
-			slog.Error("system-health: service reporter error", "err", err)
-		}
+		svc := a.Services.Read()
 		if svc == nil {
 			svc = []protocol.Finding{}
 		}
