@@ -147,14 +147,13 @@ func (c *Client) SystemResources(ctx context.Context) (protocol.SystemResources,
 	return out, err
 }
 
-// StorageHealth returns the latest storage findings recorded by
-// malmo-storage-verify (BOOT.md # The storage-ready target). host-agent
-// always returns 200 with a parseable payload — see the contract on
-// hostagent.HealthSource — so a transport error here is genuinely "host-agent
-// unreachable," not "storage looks bad."
-func (c *Client) StorageHealth(ctx context.Context) (protocol.StorageHealth, error) {
-	var out protocol.StorageHealth
-	err := c.do(ctx, "GET", "/v1/health/storage", nil, &out)
+// SystemHealth returns host-agent's locus-B findings report across categories
+// (HEALTH.md # Detector catalog, BRAIN_HOST_PROTOCOL.md). host-agent always
+// returns 200 with a parseable payload, so a transport error here is genuinely
+// "host-agent unreachable," not "something looks bad."
+func (c *Client) SystemHealth(ctx context.Context) (protocol.SystemHealth, error) {
+	var out protocol.SystemHealth
+	err := c.do(ctx, "GET", "/v1/health/system", nil, &out)
 	return out, err
 }
 

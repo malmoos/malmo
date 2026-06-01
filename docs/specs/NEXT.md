@@ -17,15 +17,9 @@ When a topic is **decided**, remove its entry here and add the rationale to `DEC
 
 ## Tier 1 — Blocking
 
-*(Last audit: 2026-05-29 — the dashboard-shell gap is now **resolved** by the new `DASHBOARD.md` (logged-in IA + the owner-scoped apps model; see `DECISIONS.md` 2026-05-29 # App instances are owner-scoped). That also resolved the apps model, the widgets yes/no (no), and the per-user-instance naming scheme. The file-manager gap below remains the one Tier-1 product-surface item. The infrastructure spine (boot/storage/health/updates/auth) is well-specified. Implementation slice queue lives in [`../progress/README.md`](../progress/README.md) # Up next.)*
+*(Last audit: 2026-05-31 — Tier 1 is **clear of product-surface gaps**. The dashboard-shell gap was resolved by `DASHBOARD.md` (logged-in IA + owner-scoped apps model; `DECISIONS.md` 2026-05-29), and the in-dashboard file-manager gap is now resolved by `FILES.md` (ops execute as the user's UID in host-agent; own + Shared scope; `DECISIONS.md` 2026-05-31). The infrastructure spine (boot/storage/health/updates/auth) is well-specified. Remaining work is implementation, not design — slice queue lives in [`../progress/README.md`](../progress/README.md) # Up next. Promote an item here into Tier 1 if a new blocking design gap appears.)*
 
-### In-dashboard file manager — "files are first-class" has no in-product browse surface
-
-"Files are first-class, apps are windows" is a load-bearing differentiator, but the only specced access path to a user's own `Photos/`, `Documents/`, `Shared/` is **SMB + the desktop OS file managers**. `DISCOVERY.md` even states the browse experience "is the dashboard, not the OS file manager" — yet no in-dashboard file browser exists. For the north-star audience (the Plex/Synology user who will *not* mount an SMB share), a web file manager is table stakes — it's Synology's flagship surface (File Station) and a core Umbrel module. The Tier-4 "data-import flows" line is a fraction of this.
-
-**Proposed home:** a new `FILES.md` owning the in-dashboard file browser — view/upload/download/rename/move within the user's use-case folders and `Shared/`, per-user scoping (mirrors the FS permission model in `STORAGE.md`), and how it relates to (does not replace) SMB. Folds in the Tier-4 "data-import flows" item.
-**Context:** `STORAGE.md` (use-case folders, `0750` per-user permissions, `Shared/`), `DISCOVERY.md` (the "dashboard is the browse surface" claim this makes good on), `APP_ISOLATION.md` (how apps see the same folders), `AUTH.md` (per-user access). Prior art: Synology File Station; Umbrel's `files` module.
-**Why Tier 1:** without it, "files are first-class" is true on disk but invisible in the product for any user who hasn't set up SMB — exactly the user we're building for.
+*(No open Tier-1 design topics. Items resolved out of this tier are recorded in `DECISIONS.md`.)*
 
 ---
 
@@ -332,7 +326,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 
 **Storage & first-run**
 - UTF-8 filename normalization (NFC vs. NFD) across SMB clients — macOS uses NFD on the wire, Linux stores bytes verbatim; "files-first-class" makes this user-visible. `STORAGE.md`.
-- Data-import flows — bulk-copy from USB stick / network share into `~/Photos/` via the dashboard, or "just use SMB" as the only path. `STORAGE.md`, `FIRST_RUN.md`.
+- Data-import flows — **browser upload is now the v1 in-product path (`FILES.md`)**; what remains is *bulk* import from a USB stick / network share plugged into the box ("copy everything off this drive into ~/Photos"), which rides removable-drive auto-mount (below). `STORAGE.md`, `FIRST_RUN.md`, `FILES.md`.
 - Boot-PIN high-security mode. `STORAGE.md`.
 - Stronger TPM2 sealing policy (PCR 7+11 with signed PCR policy, or PCR 7+14). v1 seals against PCR 7 only — works across kernel updates, weaker against an attacker who can subvert Secure Boot. Upgrade is non-destructive (additional LUKS slot, re-enroll). `STORAGE.md`, `BOOT.md`.
 - Recovery-passphrase storage assistance ("email this to me", USB shard). `STORAGE.md`, `FIRST_RUN.md`.

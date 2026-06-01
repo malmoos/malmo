@@ -5,10 +5,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -45,7 +47,11 @@ func main() {
 	host := hostclient.New(cfg.agentSock)
 	cd := caddy.New(cfg.caddyAdmin)
 	bus := events.NewBus()
-	life := lifecycle.NewManager(st, cat, host, cd, lifecycle.NewCLIDocker(), bus, cfg.stateDir)
+	// One Docker driver, shared by the lifecycle manager and the
+	// container-restart-loop detector — the detector reuses lifecycle's seam
+	// rather than opening a parallel Docker client (issue #35).
+	dock := lifecycle.NewCLIDocker()
+	life := lifecycle.NewManager(st, cat, host, cd, dock, bus, cfg.stateDir)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	life.EnsureIngress(ctx, cfg.caddyListen)
@@ -81,14 +87,22 @@ func main() {
 		slog.Warn("health: failed to restore issues from store; starting empty", "err", err)
 	}
 
-	// Pull the boot-time storage findings (BOOT.md # The storage-ready
-	// target) once at startup and reconcile them into the health registry,
-	// then keep refreshing on a slow poll. Failure here is non-fatal — the
-	// brain runs degraded just like everything else.
+	// Pull host-agent's system health report (HEALTH.md # Detector catalog,
+	// locus B) once at startup and reconcile it into the health registry per
+	// category, then keep refreshing on a slow poll. Failure here is non-fatal
+	// — the brain runs degraded just like everything else.
 	pollCtx, pollCancel := context.WithCancel(context.Background())
 	defer pollCancel()
-	pullStorageHealth(pollCtx, host, healthMgr, auditor, notifier)
-	go storageHealthPollLoop(pollCtx, host, healthMgr, auditor, notifier, cfg.healthPollPeriod)
+	pullSystemHealth(pollCtx, host, healthMgr, auditor, notifier)
+	go systemHealthPollLoop(pollCtx, host, healthMgr, auditor, notifier, cfg.healthPollPeriod)
+
+	// Locus-D container-restart-loop detector (HEALTH.md # Detector catalog):
+	// sample managed containers' cumulative RestartCount on the health-poll
+	// cadence and raise per-instance when restarts climb past the threshold
+	// within the window. Brain-only — reads Docker through the shared lifecycle
+	// seam (no host-agent change, no EVENTS proxy grant needed).
+	rld := newRestartLoopDetector(dock, healthMgr, auditor, notifier)
+	go rld.run(pollCtx, cfg.healthPollPeriod)
 
 	// Bound the notifications table (NOTIFICATIONS.md # Locked decisions, the
 	// retention bullet): prune aged / over-cap rows once at boot, then on a slow
@@ -98,6 +112,20 @@ func main() {
 		slog.Warn("notification prune failed; continuing", "err", err)
 	}
 	go notificationPruneLoop(pollCtx, st, cfg.notifyPrunePeriod)
+
+	// Locus-C version check (HEALTH.md # Detector catalog): reconcile
+	// version-mismatch against host-agent's reported agent_version, once at
+	// startup (the first handshake) then on the same loose poll cadence.
+	checkAgentVersion(pollCtx, host, healthMgr, auditor, notifier)
+	go versionCheckPollLoop(pollCtx, host, healthMgr, auditor, notifier, cfg.healthPollPeriod)
+
+	// Locus-C brain-DB integrity check (HEALTH.md # Detector catalog): PRAGMA
+	// integrity_check at boot + every 6h, reconciling brain-db-corrupt. Runs
+	// entirely on its own goroutine — the boot run is inside the loop, never
+	// before ListenAndServe — because a corrupt DB must raise a banner, never
+	// gate startup (HEALTH.md # Stance: a brain that can't boot has no UI; that
+	// path is bootstrap-state-mismatch / recovery, not this issue).
+	go brainDBIntegrityLoop(pollCtx, st, healthMgr, auditor, notifier, dbIntegrityCheckPeriod)
 
 	// Live system-resources hub (BRAIN_UI_PROTOCOL.md Pattern C, stream 3): a
 	// ref-counted 1 Hz poller of host-agent's raw counters, fanned out as
@@ -193,25 +221,39 @@ func env(k, def string) string {
 	return def
 }
 
-// pullStorageHealth fetches the current storage findings from host-agent and
-// reconciles them into the health registry. Non-blocking: if host-agent isn't
-// reachable yet, we log and return — the brain still starts. The poll loop
-// will catch up once host-agent comes online. Transitions are audited per
-// issue (see emitHealthTransitions) and fan out to the notification center
-// (see emitHealthNotifications).
-func pullStorageHealth(ctx context.Context, host *hostclient.Client, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier) {
+// pullSystemHealth fetches host-agent's system health report and reconciles it
+// into the health registry one category at a time. Non-blocking: if host-agent
+// isn't reachable yet, we log and return — the brain still starts. The poll loop
+// will catch up once host-agent comes online. Transitions are audited per issue
+// (see emitHealthTransitions) and fan out to the notification center (see
+// emitHealthNotifications).
+//
+// Each category the report covers is reconciled independently (clearing any
+// host-reported issue in it that's now absent); categories not in the report are
+// left alone. Sorted iteration keeps the per-issue audit / log order stable.
+func pullSystemHealth(ctx context.Context, host *hostclient.Client, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier) {
 	c, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	sh, err := host.StorageHealth(c)
+	sh, err := host.SystemHealth(c)
 	if err != nil {
-		slog.Warn("storage health: host-agent unreachable; skipping",
+		slog.Warn("system health: host-agent unreachable; skipping",
 			"err", err)
 		return
 	}
-	raised, cleared := healthMgr.ApplyStorageFindings(sh)
+	cats := make([]protocol.HealthCategory, 0, len(sh.Categories))
+	for cat := range sh.Categories {
+		cats = append(cats, cat)
+	}
+	sort.Slice(cats, func(i, j int) bool { return cats[i] < cats[j] })
+	var raised, cleared []health.IssueKey
+	for _, cat := range cats {
+		r, cl := healthMgr.ApplyFindings(cat, sh.Categories[cat])
+		raised = append(raised, r...)
+		cleared = append(cleared, cl...)
+	}
 	if len(raised) > 0 || len(cleared) > 0 {
-		slog.Info("storage health: reconciled",
-			"raised", len(raised), "cleared", len(cleared), "active_findings", len(sh.Findings))
+		slog.Info("system health: reconciled",
+			"raised", len(raised), "cleared", len(cleared), "categories", len(cats))
 	}
 	emitHealthTransitions(ctx, auditor, raised, cleared)
 	emitHealthNotifications(notifier, healthMgr, raised, cleared)
@@ -238,7 +280,7 @@ func emitHealthTransitions(ctx context.Context, auditor *audit.Recorder, raised,
 // raise, a resolve per allowlisted clear. The allowlist gate lives in
 // notify, so this dispatches every transition and lets notify drop the ones
 // that don't notify. Raises need the issue's severity/summary, which
-// ApplyStorageFindings doesn't return — look it up by key. The ok guard skips
+// ApplyFindings doesn't return — look it up by key. The ok guard skips
 // a key with no live issue; in the current sequential poll a just-raised key
 // is always still active when looked up, so this is defensive (and notify
 // would drop the resulting zero-value Issue anyway, since "" isn't allowlisted).
@@ -253,11 +295,11 @@ func emitHealthNotifications(notifier *notify.Notifier, healthMgr *health.Manage
 	}
 }
 
-// storageHealthPollLoop keeps the health registry in sync with what
-// host-agent reports. 60s is the loose-by-design cadence — storage findings
-// don't change often, and the dashboard's view of "active issues" gets a
-// refresh on every dashboard load via the same registry.
-func storageHealthPollLoop(ctx context.Context, host *hostclient.Client, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier, interval time.Duration) {
+// systemHealthPollLoop keeps the health registry in sync with what host-agent
+// reports. 60s is the loose-by-design cadence — host-measured findings don't
+// change often, and the dashboard's view of "active issues" gets a refresh on
+// every dashboard load via the same registry.
+func systemHealthPollLoop(ctx context.Context, host *hostclient.Client, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -265,7 +307,7 @@ func storageHealthPollLoop(ctx context.Context, host *hostclient.Client, healthM
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			pullStorageHealth(ctx, host, healthMgr, auditor, notifier)
+			pullSystemHealth(ctx, host, healthMgr, auditor, notifier)
 		}
 	}
 }
@@ -288,4 +330,286 @@ func notificationPruneLoop(ctx context.Context, st *store.Store, interval time.D
 			}
 		}
 	}
+}
+
+// expectedAgentVersion is the host-agent version this brain build expects to
+// talk to. It mirrors internal/hostagent.AgentVersion (the version the in-repo
+// agent advertises) — the conservative v1 reading of HEALTH.md's "lockstep
+// pair": exact string equality against a brain-side constant. The richer
+// release-manifest model (RELEASE_MANIFEST.md / UPDATES.md) will replace this
+// when it lands; until then, bump this in lockstep with hostagent.AgentVersion.
+const expectedAgentVersion = "0.0.1-fake"
+
+// agentStatusReader is the slice of the host client the version check needs — a
+// single GET /v1/system/status read. Consumer-side interface (CLAUDE.md) so
+// checkAgentVersion is unit-testable with a fake host-agent reporting a chosen
+// agent_version; *hostclient.Client satisfies it.
+type agentStatusReader interface {
+	SystemStatus(ctx context.Context) (protocol.SystemStatus, error)
+}
+
+// checkAgentVersion is the locus-C version-mismatch detector (HEALTH.md
+// # Detector catalog, locus C). It reads host-agent's reported agent_version
+// and reconciles the version-mismatch issue: raise when it differs from the
+// version this brain expects, clear when they match. There is no dedicated
+// handshake RPC, so each successful status read is the handshake (HEALTH.md:
+// "each handshake"). A version string is deterministic and authoritative — it
+// cannot flap like a threshold sample — so the check is 1-shot (no debounce):
+// it raises/clears on the first definitive reading. A transient unreachable
+// host-agent neither raises nor clears, so the issue state survives a blip.
+// Transitions are audited per issue and fanned out to notifications, mirroring
+// pullStorageHealth. NOTIFICATIONS.md's v1 allowlist routes version-mismatch
+// (error) to Admin, but it is not yet wired into internal/notify healthRules
+// (like disk-full / brain-db-corrupt — allowlisted in the spec but not yet
+// sourced), so the fan-out is a no-op until that entry lands; see the progress
+// entry for why wiring it is a separate, deferred step.
+func checkAgentVersion(ctx context.Context, host agentStatusReader, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier) {
+	c, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	status, err := host.SystemStatus(c)
+	if err != nil {
+		slog.Warn("version check: host-agent unreachable; skipping", "err", err)
+		return
+	}
+
+	var raised, cleared []health.IssueKey
+	if status.AgentVersion != expectedAgentVersion {
+		details := fmt.Sprintf("The system agent reports version %s, but this dashboard expects %s.",
+			status.AgentVersion, expectedAgentVersion)
+		if healthMgr.Raise("version-mismatch", "", details) {
+			raised = []health.IssueKey{{ID: "version-mismatch"}}
+			slog.Warn("version check: agent/brain version mismatch",
+				"agent_version", status.AgentVersion, "expected", expectedAgentVersion)
+		}
+	} else if healthMgr.Clear("version-mismatch", "") {
+		cleared = []health.IssueKey{{ID: "version-mismatch"}}
+	}
+	emitHealthTransitions(ctx, auditor, raised, cleared)
+	emitHealthNotifications(notifier, healthMgr, raised, cleared)
+}
+
+// versionCheckPollLoop re-runs the locus-C version check on the same loose
+// cadence as the storage poll — each periodic status read is a "handshake"
+// (HEALTH.md). version-mismatch only changes when a component is upgraded, so
+// the cadence is loose by design.
+func versionCheckPollLoop(ctx context.Context, host agentStatusReader, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			checkAgentVersion(ctx, host, healthMgr, auditor, notifier)
+		}
+	}
+}
+
+// dbIntegrityCheckPeriod is the locus-C brain-db-corrupt cadence (HEALTH.md #
+// Detector catalog: "boot + 6h"). A constant, not an env knob: the spec pins
+// the value and there's no reason to tune it per-deployment.
+const dbIntegrityCheckPeriod = 6 * time.Hour
+
+// integrityChecker is the consumer-side seam for the store's PRAGMA
+// integrity_check (CLAUDE.md: interfaces live with the consumer). *store.Store
+// satisfies it; tests pass a fake to drive each branch without a real database.
+type integrityChecker interface {
+	IntegrityCheck() (string, error)
+}
+
+// checkBrainDBIntegrity runs one PRAGMA integrity_check and reconciles the
+// brain-db-corrupt issue (HEALTH.md # Detector catalog, locus C): a result
+// other than "ok" raises it, "ok" clears it. The result is authoritative and
+// 1-shot — corruption isn't a noisy threshold sample, so there's no debounce.
+// A query error is best-effort: it can't conclude corrupt *or* sound, so it
+// logs and leaves the issue state untouched (a transient blip neither raises a
+// false banner nor clears a real one). Transitions are audited per issue and
+// fan out to the notification center, mirroring pullStorageHealth.
+func checkBrainDBIntegrity(ctx context.Context, db integrityChecker, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier) {
+	result, err := db.IntegrityCheck()
+	if err != nil {
+		slog.Warn("integrity check: query failed; leaving brain-db-corrupt unchanged", "err", err)
+		return
+	}
+	var raised, cleared []health.IssueKey
+	if result != "ok" {
+		details := fmt.Sprintf("SQLite integrity check failed:\n%s", result)
+		if healthMgr.Raise("brain-db-corrupt", "", details) {
+			raised = []health.IssueKey{{ID: "brain-db-corrupt"}}
+			slog.Error("integrity check: brain database is corrupt", "output", result)
+		}
+	} else if healthMgr.Clear("brain-db-corrupt", "") {
+		cleared = []health.IssueKey{{ID: "brain-db-corrupt"}}
+		slog.Info("integrity check: brain database recovered; cleared brain-db-corrupt")
+	}
+	emitHealthTransitions(ctx, auditor, raised, cleared)
+	emitHealthNotifications(notifier, healthMgr, raised, cleared)
+}
+
+// brainDBIntegrityLoop runs the boot integrity check and then re-checks on the
+// 6h cadence. The boot run lives *inside* this goroutine (not synchronously in
+// main before serving) on purpose — see the call site: the check must never
+// gate brain startup.
+func brainDBIntegrityLoop(ctx context.Context, db integrityChecker, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier, interval time.Duration) {
+	checkBrainDBIntegrity(ctx, db, healthMgr, auditor, notifier) // boot run
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			checkBrainDBIntegrity(ctx, db, healthMgr, auditor, notifier)
+		}
+	}
+}
+
+const (
+	// restartLoopThreshold / restartLoopWindow define the container-restart-loop
+	// trip condition: more than 3 container restarts within a 5-minute sliding
+	// window. Conservative defaults — HEALTH.md pins the detector's shape, not
+	// the constants (issue #35); tune at first soak if they prove noisy.
+	restartLoopThreshold = 3
+	restartLoopWindow    = 5 * time.Minute
+)
+
+// restartCountReader is the brain's consumer-side slice of the Docker seam:
+// just the per-instance restart counts the loop detector needs.
+// lifecycle.DockerDriver satisfies it; tests pass a fake (CLAUDE.md:
+// consumer-side interfaces).
+type restartCountReader interface {
+	RestartCounts(ctx context.Context) (map[string]int, error)
+}
+
+// restartSample is one (time, cumulative RestartCount) reading for an instance.
+type restartSample struct {
+	t     time.Time
+	count int
+}
+
+// restartLoopDetector samples managed containers' cumulative RestartCount and
+// reconciles the per-instance container-restart-loop health issue (HEALTH.md #
+// Detector catalog, locus D). Not thread-safe: it holds per-instance sample
+// history and is driven from a single poll goroutine (run).
+type restartLoopDetector struct {
+	docker    restartCountReader
+	healthMgr *health.Manager
+	auditor   *audit.Recorder
+	notifier  *notify.Notifier
+	window    time.Duration
+	threshold int
+	now       func() time.Time
+	history   map[string][]restartSample // instance_id -> samples within the window
+}
+
+func newRestartLoopDetector(docker restartCountReader, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier) *restartLoopDetector {
+	return &restartLoopDetector{
+		docker:    docker,
+		healthMgr: healthMgr,
+		auditor:   auditor,
+		notifier:  notifier,
+		window:    restartLoopWindow,
+		threshold: restartLoopThreshold,
+		now:       func() time.Time { return time.Now().UTC() },
+		history:   map[string][]restartSample{},
+	}
+}
+
+// run takes the first sample immediately (establishing baselines) then re-samples
+// every interval. Locus-D is reactive in spirit, but the socket-proxy allowlist
+// grants CONTAINERS, not EVENTS (CONTROL_PLANE.md), so polling RestartCount is
+// the no-proxy-change path the issue prefers.
+func (d *restartLoopDetector) run(ctx context.Context, interval time.Duration) {
+	d.check(ctx)
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			d.check(ctx)
+		}
+	}
+}
+
+// check samples every managed container's RestartCount once and reconciles the
+// container-restart-loop issue per instance: raise where the within-window
+// restart delta exceeds the threshold, clear where it no longer does (the app
+// stabilized) or the instance is gone (uninstalled). RestartCount is cumulative
+// since container creation, so we threshold the delta over a sliding window, not
+// the raw counter — a container that crashed a lot yesterday but is quiet now
+// reads as zero recent restarts.
+func (d *restartLoopDetector) check(ctx context.Context) {
+	counts, err := d.docker.RestartCounts(ctx)
+	if err != nil {
+		slog.Warn("restart-loop check: docker unreachable; skipping", "err", err)
+		return
+	}
+	now := d.now()
+	cutoff := now.Add(-d.window)
+
+	looping := map[string]bool{}
+	var raised []health.IssueKey
+	for id, count := range counts {
+		prev := d.history[id]
+		// Container recreation (app update / reinstall) resets RestartCount to 0.
+		// A count below the last sample means a fresh container — restart the
+		// window from here so a stale high baseline can't mask the new container's
+		// restarts (negative delta) or distort the count.
+		if n := len(prev); n > 0 && count < prev[n-1].count {
+			prev = nil
+		}
+		var samples []restartSample
+		for _, s := range prev {
+			if !s.t.Before(cutoff) {
+				samples = append(samples, s)
+			}
+		}
+		samples = append(samples, restartSample{t: now, count: count})
+		d.history[id] = samples
+
+		// Baseline is the oldest sample still inside the window; the delta against
+		// it is how many times this container restarted within the window. The
+		// first sample for an instance has delta 0 — no false raise from history.
+		if count-samples[0].count > d.threshold {
+			looping[id] = true
+			details := fmt.Sprintf("This app's container restarted %d times in about %d minutes.",
+				count-samples[0].count, int(d.window.Minutes()))
+			if d.healthMgr.Raise("container-restart-loop", id, details) {
+				raised = append(raised, health.IssueKey{ID: "container-restart-loop", InstanceKey: id})
+			}
+		}
+	}
+
+	// Forget instances Docker no longer reports (stopped / uninstalled) so the
+	// history map can't grow without bound.
+	for id := range d.history {
+		if _, ok := counts[id]; !ok {
+			delete(d.history, id)
+		}
+	}
+
+	// Clear any active restart-loop whose instance isn't looping this poll — it
+	// stabilized, or its app was uninstalled (absent from counts entirely).
+	var cleared []health.IssueKey
+	for _, iss := range d.healthMgr.List() {
+		if iss.ID != "container-restart-loop" || looping[iss.InstanceKey] {
+			continue
+		}
+		if d.healthMgr.Clear("container-restart-loop", iss.InstanceKey) {
+			cleared = append(cleared, health.IssueKey{ID: "container-restart-loop", InstanceKey: iss.InstanceKey})
+		}
+	}
+
+	// Stable order (all keys share the ID) so the per-issue audit records and
+	// tests see a deterministic sequence.
+	sortByInstanceKey(raised)
+	sortByInstanceKey(cleared)
+	emitHealthTransitions(ctx, d.auditor, raised, cleared)
+	emitHealthNotifications(d.notifier, d.healthMgr, raised, cleared)
+}
+
+func sortByInstanceKey(ks []health.IssueKey) {
+	sort.Slice(ks, func(i, j int) bool { return ks[i].InstanceKey < ks[j].InstanceKey })
 }

@@ -643,33 +643,42 @@ func TestFakePublisher_MatchesCurrentBehavior(t *testing.T) {
 	}
 }
 
-// --- /v1/health/storage ---
+// --- /v1/health/system ---
 
-// TestStorageHealth_NoSourceReturnsEmpty verifies the contract that a nil
-// Health source produces an empty findings list — "storage looks healthy" per
-// BOOT.md — rather than a 5xx the brain would have to retry on.
-func TestStorageHealth_NoSourceReturnsEmpty(t *testing.T) {
+// TestSystemHealth_NoSourcesReportsStorageOnly verifies the locus-B report
+// contract with nothing wired: the storage category is always present and
+// non-nil ("storage looks healthy" per BOOT.md), and the services category is
+// absent — so the brain reads "services not measured" rather than "all up" —
+// all behind a parseable 200 the poll loop never has to retry.
+func TestSystemHealth_NoSourcesReportsStorageOnly(t *testing.T) {
 	_, mux := newTestAgent(&stubVerifier{})
 
-	w := get(t, mux, "/v1/health/storage")
+	w := get(t, mux, "/v1/health/system")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: want 200, got %d", w.Code)
 	}
-	sh := decodeBody[protocol.StorageHealth](t, w)
-	if sh.Findings == nil {
-		t.Fatal("findings must be a non-nil slice (empty is fine)")
+	sh := decodeBody[protocol.SystemHealth](t, w)
+	storage, ok := sh.Categories[protocol.HealthCategoryStorage]
+	if !ok {
+		t.Fatal("storage category must always be present")
 	}
-	if len(sh.Findings) != 0 {
-		t.Errorf("findings: want empty, got %v", sh.Findings)
+	if storage == nil {
+		t.Error("storage findings must be a non-nil slice (empty is fine)")
+	}
+	if len(storage) != 0 {
+		t.Errorf("storage: want empty, got %v", storage)
+	}
+	if _, present := sh.Categories[protocol.HealthCategoryServices]; present {
+		t.Error("services category must be absent when no reporter is wired")
 	}
 	if sh.CheckedAt == "" {
-		t.Error("checked_at must be set even with no source")
+		t.Error("checked_at must be set even with no sources")
 	}
 }
 
-// TestStorageHealth_FromFakeSource verifies that findings set on the fake
-// source flow through the handler verbatim.
-func TestStorageHealth_FromFakeSource(t *testing.T) {
+// TestSystemHealth_StorageFromFakeSource verifies storage findings flow through
+// the storage category verbatim.
+func TestSystemHealth_StorageFromFakeSource(t *testing.T) {
 	a, mux := newTestAgent(&stubVerifier{})
 	src := NewFakeHealthSource()
 	src.Set([]protocol.Finding{
@@ -677,36 +686,63 @@ func TestStorageHealth_FromFakeSource(t *testing.T) {
 	})
 	a.Health = src
 
-	w := get(t, mux, "/v1/health/storage")
+	w := get(t, mux, "/v1/health/system")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: want 200, got %d", w.Code)
 	}
-	sh := decodeBody[protocol.StorageHealth](t, w)
-	if len(sh.Findings) != 1 || sh.Findings[0].ID != "data-drive-missing" {
-		t.Fatalf("findings: want data-drive-missing, got %v", sh.Findings)
+	sh := decodeBody[protocol.SystemHealth](t, w)
+	storage := sh.Categories[protocol.HealthCategoryStorage]
+	if len(storage) != 1 || storage[0].ID != "data-drive-missing" {
+		t.Fatalf("storage category: want data-drive-missing, got %v", storage)
 	}
 }
 
-// TestStorageHealth_AlwaysReturns200OnSourceError verifies the contract that
-// even a source error produces a parseable 200 payload — the brain's polling
-// loop must never have to retry on a 5xx.
+// TestSystemHealth_ServicesFromReporter verifies the services category appears
+// once a ServiceReporter is wired and carries its findings (per-unit
+// instance_key) verbatim.
+func TestSystemHealth_ServicesFromReporter(t *testing.T) {
+	a, mux := newTestAgent(&stubVerifier{})
+	svc := NewFakeServiceReporter()
+	svc.Set([]protocol.Finding{
+		{ID: "service-down", InstanceKey: "docker.service", Details: "docker.service is failed"},
+	})
+	a.Services = svc
+
+	w := get(t, mux, "/v1/health/system")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d", w.Code)
+	}
+	sh := decodeBody[protocol.SystemHealth](t, w)
+	services, ok := sh.Categories[protocol.HealthCategoryServices]
+	if !ok {
+		t.Fatal("services category must be present when a reporter is wired")
+	}
+	if len(services) != 1 || services[0].ID != "service-down" || services[0].InstanceKey != "docker.service" {
+		t.Fatalf("services category: want service-down/docker.service, got %v", services)
+	}
+}
+
+// TestSystemHealth_AlwaysReturns200OnSourceError verifies that even a storage
+// source error produces a parseable 200 with a present, non-nil storage
+// category — the brain's polling loop must never have to retry on a 5xx.
 type erroringHealthSource struct{}
 
 func (erroringHealthSource) Read() (protocol.StorageHealth, error) {
 	return protocol.StorageHealth{}, errors.New("simulated source failure")
 }
 
-func TestStorageHealth_AlwaysReturns200OnSourceError(t *testing.T) {
+func TestSystemHealth_AlwaysReturns200OnSourceError(t *testing.T) {
 	a, mux := newTestAgent(&stubVerifier{})
 	a.Health = erroringHealthSource{}
 
-	w := get(t, mux, "/v1/health/storage")
+	w := get(t, mux, "/v1/health/system")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: want 200 even on source error, got %d", w.Code)
 	}
-	sh := decodeBody[protocol.StorageHealth](t, w)
-	if sh.Findings == nil {
-		t.Fatal("findings must be non-nil slice")
+	sh := decodeBody[protocol.SystemHealth](t, w)
+	storage, ok := sh.Categories[protocol.HealthCategoryStorage]
+	if !ok || storage == nil {
+		t.Fatal("storage category must be present and non-nil even on source error")
 	}
 }
 

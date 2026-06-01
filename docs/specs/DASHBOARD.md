@@ -127,7 +127,7 @@ A floating bottom dock with exactly four destinations:
 | Item | What it is |
 |---|---|
 | **Home** | The app launcher (above). |
-| **Files** | The in-dashboard file browser over the user's use-case folders and `~/Shared/`. Owned by its own spec (the `NEXT.md` Tier-1 `FILES.md`); appears here as a top-level destination because "files are first-class." |
+| **Files** | The in-dashboard file browser over the user's use-case folders and `~/Shared/`. Owned by its own spec (`FILES.md`); appears here as a top-level destination because "files are first-class." |
 | **Store** | Browse/install apps. Install respects the authorization table above. |
 | **Settings** | Box + account settings, and the **home for gated routes**. |
 
@@ -201,6 +201,6 @@ The universal fallback is "one shared instance + the app's own internal multi-us
 - `AUTH.md` — the role gating behind the dock, Settings routes, and install authorization.
 - `STORAGE.md` — per-user `~/` folders that personal instances bind; the model owner-scoping is designed to respect.
 - `NOTIFICATIONS.md` / `LOCAL_ANALYTICS.md` — the bell and the (non-widget) live-resources surface.
-- `FILES.md` (`NEXT.md` Tier-1, not yet written) — the Files destination in the dock.
+- `FILES.md` — the Files destination in the dock; the in-dashboard file manager over the user's home + the Shared tree.
 
 Open items that touch this surface (per-app tile state vocabulary beyond down/stopped, search design, swipe-paging, first-arrival nudge copy) live in `NEXT.md`, not here.

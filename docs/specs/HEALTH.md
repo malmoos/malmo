@@ -146,7 +146,7 @@ The taxonomy above says *what* the issues are. This section says *how each one i
 The brain runs in a container behind the Docker socket-proxy (`CONTROL_PLANE.md`) and **cannot read host hardware** — no `statfs` of the host, no `smartctl`, no `systemctl is-active`, no `/proc/pressure`. That single fact shapes the whole catalog: every *physical* measurement is taken by **host-agent** and reported to the brain; the brain only runs detectors against state it owns directly. Four loci:
 
 - **A — Boot-time reporters.** host-agent (and boot-chain units like `malmo-storage-verify`, `BOOT.md`) write findings to `/run/malmo/health/*.json`. The brain reads them at startup and reconciles. *(Built: storage assembly, canary, mergerfs — slices 0019/0024.)*
-- **B — host-agent periodic reporters.** host-agent samples on a timer and the brain polls a health endpoint, reconciling findings the same way boot findings are reconciled. *(Built: `GET /v1/health/storage` @ 60s.)* Everything host-physical and recurring lives here.
+- **B — host-agent periodic reporters.** host-agent samples on a timer and the brain polls a health endpoint, reconciling findings the same way boot findings are reconciled. *(Built: `GET /v1/health/system` @ 60s — storage category from the boot reporter plus the `service-down` services category via `systemctl is-active`; `ApplyFindings(category, …)` reconciles each domain independently.)* Everything host-physical and recurring lives here.
 - **C — brain periodic checks.** Brain goroutine timers over brain-owned state: SQLite, the cert it serves, the version it negotiated, Docker events via the proxy.
 - **D — reactive.** udev (drive add/remove), Docker container events, host-agent push events — no polling, the signal arrives.
 
@@ -156,7 +156,7 @@ The brain runs in a container behind the Docker socket-proxy (`CONTROL_PLANE.md`
 
 These defaults apply to **every** detector unless its row overrides them. `HEALTH.md` previously deferred this to "inside each detector"; pinning a default stops every detector reinventing anti-flap.
 
-- **Debounce — raise on 2 consecutive bad samples, clear on 1 good sample.** Asymmetric on purpose: slow to alarm (avoid transient-noise banners), fast to reassure. **Exception:** locus-A boot reporters and locus-D reactive signals (udev, Docker events) are authoritative and 1-shot — no debounce.
+- **Debounce — raise on 2 consecutive bad samples, clear on 1 good sample.** Asymmetric on purpose: slow to alarm (avoid transient-noise banners), fast to reassure. **Exception:** locus-A boot reporters and locus-D reactive signals (udev, Docker events) are authoritative and 1-shot — no debounce. Locus-C detectors that check a deterministic, non-noisy value (e.g. `version-mismatch`: exact equality of a version string) are also 1-shot: raise/clear on the first definitive reading, no debounce needed.
 - **Hysteresis on threshold issues.** Raise and clear thresholds differ so a value hovering at the boundary doesn't flap the banner: `disk-nearly-full` raises at 90%/85% but clears only below 88%/83%; `disk-full` raises at 95%, clears below 93%.
 - **No severity escalation over time** (already locked) — a warning that's been up for a week is still a warning. Detectors may raise a *different, more severe issue* when the *evidence* worsens (e.g. SMART pre-fail vs. confirmed self-test FAIL could be two issues), but never escalate the same issue by age.
 - **Last-checked is always fresh.** Every poll updates `last_checked_at` even when nothing transitions, so the dashboard can show "checked 30s ago" and a stale timestamp itself signals a dead detector.
@@ -183,15 +183,17 @@ These defaults apply to **every** detector unless its row overrides them. `HEALT
 
 | Issue | Measurement | Cadence | Raise |
 |---|---|---|---|
-| `brain-db-corrupt` | `PRAGMA integrity_check` | boot + 6h | result ≠ `ok` |
+| `brain-db-corrupt` | `PRAGMA integrity_check` | boot + 6h | result ≠ `ok` *(built)* |
 | `schema-migration-failed` | migration runner result | boot | migration aborted |
 | `bootstrap-state-mismatch` | bootstrap marker present but DB absent | boot | mismatch |
-| `version-mismatch` | host-agent vs brain version on handshake | each handshake | not the lockstep pair |
+| `version-mismatch` | host-agent vs brain version on handshake | each handshake | not the lockstep pair *(built)* |
 | `tls-cert-near-expiry` | NotAfter of the served `.malmo.network` cert | daily | within renewal-failure window |
 | `update-available` | release/catalog manifest vs installed | per refresh | newer version present |
 | `backup-overdue` | last successful backup timestamp | hourly | older than window *(deferred with backup)* |
 | `store-write-failed` | store write error (reactive, not timed) | on error | any persistent write failure *(built)* |
 | `service-down` (Caddy) | Caddy container state via the Docker API + Caddy admin-API (`localhost:2019`) reachability | 60s | bounded self-heal exhausted (see below) — *deferred, see note* |
+
+**`brain-db-corrupt` is authoritative and 1-shot.** A `PRAGMA integrity_check` verdict is definitive, not a noisy sample, so this row overrides the cross-cutting debounce default (`# Cross-cutting detector policy`: raise on 2 consecutive bad samples) and raises/clears on the first reading — the same posture the policy grants locus-A/D signals. A query that fails to *run* (rather than returning a non-`ok` result) is inconclusive: no raise, no clear; corruption that breaks the query itself surfaces through `store-write-failed` instead.
 
 **Why the `service-down` Caddy check lives at locus C, not B:** Caddy and the socket-proxy are **brain-managed containers, not host systemd units** (`CONTROL_PLANE.md` # Locked: Caddy is malmo substrate, runs as a container) — there is no `caddy.service` for `systemctl is-active` to query. The brain already owns Docker access and Caddy's admin API, so it does a *better* check than systemctl could: container-running **and** actually serving (admin API answers / catch-all route present), which catches a wedged-but-not-exited Caddy that a process-liveness check would miss. The socket-proxy itself is not separately monitored — its failure manifests as the brain losing all Docker access, a self-evident condition surfaced through every Docker-backed operation failing at once.
 
@@ -209,7 +211,7 @@ These defaults apply to **every** detector unless its row overrides them. `HEALT
 | `data-drive-missing` / `data-drive-wrong` | D | udev add/remove; brain re-verifies enrolled UUID |
 | `hostname-conflict` | D | Avahi name-collision callback |
 | `app-image-partial` | D | image pull reports incomplete |
-| `container-restart-loop` | D | Docker restart count > N within window |
+| `container-restart-loop` | D | Docker restart count > N within window *(built — brain polls `RestartCount`; N/window in the progress entry)* |
 | `app-unresponsive` | D | manifest HTTP health-probe fails — *deferred, needs manifest field* |
 
 ### What we deliberately do not check

@@ -50,6 +50,28 @@ func TestSystemLive_RequiresAuth(t *testing.T) {
 	}
 }
 
+// The stream is available to every signed-in user — no role gate
+// (LOCAL_ANALYTICS.md # Privacy model; DASHBOARD.md # the top bar).
+func TestSystemLive_MemberCanStream(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("admin", "correct-horse-battery")
+	h.addMember("u_member1", "bob", "bobpass")
+	h.loginAs("bob", "bobpass")
+
+	req, _ := http.NewRequest("GET", h.srv.URL+"/api/v1/system/live", nil)
+	for _, c := range h.jar.Cookies(req.URL) {
+		req.AddCookie(c)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("stream GET as member: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("member stream: want 200, got %d", resp.StatusCode)
+	}
+}
+
 // An authenticated client opens the stream and sees `event: sample` frames whose
 // JSON carries the live levels (Done-when, issue #5). The cold first frame's rate
 // fields are null — we assert the levels, which are present from frame one.
