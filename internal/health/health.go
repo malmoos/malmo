@@ -546,5 +546,20 @@ func builtinDefinitions() []Definition {
 			BlocksApps: true,
 			Summary:    "malmo's system agent and dashboard are running mismatched versions.",
 		},
+		// State (HEALTH.md # State). brain-db-corrupt is a locus-C brain check:
+		// PRAGMA integrity_check at boot + every 6h (cmd/brain checkBrainDBIntegrity).
+		// A corrupt brain database can't be trusted for any mutation, so it blocks
+		// writes, apps, and users alike ("nearly all ops") — but the dashboard,
+		// login, and logs stay up (HEALTH.md # What stays available). Critical,
+		// Tier-2 remediation (restore from backup). Persisted (not NoPersist):
+		// integrity_check flags corruption that often still permits the row write,
+		// and the issue should survive a restart so the banner stays up; the
+		// generic store-write-failed fallback covers the case the write also fails.
+		{
+			ID: "brain-db-corrupt", Category: CategoryState,
+			Severity: SeverityCritical, Tier: 2,
+			BlocksWrites: true, BlocksApps: true, BlocksUsers: true,
+			Summary: "malmo's database is damaged; some actions are turned off until it's fixed.",
+		},
 	}
 }

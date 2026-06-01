@@ -183,7 +183,7 @@ These defaults apply to **every** detector unless its row overrides them. `HEALT
 
 | Issue | Measurement | Cadence | Raise |
 |---|---|---|---|
-| `brain-db-corrupt` | `PRAGMA integrity_check` | boot + 6h | result ≠ `ok` |
+| `brain-db-corrupt` | `PRAGMA integrity_check` | boot + 6h | result ≠ `ok` *(built)* |
 | `schema-migration-failed` | migration runner result | boot | migration aborted |
 | `bootstrap-state-mismatch` | bootstrap marker present but DB absent | boot | mismatch |
 | `version-mismatch` | host-agent vs brain version on handshake | each handshake | not the lockstep pair *(built)* |
@@ -192,6 +192,8 @@ These defaults apply to **every** detector unless its row overrides them. `HEALT
 | `backup-overdue` | last successful backup timestamp | hourly | older than window *(deferred with backup)* |
 | `store-write-failed` | store write error (reactive, not timed) | on error | any persistent write failure *(built)* |
 | `service-down` (Caddy) | Caddy container state via the Docker API + Caddy admin-API (`localhost:2019`) reachability | 60s | bounded self-heal exhausted (see below) — *deferred, see note* |
+
+**`brain-db-corrupt` is authoritative and 1-shot.** A `PRAGMA integrity_check` verdict is definitive, not a noisy sample, so this row overrides the cross-cutting debounce default (`# Cross-cutting detector policy`: raise on 2 consecutive bad samples) and raises/clears on the first reading — the same posture the policy grants locus-A/D signals. A query that fails to *run* (rather than returning a non-`ok` result) is inconclusive: no raise, no clear; corruption that breaks the query itself surfaces through `store-write-failed` instead.
 
 **Why the `service-down` Caddy check lives at locus C, not B:** Caddy and the socket-proxy are **brain-managed containers, not host systemd units** (`CONTROL_PLANE.md` # Locked: Caddy is malmo substrate, runs as a container) — there is no `caddy.service` for `systemctl is-active` to query. The brain already owns Docker access and Caddy's admin API, so it does a *better* check than systemctl could: container-running **and** actually serving (admin API answers / catch-all route present), which catches a wedged-but-not-exited Caddy that a process-liveness check would miss. The socket-proxy itself is not separately monitored — its failure manifests as the brain losing all Docker access, a self-evident condition surfaced through every Docker-backed operation failing at once.
 

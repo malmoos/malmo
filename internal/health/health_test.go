@@ -132,7 +132,32 @@ func TestList_VersionMismatchDefinition(t *testing.T) {
 	}
 }
 
-func TestApplyFindings_RaiseAndClear(t *testing.T) {
+// TestList_BrainDBCorruptDefinition pins the metadata bound to the
+// brain-db-corrupt issue (HEALTH.md # State): a critical, Tier-2, state-category
+// issue that blocks every mutation class ("nearly all ops").
+func TestList_BrainDBCorruptDefinition(t *testing.T) {
+	m := NewManager(nil)
+	m.Raise("brain-db-corrupt", "", "")
+
+	got := m.List()[0]
+	if got.Category != CategoryState {
+		t.Errorf("Category: want state, got %s", got.Category)
+	}
+	if got.Severity != SeverityCritical {
+		t.Errorf("Severity: want critical, got %s", got.Severity)
+	}
+	if got.Tier != 2 {
+		t.Errorf("Tier: want 2, got %d", got.Tier)
+	}
+	if !got.BlocksWrites || !got.BlocksApps || !got.BlocksUsers {
+		t.Errorf("blocks_*: want all true (blocks nearly all ops), got %+v", got)
+	}
+	if got.Summary == "" {
+		t.Error("Summary must be populated from definition")
+	}
+}
+
+func TestApplyStorageFindings_RaiseAndClear(t *testing.T) {
 	m := NewManager(nil)
 
 	// First poll: data drive missing.

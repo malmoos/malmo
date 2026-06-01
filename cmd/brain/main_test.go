@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -304,5 +305,142 @@ func TestEmitHealthNotifications_NoNotificationForInactiveKey(t *testing.T) {
 	emitHealthNotifications(notify.New(fns, nil), mgr, []health.IssueKey{{ID: "data-drive-missing"}}, nil)
 	if len(fns.raised) != 0 {
 		t.Fatalf("want 0 raises for a key with no live issue, got %d", len(fns.raised))
+	}
+}
+
+// fakeIntegrityChecker drives checkBrainDBIntegrity through each branch without
+// a real SQLite file. Satisfies integrityChecker.
+type fakeIntegrityChecker struct {
+	result string
+	err    error
+}
+
+func (f fakeIntegrityChecker) IntegrityCheck() (string, error) { return f.result, f.err }
+
+func dbCorruptActive(mgr *health.Manager) bool {
+	_, ok := mgr.Get("brain-db-corrupt", "")
+	return ok
+}
+
+// TestCheckBrainDBIntegrity_CorruptRaises is the #36 Done-when: a non-"ok"
+// integrity result raises brain-db-corrupt, writes exactly one raised audit
+// record targeting the issue, and carries the integrity_check output in details.
+func TestCheckBrainDBIntegrity_CorruptRaises(t *testing.T) {
+	mgr := health.NewManager(nil)
+	fs := &fakeEventStore{}
+	fns := &fakeNotifStore{}
+	checker := fakeIntegrityChecker{result: "*** in database main ***\nrow 5 missing from index idx_x"}
+
+	checkBrainDBIntegrity(context.Background(), checker, mgr, audit.New(fs), notify.New(fns, nil))
+
+	if !dbCorruptActive(mgr) {
+		t.Fatal("want brain-db-corrupt active after a non-ok integrity check")
+	}
+	if len(fs.events) != 1 {
+		t.Fatalf("want 1 audit record (the raise), got %d", len(fs.events))
+	}
+	e := fs.events[0]
+	if e.Action != audit.ActionHealthIssueRaised || e.TargetKind != "health_issue" || e.TargetID != "brain-db-corrupt" {
+		t.Errorf("audit = {%q,%q,%q}, want {%q,health_issue,brain-db-corrupt}",
+			e.Action, e.TargetKind, e.TargetID, audit.ActionHealthIssueRaised)
+	}
+	if !e.Success {
+		t.Error("raise audit record: Success = false, want true")
+	}
+	// Details carry the integrity_check report so the diagnostic bundle has it.
+	iss, _ := mgr.Get("brain-db-corrupt", "")
+	if !strings.Contains(iss.Details, "missing from index") {
+		t.Errorf("issue details = %q, want it to include the integrity_check output", iss.Details)
+	}
+}
+
+// TestCheckBrainDBIntegrity_OkClears: an "ok" result clears a prior raise and
+// writes one clear audit record (#36 Done-when: an ok result clears it).
+func TestCheckBrainDBIntegrity_OkClears(t *testing.T) {
+	mgr := health.NewManager(nil)
+	mgr.Raise("brain-db-corrupt", "", "prior corruption")
+	fs := &fakeEventStore{}
+	fns := &fakeNotifStore{}
+
+	checkBrainDBIntegrity(context.Background(), fakeIntegrityChecker{result: "ok"}, mgr, audit.New(fs), notify.New(fns, nil))
+
+	if dbCorruptActive(mgr) {
+		t.Fatal("want brain-db-corrupt cleared after an ok integrity check")
+	}
+	if len(fs.events) != 1 || fs.events[0].Action != audit.ActionHealthIssueCleared {
+		t.Fatalf("want 1 clear audit record, got %+v", fs.events)
+	}
+}
+
+// TestCheckBrainDBIntegrity_OkNoIssueIsNoop: the steady-healthy path raises
+// nothing and audits/notifies nothing.
+func TestCheckBrainDBIntegrity_OkNoIssueIsNoop(t *testing.T) {
+	mgr := health.NewManager(nil)
+	fs := &fakeEventStore{}
+	fns := &fakeNotifStore{}
+
+	checkBrainDBIntegrity(context.Background(), fakeIntegrityChecker{result: "ok"}, mgr, audit.New(fs), notify.New(fns, nil))
+
+	if dbCorruptActive(mgr) {
+		t.Error("ok on a clean registry must not raise anything")
+	}
+	if len(fs.events) != 0 {
+		t.Errorf("want 0 audit records on the steady-healthy path, got %d", len(fs.events))
+	}
+	// Pins the no-transition path. (brain-db-corrupt isn't in notify.healthRules
+	// yet, so the fan-out is a no-op for this ID regardless — real notification
+	// coverage lands with the deferred healthRules entry, not here.)
+	if len(fns.raised) != 0 {
+		t.Errorf("want 0 notifications on the steady-healthy path, got %d", len(fns.raised))
+	}
+}
+
+// TestCheckBrainDBIntegrity_SteadyCorruptRefreshesWithoutReaudit: a persistent
+// corruption raises once; the next check refreshes last_checked_at without
+// re-raising, re-auditing, or moving raised_at (HEALTH.md # Cross-cutting
+// detector policy: "last-checked is always fresh").
+func TestCheckBrainDBIntegrity_SteadyCorruptRefreshesWithoutReaudit(t *testing.T) {
+	mgr := health.NewManager(nil)
+	clock := time.Unix(1_700_000_000, 0).UTC()
+	mgr.SetClock(func() time.Time { return clock })
+	fs := &fakeEventStore{}
+	auditor := audit.New(fs)
+	notifier := notify.New(&fakeNotifStore{}, nil)
+	checker := fakeIntegrityChecker{result: "row 5 missing from index idx_x"}
+
+	checkBrainDBIntegrity(context.Background(), checker, mgr, auditor, notifier)
+	first, _ := mgr.Get("brain-db-corrupt", "")
+
+	clock = clock.Add(6 * time.Hour)
+	checkBrainDBIntegrity(context.Background(), checker, mgr, auditor, notifier)
+	second, _ := mgr.Get("brain-db-corrupt", "")
+
+	if len(fs.events) != 1 {
+		t.Fatalf("want exactly 1 audit record across two steady-corrupt checks, got %d", len(fs.events))
+	}
+	if !second.LastCheckedAt.After(first.LastCheckedAt) {
+		t.Errorf("last_checked_at did not advance: first=%s second=%s", first.LastCheckedAt, second.LastCheckedAt)
+	}
+	if !second.RaisedAt.Equal(first.RaisedAt) {
+		t.Errorf("raised_at moved on re-raise: first=%s second=%s", first.RaisedAt, second.RaisedAt)
+	}
+}
+
+// TestCheckBrainDBIntegrity_QueryErrorLeavesStateUnchanged: a failed query
+// can't conclude corrupt or sound, so it must neither clear an active issue nor
+// audit — a transient blip neither raises a false banner nor clears a real one.
+func TestCheckBrainDBIntegrity_QueryErrorLeavesStateUnchanged(t *testing.T) {
+	mgr := health.NewManager(nil)
+	mgr.Raise("brain-db-corrupt", "", "prior corruption")
+	fs := &fakeEventStore{}
+	fns := &fakeNotifStore{}
+
+	checkBrainDBIntegrity(context.Background(), fakeIntegrityChecker{err: errors.New("disk I/O error")}, mgr, audit.New(fs), notify.New(fns, nil))
+
+	if !dbCorruptActive(mgr) {
+		t.Error("a query error must not clear an active brain-db-corrupt")
+	}
+	if len(fs.events) != 0 {
+		t.Errorf("a query error must not audit, got %d records", len(fs.events))
 	}
 }
