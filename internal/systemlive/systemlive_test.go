@@ -337,6 +337,48 @@ func TestHub_CancelledGenerationPollIsNoOp(t *testing.T) {
 	}
 }
 
+// blockSampler blocks until its gate is closed, then returns one ramp sample.
+// Used to hold a poll mid-read so the test can cancel the generation in flight.
+type blockSampler struct {
+	gate chan struct{}
+	ramp rampSampler
+}
+
+func (s *blockSampler) SystemResources(ctx context.Context) (protocol.SystemResources, error) {
+	<-s.gate
+	return s.ramp.SystemResources(ctx)
+}
+
+// TestHub_MidFlightCancelIsNoOp covers the TOCTOU window between the sampler
+// returning and poll() acquiring the lock. Before the fix, unsubscribe() could
+// cancel ctx and nil prev between those two points, then the zombie poll would
+// set prev to a stale value — giving the next cold start a non-null first frame.
+// With ctx.Err() checked under the lock the window is closed.
+func TestHub_MidFlightCancelIsNoOp(t *testing.T) {
+	parent := context.Background()
+	bs := &blockSampler{gate: make(chan struct{})}
+	h := New(parent, bs, time.Hour)
+
+	// Subscribe starts the loop goroutine, which immediately calls poll() and
+	// blocks inside bs.SystemResources (gate not yet closed).
+	_, unsub := h.Subscribe()
+
+	// Cancel the generation while the read is in flight.
+	unsub()
+	if !h.prevIsNil() {
+		t.Fatal("prev must be nil after last unsubscribe")
+	}
+
+	// Release the blocked read. poll() now has raw in hand, acquires the lock,
+	// sees ctx.Err() != nil, and returns without touching prev.
+	close(bs.gate)
+	time.Sleep(20 * time.Millisecond) // let the goroutine finish
+
+	if !h.prevIsNil() {
+		t.Error("a poll cancelled mid-flight must not advance the baseline")
+	}
+}
+
 func assertRate(t *testing.T, name string, got *int64, want int64) {
 	t.Helper()
 	if got == nil {

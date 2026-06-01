@@ -156,14 +156,16 @@ func (h *Hub) poll(ctx context.Context) {
 	// The upstream read is the slow part (a host-agent round-trip), so this
 	// poller's generation may have been cancelled while it was in flight — the
 	// user collapsed the dropdown, the last subscriber left, unsubscribe()
-	// nilled prev, and a new generation cold-started. Re-check before touching
-	// shared state: a dead generation must neither repopulate prev (which would
-	// give the next cold start a stale baseline and a non-null first frame,
-	// against BRAIN_UI_PROTOCOL.md:179) nor leak a frame into the live subs.
+	// nilled prev, and a new generation cold-started. Re-check under the lock
+	// to close the TOCTOU window: without holding the lock, unsubscribe() could
+	// cancel ctx and nil prev between the check and the lock, leaving a stale
+	// baseline that would give the next cold start a non-null first frame
+	// against BRAIN_UI_PROTOCOL.md:179.
+	h.mu.Lock()
 	if ctx.Err() != nil {
+		h.mu.Unlock()
 		return
 	}
-	h.mu.Lock()
 	sample := derive(h.prev, raw)
 	h.prev = &raw
 	// Non-blocking send under the lock: instant, and serialized against
