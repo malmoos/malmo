@@ -60,7 +60,7 @@ The box presents **no surface to the public internet in v1.** SSH/SMB are firewa
 | Threat | Mitigation (owner) | Residual |
 |---|---|---|
 | Remote exploitation of an exposed service | Closed-by-default; SSH/SMB scoped to RFC1918+mesh via nftables (`AUTH.md` # Device access, `BUILD.md` # SSH); no public-exposure toggle (`MALMO_NETWORK.md` # closed by default) | BYO-domain + explicit advanced exposure is the user's consciously-accepted risk |
-| Apps reaching the internet uninvited | `internet: false` → `internal: true` bridge, kernel-level (no NAT route) (`APP_ISOLATION.md` # internet) | Door-2 compose can publish host ports — user wrote it |
+| Apps reaching the internet uninvited | `internet: false` → `internal: true` bridge, kernel-level (no NAT route) (`APP_ISOLATION.md` # internet) | — (host ports are admission-rejected for both doors; nothing binds to the host) |
 | Cloud-mediated LAN access concerns | Cloud resolves names + sets ACME TXT only; no proxy/tunnel (`MALMO_NETWORK.md`) | Cloud learns box-id exists and who queries it (metadata, not content) |
 
 ### B2 — App container ↔ host (assume breach)
@@ -69,11 +69,11 @@ The richest boundary. The right question is not "can an app be compromised" (ass
 
 | Threat | Mitigation (owner) | Residual |
 |---|---|---|
-| Container escape to host root | `cap_drop: ALL`; `privileged`, docker socket, `SYS_ADMIN` catalog-rejected; Docker default seccomp/AppArmor (`APP_ISOLATION.md` # Forbidden in store, # Capabilities) | No userns remap, no custom seccomp in v1 (Docker defaults deemed sufficient) |
+| Container escape to host root | `cap_drop: ALL`; `privileged`, docker socket, `SYS_ADMIN` admission-rejected for **both doors**; Docker default seccomp/AppArmor (`APP_ISOLATION.md` # Forbidden for both doors, # Capabilities) | No userns remap, no custom seccomp in v1 (Docker defaults deemed sufficient) |
 | App lies about declared permissions | Enforced at kernel/Docker layer, not metadata — violations silently fail + log (`APP_ISOLATION.md` # Failure mode) | — |
 | Compromised app reads beyond its scope | Per-app bridge (no inter-app traffic); bind-mounts limited to the declared `folders` at their elected source (one user's home, or the household-shared tree the owner can already reach); other homes not on its filesystem (`APP_ISOLATION.md` # Filesystem) | Blast radius = the app's declared permissions + its mounted folders + its own managed DB. An app *can* read everything its grants allow — that's the grant, not a leak |
 | Brain↔Docker control-plane abuse | Brain talks to Docker via socket-proxy, not raw socket (`CONTROL_PLANE.md`) | — |
-| Privileged Door-2 app | Allowed — user authored the compose and owns the consequences (`APP_ISOLATION.md` # Trust tiers) | Explicitly the user's risk; not a store path |
+| Privileged Door-2 app | **Rejected** — admission is door-symmetric; `privileged`/socket/`cap_add`/host-ports/host-namespaces are refused for custom compose exactly as for store apps, because a container escape on a multi-user box hits every member, not just the (admin-only) installer (`APP_ISOLATION.md` # Trust tiers, `DECISIONS.md` 2026-06-02) | An admin who needs such a container runs it over SSH (`AUTH.md` # SSH is rescue) — deliberate, not one-paste; that residual is the box owner's own root access |
 
 **Blast-radius summary:** one compromised store app reaches its own data, its user's declared folders, and the internet (if granted) — **not** host root, other users' homes, or other apps. That containment is the security claim; preventing the compromise itself is curation's job, not the sandbox's.
 

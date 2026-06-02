@@ -111,7 +111,7 @@ These are the issue types the brain knows about at v1. New issues are added by c
 | `version-mismatch` | error | apps | 2 | host-agent and brain versions are not the lockstep pair they should be. |
 | `app-image-partial` | warning | (that app only) | 2 | An app image download was interrupted and is incomplete. |
 | `container-restart-loop` | warning | (nothing) | 2 | An app's container is crash-looping (restarted more than N times in a window). Per-app `instance_key`. The app is already failing; we surface it rather than block. Tier-2 action: view logs / stop the app. |
-| `app-unresponsive` | warning | (nothing) | 2 | **Deferred.** An app's container is running but its declared HTTP health-probe fails ("up but not responding"). Gated on the manifest `health_probe` field (`NEXT.md` Tier 4 — per-app HTTP health-probe). Registered shape only; no detector until the manifest field lands. |
+| `app-unresponsive` | warning | (nothing) | 2 | An app's container is running but its declared HTTP health-probe fails ("up but not responding"). Gated on the optional manifest `health_probe` field — apps that don't declare it are never probed. The app is reachable in Docker terms but not answering coherently; we surface it rather than block. Tier-2 action: view logs / restart the app. |
 
 ### Network
 
@@ -192,6 +192,7 @@ These defaults apply to **every** detector unless its row overrides them. `HEALT
 | `backup-overdue` | last successful backup timestamp | hourly | older than window *(deferred with backup)* |
 | `store-write-failed` | store write error (reactive, not timed) | on error | any persistent write failure *(built)* |
 | `service-down` (Caddy) | Caddy container state via the Docker API + Caddy admin-API (`localhost:2019`) reachability | 60s | bounded self-heal exhausted (see below) — *deferred, see note* |
+| `app-unresponsive` | HTTP GET **through Caddy** to the app's own route (`Host: <slug>`, path = manifest `health_probe.path`); response status vs the app's `healthy_status` set | 60s (health-poll tick) | status outside the healthy set, or timeout / connection failure — 2 consecutive bad samples, after the start-period grace. Clears on 1 good sample. |
 
 **`brain-db-corrupt` is authoritative and 1-shot.** A `PRAGMA integrity_check` verdict is definitive, not a noisy sample, so this row overrides the cross-cutting debounce default (`# Cross-cutting detector policy`: raise on 2 consecutive bad samples) and raises/clears on the first reading — the same posture the policy grants locus-A/D signals. A query that fails to *run* (rather than returning a non-`ok` result) is inconclusive: no raise, no clear; corruption that breaks the query itself surfaces through `store-write-failed` instead.
 
@@ -200,6 +201,10 @@ These defaults apply to **every** detector unless its row overrides them. `HEALT
 **Detection feeds bounded self-heal, not a passive banner — and is deferred.** A fully-down Caddy means the dashboard is unreachable (Caddy fronts `malmo.local`), so a banner has nobody to show it to. Instead, the brain restarts the Caddy container on failure, bounded like host-agent's `StartLimitBurst` (≈5 restarts / 60s); `service-down`(caddy) is raised only when that budget is **exhausted** (genuinely stuck), and the issue becomes a logged incident + post-recovery surface. This is **gated on the brain owning Caddy's container lifecycle** (start/stop/restart) — today the brain manages Caddy's *routes* (`EnsureServer`/`EnsureCatchAll`) but not its *container*, so the self-heal detector is **deferred** until that prerequisite lands. See `NEXT.md` # Caddy liveness self-heal and `DECISIONS.md` 2026-05-31.
 
 **Per-reporter authority (reconcile rule).** `service-down` is one issue with a per-unit `instance_key`, but raised from two loci. Each reporter is authoritative **only over the `instance_key`s it reports** — the host-agent systemctl batch owns `{docker, avahi-daemon, chrony, smbd, host-agent}`; the brain locus-C check owns `{caddy}`. A reporter's batch clears only its own absent keys, never the other reporter's. This refines the "scoped per category" reconcile rule (`# Cross-cutting detector policy`) for the one issue that spans loci.
+
+**Why `app-unresponsive` probes through Caddy, not by dialing the container.** The probe is opt-in per app (the manifest `health_probe` field, `APP_MANIFEST.md` # B); when an app declares it, the brain issues an HTTP `GET` on the health-poll tick. The probe goes **to Caddy, with `Host: <slug>`** — exactly the request a browser makes — never directly from the brain to the app container. The reason is the threat model: dialing the container would require the brain to join an app-facing Docker network, and Docker bridges are bidirectional, so that same membership would hand every app container (an **assumed-compromised** principal — `THREAT_MODEL.md` # B2) L3 reach to the brain's listening sockets, i.e. the control plane (`brain compromise = host compromise`, `THREAT_MODEL.md`). Probing through Caddy keeps the trusted control plane off every app-reachable network — the brain only ever talks to Caddy, which it already does for routing — and measures the user-visible truth: a request through the front door either gets a coherent answer or it doesn't (a dead upstream surfaces as Caddy's own `502`, which falls outside the healthy set naturally). See `DECISIONS.md` 2026-06-02.
+
+**Healthy-status default and anti-flap.** Default healthy = **any status < 500** ("the app's HTTP server answered coherently"): an app that returns `401`/`403`/`404` on the probe path is *responding*; `5xx`, a timeout, or a connection failure is not. An author with a real `/healthz` can narrow this to `[200]`. The detector inherits the cross-cutting debounce (raise on 2 consecutive bad, clear on 1 good) and adds two guards: a **start-period grace** (default 60s after the container's `StartedAt`, overridable via `health_probe.start_period`) so a warming-up app doesn't raise on install/update, and **probing only steady-running containers** — a crash-looping app surfaces as `container-restart-loop`, not `app-unresponsive`, so the two detectors don't double-banner the same failure.
 
 ### Catalog — locus A (boot reporters) and D (reactive)
 
@@ -212,7 +217,6 @@ These defaults apply to **every** detector unless its row overrides them. `HEALT
 | `hostname-conflict` | D | Avahi name-collision callback |
 | `app-image-partial` | D | image pull reports incomplete |
 | `container-restart-loop` | D | Docker restart count > N within window *(built — brain polls `RestartCount`; N/window in the progress entry)* |
-| `app-unresponsive` | D | manifest HTTP health-probe fails — *deferred, needs manifest field* |
 
 ### What we deliberately do not check
 

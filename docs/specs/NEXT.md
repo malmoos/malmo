@@ -11,7 +11,7 @@
 
 Each entry: one-sentence shape, the doc it touches, and *why this tier*. The doc is the source of context — read it before opening the topic.
 
-When a topic is **decided**, remove its entry here and add the rationale to `DECISIONS.md` (if it flipped a position) or just lock it in the relevant doc.
+**This is a *design* backlog, not an implementation backlog.** An entry means "we haven't decided the shape yet." The moment a topic's design is **locked** — its shape written into the relevant spec (+ a `DECISIONS.md` entry if it flipped a position) — it leaves this doc. Opening the contributor issue (or queuing it in `../progress/README.md` # Up next) is part of that **same change**: lock the spec, remove the entry here, file the issue, together. Do **not** defer the removal to the implementing PR — that leaves NEXT.md claiming a design is open for the whole time the issue sits in the backlog, which is exactly the staleness this doc must not accumulate. If an issue covers only *part* of an entry, scope the entry down to what remains (see the image-cleanup and lint-tool entries for the pattern) rather than deleting it.
 
 ---
 
@@ -47,13 +47,6 @@ Two-part decision: (a) is v1 English-only? (very probably yes); (b) does the man
 **Context:** `APP_MANIFEST.md`, `APP_STORE.md`, `WEB_UI.md`.
 **Why Tier 2:** schema-shaping; literally one or two field-shape decisions in `APP_MANIFEST.md`.
 
-### Custom container (Door 2) install flow
-
-The actual paste-compose UX. Field-by-field interaction, main-port inference, what we ask vs. autodetect, name collisions, edit-after-install path.
-
-**Context:** `APP_MANIFEST.md` ("Custom container — synthetic manifest").
-**Why Tier 2:** Door 2 is the bridge to the "tinkerer adoption" audience. The synthetic-manifest mechanic is sketched; the UX isn't.
-
 ### Store catalog curation policy
 
 `APP_STORE.md` pins the publish *mechanism* (signed catalog, PR-based, CI-validated). What's still open is the **content policy** the maintainer enforces in review: do we reject manifests that set `storage.app_managed_user_content: true`, or only label them with the absence of the `files_first_class` badge? Do we require apps to log to stdout/stderr (no `logging.driver:` overrides, no in-`command:` file redirects) so the dashboard Logs tab works (`LOGGING.md` # Apps are expected to log to stdout)? What other criteria gate inclusion (license, upstream maintenance signals, declared-vs-actual permission audit)?
@@ -82,20 +75,6 @@ Required for password recovery, product comms, and any future cloud-account link
 
 **Context:** `FIRST_RUN.md`.
 **Why Tier 2:** decided now or it becomes a forced retrofit later. Likely answer: optional field at user creation, used for recovery only.
-
-### OpenAPI codegen timing for the brain API
-
-The brain↔UI API is hand-rolled Go ↔ TS types in v1 (`DECISIONS.md` 2026-05-14, brain↔UI API). The OpenAPI 3 spec + generated TS client lands later. Open: when — before the public store API ships, after the first external integrator asks, or on a fixed schedule? Generator choice (`oapi-codegen` for Go server, `openapi-typescript` for TS client) is straightforward; timing is the call.
-
-**Context:** `BRAIN_UI_PROTOCOL.md` # "API discipline."
-**Why Tier 2:** every week we ship without it, drift between hand-rolled types grows. Cheap insurance if we pin a trigger.
-
-### Rate-limit / abuse posture for the public API
-
-The brain↔UI API is public-callable from day one (third-party stores, CLI, external tools — `DECISIONS.md` 2026-05-14). v1 has no rate-limiting story. Open: per-session limits, per-IP for unauthenticated routes, separate budget for SSE stream count vs. request rate, what 429 messaging looks like.
-
-**Context:** `BRAIN_UI_PROTOCOL.md`, `AUTH.md`.
-**Why Tier 2:** needs to land before third-party stores can ship; not blocking v1.
 
 ---
 
@@ -283,11 +262,12 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Exact `MALMO_SERVICE_*` variable schema per service type — `APP_MANIFEST.md`, `SERVICE_PROVISIONING.md`.
 - `permissions.devices` syntax — paths vs. categories (`webcam`, etc.). `APP_MANIFEST.md`. *(GPU split out into its own `gpu: true` field — `DECISIONS.md` 2026-05-30; this item now covers only non-GPU device shorthand.)*
 - **Store `permissions.capabilities` escape hatch (deferred).** A reviewed-at-submission list (`NET_ADMIN`, `SYS_TIME`) for the rare store app that legitimately needs one capability. Cut from the v1 schema (`DECISIONS.md` 2026-05-30 — store apps get `cap_drop: [ALL]`, no `cap_add`); capability needs go through Door-2 / Tier 2 today. Revisit if a curated app genuinely can't fit either path. `APP_MANIFEST.md`, `APP_ISOLATION.md`.
-- **Door-2 vs. Door-1 admission asymmetry.** `APP_ISOLATION.md`'s trust-tier model says Door-2 custom compose may carry `privileged` / `cap_add` / the Docker socket ("the user wrote it"), but the implemented admission policy (`internal/admission`, run for *both* doors in `install()`) rejects all three uniformly. Decide whether Door-2 actually relaxes admission, and if so exactly which primitives — vs. holding the line and pushing those use cases to Tier 2 only. `APP_LIFECYCLE.md` # admission policy, `APP_ISOLATION.md` # Trust tiers.
+- **Door-2 asymmetric admission relaxation (deferred).** v1 holds the line — admission is door-symmetric, Door-2 carries permissive *defaults* but the identical *sandbox* (`DECISIONS.md` 2026-06-02). If real demand appears, revisit relaxing the *app-bounded* primitives for Door-2 (host ports, arbitrary bind mounts minus the socket/host-root paths) while keeping the host-rooting ones (`privileged`, socket, host namespaces, near-root caps) refused — pairs with the deferred reviewed `permissions.capabilities` allowlist. `APP_ISOLATION.md` # Trust tiers, `APP_LIFECYCLE.md` # admission policy.
 - Manifest signing / provenance for third-party stores. `APP_MANIFEST.md`.
 - App icon & screenshot handling — bundled vs. URL. `APP_MANIFEST.md`.
 - Update-strategy declarations (in-place vs. needs-migration). `APP_MANIFEST.md` (folds into hooks).
-- Typed install-time questions in the manifest (prior art: Yunohost's pre-install question schema — typed prompts for admin/domain/language captured at install time). We have nothing today; revisit when Door 2 / managed-config grows beyond env-var passthrough. `APP_MANIFEST.md`.
+- Typed install-time questions in the manifest (prior art: Yunohost's pre-install question schema — typed prompts for admin/domain/language captured at install time). Door 2 now authors the `permissions` block (internet/lan/gpu/folders) in the form plus a raw-YAML escape hatch (`DECISIONS.md` 2026-06-02), but there's still no *store-app-declared* typed-question schema for arbitrary install-time config beyond env-var passthrough; revisit when a curated app needs it. `APP_MANIFEST.md`.
+- **Door-2 synthetic-manifest *graduate-in-place* path (deferred).** Editing an **already-installed** custom app's manifest in place to *graduate* it (refine volumes, add a managed DB / backup hooks, classify cache vs. data) without reinstalling. *Install-time* authoring is built into the form (permission controls + Edit-as-YAML toggle, `DECISIONS.md` 2026-06-02); the deferred remainder is the **post-install** editor specifically — its larger surface (re-render, restart, reconcile a live instance, audit) is why it waits. v1 change-path stays uninstall + re-paste. Pairs with the re-import path for archived "keep data" instances (Control-plane Tier item). `APP_MANIFEST.md` # one model, two doors, `DASHBOARD.md` # Edit-after-install is deferred.
 - App categories / tags taxonomy for the store browse UX. `APP_STORE.md`, `WEB_UI.md`.
 - Per-app cron / scheduled tasks declared in manifest (distinct from the Tier-3 background-jobs service in `SERVICE_PROVISIONING.md`). Cron-on-host vs. a per-instance scheduler container. `APP_MANIFEST.md`.
 - Per-app kill switch in `catalog.json` (distinct from `RELEASE_MANIFEST.md`'s `rollback_to`, which targets brain/UI versions). For "CVE dropped in app X, stop it everywhere on next catalog refresh." `APP_STORE.md`, `APP_LIFECYCLE.md`.
@@ -296,7 +276,6 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - *(Resolved 2026-05-29 — user-driven multi-instance is **yes**: duplicate installs warn but don't block (`DASHBOARD.md` # warn, don't block). Each becomes a personal instance with its own owner/slug/data. The remaining sub-question — two instances owned by the *same* user — folds into the same machinery; pin it if it ever bites.)*
 - Same-user repeat-install slug cap + error UX. `allocateSlug` (`internal/lifecycle`) tries `<slug>` (bare, first-come), `<slug>--<user>` (personal collision), `<slug>-2`, `<slug>-3`, then fails *inside the install job* with an opaque "no free slug" error. Two open bits: (a) the cap of effectively three slugs before exhaustion is arbitrary and tight for power users who install the same app multiple times; (b) exhaustion should surface as a clear pre-job `422`/`409`, not a mid-job failure. `APP_LIFECYCLE.md`, `DASHBOARD.md`.
 - App publisher identity / verified-author badge surface (the *mechanism* folds into manifest signing above; this is the catalog-side UX). `APP_STORE.md`.
-- Per-app HTTP health-probe declaration in the manifest (beyond Docker `HEALTHCHECK`), so the brain reports "responding" vs. "up but unresponsive." `APP_MANIFEST.md`, `HEALTH.md`.
 - Container vulnerability scanning at catalog publish (Trivy/Grype in CI on every PR). `APP_STORE.md`.
 
 **Networking & cloud**
@@ -316,6 +295,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 
 **Isolation & runtime**
 - **GPU + device capacity enforcement.** `permissions.gpu` and `permissions.devices` are parsed and (for devices) passed through, but the spec's "refuse at capacity check if the GPU/device is absent" (`APP_ISOLATION.md` # GPU, # Devices) is not honored — the brain has no host hardware-capability query, so an absent GPU/device currently fails at `docker compose up` instead of giving the specced capacity error, and `gpu: true` emits no runtime stanza at all. Needs a host capability endpoint (sibling of `/v1/identity/well-known`) the install transaction checks before generating the override. Deferred from the folder-enforcement slice (`docs/progress/install-permissions-enforcement.md`). `APP_ISOLATION.md`, `BRAIN_HOST_PROTOCOL.md`.
+- **Ingress topology vs. "no inter-app traffic."** `APP_ISOLATION.md` # Inter-app traffic and `THREAT_MODEL.md` # B2 commit to **per-app bridges with no inter-app traffic** — the reverse proxy reaches each app over its own network. The implementation instead joins every app's `main_service` to a **shared `malmo-ingress`** network alongside Caddy (`internal/lifecycle`), which lets app main-services reach each other and thus diverges from the stated mitigation. The design (per-app bridge) is already locked; the open sub-question is the *mechanism* to preserve it — Caddy joins each per-app network (matches the spec literally), or the shared ingress stays but inter-app traffic is cut another way (ICC off / nftables on the bridge). Pin which, then converge the impl. The per-app HTTP health-probe (`DECISIONS.md` 2026-06-02) deliberately routes its probe through Caddy partly so it doesn't depend on this resolving. `APP_ISOLATION.md` # Inter-app traffic, `THREAT_MODEL.md` # B2, `CONTROL_PLANE.md`.
 - GPU sharing across apps (MIG / time-slice / exclusive). `APP_ISOLATION.md`.
 - macvlan on bonded / bridged host interfaces. `APP_ISOLATION.md`.
 - Read-only root rollout as a catalog requirement. `APP_ISOLATION.md`.
@@ -343,10 +323,9 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Account deletion flow — what happens to `/home/<user>/` and per-user Tier-3 instances when an account is removed. (Audit-row handling is settled: FK `SET NULL` on `audit_events.actor_user_id` keeps history with a null actor.) `USERS_AND_GROUPS.md`, `AUTH.md`.
 - Account suspension — disable login without deleting data (kid grounded, ex-roommate archived). `AUTH.md`, `USERS_AND_GROUPS.md`.
 - Multi-admin invitation flow — UI affordance for "make a second admin." Today implicit (admin creates a member then promotes them). `AUTH.md`, `USERS_AND_GROUPS.md`.
-- Dashboard login brute-force throttling / lockout — `LOGGING.md` notes journald caps sshd spam, but the brain's own login endpoint has no rate-limit story. `AUTH.md`.
 
 **Runtime & host**
-- Container image / layer cleanup policy — `docker image prune` cadence + retention so old images don't fill the OS drive over time. `APP_LIFECYCLE.md`, `UPDATES.md`.
+- Periodic image / layer cleanup policy — a recurring `docker image prune -a` sweep (cadence + retention) for images orphaned by *updates*, not uninstalls. Post-uninstall reclaim is handled by targeted `rmi`-by-digest (issue #9); this remaining item needs a scheduler/timer seam the brain doesn't have yet, plus a retention rule for update-orphaned layers. `APP_LIFECYCLE.md`, `UPDATES.md`.
 - Container runtime version pinning — which Docker engine version we ship, how it tracks Debian-base updates vs. upstream `docker-ce`. `BUILD.md`, `UPDATES.md`.
 - Host kernel panic / coredump capture policy — what we keep, where, retention. Brain & host-agent process panics are covered by `TELEMETRY.md` (structured crash events when opt-in is on). Kernel panics are the remaining gap. `LOGGING.md`, `HEALTH.md`.
 - Log rotation for non-journald files (Caddy access logs, anything that escapes the journal). `LOGGING.md`.
@@ -376,7 +355,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Backup verification / restore-test cadence — untested backups aren't backups. `STORAGE.md`.
 
 **Developer / app-author surface**
-- Local lint / test tool (`malmo manifest lint`, `malmo install --local`) — authors today can't validate a manifest without making a PR. `APP_MANIFEST.md`, `APP_STORE.md`.
+- Local dev/test subcommands beyond lint (`malmo install --local`, etc.) — let authors run a manifest on their own box before a catalog PR. `malmo manifest lint` (schema validation) is issue #7 and owns the `cmd/malmo` skeleton; this remaining item is the heavier "actually install it locally" surface. `APP_MANIFEST.md`, `APP_STORE.md`.
 - Catalog PR template + author-facing docs surface (subset of the Tier-3 "Documentation surface" entry). `APP_STORE.md`.
 - Manifest changelog discipline — when schema v1 → v2 ships, how authors find out. Revisit once we have a `v2` candidate. `APP_MANIFEST.md`.
 
@@ -402,6 +381,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 **Control plane**
 - *(Resolved 2026-05-29/31 — instance naming is first-come bare `<slug>` for any scope; `<slug>--<user>` on personal collision, `<slug>-2` on household collision. Flat single-label forced by wildcard-cert + mDNS constraints. See `DASHBOARD.md` # instance naming and `DECISIONS.md` 2026-05-29 + 2026-05-31.)*
 - Re-import path for archived ("keep data") instances after uninstall. `APP_LIFECYCLE.md`.
+- Per-session concurrent file-transfer cap for the streaming `GET`/`PUT /api/v1/files/content` endpoints. These are streaming (not jobs, not SSE), so neither the per-session request-rate bucket nor the SSE-stream concurrency cap governs them (`BRAIN_UI_PROTOCOL.md` # Rate limiting & abuse — deliberately left out of the v1 posture). A small concurrency counter (same shape as the ≤16 SSE cap) is the obvious backstop for a buggy uploader; pin it when file-transfer abuse actually bites. `BRAIN_UI_PROTOCOL.md`, `FILES.md`.
 
 **Build & distribution**
 - Signing infrastructure for apt repo, registry images, ISO. `BUILD.md`.

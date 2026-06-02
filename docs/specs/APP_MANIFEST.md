@@ -11,7 +11,7 @@ The brain only ever knows about manifests. *Everything* installed on a malmo box
 
 This unification matters because:
 - The brain's data model stays simple — one type of thing.
-- A power user can paste a compose file today and later edit the synthetic manifest to graduate the app (add backup hooks, request a managed DB, etc.) without reinstalling.
+- A power user can paste a compose file today; the synthetic manifest is designed to *graduate* later (add backup hooks, request a managed DB, refine volumes) into a richer manifest of the same schema. **In-product editing of a synthetic manifest is deferred past v1** (`NEXT.md`) — v1's custom flow is install-only, and changing a custom app means uninstall + re-paste. See `DASHBOARD.md` # Door-2 custom container install flow.
 - Door-1 is just "we wrote the manifest for you."
 
 ## Author philosophy
@@ -83,6 +83,7 @@ main_port: 2342                       # port the main service listens on interna
 preferred_slugs: [photos, photoprism] # subdomain priority list; OS picks first free
 needs_secure_context: false           # optional; default false. See below.
 timezone: system                      # optional; "system" (default) or "utc"
+health_probe: /healthz                # optional; enables the "responding" check. See below.
 ```
 
 **`id` and `preferred_slugs`** must be strict kebab-case — lowercase alphanumerics joined by single internal hyphens (`home-assistant` ✓; `whoami-`, `-x`, `who--ami`, `xn--y`, `Foo` ✗). This keeps the `<slug>--<user>` personal-instance scheme parseable (`DASHBOARD.md` # instance naming): no leading/trailing hyphen and no `--` run (which would collide with the owner separator and also covers the reserved `xn--` prefix). Catalog CI and the manifest parser both reject violations.
@@ -101,6 +102,23 @@ The compose file is held **verbatim**. Authors test it with `docker compose up` 
 The field is **never a routing override.** The URL each app gets is determined entirely by the global "Use secure URLs" toggle in Settings — see `MALMO_NETWORK.md`. App authors should set this honestly: many apps work fine on HTTP and shouldn't set it; apps that genuinely depend on a secure-context API should.
 
 Previously this field was named `requires_https` and gated install on un-enrolled boxes. Changed 2026-05-14 — see `DECISIONS.md`.
+
+**`health_probe`** opts the app into malmo's *"up but not responding"* detection. It is **not** Docker `HEALTHCHECK`: malmo holds the compose file verbatim and cannot add a healthcheck for the author, so the probe is declared here, in malmo's contract, and executed by the brain. Absent (the default), the app is never probed and the `app-unresponsive` health issue is never raised for it — least surprise for the bulk of the catalog. Shorthand `health_probe: /healthz` expands to `{ path: /healthz }`; the full form:
+
+```yaml
+health_probe:
+  path: /healthz                    # HTTP path to GET (required when the block is present)
+  healthy_status: [200]             # optional; default: any status < 500
+  start_period: 60s                 # optional; grace after container start before probing (default 60s)
+```
+
+When set, the brain probes the app on its health-poll tick and raises the **non-blocking** `app-unresponsive` warning (`HEALTH.md` # Version, Tier-2 action: view logs / restart) when the probe fails. Three things to know, all owned by `HEALTH.md` # Detector catalog:
+
+- **No `port` field.** The probe targets the app's existing route (which already points at `main_service:main_port`) — it goes *through Caddy* with `Host: <slug>`, exactly like a browser request, not by the brain dialing the container. This is a security call: it keeps the brain (the control plane) off every app-reachable Docker network. See `DECISIONS.md` 2026-06-02.
+- **Default healthy = any status < 500**, i.e. "the server answered coherently." An app that returns `401`/`403`/`404` on the probe path is still *responding*; `5xx`, a timeout, or a connection failure (Caddy's `502`) is not. Authors with a real health endpoint can narrow to `[200]`.
+- **`start_period`** is the grace after the container starts before the probe counts, so a warming-up app doesn't flap the banner on install/update.
+
+Door-2 synthetic manifests omit it; a power user can add it later by editing the manifest, same as any other optional field.
 
 ### B2. Resources (recommended, never a limit)
 
@@ -197,7 +215,7 @@ Store review checks the declared permissions match the app's actual usage.
 
 **`devices` and `gpu`.** `devices` lists explicit `/dev/...` paths the app needs passed through (a Zigbee dongle, a webcam); the brain validates each exists before start. `gpu: true` is **separate from `devices`** because driver wiring is platform-specific — the OS selects the right runtime (NVIDIA container runtime, Intel/AMD `/dev/dri`) and the app introspects what's present via standard tooling; if no GPU exists the install fails at the capacity check.
 
-**No added Linux capabilities for store apps.** The brain's override is `cap_drop: [ALL]` and adds none; admission rejects any `cap_add` (`APP_LIFECYCLE.md` # admission policy). Apps that genuinely need a capability, `privileged`, or the Docker socket go through the **Door-2 custom path** (the user wrote the compose, owns the consequences) or, for curated OS integrations, **Tier 2** (`SERVICE_PROVISIONING.md`). A raw-capability escape hatch *in a store manifest* is intentionally absent. (`APP_ISOLATION.md` sketches a reviewed `permissions.capabilities` list; that is not part of the v1 store schema and is tracked as an open item — see `NEXT.md`.)
+**No added Linux capabilities for store apps.** The brain's override is `cap_drop: [ALL]` and adds none; admission rejects any `cap_add` (`APP_LIFECYCLE.md` # admission policy). Apps that genuinely need a capability, `privileged`, or the Docker socket do **not** get there through Door 2 — admission is door-symmetric and refuses those for custom compose exactly as for store apps (`APP_ISOLATION.md` # Trust tiers, `DECISIONS.md` 2026-06-02). They run as curated OS integrations (**Tier 2**, `SERVICE_PROVISIONING.md`) or the admin runs them over SSH. A raw-capability escape hatch *in a store manifest* is intentionally absent. (`APP_ISOLATION.md` sketches a reviewed `permissions.capabilities` list; that is not part of the v1 store schema and is tracked as an open item — see `NEXT.md`.)
 
 #### `folders` — access to use-case content
 
@@ -315,7 +333,7 @@ permissions:
 
 ## Custom container — synthetic manifest
 
-User pastes a compose file, names the app, picks the main port. The brain generates:
+User pastes a compose file, names the app, picks the main port, and **elects the app's permissions** in the install form (`DASHBOARD.md` # Door-2 custom container install flow). The brain generates:
 
 ```yaml
 id: my-thing-x4f7                     # auto: name + entropy
@@ -324,18 +342,27 @@ name: my-thing
 version: custom
 compose_file: docker-compose.yml      # the user's pasted file
 main_service: <inferred or asked>
-main_port: <user-provided>
+main_port: <inferred or asked>
 preferred_slugs: [my-thing]
 
 storage:
   data_volumes: [<all volumes from the compose>]
   # cache_volumes: empty by default — best-effort backup of everything
 permissions:
-  internet: true                      # default-on for custom apps
-  lan: false
+  internet: true                      # default-on for custom apps; form toggle
+  lan: false                          # form toggle
+  gpu: false                          # form toggle
+  folders:                            # empty by default; one entry per form row
+    - folder: photos
+      mode: read
+      target: /photoprism/originals   # Door-2-only: explicit in-container path
 ```
 
-No managed services by default. Best-effort backup of all volumes (we can't tell cache from data without the author's input). Scope (household vs. personal) is the installer's election, not synthesized into the manifest (# G). User can edit the synthetic manifest later to add managed services, hooks, refined storage classification — same schema, same fields.
+**The `permissions` block is admin-elected in the form, not hardcoded.** `internet` (default on), `lan`, `gpu`, and any `folders` rows are authored through the install screen's permission controls; `devices` and managed `services` are the long tail, reached through the form's **Edit as YAML** escape hatch rather than dedicated fields (`DASHBOARD.md` # Form is a projection of the synthetic manifest). The form is a friendly projection of *this* manifest; the YAML toggle edits the same overlay raw. No managed services by default; best-effort backup of all volumes (we can't tell cache from data without the author's input); scope (household vs. personal) is the installer's election, not a manifest field (# G). The richer-manifest *graduate-in-place* path — editing an already-installed instance's manifest — is the intended future shape but **deferred past v1** (`DASHBOARD.md` # Edit-after-install is deferred); install-time authoring (form + YAML toggle) is not that deferred feature.
+
+**Door-2 folder grants carry an explicit `target`.** Store-app folder grants declare no in-container path — the brain mounts each at `/malmo/<folder>` + injects `MALMO_FOLDER_<NAME>`, and the author maps that env var (# Locked: folders mount at a fixed path). A Door-2 paste has no author to adapt: the verbatim third-party compose hardcodes its data path, so the synthetic manifest's folder entry carries an explicit `target` (the destination the admin typed) and the brain binds the elected source straight there. The `target` field is **Door-2-only** — store manifests omit it and keep the fixed-path + env-var convention (`DECISIONS.md` 2026-06-02). The *source* (personal vs. household) stays the installer's per-folder election, exactly as for store apps.
+
+**What the brain infers vs. asks (Door-2 paste).** `main_service` is **autodetected** when the compose has exactly one service, and **asked** otherwise (a dropdown of the compose's services). `main_port` is the *container-internal* port Caddy routes to — **best-effort inferred** from every signal the compose carries: a single `expose:` value, or the *container side* of a published `ports:` mapping (`8080:80` ⇒ `80`), mined out for the prefill before the mapping itself is rejected. It is **asked** only when the compose is silent (malmo can't read the image's `EXPOSE` without pulling it) and is always editable. A published `ports:` is never *honored* (it's an admission rejection — Caddy fronts every app on internal networks); its container side is only read to prefill `main_port`. The full screen UX — where the flow lives, the permission controls and YAML escape hatch, inline admission-error coaching, the live URL preview, and the deferred edit-after-install path — is locked in `DASHBOARD.md` # Door-2 custom container install flow.
 
 **Custom apps may request managed services.** Allowed, not encouraged. A power user pasting compose can manually add `services: { database: { type: postgres, version: "15" } }` and gets the same managed Postgres treatment. We document the path; we don't gate it.
 
@@ -350,13 +377,14 @@ No managed services by default. Best-effort backup of all volumes (we can't tell
 - **User content vs. app state are separate stores.** User content (`/home/<user>/Photos/`, etc.) accessed by manifest-declared bind mounts of use-case folders; app state in `/var/lib/malmo/instances/<id>/data/`. Apps reach user content by reference, never by copy.
 - **`scope: pick-subfolder`** for `folders` — install-time prompt for apps that should manage a subset (notes apps, media subsets). Default is provided by the manifest; user can override.
 - **Folder source (personal vs household-shared) is installer-elected, not a manifest field.** The manifest declares only the folder + `mode` + `scope`; whether it binds the owner's `~/<Folder>/` or the household `/srv/malmo/shared/<Folder>/` is the installer's per-folder choice (personal instances pick, defaulting to personal; household instances are always shared). Replaces the old `user_folders` / `shared_folders` keys. See `DECISIONS.md` 2026-05-30.
-- **`folders` mount at a fixed path + injected env var.** The manifest declares folder + `mode` + `scope` but no in-container path; the brain mounts each at `/malmo/<folder>` and injects `MALMO_FOLDER_<NAME>`. The app's compose maps that variable to its own library path. `mode` defaults to `read`. Same injection pattern as `MALMO_SERVICE_*` / `MALMO_DATA_DIR`.
+- **`folders` mount at a fixed path + injected env var (store apps).** A store manifest declares folder + `mode` + `scope` but no in-container path; the brain mounts each at `/malmo/<folder>` and injects `MALMO_FOLDER_<NAME>`. The app's compose maps that variable to its own library path. `mode` defaults to `read`. Same injection pattern as `MALMO_SERVICE_*` / `MALMO_DATA_DIR`. **Door-2 custom apps diverge:** their verbatim compose has no author to map the env var, so a Door-2 folder grant carries an explicit `target` (the destination path the admin types) and the brain binds straight there. `target` is Door-2-only; store grants omit it (# Custom container — synthetic manifest, `DECISIONS.md` 2026-06-02).
 - **`gpu` is its own field, separate from `devices`.** `devices` passes through explicit `/dev/...` paths; `gpu: true` selects the platform GPU runtime. No-GPU box fails at the capacity check.
 - **`app_managed_user_content: true`** is the opt-in for apps that don't expose user content via use-case folders. Triggers an install-time warning. Curated store prefers apps without it.
 - **Scope (household vs. personal) is installer-elected, not a manifest field.** No `multi_user.mode`. Admins choose household or personal; members install personal only (`DASHBOARD.md`, `DECISIONS.md` 2026-05-29). Guest-sharing and household visibility are deferred and not manifest fields.
 - **No added Linux capabilities for store apps.** Override is `cap_drop: [ALL]`, adds none; admission rejects `cap_add`. Capability / `privileged` / Docker-socket needs go through Door-2 or Tier 2. A reviewed `permissions.capabilities` escape hatch is not in the v1 store schema (open in `NEXT.md`).
 - **Bind mounts only — no Docker named volumes for app data.** All data lives under the instance's `data/` dir.
 - **Hooks deferred from MVP.** When reintroduced, they will be one-shot container images, not in-container scripts.
+- **`health_probe` is opt-in and malmo-executed, not Docker `HEALTHCHECK`.** Optional `path` (+ `healthy_status`, `start_period`); the brain probes the app *through its Caddy route* on the health-poll tick and raises the non-blocking `app-unresponsive` warning (`HEALTH.md`) when it fails. Absent → no probe, issue never raised. Default healthy = any status < 500. Probing through Caddy (not by dialing the container) keeps the control plane off app-reachable networks. See `DECISIONS.md` 2026-06-02.
 - **`needs_secure_context` is an install-time warning, not a routing override or install block.** Apps declare it honestly; the brain warns the user if the current URL scheme is HTTP. The URL each app uses is determined by the global toggle in Settings, not the manifest.
 - **Public, versioned spec.** Third-party stores depend on it.
 - **Env-var injection: app-defined naming.** App's compose maps malmo's stable `MALMO_SERVICE_*` variables to whatever names the app expects. No auto-rewrite. Authors adapt; we document.

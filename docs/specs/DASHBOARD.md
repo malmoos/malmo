@@ -52,6 +52,63 @@ Rationale: two people may want genuinely different things from the same app — 
 
 ---
 
+## Locked: Door-2 custom container install flow
+
+Everything above is the **Door-1** (store) install. **Door 2** — pasting a raw `docker-compose.yml` — is a separate, **admin-only** flow that produces a first-class instance under the *identical* sandbox as a store app (admission is door-symmetric; `APP_ISOLATION.md` # Trust tiers, `DECISIONS.md` 2026-06-02). This section locks its IA and screen UX; `APP_MANIFEST.md` # Custom container — synthetic manifest owns the manifest the flow produces.
+
+### Where it lives
+
+Admin-only, and tucked away — not a dock item, not in the Store browse grid. An **"Install a custom container"** affordance sits at the **bottom of the Store**, below the catalog, visible only to admins (members never see Door 2 — `DECISIONS.md` 2026-06-02). It opens a dedicated full-screen form, **not** the catalog consent dialog: the two are different shapes. A store install *elects folder sources* off a known manifest; a custom install *authors* the manifest from a paste. The calm-launcher posture holds — the non-technical primary audience never trips over a "paste YAML" box, while the tinkerer who wants it finds it where power-user affordances live.
+
+### The form — what we ask vs. autodetect
+
+One screen, top to bottom:
+
+1. **Paste or upload the compose file.** A large textarea (file-picker as the alternative) is the primary input. The compose is held **verbatim** — malmo never rewrites it (`APP_MANIFEST.md`). This is *the user's document*; it stays in its own textarea throughout (see # Form is a projection of the synthetic manifest below).
+2. **App name.** A friendly display name; the slug derives from it. The form previews the resulting URL (`<slug>.local`) live as the name is typed.
+3. **Main service** — *autodetected* when the compose has exactly one service; a **required dropdown** of the compose's services when it has several (`manifest.Synthesize`).
+4. **Main port** — the *container-internal* port Caddy routes to. **Best-effort inferred** from every signal the compose carries — a single `expose:` value, or the *container side* of a published `ports:` mapping (`8080:80` ⇒ `80`, mined out before the mapping itself is rejected) — and **asked** only when the compose is silent, since malmo can't read the image's `EXPOSE` without pulling it. Always editable, always required, with help text ("the port your app listens on *inside* the container — check the image's docs"). A published `ports:` mapping is still an admission rejection (Caddy fronts every app); we read its container side for the prefill, we don't honor the host binding.
+5. **Permissions.** The admin elects the app's malmo-native permissions — this is where the synthetic manifest's `permissions` block is authored (`APP_MANIFEST.md` # Custom container):
+   - **Internet** — default **on** (the custom-app default), with a one-line explanation.
+   - **LAN / mDNS** — default **off**.
+   - **GPU** — default **off**; a single toggle. On ⇒ the synthetic manifest sets `gpu: true` (platform GPU runtime; `APP_MANIFEST.md` # gpu). No-GPU boxes surface the same capacity-check failure as a store app.
+   - **Folder access** — **optional, empty by default** (most pasted containers touch no user content). An "add a folder" control adds **two-input rows**: **Source** (a picker over the fixed use-case folders — Photos, Documents, Movies, Music, Notes, Downloads) on the left, **Destination** (a free-text in-container path the admin types) on the right, plus a read/write choice. Each row becomes one folder grant in the synthetic manifest. The destination is hand-typed and Door-2-specific — see # Folder grants carry an explicit destination path below.
+   - **Devices and managed `services`** are deliberately **not** given dedicated controls — they're the long tail. A power user reaches them through the **Edit as YAML** toggle (next), not a form field.
+6. **Scope** — even though Door 2 is admin-only, the admin still chooses **Household** vs **Just for me**, via the same button convention as the store row (silent personal on a single-user box; # Single-user simplification).
+
+### Form is a projection of the synthetic manifest (with a YAML escape hatch)
+
+The form fields in steps 2–5 are a **friendly projection of the synthetic manifest** — the overlay malmo wraps around the pasted compose (`APP_MANIFEST.md` # Custom container). An **"Edit as YAML"** toggle flips that overlay between the form and a **raw manifest editor**, so the power user who needs a field the form doesn't surface (`devices`, managed `services`, a `health_probe`) hand-authors it without us building a control for every key. This is the Door-1/Door-2 split recursed one level: the form is the calm path, the YAML view is the escape hatch.
+
+Two boundaries keep it honest:
+
+- **The toggle edits the *manifest overlay*, not the compose.** The pasted compose is the user's verbatim document and keeps its own textarea (step 1); the YAML view never merges the two. Two documents, two roles — flipping to YAML never threatens the "compose held verbatim" guarantee.
+- **Admission gates every path identically.** Whether a permission was toggled, a folder row filled in, or the manifest hand-edited as YAML, submitting runs `Synthesize` + `admission.Check` (# Validation below). The escape hatch escapes the *form*, not the *sandbox* — a YAML-editing admin still can't smuggle `privileged` or a host mount past the door (`APP_ISOLATION.md` # Forbidden for both doors).
+
+This is **install-time authoring** of a not-yet-installed app — distinct from the deferred *graduate-in-place* path (`NEXT.md`), which edits an already-installed instance's manifest (re-render, restart, reconcile, audit). Editing the overlay before the instance exists has none of that lifecycle surface.
+
+### Folder grants carry an explicit destination path
+
+A store app's folder grant declares no in-container path: the brain mounts every folder at a fixed `/malmo/<folder>` and injects `MALMO_FOLDER_<NAME>`, and the *author* maps that variable to the image's library path (`APP_MANIFEST.md` # Locked: folders mount at a fixed path). A Door-2 paste has no author to adapt — the verbatim third-party compose already hardcodes where it wants data (PhotoPrism reads `/photoprism/originals`, not a malmo env var). So a **Door-2 folder grant carries an explicit `target`** — the destination path the admin types — and the brain binds the elected source straight there. Store apps keep the fixed-path + env-var convention; the explicit `target` is an additive, Door-2-only field (`APP_MANIFEST.md` # Custom container, `DECISIONS.md` 2026-06-02). The source side stays a **picker, not free text** — it must resolve to a real use-case folder, keeping folder access inside the files-first-class model and out of "bind any host path" territory (which admission rejects anyway).
+
+### Validation: coach the paste into the sandbox
+
+This is the load-bearing UX call. The common Door-2 input is a copy-pasted forum snippet that **will** trip the door-symmetric admission rules — `ports:`, host-path bind mounts, `privileged`, `cap_add`, `build:`, host namespaces (`APP_ISOLATION.md` # Forbidden for both doors). Door 2's job is to **explain and coach**, not just reject:
+
+- **Two-stage, synchronous.** The client parses the YAML for instant structural feedback; submitting calls `POST /api/v1/apps/custom`, which runs `Synthesize` + `admission.Check` as **synchronous pre-checks** and returns `422` with the exact field-named message *before* any install job starts (implemented). A bad paste never leaves a half-built instance.
+- **Errors are inline and actionable.** Each admission rejection already carries its remedy in the message ("service X declares host ports — remove the ports mapping"; "use a relative bind mount like ./data/… instead"); the form surfaces it against the offending input, not as an opaque toast. This turns the sandbox from a wall into a guided rail.
+- **Image pinning is surfaced honestly.** The form notes that malmo pins the **exact image it pulls now** (TOFU digest; `APP_MANIFEST.md`) and that a custom app **does not auto-update** — there is no catalog tracking its versions. The admin updates it by re-pasting a newer tag.
+
+### Name / slug collisions
+
+A custom install **never** triggers the duplicate-install warning: `Synthesize` mints a fresh manifest id with random entropy on every paste, so two custom apps can't collide on identity (`BRAIN_UI_PROTOCOL.md` # the two install endpoints are intentionally asymmetric). What *can* collide is the **slug** — the routable name — against an existing instance; that's resolved by the same first-come rule as everything else: bare `<slug>`, then `--<user>` (personal) or `-2` (household) on collision (# instance naming above). The form previews the preferred `<slug>.local`; the completed install reports the final, possibly-suffixed URL.
+
+### Edit-after-install is deferred (v1 is install-only)
+
+There is **no** in-product editor for an *installed* custom app in v1. The **Edit as YAML** toggle (# Form is a projection above) authors the manifest **before install**, while the form is open and no instance exists yet — that is not the deferred feature. To change an app *after* it's installed — a new image tag, a refined volume, a managed DB — the admin **uninstalls and re-pastes**. The "graduate the synthetic manifest in place" path (`APP_MANIFEST.md` # one model, two doors) — editing a *live* instance's manifest, then re-rendering, restarting, and reconciling — is real but **not v1**; it's parked in `NEXT.md`. This keeps Door 2's post-install surface to the one thing it must do well — get a pasted compose safely installed and routed — and matches the broader v1 posture that even store-app permission *revocation* is deferred (# What stays deferred above).
+
+---
+
 ## Locked: instance naming / routing — first-come bare slug, `--<user>` on collision
 
 Every instance needs a stable, unique, routable name — it's the LAN `.local` record (`DISCOVERY.md` # Per-app A records), the `.malmo.network` subdomain (`MALMO_NETWORK.md`), and the Caddy site block, all keyed on the instance slug.

@@ -51,14 +51,14 @@ const empty = computed(() => household.value.length === 0 && yours.value.length 
     <template v-else>
       <section v-if="household.length" class="space-y-3">
         <h2 v-if="!singleUserMode" class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Household</h2>
-        <div class="grid grid-cols-3 gap-3 sm:grid-cols-4">
+        <div class="grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-4 lg:grid-cols-6">
           <AppTile v-for="a in household" :key="a.id" :instance="a" />
         </div>
       </section>
 
       <section v-if="yours.length" class="space-y-3">
         <h2 v-if="!singleUserMode" class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Yours</h2>
-        <div class="grid grid-cols-3 gap-3 sm:grid-cols-4">
+        <div class="grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-4 lg:grid-cols-6">
           <AppTile v-for="a in yours" :key="a.id" :instance="a" />
         </div>
       </section>

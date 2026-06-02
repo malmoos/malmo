@@ -21,13 +21,13 @@ The spec docs are the source of truth and cross-reference each other heavily. Wh
 Actionable implementation work lives in **[GitHub Issues](https://github.com/onel/malmo/issues)** — the parallel-work board. Find work and claim it:
 
 ```bash
-gh issue list --label P1                 # highest priority first; also P2, P3
-gh issue list --label "area:frontend"    # filter by area: backend / frontend / tooling
-gh issue view <N>                         # full task: spec refs, files to touch, "Done when"
-gh issue edit <N> --add-assignee @me      # claim it — assignment, so no one double-grabs
+gh issue list --label accepted --label P1           # accepted + highest priority; also P2, P3
+gh issue list --label accepted --label "area:frontend"  # filter by area: backend / frontend / tooling
+gh issue view <N>                                    # full task: spec refs, files to touch, "Done when"
+gh issue edit <N> --add-assignee @me                 # claim it — assignment, so no one double-grabs
 ```
 
-Pick the highest-priority issue (`P1` > `P2` > `P3`) that is **unassigned** and **not labelled `blocked`**, then assign it to yourself before you start.
+**Only pick issues that carry the `accepted` label and are unassigned.** The `accepted` label means the maintainer has triaged the issue, scoped it, and confirmed it is ready for implementation. Issues without it — however good the idea — have not been reviewed yet; starting on one wastes your time if the scope changes or the issue gets closed. Pick the highest-priority issue (`P1` > `P2` > `P3`) that is **`accepted`**, **unassigned**, and **not labelled `blocked`**, then assign it to yourself before you start.
 
 - Issues are written to be **self-contained** — each names its spec(s), the files it touches, and a crisp *Done when*.
 - **Dependencies:** an issue labelled `blocked` has an unmet dependency named in its body (e.g. "Depends on #2"). Don't start it until that issue is closed; drop the `blocked` label when the dep lands.

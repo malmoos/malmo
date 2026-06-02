@@ -134,6 +134,8 @@ Before install, brain runs `docker compose config` against the author's compose 
 
 Rejection messages name the exact field that failed. Catalog CI runs the same checks before publish.
 
+**The policy is door-symmetric** — it runs identically for Door-1 (catalog) and Door-2 (custom paste). Door 2 differs only in its *manifest* (permissive defaults, synthesized, TOFU-pinned image), never in its *sandbox*; the host-rooting primitives above are refused for both, because on a multi-user box a container escape hits every member, not just the installer (`APP_ISOLATION.md` # Trust tiers, `DECISIONS.md` 2026-06-02). **Door 2 is admin-only**: `POST /api/v1/apps/custom` requires admin (members install store apps, personal scope only). A future door-asymmetric relaxation is parked in `NEXT.md`.
+
 ## Locked: env-var injection
 
 Brain writes a `.env` file in the instance dir; compose auto-loads it. MVP variable set:
