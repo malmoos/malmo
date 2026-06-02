@@ -22,7 +22,7 @@ func Synthesize(name string, composeBytes []byte, mainService string, mainPort i
 		return nil, nil, fmt.Errorf("a main port is required")
 	}
 
-	services, err := composeServiceNames(composeBytes)
+	services, err := ComposeServiceNames(composeBytes)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -61,7 +61,12 @@ func Synthesize(name string, composeBytes []byte, mainService string, mainPort i
 	return man, composeBytes, nil
 }
 
-func composeServiceNames(composeBytes []byte) ([]string, error) {
+// ComposeServiceNames returns the service names declared under `services:` in a
+// compose document, erroring if the bytes aren't valid YAML or declare no
+// services. Two consumers: Synthesize (Door-2 main-service inference) and the
+// `malmo manifest lint` CLI (confirming a manifest's main_service exists in its
+// sibling compose).
+func ComposeServiceNames(composeBytes []byte) ([]string, error) {
 	var doc struct {
 		Services map[string]yaml.Node `yaml:"services"`
 	}
