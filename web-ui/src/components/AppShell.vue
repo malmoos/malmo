@@ -6,6 +6,7 @@
 // view, not just Home.
 import TopBar from "./TopBar.vue";
 import Dock from "./Dock.vue";
+import ToastHost from "./ToastHost.vue";
 import { useEvents } from "../useEvents";
 
 useEvents();
@@ -21,5 +22,6 @@ useEvents();
       </div>
     </main>
     <Dock />
+    <ToastHost />
   </div>
 </template>

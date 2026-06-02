@@ -9,6 +9,7 @@
 // flipping a mute re-reads the inbox + badge under their new read-time filter.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/vue-query";
 import { api } from "./api";
+import { pushErrorToast } from "./toasts";
 
 const MUTES_KEY = ["notifications", "mutes"];
 
@@ -41,6 +42,7 @@ export function useNotificationMutes() {
     },
     onError: (_err, _vars, ctx) => {
       if (ctx?.prev) qc.setQueryData(MUTES_KEY, ctx.prev);
+      pushErrorToast("Couldn't update notification settings. Try again.");
     },
     onSettled: () => qc.invalidateQueries({ queryKey: ["notifications"] }),
   });
