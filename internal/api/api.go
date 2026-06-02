@@ -39,6 +39,7 @@ type Server struct {
 	auditor *audit.Recorder
 	health  *health.Manager
 	live    *systemlive.Hub
+	streams *streamCap
 	jobs    *Jobs
 }
 
@@ -56,7 +57,9 @@ func NewServer(
 	return &Server{
 		store: st, catalog: cat, life: life, bus: bus,
 		auth: authMgr, host: host, auditor: auditor,
-		health: healthMgr, live: live, jobs: newJobs(),
+		health: healthMgr, live: live,
+		streams: newStreamCap(maxStreamsPerSession),
+		jobs:    newJobs(),
 	}
 }
 
@@ -483,6 +486,12 @@ func (s *Server) getJob(ctx context.Context, in *struct {
 
 // events is the global SSE stream (BRAIN_UI_PROTOCOL.md Pattern C, stream 2).
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
+	release, ok := s.beginStream(w, r)
+	if !ok {
+		return // beginStream wrote 401 (no session) or 429 (over the per-session cap)
+	}
+	defer release()
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -520,13 +529,16 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 // it's the last. No reconnect replay — a reconnecting client resumes at the next
 // `sample` (BRAIN_UI_PROTOCOL.md:179). Available to every signed-in user with no
 // role gate: host-level resource state isn't per-user data (LOCAL_ANALYTICS.md #
-// Privacy model). authMiddleware already rejected unauthenticated requests; the
-// FromContext check is belt-and-suspenders.
+// Privacy model). beginStream re-checks the session (belt-and-suspenders over
+// authMiddleware) and reserves the stream's slot under the per-session cap
+// (BRAIN_UI_PROTOCOL.md:188 — system/live counts against the ≤16-stream cap).
 func (s *Server) systemLive(w http.ResponseWriter, r *http.Request) {
-	if _, ok := auth.FromContext(r.Context()); !ok {
-		writeUnauthenticated(w)
-		return
+	release, ok := s.beginStream(w, r)
+	if !ok {
+		return // beginStream wrote 401 (no session) or 429 (over the per-session cap)
 	}
+	defer release()
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
