@@ -6,8 +6,8 @@ The manifest declares *intent* (`internet: true`, `lan: false`, `folders: [{fold
 
 ## Principles
 
-- **The user owns the box.** Defaults are conservative; escape hatches exist (Door-2 custom compose, `security.*` overrides). We don't lock the user out of their own machine.
-- **Store apps carry a meaningful trust claim.** Things that can root the host are not allowed in the catalog. Door-2 custom compose accepts anything — the user wrote it, the user owns the consequences.
+- **The user owns the box.** Defaults are conservative, and an admin who genuinely needs an unsandboxable container has SSH (`AUTH.md` # SSH is rescue) — `docker run` over SSH is the escape hatch. We don't lock the user out of their own machine; we just don't put host-rooting one paste away in the UI.
+- **Store apps carry a meaningful trust claim.** Things that can root the host are not allowed in the catalog. **Door-2 custom compose runs under the identical sandbox** — host-rooting primitives are refused for *both* doors. The reason is multi-user: malmo's threat model names "a compromised app" as a top adversary, and a Door-2 app that roots the host doesn't just affect the (admin) installer — it exposes every other household member's data, none of whom consented. "The user owns the consequences" holds for a single-user box; on a multi-user box the consequences land on other principals, so the bright lines stay up in the UI path. (See `DECISIONS.md` 2026-06-02.)
 - **Manifest declares intent. Brain enforces it.** Apps that lie about their permissions either fail (silently blocked at the kernel/Docker layer) or get pulled from the catalog.
 - **Same enforcement everywhere.** Store apps and custom apps share the same runtime. Only the *defaults* and *catalog rules* differ.
 
@@ -15,10 +15,14 @@ The manifest declares *intent* (`internet: true`, `lan: false`, `folders: [{fold
 
 | | Store apps (Door 1) | Custom apps (Door 2) |
 |---|---|---|
-| Manifest source | Catalog repo, reviewed | User-supplied or synthesized from raw compose |
-| Default permissions | Least-permissive (must declare what they need) | Permissive (user wrote it) |
-| Forbidden capabilities | `privileged`, docker socket, `SYS_ADMIN` | None — user can do anything |
+| Who can install | Admin or member (members: personal scope only) | **Admin only** |
+| Manifest source | Catalog repo, reviewed | User-supplied, synthesized from raw compose |
+| Default permissions | Least-permissive (must declare what they need) | Permissive (`internet: true` on by default) |
+| Image binding | Digest from the signed catalog | TOFU — pull, pin the resolved digest |
+| Forbidden primitives | `privileged`, docker socket, host ports, host bind mounts, `cap_add`, host namespaces | **Identical to store** — same admission policy runs for both |
 | Enforcement mechanism | Identical to custom | Identical to store |
+
+**What actually differs between the doors is the *manifest*, not the *sandbox*.** Door 2 is "you wrote the manifest instead of us, behind the same safety rails" — permissive defaults, a synthesized manifest, and TOFU digest pinning. The runtime envelope (`cap_drop: [ALL]`, no host access, Caddy-routed, runs as a UID) is byte-for-byte the same. An admin who needs a container that can't fit those rails (Portainer/Watchtower → docker socket; Tailscale/WireGuard → `NET_ADMIN` + host net) runs it over SSH, or it becomes a curated **Tier-2** OS integration (`SERVICE_PROVISIONING.md`). Relaxing the door asymmetrically is a future option, not v1 (`DECISIONS.md` 2026-06-02).
 
 ---
 
@@ -68,7 +72,7 @@ Per-user data lives at `/home/<user>/` with `0750` perms owned by the user (`STO
 
 Every app gets its own Docker bridge network. Inter-container DNS works inside it (the app's own compose services resolve each other by name). Inter-*app* traffic is denied by default — apps live on separate networks.
 
-The brain reaches the app's web port over this network for reverse-proxy routing. Apps **do not bind to host ports** in store mode; the brain owns 80/443 for the subdomain proxy + TLS termination. Manifest declares `web.port: 8080` and the brain wires `myapp.local → container:8080`. Door-2 compose can publish host ports if the user wrote it that way.
+The brain reaches the app's web port over this network for reverse-proxy routing. Apps **do not bind to host ports** — for *both* doors; the brain owns 80/443 for the subdomain proxy + TLS termination. Manifest declares `web.port: 8080` and the brain wires `myapp.local → container:8080`. A `ports:` host binding is an admission rejection regardless of door (`APP_LIFECYCLE.md` # admission policy).
 
 ### `internet: true` / `false`
 
@@ -117,7 +121,7 @@ App state (indexes, configs, the app's own DB) lives under the instance dir at `
 
 `/tmp` is a size-capped tmpfs.
 
-**Bind mounts to arbitrary host paths are forbidden in store manifests.** Allowed in Door-2 compose because the user wrote it.
+**Bind mounts to arbitrary host paths are forbidden for both doors.** Only relative bind mounts under the instance's `data/` dir are allowed; an absolute host source is an admission rejection (store or custom alike).
 
 ### User content (use-case folders)
 
@@ -196,17 +200,17 @@ App authors think "I need to control the network," not "I need `NET_ADMIN`." The
 
 There is **no `permissions.capabilities` list in the v1 store schema.** A store app gets `cap_drop: [ALL]` and adds nothing back; admission rejects any `cap_add` (`APP_LIFECYCLE.md` # admission policy, `APP_MANIFEST.md` # E). A reviewed-at-submission capability list for the rare legitimate case (`NET_ADMIN`, `SYS_TIME`) is a **deferred** schema addition — tracked in `NEXT.md`, not assumed by the catalog today.
 
-The app that genuinely needs a capability, `privileged`, the Docker socket, or low-level hardware access goes through the **Door-2 custom path** (the user wrote the compose, owns the consequences) or, for curated OS integrations, **Tier 2** (`SERVICE_PROVISIONING.md`).
+The app that genuinely needs a capability, `privileged`, the Docker socket, or low-level hardware access does **not** get there through Door 2 — admission refuses those primitives for both doors. It runs as a curated OS integration (**Tier 2**, `SERVICE_PROVISIONING.md`), or the admin runs it directly over SSH (`AUTH.md` # SSH is rescue). The box owner keeps the power; it just isn't a one-paste UI action.
 
-### Forbidden in store
+### Forbidden for both doors
 
-These are container-escape primitives and are catalog-rejected:
+These are container-escape primitives and are admission-rejected for store **and** custom apps alike:
 
 - `privileged: true`
 - Mounting `/var/run/docker.sock`
 - any `cap_add` (`SYS_ADMIN` especially)
 
-A store app cannot request them. The intent is that Door-2 custom compose carries them — the user wrote it — but note that the **current admission policy runs identically for both doors** (`APP_LIFECYCLE.md` # admission policy), so the exact set of primitives Door-2 may relax is an **open item** (`NEXT.md`), not yet a door-asymmetric rule.
+Neither door can request them through the UI. **Admission is deliberately door-symmetric** (`APP_LIFECYCLE.md` # admission policy) — Door-2 carries *permissive defaults*, not *relaxed enforcement* (`DECISIONS.md` 2026-06-02). The escape path for a genuinely-unsandboxable container is Tier-2 curation or the admin's SSH access, not a custom paste. A future door-asymmetric relaxation (and the related reviewed `permissions.capabilities` allowlist) is parked in `NEXT.md`, not assumed today.
 
 ### Not in v1
 
