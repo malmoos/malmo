@@ -25,20 +25,25 @@ const label = computed(() => (props.instance.scope === "household" ? "Shared" : 
     :href="running ? instance.url : undefined"
     :target="running ? '_blank' : undefined"
     rel="noopener"
-    class="relative flex flex-col items-center gap-2 rounded-2xl border border-border bg-card p-4 text-center transition"
-    :class="running ? 'cursor-pointer hover:shadow-md' : 'cursor-default opacity-50'"
+    class="group flex flex-col items-center gap-3 text-center"
+    :class="running ? 'cursor-pointer' : 'cursor-default'"
     :title="running ? `Open ${instance.name}` : `${instance.name} is ${instance.state}`"
   >
-    <AlertTriangle
-      v-if="!running"
-      class="absolute right-2 top-2 size-4 text-destructive"
-    />
-    <div class="grid size-12 place-items-center rounded-xl bg-muted text-muted-foreground">
-      <AppWindow class="size-6" />
+    <!-- The big square button: parchment fill, bordered, single centered glyph
+         (DASHBOARD.md # Tile). Grays out + corner alert when not running. -->
+    <div
+      class="relative grid aspect-square w-full place-items-center rounded-3xl border border-border bg-card text-muted-foreground transition"
+      :class="running ? 'group-hover:shadow-md' : 'opacity-50'"
+    >
+      <AlertTriangle
+        v-if="!running"
+        class="absolute right-3 top-3 size-4 text-destructive"
+      />
+      <AppWindow class="size-9" />
     </div>
     <div class="min-w-0">
-      <div class="truncate text-sm font-medium">{{ instance.name }}</div>
-      <div v-if="!singleUserMode" class="text-xs text-muted-foreground">{{ label }}</div>
+      <div class="truncate text-base font-medium">{{ instance.name }}</div>
+      <div v-if="!singleUserMode" class="text-xs uppercase tracking-wide text-muted-foreground">{{ label }}</div>
     </div>
   </component>
 </template>

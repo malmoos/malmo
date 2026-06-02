@@ -1,18 +1,17 @@
 <script setup lang="ts">
-// The top bar (DASHBOARD.md # the top bar): four quiet elements — a storage
-// pill (left), and the notification bell + live-resources chevron + account
-// menu (right). Everything here is deliberately understated; it goes loud only
-// under pressure, which none of these surfaces do yet:
-//   - Storage pill — static placeholder until a capacity endpoint exists; it
-//     already routes to Settings, where Storage will live.
+// The top bar (DASHBOARD.md # the top bar): quiet controls clustered top-right —
+// the notification bell + live-resources chevron + account menu. Everything here
+// is deliberately understated; it goes loud only under pressure, which none of
+// these surfaces do yet:
 //   - Bell — no unread dot until NOTIFICATIONS.md is wired (queue item #2).
 //   - Live-resources chevron — opens a compact CPU/RAM/net/disk panel backed by
 //     the GET /api/v1/system/live SSE stream; available to every signed-in user.
 //   - Account menu — username + role; sign-out is intentionally omitted in the
 //     single-user dev phase (re-enabled with the AUTH.md login screen).
+// The storage pill is deferred until a capacity endpoint exists; it will return
+// here (per the design, top-right) rather than the old left-side Settings link.
 import { ref } from "vue";
 import { RouterLink } from "vue-router";
-import { HardDrive } from "lucide-vue-next";
 import { useAuth } from "../auth";
 import NotificationBell from "../NotificationBell.vue";
 import LiveResources from "../LiveResources.vue";
@@ -26,16 +25,7 @@ function initial(name: string | undefined): string {
 </script>
 
 <template>
-  <header class="flex items-center justify-between px-4 py-3">
-    <RouterLink
-      to="/settings"
-      class="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground hover:bg-muted"
-      title="Storage"
-    >
-      <HardDrive class="size-3.5" />
-      <span>— / — TB</span>
-    </RouterLink>
-
+  <header class="flex items-center justify-end px-4 py-3">
     <div class="flex items-center gap-2">
       <NotificationBell />
 
