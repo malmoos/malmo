@@ -11,7 +11,7 @@
 
 Each entry: one-sentence shape, the doc it touches, and *why this tier*. The doc is the source of context — read it before opening the topic.
 
-When a topic is **decided**, remove its entry here and add the rationale to `DECISIONS.md` (if it flipped a position) or just lock it in the relevant doc.
+**This is a *design* backlog, not an implementation backlog.** An entry means "we haven't decided the shape yet." The moment a topic's design is **locked** — its shape written into the relevant spec (+ a `DECISIONS.md` entry if it flipped a position) — it leaves this doc. Opening the contributor issue (or queuing it in `../progress/README.md` # Up next) is part of that **same change**: lock the spec, remove the entry here, file the issue, together. Do **not** defer the removal to the implementing PR — that leaves NEXT.md claiming a design is open for the whole time the issue sits in the backlog, which is exactly the staleness this doc must not accumulate. If an issue covers only *part* of an entry, scope the entry down to what remains (see the image-cleanup and lint-tool entries for the pattern) rather than deleting it.
 
 ---
 
@@ -82,20 +82,6 @@ Required for password recovery, product comms, and any future cloud-account link
 
 **Context:** `FIRST_RUN.md`.
 **Why Tier 2:** decided now or it becomes a forced retrofit later. Likely answer: optional field at user creation, used for recovery only.
-
-### OpenAPI codegen timing for the brain API
-
-The brain↔UI API is hand-rolled Go ↔ TS types in v1 (`DECISIONS.md` 2026-05-14, brain↔UI API). The OpenAPI 3 spec + generated TS client lands later. Open: when — before the public store API ships, after the first external integrator asks, or on a fixed schedule? Generator choice (`oapi-codegen` for Go server, `openapi-typescript` for TS client) is straightforward; timing is the call.
-
-**Context:** `BRAIN_UI_PROTOCOL.md` # "API discipline."
-**Why Tier 2:** every week we ship without it, drift between hand-rolled types grows. Cheap insurance if we pin a trigger.
-
-### Rate-limit / abuse posture for the public API
-
-The brain↔UI API is public-callable from day one (third-party stores, CLI, external tools — `DECISIONS.md` 2026-05-14). v1 has no rate-limiting story. Open: per-session limits, per-IP for unauthenticated routes, separate budget for SSE stream count vs. request rate, what 429 messaging looks like.
-
-**Context:** `BRAIN_UI_PROTOCOL.md`, `AUTH.md`.
-**Why Tier 2:** needs to land before third-party stores can ship; not blocking v1.
 
 ---
 
@@ -343,7 +329,6 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Account deletion flow — what happens to `/home/<user>/` and per-user Tier-3 instances when an account is removed. (Audit-row handling is settled: FK `SET NULL` on `audit_events.actor_user_id` keeps history with a null actor.) `USERS_AND_GROUPS.md`, `AUTH.md`.
 - Account suspension — disable login without deleting data (kid grounded, ex-roommate archived). `AUTH.md`, `USERS_AND_GROUPS.md`.
 - Multi-admin invitation flow — UI affordance for "make a second admin." Today implicit (admin creates a member then promotes them). `AUTH.md`, `USERS_AND_GROUPS.md`.
-- Dashboard login brute-force throttling / lockout — `LOGGING.md` notes journald caps sshd spam, but the brain's own login endpoint has no rate-limit story. `AUTH.md`.
 
 **Runtime & host**
 - Periodic image / layer cleanup policy — a recurring `docker image prune -a` sweep (cadence + retention) for images orphaned by *updates*, not uninstalls. Post-uninstall reclaim is handled by targeted `rmi`-by-digest (issue #9); this remaining item needs a scheduler/timer seam the brain doesn't have yet, plus a retention rule for update-orphaned layers. `APP_LIFECYCLE.md`, `UPDATES.md`.
@@ -376,7 +361,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Backup verification / restore-test cadence — untested backups aren't backups. `STORAGE.md`.
 
 **Developer / app-author surface**
-- Local lint / test tool (`malmo manifest lint`, `malmo install --local`) — authors today can't validate a manifest without making a PR. `APP_MANIFEST.md`, `APP_STORE.md`.
+- Local dev/test subcommands beyond lint (`malmo install --local`, etc.) — let authors run a manifest on their own box before a catalog PR. `malmo manifest lint` (schema validation) is issue #7 and owns the `cmd/malmo` skeleton; this remaining item is the heavier "actually install it locally" surface. `APP_MANIFEST.md`, `APP_STORE.md`.
 - Catalog PR template + author-facing docs surface (subset of the Tier-3 "Documentation surface" entry). `APP_STORE.md`.
 - Manifest changelog discipline — when schema v1 → v2 ships, how authors find out. Revisit once we have a `v2` candidate. `APP_MANIFEST.md`.
 
@@ -402,6 +387,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 **Control plane**
 - *(Resolved 2026-05-29/31 — instance naming is first-come bare `<slug>` for any scope; `<slug>--<user>` on personal collision, `<slug>-2` on household collision. Flat single-label forced by wildcard-cert + mDNS constraints. See `DASHBOARD.md` # instance naming and `DECISIONS.md` 2026-05-29 + 2026-05-31.)*
 - Re-import path for archived ("keep data") instances after uninstall. `APP_LIFECYCLE.md`.
+- Per-session concurrent file-transfer cap for the streaming `GET`/`PUT /api/v1/files/content` endpoints. These are streaming (not jobs, not SSE), so neither the per-session request-rate bucket nor the SSE-stream concurrency cap governs them (`BRAIN_UI_PROTOCOL.md` # Rate limiting & abuse — deliberately left out of the v1 posture). A small concurrency counter (same shape as the ≤16 SSE cap) is the obvious backstop for a buggy uploader; pin it when file-transfer abuse actually bites. `BRAIN_UI_PROTOCOL.md`, `FILES.md`.
 
 **Build & distribution**
 - Signing infrastructure for apt repo, registry images, ISO. `BUILD.md`.

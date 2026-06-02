@@ -113,6 +113,8 @@ The login page lists every account on the box — first name + colored letter gl
 - **Admin override:** an admin can clear a lock from the user-management UI ("Cindy is locked out, unlock her").
 - All failed attempts logged. Audit log surfacing comes later.
 
+This section governs the **login path only** — the deliberately-expensive PAM round-trip is the asset it protects. *General* request throttling for the rest of the public API (per-session and per-IP request-rate buckets, the `429`/`Retry-After` contract, SSE-stream concurrency) lives in `BRAIN_UI_PROTOCOL.md` # Rate limiting & abuse. The two don't overlap: `/login` keeps its stricter per-username backoff here; the general per-IP plane there is the backstop for the *other* unauthenticated routes.
+
 ## CSRF
 
 `SameSite=Lax` blocks cross-site POSTs to the dashboard origin. For v1 that's sufficient — we don't accept GET requests for state-changing operations.

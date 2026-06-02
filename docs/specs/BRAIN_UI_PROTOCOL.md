@@ -205,7 +205,7 @@ This is deliberately *not* lockstep with the brain version. The UI and brain shi
 
 - Stable URLs, stable error codes, stable event `kind` values.
 - No hidden auth shortcuts the dashboard uses but external callers can't (e.g. no "internal" routes outside `/api/v1/`).
-- Rate-limit and abuse posture is a `NEXT.md` follow-up — public-callable from day one means we'll need it before third-party stores ship.
+- Rate-limit and abuse posture is locked below (# Rate limiting & abuse) — public-callable from day one means external callers (CLI, third-party stores) need a predictable throttling contract, not just the dashboard.
 
 **Codegen.** Split. **Server-side OpenAPI 3 emission lands from day one** — the brain is written using [`huma`](https://huma.rocks), a Go web library that produces an OpenAPI schema as a byproduct of handler registration. Typed request/response Go structs *are* the schema; there is no hand-maintained `openapi.yaml`. The schema is the substrate for the CI enforcement described below. **Client-side codegen is deferred** — the UI keeps hand-rolled TS types in v1; the generated TS client (`openapi-fetch` or similar) lands as a follow-up before the public-API surface goes external, when schema stability makes hand-maintenance cost more than codegen.
 
@@ -246,6 +246,22 @@ curl -b "malmo_session=..." -N http://malmo.local/api/v1/events
 
 Future changes that would make the protocol harder to debug from `curl` need explicit justification.
 
+## Rate limiting & abuse
+
+malmo is closed-by-default, LAN + mesh only (`THREAT_MODEL.md` # B1) — there is no public-internet exposure in v1, so this is **not** internet-scale DoS defense (DoS is a named non-goal, `THREAT_MODEL.md` # Out of scope). The realistic threat is a **runaway or buggy client** — a dashboard tab in a reconnect loop, a CLI script polling tight, a third-party store with a bad retry config — or a compromised LAN device doing the same deliberately, grinding a modest single-node box (often an old laptop) into CPU/goroutine/memory pressure. The posture is **throttle, don't ban; in-memory state; resets on brain restart; log the source IP but never blacklist** — the same philosophy `AUTH.md` # Rate limiting set for the login path.
+
+Three orthogonal planes, plus the login throttle that already exists:
+
+1. **Per-session request rate** — a token bucket keyed on the `malmo_session` token, governing all authenticated short requests (Pattern A, plus job create/poll/cancel). Default **120 req/min sustained, burst 60** — sized so a normal dashboard (TanStack Query + a few SSE streams + job polling) never trips it, but a runaway loop does. SSE streams and the streaming `/files/content` endpoints are **exempt** from this bucket — they are long-lived, not short requests.
+2. **Per-IP request rate** — a token bucket keyed on client IP, governing the **unauthenticated** allowlist only (`/login`, `/setup`, version probe). Default **30 req/min/IP**. This sits *above* the login throttle: `/login` keeps its stricter per-username exponential backoff + per-IP bucket (`AUTH.md` # Rate limiting); this plane is the backstop so the *other* unauthenticated routes can't be hammered to burn DB/CPU work. Logs the IP, does not ban (LAN reality).
+3. **SSE-stream concurrency** — the ≤16 concurrent-streams-per-session cap (# Stream cap, above). This is a **separate budget from request rate**: opening a stream consumes one of the 16 slots but does *not* draw from plane 1's bucket, so a tight EventSource reconnect loop is bounded by the slot cap + reconnect interval, not by req/min.
+
+**429 contract.** A throttled request gets HTTP `429` with the standard envelope `{ "code": "rate-limited", "message": "...", "details": { "scope": "session" | "ip", "retry_after_s": N } }` **and a `Retry-After` header** (seconds) so well-behaved external callers back off correctly. The `rate-limited` code is distinct from the login lockout's `login.lockout` (`AUTH.md`) — request throttling and account lockout are different events. The dashboard surfaces a non-alarming "malmo is busy — retrying…" and auto-retries after `Retry-After` (TanStack Query backoff); this is a backstop, not a normal-operation banner.
+
+**Mechanism.** A middleware in the brain's chain, ordered **after** auth resolves the session but **before** handlers — so it keys on the session token when authenticated, or falls back to client IP on the unauthenticated allowlist. In-memory, mutex-guarded buckets with periodic GC of idle entries; no persistence (resets on restart, like the login throttle). Plane 3 reuses the # Stream cap counter.
+
+**Explicit non-goals (v1).** No IP banning (throttle only). No persistent or distributed limiter state (single node). No per-route custom budgets beyond the three planes — uniform until a specific route bites (no premature abstraction). No global whole-box request ceiling (per-session + per-IP suffices for 1–4 users). No per-session concurrent-jobs cap (job *creation* counts against plane 1; install/update are serialized by the lifecycle transaction owner). A per-session **file-transfer** concurrency cap for streaming `/files/content` is deliberately deferred to `NEXT.md` (those endpoints are ungoverned by all three planes; pin a counter when it bites).
+
 ## Locked decisions
 
 - **Transport:** HTTPS via Caddy. No direct brain port exposure.
@@ -259,6 +275,7 @@ Future changes that would make the protocol harder to debug from `curl` need exp
 - **Event `kind` values are enumerated in the schema.** Adding a new kind is an API-version-bumping change.
 - **SSE reconnect:** monotonic `id`, ~256 KB per-stream rolling buffer, `Last-Event-ID` replay, single `{"lost": true}` event on overflow.
 - **Stream cap:** ≤16 concurrent SSE streams per session.
+- **Rate limiting:** throttle-not-ban, in-memory, three orthogonal planes — per-session request rate (120/min, burst 60), per-IP request rate on the unauthenticated allowlist (30/min), and the per-session SSE-stream concurrency cap (separate budget). `429` carries `code: "rate-limited"` + a `Retry-After` header. LAN-scoped runaway-client defense, not DoS protection (`THREAT_MODEL.md` non-goal). See # Rate limiting & abuse.
 - **Codegen split.** Server-side: OpenAPI 3 emitted by the brain via [`huma`](https://huma.rocks) from day one (substrate for CI enforcement). Client-side: TS types hand-rolled in v1; generated TS client (`openapi-fetch` or similar) lands before public-API surface goes external.
 - **Public-API posture from day one.** Dashboard uses the same routes any external caller will hit. No internal carve-outs.
 - **Debuggability is a first-class design constraint.** Future changes that hurt `curl`-debuggability need explicit justification.
@@ -269,4 +286,4 @@ Future changes that would make the protocol harder to debug from `curl` need exp
 - `BRAIN_HOST_PROTOCOL.md` — sibling protocol; SSE/jobs patterns deliberately identical.
 - `AUTH.md` — `malmo_session` cookie semantics live there.
 - `WEB_UI.md` — client-side consumers of this protocol (`@tanstack/vue-query`, `useEvents()`, `useJob()`).
-- `NEXT.md` — carries the OpenAPI codegen-timing and rate-limit / abuse-posture follow-ups.
+- `NEXT.md` — carries the OpenAPI codegen-timing follow-up and the deferred per-session file-transfer concurrency cap.
