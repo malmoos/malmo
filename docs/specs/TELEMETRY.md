@@ -96,7 +96,7 @@ Crash stream: same backend in v1 (PostHog supports exception ingestion). Self-ho
 
 ## Settings UI
 
-A single page under Settings → Privacy:
+A single page under Settings → Privacy — an admin-only Box panel, since the toggle is box-wide (`SETTINGS.md` # panel inventory owns the IA placement; this section owns the page's behavior):
 
 - The same checkbox as first-run, same disclosure.
 - "Last transmission: <timestamp>" — so the user can verify nothing's leaving when the toggle is off.

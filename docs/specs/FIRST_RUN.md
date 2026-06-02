@@ -101,7 +101,7 @@ Full time / NTP model in `TIME.md`. NTP itself (chrony with NTS sources) is up b
 - One unchecked checkbox: *"Send anonymous usage statistics and crash reports to help improve malmo."*
 - Off by default. Plain language. No dark patterns.
 - Inline "What does this collect?" disclosure expands to show the field allowlist.
-- Toggleable from Settings → Privacy later.
+- Toggleable from Settings → Privacy later — an admin-only Box panel, since the toggle is box-wide (`SETTINGS.md` # panel inventory). The first-run prompt is the founding admin making that box-level choice once.
 
 Full spec: `TELEMETRY.md`. The one toggle covers both the usage stream and the crash stream; both go to `telemetry.malmo.network` (a malmo-controlled endpoint, not a third-party SaaS).
 
