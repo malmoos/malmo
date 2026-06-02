@@ -563,6 +563,14 @@ func (m *Manager) loadInstanceManifest(id string) (*manifest.Manifest, error) {
 	return manifest.Parse(b)
 }
 
+// InstanceManifest returns the parsed manifest the installer persisted for an
+// installed instance. The brain's app-unresponsive probe (cmd/brain) reads
+// main_service and health_probe from it; thin exported wrapper over the on-disk
+// manifest so cmd/brain doesn't duplicate the instance-dir path layout.
+func (m *Manager) InstanceManifest(id string) (*manifest.Manifest, error) {
+	return m.loadInstanceManifest(id)
+}
+
 // allocateSlug derives a free, routable slug from the manifest's preferred
 // slugs. The hostname encodes *uniqueness, not ownership* (DASHBOARD.md #
 // instance naming): the bare `<base>` is preferred by every instance regardless

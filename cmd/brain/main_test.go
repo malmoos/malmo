@@ -3,12 +3,17 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/malmo/malmo/internal/audit"
 	"github.com/malmo/malmo/internal/health"
+	"github.com/malmo/malmo/internal/lifecycle"
+	"github.com/malmo/malmo/internal/manifest"
 	"github.com/malmo/malmo/internal/notify"
 	"github.com/malmo/malmo/internal/protocol"
 	"github.com/malmo/malmo/internal/store"
@@ -745,5 +750,349 @@ func TestRestartLoop_RaiseEmitsNoBellNotification(t *testing.T) {
 	}
 	if len(ns.raised) != 0 {
 		t.Errorf("container-restart-loop must not emit a notification (not allowlisted), got %v", ns.raised)
+	}
+}
+
+// --- app-unresponsive probe detector (issue #54) -------------------------
+
+// stubRoundTripper is a scriptable http transport: it answers per the request's
+// Host header (the route Caddy would match), so a test can drive healthy /
+// unhealthy / connection-failure probes without a real Caddy or app. It records
+// the last request so the "routes through Caddy by Host" wiring can be asserted.
+type stubRoundTripper struct {
+	status map[string]int  // Host -> status to return
+	fail   map[string]bool // Host -> return a transport error (timeout / refused)
+	last   *http.Request
+}
+
+func (s *stubRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	s.last = r
+	if s.fail[r.Host] {
+		return nil, fmt.Errorf("dial %s: connection refused", r.Host)
+	}
+	code, ok := s.status[r.Host]
+	if !ok {
+		code = http.StatusOK
+	}
+	return &http.Response{
+		StatusCode: code,
+		Body:       io.NopCloser(strings.NewReader("")),
+		Header:     make(http.Header),
+	}, nil
+}
+
+type fakeInstanceLister struct{ instances []store.Instance }
+
+func (f *fakeInstanceLister) List() ([]store.Instance, error) { return f.instances, nil }
+
+type fakeManifestLoader struct{ m map[string]*manifest.Manifest }
+
+func (f *fakeManifestLoader) InstanceManifest(id string) (*manifest.Manifest, error) {
+	man, ok := f.m[id]
+	if !ok {
+		return nil, fmt.Errorf("no manifest for %s", id)
+	}
+	return man, nil
+}
+
+type fakeContainerReader struct{ containers []lifecycle.ManagedContainer }
+
+func (f *fakeContainerReader) ManagedContainers(context.Context) ([]lifecycle.ManagedContainer, error) {
+	return f.containers, nil
+}
+
+// newTestProbeDetector wires an appProbeDetector to in-memory fakes, a stub
+// transport, and a hand-advanced clock, at the production raise threshold.
+func newTestProbeDetector(lister instanceLister, loader instanceManifestLoader, reader managedContainerReader, rt http.RoundTripper, clk *stepClock) (*appProbeDetector, *health.Manager, *fakeEventStore, *fakeNotifStore) {
+	mgr := health.NewManager(nil)
+	es := &fakeEventStore{}
+	ns := &fakeNotifStore{}
+	d := &appProbeDetector{
+		docker:    reader,
+		instances: lister,
+		manifests: loader,
+		healthMgr: mgr,
+		auditor:   audit.New(es),
+		notifier:  notify.New(ns, nil),
+		client:    &http.Client{Transport: rt},
+		baseURL:   "http://caddy.test",
+		now:       clk.now,
+		bad:       map[string]int{},
+	}
+	return d, mgr, es, ns
+}
+
+func unresponsiveIssues(mgr *health.Manager) []health.Issue {
+	var out []health.Issue
+	for _, iss := range mgr.List() {
+		if iss.ID == "app-unresponsive" {
+			out = append(out, iss)
+		}
+	}
+	return out
+}
+
+// probeManifest is a minimal manifest carrying just the fields the probe reads.
+func probeManifest(mainService, path string, healthy []int, start time.Duration) *manifest.Manifest {
+	return &manifest.Manifest{
+		MainService: mainService,
+		HealthProbe: &manifest.HealthProbe{Path: path, HealthyStatus: healthy, StartPeriod: start},
+	}
+}
+
+// probeScenario builds a one-instance scenario: instance "app" (slug "app",
+// mDNS "app.local"), main_service "web" running and started `age` before the
+// clock, declaring a probe on `path` with `healthy`/`start`.
+func probeScenario(clk *stepClock, path string, healthy []int, start, age time.Duration) (*fakeInstanceLister, *fakeManifestLoader, *fakeContainerReader) {
+	lister := &fakeInstanceLister{instances: []store.Instance{
+		{ID: "app", Slug: "app", MDNSName: "app.local", State: "running"},
+	}}
+	loader := &fakeManifestLoader{m: map[string]*manifest.Manifest{
+		"app": probeManifest("web", path, healthy, start),
+	}}
+	reader := &fakeContainerReader{containers: []lifecycle.ManagedContainer{
+		{InstanceID: "app", Service: "web", Running: true, StartedAt: clk.now().Add(-age)},
+	}}
+	return lister, loader, reader
+}
+
+// A failing probe raises app-unresponsive only on the 2nd consecutive failure
+// (cross-cutting debounce), keyed to the instance, with one raised audit record.
+func TestAppProbe_RaisesAfterTwoBadSamples(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	lister, loader, reader := probeScenario(clk, "/healthz", nil, manifest.DefaultStartPeriod, 5*time.Minute)
+	rt := &stubRoundTripper{status: map[string]int{"app.local": 503}}
+	d, mgr, es, _ := newTestProbeDetector(lister, loader, reader, rt, clk)
+
+	d.check(context.Background()) // 1st bad — debounced, no raise
+	if len(unresponsiveIssues(mgr)) != 0 {
+		t.Fatalf("first bad sample must not raise, got %v", mgr.List())
+	}
+	d.check(context.Background()) // 2nd bad — raise
+	got := unresponsiveIssues(mgr)
+	if len(got) != 1 || got[0].InstanceKey != "app" {
+		t.Fatalf("want 1 app-unresponsive keyed to 'app', got %v", mgr.List())
+	}
+	if n := auditCount(es, audit.ActionHealthIssueRaised); n != 1 {
+		t.Errorf("want 1 raised audit record, got %d", n)
+	}
+}
+
+// One good sample clears an active app-unresponsive, with a paired audit record.
+func TestAppProbe_ClearsOnGoodSample(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	lister, loader, reader := probeScenario(clk, "/healthz", nil, manifest.DefaultStartPeriod, 5*time.Minute)
+	rt := &stubRoundTripper{status: map[string]int{"app.local": 503}}
+	d, mgr, es, _ := newTestProbeDetector(lister, loader, reader, rt, clk)
+
+	d.check(context.Background())
+	d.check(context.Background())
+	if len(unresponsiveIssues(mgr)) != 1 {
+		t.Fatalf("expected raise before recovery, got %v", mgr.List())
+	}
+	rt.status["app.local"] = 200
+	d.check(context.Background())
+	if len(unresponsiveIssues(mgr)) != 0 {
+		t.Fatalf("good sample should clear, got %v", mgr.List())
+	}
+	if n := auditCount(es, audit.ActionHealthIssueCleared); n != 1 {
+		t.Errorf("want 1 cleared audit record, got %d", n)
+	}
+}
+
+// Default healthy = any status < 500: a 404 on the probe path is "responding"
+// and must never raise, however many times it's seen.
+func TestAppProbe_DefaultHealthyAllowsClientErrors(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	lister, loader, reader := probeScenario(clk, "/healthz", nil, manifest.DefaultStartPeriod, 5*time.Minute)
+	rt := &stubRoundTripper{status: map[string]int{"app.local": 404}}
+	d, mgr, _, _ := newTestProbeDetector(lister, loader, reader, rt, clk)
+
+	d.check(context.Background())
+	d.check(context.Background())
+	if len(unresponsiveIssues(mgr)) != 0 {
+		t.Fatalf("404 is responding (default <500); must not raise, got %v", mgr.List())
+	}
+}
+
+// A narrowed healthy_status set ([200]) treats anything else — including a 204 —
+// as unhealthy.
+func TestAppProbe_NarrowHealthyStatus(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	lister, loader, reader := probeScenario(clk, "/healthz", []int{200}, manifest.DefaultStartPeriod, 5*time.Minute)
+	rt := &stubRoundTripper{status: map[string]int{"app.local": 204}}
+	d, mgr, _, _ := newTestProbeDetector(lister, loader, reader, rt, clk)
+
+	d.check(context.Background())
+	d.check(context.Background())
+	if len(unresponsiveIssues(mgr)) != 1 {
+		t.Fatalf("204 outside [200] must raise, got %v", mgr.List())
+	}
+}
+
+// Within the start-period grace the probe is skipped entirely — a warming-up
+// app doesn't flap the banner. Once the grace passes, failures count.
+func TestAppProbe_StartPeriodSuppresses(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	// Started 10s ago, 60s grace → in grace.
+	lister, loader, reader := probeScenario(clk, "/healthz", nil, manifest.DefaultStartPeriod, 10*time.Second)
+	rt := &stubRoundTripper{status: map[string]int{"app.local": 503}}
+	d, mgr, _, _ := newTestProbeDetector(lister, loader, reader, rt, clk)
+
+	d.check(context.Background())
+	d.check(context.Background())
+	if len(unresponsiveIssues(mgr)) != 0 {
+		t.Fatalf("must not raise during start-period grace, got %v", mgr.List())
+	}
+	if rt.last != nil {
+		t.Errorf("must not probe during grace; got a request to %v", rt.last.Host)
+	}
+	// Past the grace now: two failures raise.
+	clk.add(time.Minute)
+	d.check(context.Background())
+	d.check(context.Background())
+	if len(unresponsiveIssues(mgr)) != 1 {
+		t.Fatalf("must raise once past the grace, got %v", mgr.List())
+	}
+}
+
+// An app that declares no health_probe is never probed and never raises.
+func TestAppProbe_NoProbeNeverRaised(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	lister := &fakeInstanceLister{instances: []store.Instance{{ID: "app", Slug: "app", MDNSName: "app.local"}}}
+	loader := &fakeManifestLoader{m: map[string]*manifest.Manifest{
+		"app": {MainService: "web"}, // no HealthProbe
+	}}
+	reader := &fakeContainerReader{containers: []lifecycle.ManagedContainer{
+		{InstanceID: "app", Service: "web", Running: true, StartedAt: clk.now().Add(-5 * time.Minute)},
+	}}
+	rt := &stubRoundTripper{status: map[string]int{"app.local": 503}}
+	d, mgr, _, _ := newTestProbeDetector(lister, loader, reader, rt, clk)
+
+	d.check(context.Background())
+	d.check(context.Background())
+	if len(unresponsiveIssues(mgr)) != 0 {
+		t.Fatalf("opt-out app must never raise, got %v", mgr.List())
+	}
+	if rt.last != nil {
+		t.Errorf("opt-out app must never be probed; got a request to %v", rt.last.Host)
+	}
+}
+
+// A crash-looping app surfaces as container-restart-loop, not app-unresponsive:
+// the probe defers to a live restart-loop issue and doesn't double-banner.
+func TestAppProbe_CrashLooperNotDoubleBannered(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	lister, loader, reader := probeScenario(clk, "/healthz", nil, manifest.DefaultStartPeriod, 5*time.Minute)
+	rt := &stubRoundTripper{status: map[string]int{"app.local": 503}}
+	d, mgr, _, _ := newTestProbeDetector(lister, loader, reader, rt, clk)
+	mgr.Raise("container-restart-loop", "app", "crash-looping") // restart-loop owns it
+
+	d.check(context.Background())
+	d.check(context.Background())
+	if len(unresponsiveIssues(mgr)) != 0 {
+		t.Fatalf("crash-looper must not also raise app-unresponsive, got %v", mgr.List())
+	}
+	if rt.last != nil {
+		t.Errorf("crash-looper must not be probed; got a request to %v", rt.last.Host)
+	}
+}
+
+// A connection failure / timeout (no HTTP response at all) is unhealthy — a dead
+// upstream behind Caddy reads the same as a 5xx.
+func TestAppProbe_ConnectionFailureIsUnhealthy(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	lister, loader, reader := probeScenario(clk, "/healthz", nil, manifest.DefaultStartPeriod, 5*time.Minute)
+	rt := &stubRoundTripper{fail: map[string]bool{"app.local": true}}
+	d, mgr, _, _ := newTestProbeDetector(lister, loader, reader, rt, clk)
+
+	d.check(context.Background())
+	d.check(context.Background())
+	if len(unresponsiveIssues(mgr)) != 1 {
+		t.Fatalf("connection failure must raise after two samples, got %v", mgr.List())
+	}
+}
+
+// A non-running main container is not steady-running → not probed, never raised.
+func TestAppProbe_NotRunningSkipped(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	lister, loader, _ := probeScenario(clk, "/healthz", nil, manifest.DefaultStartPeriod, 5*time.Minute)
+	reader := &fakeContainerReader{containers: []lifecycle.ManagedContainer{
+		{InstanceID: "app", Service: "web", Running: false, StartedAt: clk.now().Add(-5 * time.Minute)},
+	}}
+	rt := &stubRoundTripper{status: map[string]int{"app.local": 503}}
+	d, mgr, _, _ := newTestProbeDetector(lister, loader, reader, rt, clk)
+
+	d.check(context.Background())
+	d.check(context.Background())
+	if len(unresponsiveIssues(mgr)) != 0 {
+		t.Fatalf("a stopped container must not raise app-unresponsive, got %v", mgr.List())
+	}
+	if rt.last != nil {
+		t.Errorf("a stopped container must not be probed; got a request to %v", rt.last.Host)
+	}
+}
+
+// Once raised, losing eligibility (here: uninstalled — gone from the instance
+// list and from Docker) clears the issue.
+func TestAppProbe_ClearsWhenUninstalled(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	lister, loader, reader := probeScenario(clk, "/healthz", nil, manifest.DefaultStartPeriod, 5*time.Minute)
+	rt := &stubRoundTripper{status: map[string]int{"app.local": 503}}
+	d, mgr, _, _ := newTestProbeDetector(lister, loader, reader, rt, clk)
+
+	d.check(context.Background())
+	d.check(context.Background())
+	if len(unresponsiveIssues(mgr)) != 1 {
+		t.Fatalf("expected raise before uninstall, got %v", mgr.List())
+	}
+	lister.instances = nil
+	reader.containers = nil
+	d.check(context.Background())
+	if len(unresponsiveIssues(mgr)) != 0 {
+		t.Fatalf("uninstalled app must clear app-unresponsive, got %v", mgr.List())
+	}
+}
+
+// The probe goes to Caddy's listener with Host: <route host> and the manifest
+// path — exactly the request a browser makes, never dialing the container.
+func TestAppProbe_RoutesThroughCaddyByHost(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	lister, loader, reader := probeScenario(clk, "/healthz", nil, manifest.DefaultStartPeriod, 5*time.Minute)
+	rt := &stubRoundTripper{status: map[string]int{"app.local": 200}}
+	d, _, _, _ := newTestProbeDetector(lister, loader, reader, rt, clk)
+
+	d.check(context.Background())
+	if rt.last == nil {
+		t.Fatal("expected a probe request")
+	}
+	if rt.last.Host != "app.local" {
+		t.Errorf("probe Host = %q, want app.local (route host)", rt.last.Host)
+	}
+	if got := rt.last.URL.String(); got != "http://caddy.test/healthz" {
+		t.Errorf("probe URL = %q, want http://caddy.test/healthz (Caddy listener + path)", got)
+	}
+}
+
+func TestProbeHealthy(t *testing.T) {
+	cases := []struct {
+		status  int
+		allowed []int
+		want    bool
+	}{
+		{200, nil, true},
+		{404, nil, true}, // default <500 → "responding"
+		{499, nil, true},
+		{500, nil, false}, // 5xx → not responding
+		{502, nil, false}, // Caddy's dead-upstream
+		{200, []int{200}, true},
+		{204, []int{200}, false},
+		{200, []int{200, 204}, true},
+		{500, []int{200, 500}, true}, // explicit set can include a 5xx
+	}
+	for _, c := range cases {
+		if got := probeHealthy(c.status, c.allowed); got != c.want {
+			t.Errorf("probeHealthy(%d, %v) = %v, want %v", c.status, c.allowed, got, c.want)
+		}
 	}
 }
