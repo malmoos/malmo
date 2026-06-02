@@ -47,13 +47,6 @@ Two-part decision: (a) is v1 English-only? (very probably yes); (b) does the man
 **Context:** `APP_MANIFEST.md`, `APP_STORE.md`, `WEB_UI.md`.
 **Why Tier 2:** schema-shaping; literally one or two field-shape decisions in `APP_MANIFEST.md`.
 
-### Custom container (Door 2) install flow
-
-The actual paste-compose UX. Field-by-field interaction, main-port inference, what we ask vs. autodetect, name collisions, edit-after-install path.
-
-**Context:** `APP_MANIFEST.md` ("Custom container — synthetic manifest").
-**Why Tier 2:** Door 2 is the bridge to the "tinkerer adoption" audience. The synthetic-manifest mechanic is sketched; the UX isn't.
-
 ### Store catalog curation policy
 
 `APP_STORE.md` pins the publish *mechanism* (signed catalog, PR-based, CI-validated). What's still open is the **content policy** the maintainer enforces in review: do we reject manifests that set `storage.app_managed_user_content: true`, or only label them with the absence of the `files_first_class` badge? Do we require apps to log to stdout/stderr (no `logging.driver:` overrides, no in-`command:` file redirects) so the dashboard Logs tab works (`LOGGING.md` # Apps are expected to log to stdout)? What other criteria gate inclusion (license, upstream maintenance signals, declared-vs-actual permission audit)?
@@ -274,6 +267,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - App icon & screenshot handling — bundled vs. URL. `APP_MANIFEST.md`.
 - Update-strategy declarations (in-place vs. needs-migration). `APP_MANIFEST.md` (folds into hooks).
 - Typed install-time questions in the manifest (prior art: Yunohost's pre-install question schema — typed prompts for admin/domain/language captured at install time). We have nothing today; revisit when Door 2 / managed-config grows beyond env-var passthrough. `APP_MANIFEST.md`.
+- **Door-2 synthetic-manifest edit / graduate-in-place path (deferred).** The v1 custom-container flow is install-only — changing a custom app is uninstall + re-paste (`DECISIONS.md` 2026-06-02). The intended-future shape is editing a synthetic manifest in place to *graduate* it (refine volumes, add a managed DB / backup hooks, classify cache vs. data) without reinstalling. Larger surface than the install flow (validation, compose re-render, restart, audit); revisit when re-paste friction actually bites. Pairs with the re-import path for archived "keep data" instances (Control-plane Tier item). `APP_MANIFEST.md` # one model, two doors, `DASHBOARD.md` # Door-2 custom container install flow.
 - App categories / tags taxonomy for the store browse UX. `APP_STORE.md`, `WEB_UI.md`.
 - Per-app cron / scheduled tasks declared in manifest (distinct from the Tier-3 background-jobs service in `SERVICE_PROVISIONING.md`). Cron-on-host vs. a per-instance scheduler container. `APP_MANIFEST.md`.
 - Per-app kill switch in `catalog.json` (distinct from `RELEASE_MANIFEST.md`'s `rollback_to`, which targets brain/UI versions). For "CVE dropped in app X, stop it everywhere on next catalog refresh." `APP_STORE.md`, `APP_LIFECYCLE.md`.

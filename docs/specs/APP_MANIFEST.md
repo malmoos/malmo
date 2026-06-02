@@ -11,7 +11,7 @@ The brain only ever knows about manifests. *Everything* installed on a malmo box
 
 This unification matters because:
 - The brain's data model stays simple — one type of thing.
-- A power user can paste a compose file today and later edit the synthetic manifest to graduate the app (add backup hooks, request a managed DB, etc.) without reinstalling.
+- A power user can paste a compose file today; the synthetic manifest is designed to *graduate* later (add backup hooks, request a managed DB, refine volumes) into a richer manifest of the same schema. **In-product editing of a synthetic manifest is deferred past v1** (`NEXT.md`) — v1's custom flow is install-only, and changing a custom app means uninstall + re-paste. See `DASHBOARD.md` # Door-2 custom container install flow.
 - Door-1 is just "we wrote the manifest for you."
 
 ## Author philosophy
@@ -353,7 +353,9 @@ permissions:
   lan: false
 ```
 
-No managed services by default. Best-effort backup of all volumes (we can't tell cache from data without the author's input). Scope (household vs. personal) is the installer's election, not synthesized into the manifest (# G). User can edit the synthetic manifest later to add managed services, hooks, refined storage classification — same schema, same fields.
+No managed services by default. Best-effort backup of all volumes (we can't tell cache from data without the author's input). Scope (household vs. personal) is the installer's election, not synthesized into the manifest (# G). The richer-manifest graduation path (managed services, hooks, refined storage classification — same schema, same fields) is the intended future shape but **in-product editing is deferred past v1** (`DASHBOARD.md` # Door-2 custom container install flow); the v1 path is install-only.
+
+**What the brain infers vs. asks (Door-2 paste).** `main_service` is **autodetected** when the compose has exactly one service, and **asked** otherwise (a dropdown of the compose's services). `main_port` is the *container-internal* port Caddy routes to — **best-effort inferred** from the main service's `expose:` (a single declared value prefills it) and **asked** when none is declared, since malmo can't read the image's `EXPOSE` without pulling it; it is always editable. Published `ports:` are never the answer here — they're an admission rejection (Caddy fronts every app on internal networks). The full screen UX — where the flow lives, inline admission-error coaching, the live URL preview, and the deferred edit-after-install path — is locked in `DASHBOARD.md` # Door-2 custom container install flow.
 
 **Custom apps may request managed services.** Allowed, not encouraged. A power user pasting compose can manually add `services: { database: { type: postgres, version: "15" } }` and gets the same managed Postgres treatment. We document the path; we don't gate it.
 
