@@ -346,7 +346,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Dashboard login brute-force throttling / lockout — `LOGGING.md` notes journald caps sshd spam, but the brain's own login endpoint has no rate-limit story. `AUTH.md`.
 
 **Runtime & host**
-- Container image / layer cleanup policy — `docker image prune` cadence + retention so old images don't fill the OS drive over time. `APP_LIFECYCLE.md`, `UPDATES.md`.
+- Periodic image / layer cleanup policy — a recurring `docker image prune -a` sweep (cadence + retention) for images orphaned by *updates*, not uninstalls. Post-uninstall reclaim is handled by targeted `rmi`-by-digest (issue #9); this remaining item needs a scheduler/timer seam the brain doesn't have yet, plus a retention rule for update-orphaned layers. `APP_LIFECYCLE.md`, `UPDATES.md`.
 - Container runtime version pinning — which Docker engine version we ship, how it tracks Debian-base updates vs. upstream `docker-ce`. `BUILD.md`, `UPDATES.md`.
 - Host kernel panic / coredump capture policy — what we keep, where, retention. Brain & host-agent process panics are covered by `TELEMETRY.md` (structured crash events when opt-in is on). Kernel panics are the remaining gap. `LOGGING.md`, `HEALTH.md`.
 - Log rotation for non-journald files (Caddy access logs, anything that escapes the journal). `LOGGING.md`.
