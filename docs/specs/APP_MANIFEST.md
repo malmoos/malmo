@@ -83,6 +83,7 @@ main_port: 2342                       # port the main service listens on interna
 preferred_slugs: [photos, photoprism] # subdomain priority list; OS picks first free
 needs_secure_context: false           # optional; default false. See below.
 timezone: system                      # optional; "system" (default) or "utc"
+health_probe: /healthz                # optional; enables the "responding" check. See below.
 ```
 
 **`id` and `preferred_slugs`** must be strict kebab-case — lowercase alphanumerics joined by single internal hyphens (`home-assistant` ✓; `whoami-`, `-x`, `who--ami`, `xn--y`, `Foo` ✗). This keeps the `<slug>--<user>` personal-instance scheme parseable (`DASHBOARD.md` # instance naming): no leading/trailing hyphen and no `--` run (which would collide with the owner separator and also covers the reserved `xn--` prefix). Catalog CI and the manifest parser both reject violations.
@@ -101,6 +102,23 @@ The compose file is held **verbatim**. Authors test it with `docker compose up` 
 The field is **never a routing override.** The URL each app gets is determined entirely by the global "Use secure URLs" toggle in Settings — see `MALMO_NETWORK.md`. App authors should set this honestly: many apps work fine on HTTP and shouldn't set it; apps that genuinely depend on a secure-context API should.
 
 Previously this field was named `requires_https` and gated install on un-enrolled boxes. Changed 2026-05-14 — see `DECISIONS.md`.
+
+**`health_probe`** opts the app into malmo's *"up but not responding"* detection. It is **not** Docker `HEALTHCHECK`: malmo holds the compose file verbatim and cannot add a healthcheck for the author, so the probe is declared here, in malmo's contract, and executed by the brain. Absent (the default), the app is never probed and the `app-unresponsive` health issue is never raised for it — least surprise for the bulk of the catalog. Shorthand `health_probe: /healthz` expands to `{ path: /healthz }`; the full form:
+
+```yaml
+health_probe:
+  path: /healthz                    # HTTP path to GET (required when the block is present)
+  healthy_status: [200]             # optional; default: any status < 500
+  start_period: 60s                 # optional; grace after container start before probing (default 60s)
+```
+
+When set, the brain probes the app on its health-poll tick and raises the **non-blocking** `app-unresponsive` warning (`HEALTH.md` # Version, Tier-2 action: view logs / restart) when the probe fails. Three things to know, all owned by `HEALTH.md` # Detector catalog:
+
+- **No `port` field.** The probe targets the app's existing route (which already points at `main_service:main_port`) — it goes *through Caddy* with `Host: <slug>`, exactly like a browser request, not by the brain dialing the container. This is a security call: it keeps the brain (the control plane) off every app-reachable Docker network. See `DECISIONS.md` 2026-06-02.
+- **Default healthy = any status < 500**, i.e. "the server answered coherently." An app that returns `401`/`403`/`404` on the probe path is still *responding*; `5xx`, a timeout, or a connection failure (Caddy's `502`) is not. Authors with a real health endpoint can narrow to `[200]`.
+- **`start_period`** is the grace after the container starts before the probe counts, so a warming-up app doesn't flap the banner on install/update.
+
+Door-2 synthetic manifests omit it; a power user can add it later by editing the manifest, same as any other optional field.
 
 ### B2. Resources (recommended, never a limit)
 
@@ -357,6 +375,7 @@ No managed services by default. Best-effort backup of all volumes (we can't tell
 - **No added Linux capabilities for store apps.** Override is `cap_drop: [ALL]`, adds none; admission rejects `cap_add`. Capability / `privileged` / Docker-socket needs go through Door-2 or Tier 2. A reviewed `permissions.capabilities` escape hatch is not in the v1 store schema (open in `NEXT.md`).
 - **Bind mounts only — no Docker named volumes for app data.** All data lives under the instance's `data/` dir.
 - **Hooks deferred from MVP.** When reintroduced, they will be one-shot container images, not in-container scripts.
+- **`health_probe` is opt-in and malmo-executed, not Docker `HEALTHCHECK`.** Optional `path` (+ `healthy_status`, `start_period`); the brain probes the app *through its Caddy route* on the health-poll tick and raises the non-blocking `app-unresponsive` warning (`HEALTH.md`) when it fails. Absent → no probe, issue never raised. Default healthy = any status < 500. Probing through Caddy (not by dialing the container) keeps the control plane off app-reachable networks. See `DECISIONS.md` 2026-06-02.
 - **`needs_secure_context` is an install-time warning, not a routing override or install block.** Apps declare it honestly; the brain warns the user if the current URL scheme is HTTP. The URL each app uses is determined by the global toggle in Settings, not the manifest.
 - **Public, versioned spec.** Third-party stores depend on it.
 - **Env-var injection: app-defined naming.** App's compose maps malmo's stable `MALMO_SERVICE_*` variables to whatever names the app expects. No auto-rewrite. Authors adapt; we document.

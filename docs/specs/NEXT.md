@@ -282,7 +282,6 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - *(Resolved 2026-05-29 — user-driven multi-instance is **yes**: duplicate installs warn but don't block (`DASHBOARD.md` # warn, don't block). Each becomes a personal instance with its own owner/slug/data. The remaining sub-question — two instances owned by the *same* user — folds into the same machinery; pin it if it ever bites.)*
 - Same-user repeat-install slug cap + error UX. `allocateSlug` (`internal/lifecycle`) tries `<slug>` (bare, first-come), `<slug>--<user>` (personal collision), `<slug>-2`, `<slug>-3`, then fails *inside the install job* with an opaque "no free slug" error. Two open bits: (a) the cap of effectively three slugs before exhaustion is arbitrary and tight for power users who install the same app multiple times; (b) exhaustion should surface as a clear pre-job `422`/`409`, not a mid-job failure. `APP_LIFECYCLE.md`, `DASHBOARD.md`.
 - App publisher identity / verified-author badge surface (the *mechanism* folds into manifest signing above; this is the catalog-side UX). `APP_STORE.md`.
-- Per-app HTTP health-probe declaration in the manifest (beyond Docker `HEALTHCHECK`), so the brain reports "responding" vs. "up but unresponsive." `APP_MANIFEST.md`, `HEALTH.md`.
 - Container vulnerability scanning at catalog publish (Trivy/Grype in CI on every PR). `APP_STORE.md`.
 
 **Networking & cloud**
