@@ -64,12 +64,32 @@ Admin-only, and tucked away — not a dock item, not in the Store browse grid. A
 
 One screen, top to bottom:
 
-1. **Paste or upload the compose file.** A large textarea (file-picker as the alternative) is the primary input. The compose is held **verbatim** — malmo never rewrites it (`APP_MANIFEST.md`).
+1. **Paste or upload the compose file.** A large textarea (file-picker as the alternative) is the primary input. The compose is held **verbatim** — malmo never rewrites it (`APP_MANIFEST.md`). This is *the user's document*; it stays in its own textarea throughout (see # Form is a projection of the synthetic manifest below).
 2. **App name.** A friendly display name; the slug derives from it. The form previews the resulting URL (`<slug>.local`) live as the name is typed.
 3. **Main service** — *autodetected* when the compose has exactly one service; a **required dropdown** of the compose's services when it has several (`manifest.Synthesize`).
-4. **Main port** — the *container-internal* port Caddy routes to. **Best-effort inferred** from the main service's `expose:` (a single declared value prefills it); **asked** when none is declared, since malmo can't read the image's `EXPOSE` without pulling it. Always editable, always required, with help text ("the port your app listens on *inside* the container — check the image's docs"). Published `ports:` are never the answer — they're an admission rejection (Caddy fronts every app), so a pasted mapping never carries over here.
-5. **Internet access** — a single toggle, **default on** (the custom-app default; `APP_MANIFEST.md`), with a one-line explanation; LAN/mDNS stays off by default. This is the *only* permission surfaced in the paste flow. `folders`, `devices`, `gpu`, and managed `services` are deliberately **not** here — they're authored by hand in the manifest (the deferred graduation path below), which is the power user's job.
+4. **Main port** — the *container-internal* port Caddy routes to. **Best-effort inferred** from every signal the compose carries — a single `expose:` value, or the *container side* of a published `ports:` mapping (`8080:80` ⇒ `80`, mined out before the mapping itself is rejected) — and **asked** only when the compose is silent, since malmo can't read the image's `EXPOSE` without pulling it. Always editable, always required, with help text ("the port your app listens on *inside* the container — check the image's docs"). A published `ports:` mapping is still an admission rejection (Caddy fronts every app); we read its container side for the prefill, we don't honor the host binding.
+5. **Permissions.** The admin elects the app's malmo-native permissions — this is where the synthetic manifest's `permissions` block is authored (`APP_MANIFEST.md` # Custom container):
+   - **Internet** — default **on** (the custom-app default), with a one-line explanation.
+   - **LAN / mDNS** — default **off**.
+   - **GPU** — default **off**; a single toggle. On ⇒ the synthetic manifest sets `gpu: true` (platform GPU runtime; `APP_MANIFEST.md` # gpu). No-GPU boxes surface the same capacity-check failure as a store app.
+   - **Folder access** — **optional, empty by default** (most pasted containers touch no user content). An "add a folder" control adds **two-input rows**: **Source** (a picker over the fixed use-case folders — Photos, Documents, Movies, Music, Notes, Downloads) on the left, **Destination** (a free-text in-container path the admin types) on the right, plus a read/write choice. Each row becomes one folder grant in the synthetic manifest. The destination is hand-typed and Door-2-specific — see # Folder grants carry an explicit destination path below.
+   - **Devices and managed `services`** are deliberately **not** given dedicated controls — they're the long tail. A power user reaches them through the **Edit as YAML** toggle (next), not a form field.
 6. **Scope** — even though Door 2 is admin-only, the admin still chooses **Household** vs **Just for me**, via the same button convention as the store row (silent personal on a single-user box; # Single-user simplification).
+
+### Form is a projection of the synthetic manifest (with a YAML escape hatch)
+
+The form fields in steps 2–5 are a **friendly projection of the synthetic manifest** — the overlay malmo wraps around the pasted compose (`APP_MANIFEST.md` # Custom container). An **"Edit as YAML"** toggle flips that overlay between the form and a **raw manifest editor**, so the power user who needs a field the form doesn't surface (`devices`, managed `services`, a `health_probe`) hand-authors it without us building a control for every key. This is the Door-1/Door-2 split recursed one level: the form is the calm path, the YAML view is the escape hatch.
+
+Two boundaries keep it honest:
+
+- **The toggle edits the *manifest overlay*, not the compose.** The pasted compose is the user's verbatim document and keeps its own textarea (step 1); the YAML view never merges the two. Two documents, two roles — flipping to YAML never threatens the "compose held verbatim" guarantee.
+- **Admission gates every path identically.** Whether a permission was toggled, a folder row filled in, or the manifest hand-edited as YAML, submitting runs `Synthesize` + `admission.Check` (# Validation below). The escape hatch escapes the *form*, not the *sandbox* — a YAML-editing admin still can't smuggle `privileged` or a host mount past the door (`APP_ISOLATION.md` # Forbidden for both doors).
+
+This is **install-time authoring** of a not-yet-installed app — distinct from the deferred *graduate-in-place* path (`NEXT.md`), which edits an already-installed instance's manifest (re-render, restart, reconcile, audit). Editing the overlay before the instance exists has none of that lifecycle surface.
+
+### Folder grants carry an explicit destination path
+
+A store app's folder grant declares no in-container path: the brain mounts every folder at a fixed `/malmo/<folder>` and injects `MALMO_FOLDER_<NAME>`, and the *author* maps that variable to the image's library path (`APP_MANIFEST.md` # Locked: folders mount at a fixed path). A Door-2 paste has no author to adapt — the verbatim third-party compose already hardcodes where it wants data (PhotoPrism reads `/photoprism/originals`, not a malmo env var). So a **Door-2 folder grant carries an explicit `target`** — the destination path the admin types — and the brain binds the elected source straight there. Store apps keep the fixed-path + env-var convention; the explicit `target` is an additive, Door-2-only field (`APP_MANIFEST.md` # Custom container, `DECISIONS.md` 2026-06-02). The source side stays a **picker, not free text** — it must resolve to a real use-case folder, keeping folder access inside the files-first-class model and out of "bind any host path" territory (which admission rejects anyway).
 
 ### Validation: coach the paste into the sandbox
 
@@ -85,7 +105,7 @@ A custom install **never** triggers the duplicate-install warning: `Synthesize` 
 
 ### Edit-after-install is deferred (v1 is install-only)
 
-There is **no** in-product editor for a synthetic manifest or its compose in v1. To change a custom app — a new image tag, a refined volume, a managed DB — the admin **uninstalls and re-pastes**. The "graduate the synthetic manifest in place" path (`APP_MANIFEST.md` # one model, two doors) is real but **not v1**; it's parked in `NEXT.md`. This keeps Door 2's surface to the one thing it must do well — get a pasted compose safely installed and routed — and matches the broader v1 posture that even store-app permission *revocation* is deferred (# What stays deferred above).
+There is **no** in-product editor for an *installed* custom app in v1. The **Edit as YAML** toggle (# Form is a projection above) authors the manifest **before install**, while the form is open and no instance exists yet — that is not the deferred feature. To change an app *after* it's installed — a new image tag, a refined volume, a managed DB — the admin **uninstalls and re-pastes**. The "graduate the synthetic manifest in place" path (`APP_MANIFEST.md` # one model, two doors) — editing a *live* instance's manifest, then re-rendering, restarting, and reconciling — is real but **not v1**; it's parked in `NEXT.md`. This keeps Door 2's post-install surface to the one thing it must do well — get a pasted compose safely installed and routed — and matches the broader v1 posture that even store-app permission *revocation* is deferred (# What stays deferred above).
 
 ---
 

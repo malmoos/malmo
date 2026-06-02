@@ -333,7 +333,7 @@ permissions:
 
 ## Custom container — synthetic manifest
 
-User pastes a compose file, names the app, picks the main port. The brain generates:
+User pastes a compose file, names the app, picks the main port, and **elects the app's permissions** in the install form (`DASHBOARD.md` # Door-2 custom container install flow). The brain generates:
 
 ```yaml
 id: my-thing-x4f7                     # auto: name + entropy
@@ -342,20 +342,27 @@ name: my-thing
 version: custom
 compose_file: docker-compose.yml      # the user's pasted file
 main_service: <inferred or asked>
-main_port: <user-provided>
+main_port: <inferred or asked>
 preferred_slugs: [my-thing]
 
 storage:
   data_volumes: [<all volumes from the compose>]
   # cache_volumes: empty by default — best-effort backup of everything
 permissions:
-  internet: true                      # default-on for custom apps
-  lan: false
+  internet: true                      # default-on for custom apps; form toggle
+  lan: false                          # form toggle
+  gpu: false                          # form toggle
+  folders:                            # empty by default; one entry per form row
+    - folder: photos
+      mode: read
+      target: /photoprism/originals   # Door-2-only: explicit in-container path
 ```
 
-No managed services by default. Best-effort backup of all volumes (we can't tell cache from data without the author's input). Scope (household vs. personal) is the installer's election, not synthesized into the manifest (# G). The richer-manifest graduation path (managed services, hooks, refined storage classification — same schema, same fields) is the intended future shape but **in-product editing is deferred past v1** (`DASHBOARD.md` # Door-2 custom container install flow); the v1 path is install-only.
+**The `permissions` block is admin-elected in the form, not hardcoded.** `internet` (default on), `lan`, `gpu`, and any `folders` rows are authored through the install screen's permission controls; `devices` and managed `services` are the long tail, reached through the form's **Edit as YAML** escape hatch rather than dedicated fields (`DASHBOARD.md` # Form is a projection of the synthetic manifest). The form is a friendly projection of *this* manifest; the YAML toggle edits the same overlay raw. No managed services by default; best-effort backup of all volumes (we can't tell cache from data without the author's input); scope (household vs. personal) is the installer's election, not a manifest field (# G). The richer-manifest *graduate-in-place* path — editing an already-installed instance's manifest — is the intended future shape but **deferred past v1** (`DASHBOARD.md` # Edit-after-install is deferred); install-time authoring (form + YAML toggle) is not that deferred feature.
 
-**What the brain infers vs. asks (Door-2 paste).** `main_service` is **autodetected** when the compose has exactly one service, and **asked** otherwise (a dropdown of the compose's services). `main_port` is the *container-internal* port Caddy routes to — **best-effort inferred** from the main service's `expose:` (a single declared value prefills it) and **asked** when none is declared, since malmo can't read the image's `EXPOSE` without pulling it; it is always editable. Published `ports:` are never the answer here — they're an admission rejection (Caddy fronts every app on internal networks). The full screen UX — where the flow lives, inline admission-error coaching, the live URL preview, and the deferred edit-after-install path — is locked in `DASHBOARD.md` # Door-2 custom container install flow.
+**Door-2 folder grants carry an explicit `target`.** Store-app folder grants declare no in-container path — the brain mounts each at `/malmo/<folder>` + injects `MALMO_FOLDER_<NAME>`, and the author maps that env var (# Locked: folders mount at a fixed path). A Door-2 paste has no author to adapt: the verbatim third-party compose hardcodes its data path, so the synthetic manifest's folder entry carries an explicit `target` (the destination the admin typed) and the brain binds the elected source straight there. The `target` field is **Door-2-only** — store manifests omit it and keep the fixed-path + env-var convention (`DECISIONS.md` 2026-06-02). The *source* (personal vs. household) stays the installer's per-folder election, exactly as for store apps.
+
+**What the brain infers vs. asks (Door-2 paste).** `main_service` is **autodetected** when the compose has exactly one service, and **asked** otherwise (a dropdown of the compose's services). `main_port` is the *container-internal* port Caddy routes to — **best-effort inferred** from every signal the compose carries: a single `expose:` value, or the *container side* of a published `ports:` mapping (`8080:80` ⇒ `80`), mined out for the prefill before the mapping itself is rejected. It is **asked** only when the compose is silent (malmo can't read the image's `EXPOSE` without pulling it) and is always editable. A published `ports:` is never *honored* (it's an admission rejection — Caddy fronts every app on internal networks); its container side is only read to prefill `main_port`. The full screen UX — where the flow lives, the permission controls and YAML escape hatch, inline admission-error coaching, the live URL preview, and the deferred edit-after-install path — is locked in `DASHBOARD.md` # Door-2 custom container install flow.
 
 **Custom apps may request managed services.** Allowed, not encouraged. A power user pasting compose can manually add `services: { database: { type: postgres, version: "15" } }` and gets the same managed Postgres treatment. We document the path; we don't gate it.
 
@@ -370,7 +377,7 @@ No managed services by default. Best-effort backup of all volumes (we can't tell
 - **User content vs. app state are separate stores.** User content (`/home/<user>/Photos/`, etc.) accessed by manifest-declared bind mounts of use-case folders; app state in `/var/lib/malmo/instances/<id>/data/`. Apps reach user content by reference, never by copy.
 - **`scope: pick-subfolder`** for `folders` — install-time prompt for apps that should manage a subset (notes apps, media subsets). Default is provided by the manifest; user can override.
 - **Folder source (personal vs household-shared) is installer-elected, not a manifest field.** The manifest declares only the folder + `mode` + `scope`; whether it binds the owner's `~/<Folder>/` or the household `/srv/malmo/shared/<Folder>/` is the installer's per-folder choice (personal instances pick, defaulting to personal; household instances are always shared). Replaces the old `user_folders` / `shared_folders` keys. See `DECISIONS.md` 2026-05-30.
-- **`folders` mount at a fixed path + injected env var.** The manifest declares folder + `mode` + `scope` but no in-container path; the brain mounts each at `/malmo/<folder>` and injects `MALMO_FOLDER_<NAME>`. The app's compose maps that variable to its own library path. `mode` defaults to `read`. Same injection pattern as `MALMO_SERVICE_*` / `MALMO_DATA_DIR`.
+- **`folders` mount at a fixed path + injected env var (store apps).** A store manifest declares folder + `mode` + `scope` but no in-container path; the brain mounts each at `/malmo/<folder>` and injects `MALMO_FOLDER_<NAME>`. The app's compose maps that variable to its own library path. `mode` defaults to `read`. Same injection pattern as `MALMO_SERVICE_*` / `MALMO_DATA_DIR`. **Door-2 custom apps diverge:** their verbatim compose has no author to map the env var, so a Door-2 folder grant carries an explicit `target` (the destination path the admin types) and the brain binds straight there. `target` is Door-2-only; store grants omit it (# Custom container — synthetic manifest, `DECISIONS.md` 2026-06-02).
 - **`gpu` is its own field, separate from `devices`.** `devices` passes through explicit `/dev/...` paths; `gpu: true` selects the platform GPU runtime. No-GPU box fails at the capacity check.
 - **`app_managed_user_content: true`** is the opt-in for apps that don't expose user content via use-case folders. Triggers an install-time warning. Curated store prefers apps without it.
 - **Scope (household vs. personal) is installer-elected, not a manifest field.** No `multi_user.mode`. Admins choose household or personal; members install personal only (`DASHBOARD.md`, `DECISIONS.md` 2026-05-29). Guest-sharing and household visibility are deferred and not manifest fields.
