@@ -24,7 +24,7 @@ The slot is freed by the deferred `release()` when the handler returns, which ha
 
 ## Known gaps & deviations
 
-- **No `Retry-After` header on the `429`.** The spec doesn't ask for one, and the cap is a backstop against buggy/runaway tabs — a browser `EventSource` treats a non-`200` as fatal and stops reconnecting, which is the intended effect. Left off deliberately.
+- **`Retry-After: 0` on the `429`.** `BRAIN_UI_PROTOCOL.md` # Rate limiting locked decision requires `Retry-After` on every `429`; for the stream cap the slot frees when a tab closes rather than after a fixed delay, so the value is `0`. The response body uses the locked `{code: "rate-limited", message, details: {scope: "session"}}` envelope.
 - **The cap counts only the two raw SSE handlers that exist today** (`events`, `system/live`). The per-resource log/progress tails in `BRAIN_UI_PROTOCOL.md` Pattern C stream 1 (`/api/v1/jobs/:id/log`, `/api/v1/apps/:id/log`, `/api/v1/services/:svc/log`) are not implemented yet; when they land they must also call `beginStream` to participate — noted here so it isn't silently assumed handled. `beginStream` is the single seam to wire them through.
 - **Not exercised under a real browser.** Verified over real HTTP with the Go client (long-lived streams held open concurrently); the `EventSource`-stops-on-429 behaviour is a browser property, not tested here.
 - **Schema/`oasdiff` impact: none.** The SSE endpoints are raw mux handlers outside huma, so they're absent from the generated OpenAPI; adding a `429` path changes no schema and is additive regardless (`BRAIN_UI_PROTOCOL.md` # CI enforcement).

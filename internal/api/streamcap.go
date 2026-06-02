@@ -75,10 +75,13 @@ func (s *Server) beginStream(w http.ResponseWriter, r *http.Request) (func(), bo
 	return release, true
 }
 
-// writeStreamCapExceeded mirrors writeUnauthenticated's raw-handler error shape
-// (the SSE handlers sit outside huma, so they hand-write the body).
+// writeStreamCapExceeded writes the locked 429 shape (BRAIN_UI_PROTOCOL.md #
+// Rate limiting & abuse, # Errors): {code, message, details?} envelope with
+// code "rate-limited", scope "session", and a Retry-After: 0 header (the slot
+// frees when a stream closes, not after a fixed delay).
 func writeStreamCapExceeded(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", "0")
 	w.WriteHeader(http.StatusTooManyRequests)
-	_, _ = w.Write([]byte(`{"status":429,"title":"Too Many Requests","detail":"Too many live streams open for this session."}`))
+	_, _ = w.Write([]byte(`{"code":"rate-limited","message":"Too many live streams open for this session.","details":{"scope":"session"}}`))
 }
