@@ -50,6 +50,7 @@ type fakeDocker struct {
 	composeUpErr   error // simple "always fail compose up"
 	composeDownErr error
 	composeStopErr error
+	removeImageErr error
 
 	calls []call
 }
@@ -180,7 +181,7 @@ func (f *fakeDocker) RemoveContainersByInstance(_ context.Context, id string) er
 
 func (f *fakeDocker) RemoveImage(_ context.Context, ref string) error {
 	f.record("RemoveImage", ref)
-	return nil
+	return f.removeImageErr
 }
 
 // --- caddy fake ----------------------------------------------------------

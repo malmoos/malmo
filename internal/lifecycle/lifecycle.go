@@ -444,9 +444,9 @@ func (m *Manager) Uninstall(ctx context.Context, id string) error {
 	if err := m.store.Delete(id); err != nil {
 		return err
 	}
-	m.reclaimImages(ctx, id, images)
 	m.bus.Publish(events.AppUninstalled, map[string]any{"instance_id": id})
 	slog.Info("app uninstalled", "instance_id", id, "name", inst.Name)
+	m.reclaimImages(ctx, id, images)
 	return nil
 }
 

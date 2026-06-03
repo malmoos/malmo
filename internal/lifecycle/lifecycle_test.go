@@ -8,6 +8,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -435,6 +436,24 @@ images:
 	}
 	if !methodsContainArg(e.docker.Calls(), "RemoveImage", wantRef) {
 		t.Fatalf("RemoveImage(%s) not called after last referent removed: %v", wantRef, e.docker.methods())
+	}
+}
+
+func TestUninstallSucceedsWhenReclaimFails(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeCatalogApp(t, "whoami", whoamiCompose, whoamiManifest(testDigest))
+	e.docker.digests[testImage] = testDigest
+	inst, err := e.m.Install(context.Background(), "whoami", Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, nil)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	e.docker.removeImageErr = errors.New("image in use")
+	if err := e.m.Uninstall(context.Background(), inst.ID); err != nil {
+		t.Fatalf("uninstall must succeed even when rmi fails: %v", err)
+	}
+	if _, err := e.store.Get(inst.ID); err == nil {
+		t.Fatal("instance row should be gone after uninstall")
 	}
 }
 
