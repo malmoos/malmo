@@ -1,6 +1,10 @@
 // Thin fetch wrapper (WEB_UI.md): prepends /api/v1, sends credentials, parses
-// {code,message} errors into a typed ApiError. Shaped to be swappable for
-// openapi-fetch when codegen lands.
+// {code,message} errors into a typed ApiError. The wire types below are
+// generated from the brain's OpenAPI schema; this wrapper stays hand-written —
+// it keeps the ApiError mapping + 401 handling that openapi-fetch's
+// {data,error} client would not provide. Regenerate the types with
+// `npm run gen:api` after a brain DTO change.
+import type { components } from "./generated/openapi";
 
 export class ApiError extends Error {
   code: string;
@@ -48,94 +52,43 @@ export const api = {
   del: <T>(p: string) => request<T>("DELETE", p),
 };
 
-// --- wire types (hand-rolled in v1; generated client is a follow-up) ------
+// --- wire types (generated from the brain's OpenAPI schema) ----------------
+// Backed by api/openapi.json via `npm run gen:api` (openapi-typescript): the
+// brain's huma handler structs are the single source of truth. These aliases
+// keep the export names the dashboard already imports, so call sites are
+// unchanged. CI's `make openapi-check` keeps the committed spec fresh, so these
+// types cannot silently drift from the Go DTOs.
+type Schemas = components["schemas"];
 
-export interface User {
-  id: string;
-  username: string;
-  role: string;
-  created_at: number;
-  single_user_mode?: boolean;
-}
+export type User = Schemas["UserDTO"];
+export type AuthState = Schemas["Auth-stateResponse"];
+export type SetupResult = Schemas["SetupResponse"];
+export type CatalogEntry = Schemas["Entry"];
+export type Instance = Schemas["InstanceDTO"];
+export type Notification = Schemas["NotificationDTO"];
+export type Job = Schemas["Job"];
+export type FolderElection = Schemas["FolderElection"];
+export type InstallRequest = Schemas["Install-appRequest"];
+export type InstallPlan = Schemas["InstallPlanDTO"];
+export type InstallPlanFolder = Schemas["InstallPlanFolder"];
+export type InstallPlanPermissions = Schemas["InstallPlanPermissions"];
+export type SourceMenu = Schemas["SourceMenu"];
+export type FolderSources = Schemas["FolderSources"];
 
-export interface AuthState {
-  has_users: boolean;
-}
-
-export interface SetupResult {
-  user: User;
-  recovery_code: string;
-}
-
-export interface CatalogEntry {
-  id: string;
-  name: string;
-  version: string;
-}
-
+// Scope is a UI-side literal union, intentionally NOT generated. The brain
+// serves scope (like severity / status / state) as a free string — the huma
+// structs don't declare enums (filed as a follow-up in
+// docs/progress/openapi-codegen.md). The dashboard only ever sets/compares the
+// two real values, and InstallDialog indexes FolderSources by scope, which
+// needs the literal union.
 export type Scope = "household" | "personal";
 
-export interface Instance {
-  id: string;
-  manifest_id: string;
-  name: string;
-  slug: string;
-  version: string;
-  state: string;
-  url: string;
-  owner_user_id: string;
-  owner_username: string;
-  scope: Scope;
-}
+// --- Door-2 hand-maintained types (not in the OpenAPI spec) -----------------
+// These types back the custom-container install endpoints which bypass huma
+// and are therefore not generated. See DASHBOARD.md # Door-2.
 
-// Notification is the bell read surface (NOTIFICATIONS.md # Surfaces). Routing
-// fields (audience, variant, user_id) stay server-side; `read` is this caller's
-// per-recipient state folded into a bool. `ts` / `resolved_at` are unix epoch ms.
-export interface Notification {
-  id: number;
-  ts: number;
-  category: string;
-  severity: "info" | "warning" | "error" | "critical";
-  summary: string;
-  body?: string;
-  action_label?: string;
-  action_route?: string;
-  read: boolean;
-  resolved_at?: number;
-}
-
-export interface Job {
-  job_id: string;
-  kind: string;
-  status: "running" | "completed" | "failed" | "cancelled" | "cancelling" | "stalled";
-  step?: string;
-  progress: number;
-  result?: Record<string, unknown>;
-  error?: { code: string; message: string };
-}
-
-// FolderElection is one entry in the install request's config.folders array.
-// source is only relevant when the folder's source menu has more than one option.
-// subfolder is only included for pick-subfolder folders.
-export interface FolderElection {
-  folder: string;
-  source?: string;
-  subfolder?: string;
-}
-
-// InstallRequest is the POST /api/v1/apps body for catalog (Door-1) installs.
-// scope defaults server-side (household for admins, personal for members).
-// confirm:true bypasses the duplicate-install 409 check.
-export interface InstallRequest {
-  manifest_id: string;
-  scope?: Scope;
-  confirm?: boolean;
-  config: { folders: FolderElection[] };
-}
-
-// Door-2 custom-container install (DASHBOARD.md # Door-2). `inspect` is a
-// read-only, admin-only parse of a pasted compose that drives the form's service
-// dropdown and main-port prefill (main_port 0 = could not infer; the form asks).
+// Door-2 inspect: admin-only parse of a pasted compose for service dropdown
+// and main-port prefill (main_port 0 = could not infer; the form asks).
 export interface CustomInspectResult {
   services: string[];
   main_port: number;
@@ -189,44 +142,6 @@ export interface CustomInstallRequest {
   scope?: Scope;
   permissions?: CustomPermissions;
   overlay?: string;
-}
-
-// InstallPlan is the response shape for GET /api/v1/catalog/:id/install-plan
-// (Pattern A sync). The brain returns structured fields; the UI owns all wording.
-// Advisory only — slice 4 (POST /api/v1/apps with config) is the authoritative path.
-export interface SourceMenu {
-  options: string[];
-  default: string;
-}
-
-export interface FolderSources {
-  household: SourceMenu;
-  personal: SourceMenu;
-}
-
-export interface InstallPlanFolder {
-  folder: string;
-  mode: "read" | "write";
-  scope: "whole" | "pick-subfolder";
-  subfolder_default?: string;
-  sources: FolderSources;
-}
-
-export interface InstallPlanPermissions {
-  internet: boolean;
-  lan: boolean;
-  gpu: boolean;
-  devices: string[];
-  folders: InstallPlanFolder[];
-}
-
-export interface InstallPlan {
-  manifest_id: string;
-  name: string;
-  version: string;
-  scope_options: Scope[];
-  scope_default: Scope;
-  permissions: InstallPlanPermissions;
 }
 
 // Poll a job to a terminal state (Pattern B). A useJob() composable with

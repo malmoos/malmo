@@ -10,6 +10,7 @@ on:
     branches: [main]
     paths:
       - "web-ui/**"
+      - "api/**"
       - ".github/workflows/ci-web.yml"
 
 # Cancel superseded runs on the same ref (e.g. force-pushes to a PR branch).
@@ -35,6 +36,15 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # Regenerate the TS client from the committed spec (api/openapi.json) and
+      # fail if the checked-in copy is stale — mirrors the Go job's openapi-check
+      # so the generated client can't drift from the schema (BRAIN_UI_PROTOCOL.md
+      # # Codegen).
+      - name: OpenAPI client freshness
+        run: |
+          npm run gen:api
+          git diff --exit-code src/generated/openapi.ts
 
       # `npm run build` runs `vue-tsc --noEmit` (typecheck) then `vite build`.
       - name: Typecheck + build

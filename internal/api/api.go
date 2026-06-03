@@ -67,6 +67,13 @@ func NewServer(
 	}
 }
 
+// OpenAPI document identity. Shared by Handler (live serving) and
+// OpenAPIDocument (build-time emission) so both describe the same surface.
+const (
+	openAPITitle   = "malmo brain"
+	openAPIVersion = "0.0.1"
+)
+
 // Handler builds the mux: huma-registered REST routes + the raw SSE endpoint.
 // The chain is CORS → auth → rate-limit → mux. CORS handles OPTIONS preflight
 // (no auth needed); auth gates everything else except the small public
@@ -74,13 +81,8 @@ func NewServer(
 // allowlist) before the mux dispatches (BRAIN_UI_PROTOCOL.md # Rate limiting).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	api := humago.New(mux, huma.DefaultConfig("malmo brain", "0.0.1"))
-	s.register(api)
-	s.registerAuth(api)
-	s.registerUsers(api)
-	s.registerMeRoutes(api)
-	s.registerHealth(api)
-	s.registerNotifications(api)
+	api := humago.New(mux, huma.DefaultConfig(openAPITitle, openAPIVersion))
+	s.registerAll(api)
 
 	// SSE is registered raw (huma streaming adds no value here and the raw
 	// handler keeps the wire format curl-debuggable per BRAIN_UI_PROTOCOL.md).
@@ -88,6 +90,36 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/system/live", s.systemLive)
 
 	return withCORS(s.authMiddleware(s.rateLimit(mux)))
+}
+
+// registerAll registers every huma (OpenAPI-described) route on api. It is the
+// single source of the REST surface, shared by Handler (live serving) and
+// OpenAPIDocument (build-time spec emission), so the emitted spec can never
+// drift from what the server actually serves. The raw SSE endpoints
+// (/api/v1/events, /api/v1/system/live) are deliberately not registered here:
+// they bypass huma and stay out of the OpenAPI surface (BRAIN_UI_PROTOCOL.md
+// # Codegen — typed SSE is a separate follow-up).
+func (s *Server) registerAll(api huma.API) {
+	s.register(api)
+	s.registerAuth(api)
+	s.registerUsers(api)
+	s.registerMeRoutes(api)
+	s.registerHealth(api)
+	s.registerNotifications(api)
+}
+
+// OpenAPIDocument builds the brain's full REST surface against a throwaway mux
+// and returns the resulting OpenAPI 3 document. No server is started and no
+// handler runs — huma.Register reflects the typed request/response structs to
+// produce the schema, so a zero-value Server (no live dependencies) suffices.
+// This is the build-time spec emitter behind `make openapi` and the CI
+// freshness check (BRAIN_UI_PROTOCOL.md # Codegen / # CI enforcement); cmd/openapi-gen
+// serializes it to api/openapi.{json,yaml}.
+func OpenAPIDocument() *huma.OpenAPI {
+	s := &Server{}
+	api := humago.New(http.NewServeMux(), huma.DefaultConfig(openAPITitle, openAPIVersion))
+	s.registerAll(api)
+	return api.OpenAPI()
 }
 
 func (s *Server) register(api huma.API) {
