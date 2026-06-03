@@ -133,6 +133,64 @@ export interface InstallRequest {
   config: { folders: FolderElection[] };
 }
 
+// Door-2 custom-container install (DASHBOARD.md # Door-2). `inspect` is a
+// read-only, admin-only parse of a pasted compose that drives the form's service
+// dropdown and main-port prefill (main_port 0 = could not infer; the form asks).
+export interface CustomInspectResult {
+  services: string[];
+  main_port: number;
+}
+
+// CustomFolderGrant is one Door-2 folder grant: a use-case folder (Source
+// picker), the in-container destination the admin types (target — Door-2 has no
+// author to map MALMO_FOLDER_<NAME>), and read/write.
+export interface CustomFolderGrant {
+  folder: string;
+  mode?: "read" | "write";
+  target?: string;
+}
+
+// CustomPermissions is the structured Door-2 permission election (form mode).
+// internet defaults on server-side when omitted.
+export interface CustomPermissions {
+  internet?: boolean;
+  lan?: boolean;
+  gpu?: boolean;
+  folders?: CustomFolderGrant[];
+  devices?: string[];
+}
+
+// CustomPermissionsResolved is a parsed/normalized permission set (the parse
+// endpoint result the form repopulates from) — internet is concrete here.
+export interface CustomPermissionsResolved {
+  internet: boolean;
+  lan: boolean;
+  gpu: boolean;
+  folders: CustomFolderGrant[];
+  devices: string[];
+}
+
+export interface CustomOverlayRenderResult {
+  overlay: string;
+}
+export interface CustomOverlayParseResult {
+  permissions: CustomPermissionsResolved;
+}
+
+// CustomInstallRequest is the POST /api/v1/apps/custom body. The form sends
+// `permissions`; the Edit-as-YAML toggle sends a raw `overlay` instead, which
+// wins server-side. scope follows the store convention (household for admins by
+// choice, forced/silent personal otherwise).
+export interface CustomInstallRequest {
+  name: string;
+  compose: string;
+  main_service?: string;
+  main_port: number;
+  scope?: Scope;
+  permissions?: CustomPermissions;
+  overlay?: string;
+}
+
 // InstallPlan is the response shape for GET /api/v1/catalog/:id/install-plan
 // (Pattern A sync). The brain returns structured fields; the UI owns all wording.
 // Advisory only — slice 4 (POST /api/v1/apps with config) is the authoritative path.
