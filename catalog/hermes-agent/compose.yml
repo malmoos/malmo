@@ -1,0 +1,29 @@
+# Hermes Agent adapted for molma.
+#
+# Upstream changes:
+#   gateway service: build: . removed; published image used instead.
+#   Both services: network_mode: host removed; Caddy routes the dashboard by subdomain.
+#   Both services: ~/.hermes:/opt/data replaced with ./data:/opt/data (relative bind).
+#   dashboard service: --host changed from 127.0.0.1 to 0.0.0.0 so Caddy can reach it.
+#   dashboard service: --insecure added to disable the OAuth gate, acceptable on a
+#     LAN-only molma instance where the dashboard is not directly internet-exposed.
+#
+# First boot: configure your LLM provider via the dashboard UI or by setting
+# OPENROUTER_API_KEY (or another provider key) in the environment. See
+# https://hermes-agent.nousresearch.com/docs/user-guide/configuration for all options.
+services:
+  gateway:
+    image: nousresearch/hermes-agent:v2026.5.29.2
+    restart: unless-stopped
+    volumes:
+      - ./data:/opt/data
+    command: ["gateway", "run"]
+
+  dashboard:
+    image: nousresearch/hermes-agent:v2026.5.29.2
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    volumes:
+      - ./data:/opt/data
+    command: ["dashboard", "--host", "0.0.0.0", "--no-open", "--insecure"]
