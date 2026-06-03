@@ -7,6 +7,7 @@
 import TopBar from "./TopBar.vue";
 import Dock from "./Dock.vue";
 import ToastHost from "./ToastHost.vue";
+import ElevateDialog from "./ElevateDialog.vue";
 import { useEvents } from "../useEvents";
 
 useEvents();
@@ -23,5 +24,6 @@ useEvents();
     </main>
     <Dock />
     <ToastHost />
+    <ElevateDialog />
   </div>
 </template>

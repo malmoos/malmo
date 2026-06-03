@@ -29,6 +29,7 @@ var publicPaths = map[string]bool{
 	"/api/v1/login":      true,
 	"/api/v1/recover":    true,
 	"/api/v1/auth/state": true,
+	"/api/v1/auth/users": true,
 	// huma exposes these by default; leave them public so curl/devtools work.
 	"/openapi.json": true,
 	"/openapi.yaml": true,
@@ -162,6 +163,11 @@ func (s *Server) registerAuth(api huma.API) {
 		OperationID: "elevate", Method: "POST", Path: "/api/v1/auth/elevate",
 		Summary: "Re-verify password and enter the 5-minute elevation window (auth required)",
 	}, s.elevate)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "auth-users", Method: "GET", Path: "/api/v1/auth/users",
+		Summary: "List users for the login picker (public)",
+	}, s.authUsers)
 }
 
 // --- handlers ------------------------------------------------------------
@@ -181,6 +187,34 @@ func (s *Server) authState(ctx context.Context, _ *struct{}) (*struct {
 		}
 	}{}
 	out.Body.HasUsers = has
+	return out, nil
+}
+
+// authUsers returns the minimal user list for the login picker. Public — anyone
+// who can reach the dashboard URL can see who lives on the box, which is
+// acceptable in the household trust model (AUTH.md # Login screen UX).
+type loginPickerUser struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+}
+
+func (s *Server) authUsers(ctx context.Context, _ *struct{}) (*struct {
+	Body struct {
+		Users []loginPickerUser `json:"users"`
+	}
+}, error) {
+	users, err := s.store.ListUsers()
+	if err != nil {
+		return nil, huma.Error500InternalServerError("store read failed", err)
+	}
+	out := &struct {
+		Body struct {
+			Users []loginPickerUser `json:"users"`
+		}
+	}{}
+	for _, u := range users {
+		out.Body.Users = append(out.Body.Users, loginPickerUser{ID: u.ID, Username: u.Username})
+	}
 	return out, nil
 }
 

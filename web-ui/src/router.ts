@@ -12,6 +12,9 @@ const routes: RouteRecordRaw[] = [
   // (the view guards the role; the Store affordance is hidden from members).
   { path: "/store/custom", name: "store-custom", component: () => import("@/views/CustomInstallView.vue") },
   { path: "/settings", name: "settings", component: () => import("@/views/SettingsView.vue") },
+  // Admin-only sub-routes under Settings (DASHBOARD.md # global navigation,
+  // AUTH.md # Roles). The views guard the role directly (CustomInstallView pattern).
+  { path: "/settings/users", name: "settings-users", component: () => import("@/views/UsersView.vue") },
   // Unknown paths fall back to Home — the SPA never 404s its own chrome.
   { path: "/:pathMatch(.*)*", redirect: "/" },
 ];
