@@ -15,7 +15,7 @@ export MALMO_AGENT_SOCK := $(AGENT_SOCK)
 export MALMO_STATE_DIR := $(STATE_DIR)
 export MALMO_CATALOG_DIR := ./catalog
 
-.PHONY: build host-agent brain host-agent-real check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev openapi clean help
+.PHONY: build host-agent brain host-agent-real check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev openapi openapi-check clean help
 
 # msteinert/pam v2.1.0 uses RTLD_NEXT, a GNU extension that requires
 # _GNU_SOURCE at C compile time. Apply globally; harmless to non-cgo builds.
@@ -24,6 +24,7 @@ export CGO_CFLAGS := -D_GNU_SOURCE
 help:
 	@echo "make check       - pre-PR gate: gofmt + vet + full test suite (Go). Run before every PR."
 	@echo "make check-web   - pre-PR gate for frontend changes: web-ui typecheck + build"
+	@echo "make openapi     - regenerate api/openapi.{json,yaml} from the brain (no server)"
 	@echo "make fmt         - rewrite Go sources into gofmt-canonical form (autofix)"
 	@echo "make dev         - all three foreground procs in one terminal (recommended)"
 	@echo "make build       - compile brain + host-agent"
@@ -50,11 +51,17 @@ help:
 # Frontend changes additionally need `make check-web`. The full test suite
 # needs libpam0g-dev (see docs/dev/running-locally.md); use the individual
 # targets if you don't have the headers.
-check: fmt-check vet test
+check: fmt-check vet openapi-check test
 
 # Web typecheck + production build (mirrors CI's web job). Needs node/npm.
+# Regenerates the OpenAPI TS client from the committed spec and fails if the
+# checked-in copy (web-ui/src/generated/openapi.ts) is stale — keeps the
+# generated client honest the way openapi-check keeps the spec honest.
 check-web:
-	cd web-ui && npm install && npm run build
+	cd web-ui && npm ci && npm run gen:api
+	@git diff --quiet web-ui/src/generated/openapi.ts || { \
+	  echo "web-ui/src/generated/openapi.ts is stale — regenerate with: (cd web-ui && npm run gen:api)"; exit 1; }
+	cd web-ui && npm run build
 
 # Rewrite Go sources into gofmt-canonical form (autofix).
 fmt:
@@ -176,10 +183,26 @@ dev: build caddy
 	  (cd web-ui && npm run dev 2>&1 | sed -u 's/^/[ui]    /') & \
 	  wait
 
-# Emit the OpenAPI schema (BRAIN_UI_PROTOCOL.md CI hook). The running brain
-# serves it; this just fetches it.
+# Regenerate the committed OpenAPI spec (api/openapi.{json,yaml}) from the huma
+# handler registrations — no running brain, no port (BRAIN_UI_PROTOCOL.md
+# # Codegen). The spec is the substrate for the web-ui's generated TS client
+# (web-ui `npm run gen:api`) and the freshness gate below.
 openapi:
-	@curl -s localhost:8080/openapi.json | python3 -m json.tool > openapi.json && echo "wrote openapi.json"
+	@go run ./cmd/openapi-gen -o api && echo "wrote api/openapi.json, api/openapi.yaml"
+
+# Fail if the committed spec is stale (re-emit to a scratch dir and diff). Pure
+# check — never mutates the tree; run `make openapi` to refresh. Mirrors the
+# fmt-check pattern; wired into `make check` and CI so a brain DTO change that
+# isn't regenerated can't merge silently.
+openapi-check:
+	@tmp=$$(mktemp -d); \
+	  go run ./cmd/openapi-gen -o $$tmp || { rm -rf $$tmp; exit 1; }; \
+	  if ! diff -q api/openapi.json $$tmp/openapi.json >/dev/null || ! diff -q api/openapi.yaml $$tmp/openapi.yaml >/dev/null; then \
+	    echo "api/openapi.{json,yaml} is stale — regenerate with: make openapi"; \
+	    diff -u api/openapi.json $$tmp/openapi.json || true; \
+	    rm -rf $$tmp; exit 1; \
+	  fi; \
+	  rm -rf $$tmp; echo "openapi spec is fresh"
 
 clean: caddy-down
 	-@docker ps -aq --filter "label=com.docker.compose.project" --filter "name=malmo-" | xargs -r docker rm -f

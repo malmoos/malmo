@@ -17,6 +17,7 @@ import (
 	"github.com/malmo/malmo/internal/admission"
 	"github.com/malmo/malmo/internal/catalog"
 	"github.com/malmo/malmo/internal/events"
+	"github.com/malmo/malmo/internal/manifest"
 	"github.com/malmo/malmo/internal/store"
 	"gopkg.in/yaml.v3"
 )
@@ -166,6 +167,7 @@ func TestInstallHappyDoor2(t *testing.T) {
 
 	inst, err := e.m.InstallCustom(context.Background(), CustomSpec{
 		Name: "My Whoami", Compose: whoamiCompose, MainPort: 80,
+		Permissions: manifest.Permissions{Internet: true},
 	}, Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)

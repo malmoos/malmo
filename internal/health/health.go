@@ -573,5 +573,22 @@ func builtinDefinitions() []Definition {
 			BlocksWrites: false, BlocksApps: false, BlocksUsers: false,
 			Summary: "An app keeps crashing and restarting.",
 		},
+		// Version/app-runtime (HEALTH.md # Version). app-unresponsive is a locus-C
+		// brain check: for each steady-running instance that declares a
+		// health_probe (APP_MANIFEST.md # B), the brain GETs the probe path
+		// through the app's Caddy route and raises when it fails (cmd/brain
+		// appProbeDetector). Per-app — keyed by instance_id. Opt-in: an app with no
+		// health_probe is never probed and never raises this. The app is reachable
+		// but not answering coherently, so we surface it rather than block; warning,
+		// Tier-2 (view logs / restart the app). The detector applies the
+		// cross-cutting 2-bad/1-good debounce itself (it calls Raise/Clear directly,
+		// not via ApplyFindings), so the Debounce flag here would be inert — left
+		// false to avoid implying ApplyFindings drives it.
+		{
+			ID: "app-unresponsive", Category: CategoryVersion,
+			Severity: SeverityWarning, Tier: 2,
+			BlocksWrites: false, BlocksApps: false, BlocksUsers: false,
+			Summary: "An app is running but not responding.",
+		},
 	}
 }

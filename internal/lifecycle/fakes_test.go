@@ -43,8 +43,9 @@ type fakeDocker struct {
 	pullErr       map[string]error  // per-image Pull error (nil = success)
 	composeUp     func(dir, project string) (string, error)
 	inspect       func(id, mainService string) (running bool, health string, err error)
-	psManaged     map[string]bool // returned by PSManaged
-	restartCounts map[string]int  // returned by RestartCounts
+	psManaged     map[string]bool    // returned by PSManaged
+	restartCounts map[string]int     // returned by RestartCounts
+	managed       []ManagedContainer // returned by ManagedContainers
 
 	composeUpErr   error // simple "always fail compose up"
 	composeDownErr error
@@ -162,6 +163,13 @@ func (f *fakeDocker) RestartCounts(_ context.Context) (map[string]int, error) {
 	for k, v := range f.restartCounts {
 		out[k] = v
 	}
+	return out, nil
+}
+
+func (f *fakeDocker) ManagedContainers(_ context.Context) ([]ManagedContainer, error) {
+	f.record("ManagedContainers")
+	out := make([]ManagedContainer, len(f.managed))
+	copy(out, f.managed)
 	return out, nil
 }
 

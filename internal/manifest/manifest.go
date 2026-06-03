@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -30,6 +31,80 @@ type Manifest struct {
 	// Absent ⇒ TOFU at install (Door-2 always, Door-1 until the catalog
 	// publishes a digest).
 	Images map[string]string `yaml:"images,omitempty"`
+
+	// HealthProbe is the optional "up but not responding" probe config
+	// (APP_MANIFEST.md # B). nil ⇒ the app is never probed and the
+	// app-unresponsive health issue is never raised for it. Door-2 synthetic
+	// manifests omit it.
+	HealthProbe *HealthProbe `yaml:"health_probe,omitempty"`
+}
+
+// HealthProbe declares the HTTP probe that backs the app-unresponsive detector
+// (APP_MANIFEST.md # B, HEALTH.md # app-unresponsive). It is not a Docker
+// HEALTHCHECK: the brain executes it through the app's Caddy route on the
+// health-poll tick. It accepts a shorthand string (`health_probe: /healthz`,
+// expanding to {path: /healthz}) or the full mapping.
+type HealthProbe struct {
+	// Path is the HTTP path the brain GETs (required; must be absolute).
+	Path string
+	// HealthyStatus is the set of status codes treated as healthy. Empty ⇒ the
+	// default "any status < 500" (the server answered coherently); 401/403/404
+	// still count as responding.
+	HealthyStatus []int
+	// StartPeriod is the grace after the container starts before a failing probe
+	// counts, so a warming-up app doesn't flap the banner on install/update.
+	// Defaults to DefaultStartPeriod when omitted.
+	StartPeriod time.Duration
+}
+
+// DefaultStartPeriod is the health_probe.start_period default (APP_MANIFEST.md
+// # B): the warm-up grace before a probe failure counts.
+const DefaultStartPeriod = 60 * time.Second
+
+// healthProbeWire is the YAML mapping shape. start_period is a Go duration
+// string ("60s") on the wire, parsed to a time.Duration in HealthProbe.
+type healthProbeWire struct {
+	Path          string `yaml:"path"`
+	HealthyStatus []int  `yaml:"healthy_status,omitempty"`
+	StartPeriod   string `yaml:"start_period,omitempty"`
+}
+
+// UnmarshalYAML accepts the shorthand string form or the full mapping
+// (APP_MANIFEST.md # B). The string form sets only Path.
+func (h *HealthProbe) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		var s string
+		if err := node.Decode(&s); err != nil {
+			return err
+		}
+		*h = HealthProbe{Path: s}
+		return nil
+	}
+	var w healthProbeWire
+	if err := node.Decode(&w); err != nil {
+		return fmt.Errorf("health_probe: %w", err)
+	}
+	h.Path = w.Path
+	h.HealthyStatus = w.HealthyStatus
+	if w.StartPeriod != "" {
+		d, err := time.ParseDuration(w.StartPeriod)
+		if err != nil {
+			return fmt.Errorf("health_probe.start_period %q: %w", w.StartPeriod, err)
+		}
+		h.StartPeriod = d
+	}
+	return nil
+}
+
+// MarshalYAML emits the mapping form so a parsed manifest round-trips through
+// the per-instance manifest.yml the installer writes (start_period back to a
+// duration string).
+func (h HealthProbe) MarshalYAML() (any, error) {
+	w := healthProbeWire{Path: h.Path, HealthyStatus: h.HealthyStatus}
+	if h.StartPeriod != 0 {
+		w.StartPeriod = h.StartPeriod.String()
+	}
+	return w, nil
 }
 
 type Permissions struct {
@@ -67,6 +142,14 @@ type Folder struct {
 	Mode    string `yaml:"mode"`              // read|write (default read)
 	Scope   string `yaml:"scope"`             // whole|pick-subfolder (default whole)
 	Default string `yaml:"default,omitempty"` // default subpath for pick-subfolder
+
+	// Target is the explicit in-container destination path, set ONLY by Door-2
+	// synthetic manifests (DASHBOARD.md # Folder grants carry an explicit
+	// destination path). A pasted third-party compose has no author to map
+	// MALMO_FOLDER_<NAME>, so the admin types where the app reads its data and
+	// the brain binds the elected source straight there. Store manifests omit it
+	// and keep the fixed `/malmo/<folder>` + env-var convention.
+	Target string `yaml:"target,omitempty"`
 }
 
 // folderTaxonomy is the fixed v1 use-case folder set (APP_ISOLATION.md # User
@@ -121,16 +204,48 @@ func (m *Manifest) validate() error {
 			return fmt.Errorf("slug %q must be kebab-case (lowercase alphanumerics, single internal hyphens)", slug)
 		}
 	}
-	return m.validatePermissions()
+	if err := m.validateHealthProbe(); err != nil {
+		return err
+	}
+	return ValidatePermissions(&m.Permissions)
 }
 
-// validatePermissions normalizes folder defaults (mode=read, scope=whole) in
-// place and rejects unknown folder names, modes, or scopes. It deliberately
-// validates nothing about *source* — personal vs shared is resolved by the
-// installer at install time, not declared here (APP_MANIFEST.md # folders).
-func (m *Manifest) validatePermissions() error {
-	for i := range m.Permissions.Folders {
-		f := &m.Permissions.Folders[i]
+// validateHealthProbe checks the optional probe block and normalizes its
+// start_period default in place (APP_MANIFEST.md # B). Absent ⇒ no-op. The path
+// must be a non-empty absolute path (the brain GETs it through the app's Caddy
+// route); healthy_status entries must be plausible HTTP codes.
+func (m *Manifest) validateHealthProbe() error {
+	if m.HealthProbe == nil {
+		return nil
+	}
+	p := m.HealthProbe
+	if p.Path == "" || !strings.HasPrefix(p.Path, "/") {
+		return fmt.Errorf("health_probe.path must be a non-empty absolute path (e.g. /healthz), got %q", p.Path)
+	}
+	if p.StartPeriod < 0 {
+		return fmt.Errorf("health_probe.start_period must not be negative, got %s", p.StartPeriod)
+	}
+	if p.StartPeriod == 0 {
+		p.StartPeriod = DefaultStartPeriod
+	}
+	for _, s := range p.HealthyStatus {
+		if s < 100 || s > 599 {
+			return fmt.Errorf("health_probe.healthy_status: %d is not a valid HTTP status code", s)
+		}
+	}
+	return nil
+}
+
+// ValidatePermissions normalizes folder defaults (mode=read, scope=whole) in
+// place and rejects unknown folder names, modes, scopes, or malformed Door-2
+// targets. It deliberately validates nothing about *source* — personal vs shared
+// is resolved by the installer at install time, not declared here (APP_MANIFEST.md
+// # folders). Exported because the Door-2 "Edit as YAML" overlay parses an
+// admin-authored permissions block through the same gate (DASHBOARD.md # Form is
+// a projection of the synthetic manifest).
+func ValidatePermissions(p *Permissions) error {
+	for i := range p.Folders {
+		f := &p.Folders[i]
 		if !folderTaxonomy[f.Folder] {
 			return fmt.Errorf("permissions.folders: unknown folder %q (allowed: photos, documents, movies, music, notes, downloads)", f.Folder)
 		}
@@ -153,6 +268,12 @@ func (m *Manifest) validatePermissions() error {
 			if strings.HasPrefix(f.Default, "/") || strings.Contains(f.Default, "..") {
 				return fmt.Errorf("permissions.folders[%s]: default must be a relative subpath under the folder", f.Folder)
 			}
+		}
+		// Door-2-only: the explicit in-container destination must be an absolute
+		// path with no traversal (it's a container path the admin typed, not a
+		// host path — host binds are an admission concern). Store grants omit it.
+		if f.Target != "" && (!strings.HasPrefix(f.Target, "/") || strings.Contains(f.Target, "..")) {
+			return fmt.Errorf("permissions.folders[%s]: target must be an absolute in-container path with no '..', got %q", f.Folder, f.Target)
 		}
 	}
 	return nil

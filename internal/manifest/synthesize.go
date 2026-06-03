@@ -1,10 +1,12 @@
 package manifest
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -13,8 +15,10 @@ import (
 // Synthesize builds a manifest for a user-pasted (Door-2) compose
 // (APP_MANIFEST.md # Custom container — synthetic manifest). It infers the main
 // service when the compose has exactly one; otherwise the caller must name it.
-// Custom apps default to internet-on, no managed services.
-func Synthesize(name string, composeBytes []byte, mainService string, mainPort int) (*Manifest, []byte, error) {
+// The permission set is admin-elected in the Door-2 form (DASHBOARD.md #
+// Permissions); the caller passes it in (the default is internet-on, set by the
+// API layer, not here) — no managed services.
+func Synthesize(name string, composeBytes []byte, mainService string, mainPort int, perms Permissions) (*Manifest, []byte, error) {
 	if strings.TrimSpace(name) == "" {
 		return nil, nil, fmt.Errorf("a name is required")
 	}
@@ -53,7 +57,7 @@ func Synthesize(name string, composeBytes []byte, mainService string, mainPort i
 		MainService:     mainService,
 		MainPort:        mainPort,
 		PreferredSlugs:  []string{slug},
-		Permissions:     Permissions{Internet: true},
+		Permissions:     perms,
 	}
 	if err := man.validate(); err != nil {
 		return nil, nil, err
@@ -81,6 +85,115 @@ func ComposeServiceNames(composeBytes []byte) ([]string, error) {
 		names = append(names, n)
 	}
 	return names, nil
+}
+
+// InferMainPort makes a best-effort guess at the container-internal port the
+// main service listens on, for prefilling the Door-2 form (DASHBOARD.md # Main
+// port). It reads every signal the compose carries: a single `expose:` value,
+// or — failing that — the container side of a single published `ports:` mapping
+// (`8080:80` ⇒ `80`), mined out even though the mapping itself is an admission
+// rejection (Caddy fronts every app; we read the container side for the prefill,
+// we don't honor the host binding). Returns 0 when the compose is silent,
+// declares several ports (ambiguous), or the value isn't a plain 1..65535 port —
+// the form then asks. `main_port` stays required and editable regardless: malmo
+// can't read the image's real EXPOSE without pulling it, so this is
+// prefill-and-confirm only.
+func InferMainPort(composeBytes []byte, mainService string) int {
+	var doc struct {
+		Services map[string]struct {
+			Expose []yaml.Node `yaml:"expose"`
+			Ports  []yaml.Node `yaml:"ports"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(composeBytes, &doc); err != nil {
+		return 0
+	}
+	svc, ok := doc.Services[mainService]
+	if !ok {
+		return 0
+	}
+	// expose: is the explicit container-internal declaration — prefer it.
+	if len(svc.Expose) == 1 {
+		if p := validPort(svc.Expose[0].Value); p != 0 {
+			return p
+		}
+	}
+	// Otherwise mine the container side of a single published ports: mapping.
+	if len(svc.Ports) == 1 {
+		if p := containerSideOf(svc.Ports[0]); p != 0 {
+			return p
+		}
+	}
+	return 0
+}
+
+// containerSideOf returns the container-internal port of one compose `ports:`
+// entry, in either short or long syntax, or 0 if it isn't a single 1..65535
+// port. Short: "8080:80", "127.0.0.1:8080:80", "80", "8080:80/tcp" — the segment
+// after the last colon (proto suffix stripped). Long: { target: 80, ... }.
+func containerSideOf(node yaml.Node) int {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		s := strings.SplitN(node.Value, "/", 2)[0] // drop any /tcp|/udp
+		parts := strings.Split(s, ":")
+		return validPort(parts[len(parts)-1])
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			if node.Content[i].Value == "target" {
+				return validPort(node.Content[i+1].Value)
+			}
+		}
+	}
+	return 0
+}
+
+// validPort parses a trimmed string as a 1..65535 port, returning 0 on anything
+// else (empty, a range like "8000-8005", non-numeric, or out of range).
+func validPort(s string) int {
+	p, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || p < 1 || p > 65535 {
+		return 0
+	}
+	return p
+}
+
+// permissionsOverlay is the YAML shape the Door-2 "Edit as YAML" toggle renders
+// and parses (DASHBOARD.md # Form is a projection of the synthetic manifest): the
+// synthetic manifest's permissions block, nothing else. The pasted compose keeps
+// its own textarea and is never merged in; name/main_service/main_port stay
+// dedicated form inputs in both modes. The escape hatch exists for permission
+// fields the form omits — today that's `devices` (managed `services` /
+// `health_probe` await their subsystems, # Known gaps).
+type permissionsOverlay struct {
+	Permissions Permissions `yaml:"permissions"`
+}
+
+// RenderPermissionsOverlay marshals an elected permission set to the YAML the
+// "Edit as YAML" editor shows when the admin flips out of the form.
+func RenderPermissionsOverlay(p Permissions) ([]byte, error) {
+	return yaml.Marshal(permissionsOverlay{Permissions: p})
+}
+
+// ParsePermissionsOverlay parses an admin-edited overlay back to a Permissions,
+// through the same ValidatePermissions gate the form path uses — a hand-typed
+// folder target, unknown folder, or bad mode is rejected identically (the escape
+// hatch escapes the form, not the sandbox; admission still runs at install).
+// Unknown keys are rejected so a typo (`interent:`) surfaces instead of silently
+// reading as false. An empty overlay is an empty (all-off) permission set.
+func ParsePermissionsOverlay(data []byte) (Permissions, error) {
+	if strings.TrimSpace(string(data)) == "" {
+		return Permissions{}, nil
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	var o permissionsOverlay
+	if err := dec.Decode(&o); err != nil {
+		return Permissions{}, fmt.Errorf("permissions overlay is not valid YAML: %w", err)
+	}
+	if err := ValidatePermissions(&o.Permissions); err != nil {
+		return Permissions{}, err
+	}
+	return o.Permissions, nil
 }
 
 var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)

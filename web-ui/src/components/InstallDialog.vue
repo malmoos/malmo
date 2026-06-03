@@ -8,8 +8,8 @@
 // UI owns ALL wording — the brain returns structured enums; we write sentences.
 // Write-mode folder warnings are visually distinct (warning/red) per spec
 // (APP_MANIFEST.md:218, APP_ISOLATION.md # User content).
-import { ref } from "vue";
-import type { InstallPlan, InstallRequest, FolderElection, Scope } from "../api";
+import { computed, ref } from "vue";
+import type { InstallPlan, InstallPlanFolder, InstallRequest, FolderElection, Scope } from "../api";
 import { useAuth } from "../auth";
 
 const props = defineProps<{
@@ -25,6 +25,18 @@ const emit = defineEmits<{
   cancel: [];
 }>();
 
+// folders / devices normalize the brain's nullable permission arrays (a nil Go
+// slice serializes to null in the OpenAPI schema) so the template and the
+// election builder can iterate them without per-site guards.
+const folders = computed(() => props.plan.permissions.folders ?? []);
+const devices = computed(() => props.plan.permissions.devices ?? []);
+
+// sourceOptions is a folder's (also-nullable) source menu at the current scope —
+// the household/personal pick selects which menu applies.
+function sourceOptions(f: InstallPlanFolder): string[] {
+  return f.sources[props.scope].options ?? [];
+}
+
 // ── Per-folder elections ──────────────────────────────────────────────────────
 
 // folderSources: reactive map of folder name → elected source string
@@ -35,7 +47,7 @@ const folderSubfolders = ref<Record<string, string>>({});
 function initFolderDefaults(scope: Scope) {
   const sources: Record<string, string> = {};
   const subfolders: Record<string, string> = {};
-  for (const f of props.plan.permissions.folders) {
+  for (const f of folders.value) {
     const menu = f.sources[scope];
     sources[f.folder] = menu.default;
     if (f.scope === "pick-subfolder") {
@@ -73,9 +85,9 @@ function sourceLabel(folder: string, source: string): string {
 // ── Submit ────────────────────────────────────────────────────────────────────
 
 function handleSubmit() {
-  const folderElections: FolderElection[] = props.plan.permissions.folders.map((f) => {
+  const folderElections: FolderElection[] = folders.value.map((f) => {
     const election: FolderElection = { folder: f.folder };
-    if (f.sources[props.scope].options.length > 1) {
+    if (sourceOptions(f).length > 1) {
       election.source = folderSources.value[f.folder];
     }
     if (f.scope === "pick-subfolder") {
@@ -131,7 +143,7 @@ function handleSubmit() {
               Use the graphics card
             </li>
             <li
-              v-for="device in plan.permissions.devices"
+              v-for="device in devices"
               :key="device"
               class="flex items-start gap-2 text-sm"
             >
@@ -140,7 +152,7 @@ function handleSubmit() {
             </li>
             <!-- Folder permissions -->
             <li
-              v-for="f in plan.permissions.folders"
+              v-for="f in folders"
               :key="f.folder"
               class="flex items-start gap-2 text-sm"
               :class="f.mode === 'write' ? 'font-medium text-destructive' : ''"
@@ -154,7 +166,7 @@ function handleSubmit() {
               </span>
             </li>
             <li
-              v-if="!plan.permissions.internet && !plan.permissions.lan && !plan.permissions.gpu && plan.permissions.devices.length === 0 && plan.permissions.folders.length === 0"
+              v-if="!plan.permissions.internet && !plan.permissions.lan && !plan.permissions.gpu && devices.length === 0 && folders.length === 0"
               class="text-sm text-muted-foreground"
             >
               No special permissions required.
@@ -163,10 +175,10 @@ function handleSubmit() {
         </div>
 
         <!-- Per-folder source pickers -->
-        <div v-if="plan.permissions.folders.length > 0" class="space-y-3">
+        <div v-if="folders.length > 0" class="space-y-3">
           <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Folder sources</p>
           <div
-            v-for="f in plan.permissions.folders"
+            v-for="f in folders"
             :key="f.folder"
             class="space-y-1.5 rounded-xl border border-border px-3 py-2.5"
           >
@@ -174,16 +186,16 @@ function handleSubmit() {
 
             <!-- Single option: fixed/disabled display -->
             <p
-              v-if="f.sources[scope].options.length === 1"
+              v-if="sourceOptions(f).length === 1"
               class="text-sm text-muted-foreground"
             >
-              {{ sourceLabel(f.folder, f.sources[scope].options[0] ?? "") }}
+              {{ sourceLabel(f.folder, sourceOptions(f)[0] ?? "") }}
             </p>
 
             <!-- Multiple options: radio picker -->
             <div v-else class="flex flex-col gap-1">
               <label
-                v-for="opt in f.sources[scope].options"
+                v-for="opt in sourceOptions(f)"
                 :key="opt"
                 class="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-2.5 py-1.5 text-sm hover:bg-muted"
                 :class="folderSources[f.folder] === opt ? 'border-accent bg-muted' : ''"
