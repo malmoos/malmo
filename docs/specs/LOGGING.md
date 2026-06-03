@@ -158,6 +158,7 @@ The following `action` strings are the pinned v1 set. Defined as exported consts
 | `setup.complete` | First admin bootstrapped via `/v1/setup`. |
 | `login.success` | Dashboard password login succeeded. |
 | `login.failure` | Dashboard password login failed (bad credentials). |
+| `login.lockout` | Per-username failure counter crossed the 15-minute lock threshold (`AUTH.md` # Rate limiting). Emitted once per lock at the crossing failure; `success=false`. |
 | `logout` | Session revoked via `/v1/logout`. |
 | `app.install` | Catalog (Door-1) app installed. |
 | `app.uninstall` | App uninstalled. |

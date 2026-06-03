@@ -2,7 +2,7 @@
 
 - **Status:** done
 - **Date:** 2026-06-03
-- **Specs touched:** none. `AUTH.md` # Rate limiting already locks the schedule; this realizes it. No `DECISIONS.md`/`NEXT.md` change — the design was specified, not redesigned.
+- **Specs touched:** `LOGGING.md` — added `login.lockout` to the v1 action vocabulary table (the action is implicit in `AUTH.md` # Rate limiting's "all failed attempts logged" requirement but wasn't listed). `CLAUDE.md` — added `retry_after` to the standard structured-field list. No `DECISIONS.md`/`NEXT.md` change — the design was specified, not redesigned.
 
 Closes issue #8. The brain login endpoint went username-lookup → `VerifyPassword` (a deliberately-expensive PAM round-trip) → 401 with no throttling, so the PAM call — the asset `AUTH.md` # Rate limiting exists to protect — was reachable on every repeated guess. This adds the per-username backoff/lock and per-IP token bucket exactly as specced, gating *before* PAM.
 
