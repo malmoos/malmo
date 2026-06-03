@@ -39,8 +39,13 @@ The brain polls the catalog on the same hourly cadence as the release manifest. 
       "compose_url": "/apps/photoprism/docker-compose.yml",
       "compose_hash": "sha256:fed321...",
       "images": {
-        "photoprism/photoprism:2.4.1": "sha256:abc123...",
-        "mariadb:11.0.2": "sha256:789xyz..."
+        "photoprism/photoprism:2.4.1": { "digest": "sha256:abc123...", "download_bytes": 612000000, "disk_bytes": 1480000000 },
+        "mariadb:11.0.2": { "digest": "sha256:789xyz...", "download_bytes": 118000000, "disk_bytes": 402000000 }
+      },
+      "footprint": {
+        "image_download_bytes": 730000000,
+        "image_disk_bytes": 1882000000,
+        "estimated_state": "10GB"
       },
       "files_first_class": true
     },
@@ -55,7 +60,8 @@ Fields per app:
 - **`name`, `categories`, `short_description`, `icon_url`** — for the browse UI. The browse view is rendered from these alone, without fetching individual manifests.
 - **`manifest_url` / `manifest_hash`** — content-addressed pointer to the full manifest. On install, brain fetches and verifies the hash matches.
 - **`compose_url` / `compose_hash`** — same, for the compose file.
-- **`images`** — map of `image:tag` (as referenced in the compose) → resolved `sha256:` digest. CI resolves these at catalog-build time. The brain pulls by digest, not by tag — see Trust below.
+- **`images`** — map of `image:tag` (as referenced in the compose) → `{ digest, download_bytes, disk_bytes }`. CI resolves all three at catalog-build time from the registry: `digest` (the pinned bytes — see Trust below; the brain pulls by digest, not by tag), `download_bytes` (sum of the image's compressed layer sizes — the bandwidth/time cost), and `disk_bytes` (sum of its uncompressed layer sizes, deduping layers shared *within this app's own image set* — the on-disk cost). Sizes are **display-only and advisory** (# Trust model); only `digest` gates the pull.
+- **`footprint`** — per-app summary so the **browse grid renders the size without fetching the full manifest**: `{ image_download_bytes, image_disk_bytes, estimated_state }`. CI computes the two image totals by summing the `images` entries and hoists `estimated_state` verbatim from the manifest's `storage.estimated_size` (`APP_MANIFEST.md` # Storage; absent if the manifest omits it). This is a **coarse upper bound** — it assumes nothing is cached locally. The install dialog shows a sharper, box-specific number that subtracts already-present images (`BRAIN_UI_PROTOCOL.md` # GET /api/v1/catalog/:id/install-plan).
 - **`files_first_class`** — true when the manifest declares `folders` and does not set `storage.app_managed_user_content`. Surfaces as a badge in the UI; not a gate.
 
 Top-level fields:
@@ -79,6 +85,8 @@ Consequences:
 - Tag mutation on an upstream registry (intentional or compromised) does not affect installed boxes — they pulled the digest the catalog promised.
 - A new release of the app is a CI run that resolves the new digest and a PR that bumps `version` + `images` in the catalog.
 - Authors never manage SHAs; manifest stays readable and portable (the same manifest still runs outside molma with normal `docker compose pull`).
+
+**Image sizes are display-only, not part of the trust binding.** The same CI run that resolves a digest also records the image's `download_bytes` / `disk_bytes` (# Catalog schema). These exist purely to tell the user the on-disk footprint before they install; they gate nothing — a size that drifts from reality is a cosmetic bug, not an integrity failure. Only the digest binds bytes.
 
 **What we don't sign:** individual manifests / compose files don't carry their own signature. Their integrity is bound to the catalog via the `manifest_hash` / `compose_hash` fields. One signed root, hash-chained leaves — same shape as the well-known package-manager pattern.
 
