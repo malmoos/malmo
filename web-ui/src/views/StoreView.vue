@@ -183,28 +183,9 @@ const householdDropdownItems = computed(() => {
       : [];
 });
 
-// ── Custom app install ────────────────────────────────────────────────────────
-
-const customName = ref("");
-const customPort = ref<number | undefined>(undefined);
-const customCompose = ref("");
-
-const installCustom = useMutation({
-  mutationFn: async () => {
-    const job = await api.post<Job>("/apps/custom", {
-      name: customName.value,
-      compose: customCompose.value,
-      main_port: Number(customPort.value),
-    });
-    return waitForJob(job.job_id);
-  },
-  onSuccess: () => {
-    customName.value = "";
-    customPort.value = undefined;
-    customCompose.value = "";
-  },
-  onSettled: () => qc.invalidateQueries({ queryKey: ["apps"] }),
-});
+// Door 2 (custom-container install) is admin-only and lives at the bottom of the
+// Store, never in the browse grid (DASHBOARD.md # Door-2). Members never see it.
+const isAdmin = computed(() => currentUser.value?.role === "admin");
 </script>
 
 <template>
@@ -329,45 +310,17 @@ const installCustom = useMutation({
       {{ (installPlanQuery.error.value as Error).message }}
     </p>
 
-    <section class="space-y-3">
-      <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Add custom app</h2>
-      <form class="flex flex-col gap-2" @submit.prevent="installCustom.mutate()">
-        <div class="flex gap-2">
-          <input
-            v-model="customName"
-            placeholder="App name"
-            required
-            class="flex-1 rounded-lg border border-border px-3 py-2 text-sm"
-          />
-          <input
-            v-model.number="customPort"
-            type="number"
-            placeholder="Main port"
-            required
-            class="w-32 rounded-lg border border-border px-3 py-2 text-sm"
-          />
-        </div>
-        <textarea
-          v-model="customCompose"
-          rows="8"
-          spellcheck="false"
-          placeholder="Paste a docker-compose.yml…"
-          required
-          class="rounded-lg border border-border px-3 py-2 font-mono text-xs"
-        />
-        <div>
-          <button
-            type="submit"
-            class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
-            :disabled="installCustom.isPending.value"
-          >
-            {{ installCustom.isPending.value ? "Installing…" : "Install custom app" }}
-          </button>
-        </div>
-        <p v-if="installCustom.isError.value" class="text-sm text-destructive">
-          {{ (installCustom.error.value as ApiError).message }}
-        </p>
-      </form>
+    <!-- Door 2: admin-only custom-container install, tucked at the bottom -->
+    <section v-if="isAdmin" class="border-t border-border pt-4">
+      <RouterLink
+        to="/store/custom"
+        class="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
+      >
+        Install a custom container
+      </RouterLink>
+      <p class="mt-1.5 text-xs text-muted-foreground">
+        Paste a <code>docker-compose.yml</code> to run an app that isn't in the catalog.
+      </p>
     </section>
   </div>
 </template>

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -81,6 +82,36 @@ func ComposeServiceNames(composeBytes []byte) ([]string, error) {
 		names = append(names, n)
 	}
 	return names, nil
+}
+
+// InferMainPort makes a best-effort guess at the container-internal port the
+// main service listens on, for prefilling the Door-2 form (DASHBOARD.md # Main
+// port). It reads the main service's single `expose:` value and returns 0 when
+// the compose is silent, exposes several ports (ambiguous), or the value isn't a
+// plain 1..65535 port — the form then asks. `main_port` stays required and
+// editable regardless: malmo can't read the image's real EXPOSE without pulling
+// it, so this is prefill-and-confirm only.
+//
+// The container side of a published `ports:` mapping is a second prefill signal
+// layered on separately; this helper is the seam that grows to mine it.
+func InferMainPort(composeBytes []byte, mainService string) int {
+	var doc struct {
+		Services map[string]struct {
+			Expose []yaml.Node `yaml:"expose"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(composeBytes, &doc); err != nil {
+		return 0
+	}
+	svc, ok := doc.Services[mainService]
+	if !ok || len(svc.Expose) != 1 {
+		return 0
+	}
+	p, err := strconv.Atoi(strings.TrimSpace(svc.Expose[0].Value))
+	if err != nil || p < 1 || p > 65535 {
+		return 0
+	}
+	return p
 }
 
 var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)
