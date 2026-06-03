@@ -141,16 +141,54 @@ export interface CustomInspectResult {
   main_port: number;
 }
 
-// CustomInstallRequest is the POST /api/v1/apps/custom body. internet defaults
-// on server-side when omitted; scope follows the store convention (household for
-// admins by choice, forced/silent personal otherwise).
+// CustomFolderGrant is one Door-2 folder grant: a use-case folder (Source
+// picker), the in-container destination the admin types (target — Door-2 has no
+// author to map MALMO_FOLDER_<NAME>), and read/write.
+export interface CustomFolderGrant {
+  folder: string;
+  mode?: "read" | "write";
+  target?: string;
+}
+
+// CustomPermissions is the structured Door-2 permission election (form mode).
+// internet defaults on server-side when omitted.
+export interface CustomPermissions {
+  internet?: boolean;
+  lan?: boolean;
+  gpu?: boolean;
+  folders?: CustomFolderGrant[];
+  devices?: string[];
+}
+
+// CustomPermissionsResolved is a parsed/normalized permission set (the parse
+// endpoint result the form repopulates from) — internet is concrete here.
+export interface CustomPermissionsResolved {
+  internet: boolean;
+  lan: boolean;
+  gpu: boolean;
+  folders: CustomFolderGrant[];
+  devices: string[];
+}
+
+export interface CustomOverlayRenderResult {
+  overlay: string;
+}
+export interface CustomOverlayParseResult {
+  permissions: CustomPermissionsResolved;
+}
+
+// CustomInstallRequest is the POST /api/v1/apps/custom body. The form sends
+// `permissions`; the Edit-as-YAML toggle sends a raw `overlay` instead, which
+// wins server-side. scope follows the store convention (household for admins by
+// choice, forced/silent personal otherwise).
 export interface CustomInstallRequest {
   name: string;
   compose: string;
   main_service?: string;
   main_port: number;
-  internet?: boolean;
   scope?: Scope;
+  permissions?: CustomPermissions;
+  overlay?: string;
 }
 
 // InstallPlan is the response shape for GET /api/v1/catalog/:id/install-plan

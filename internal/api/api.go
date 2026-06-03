@@ -111,6 +111,16 @@ func (s *Server) register(api huma.API) {
 	}, s.inspectCustomApp)
 
 	huma.Register(api, huma.Operation{
+		OperationID: "render-custom-overlay", Method: "POST", Path: "/api/v1/apps/custom/overlay/render",
+		Summary: "Render elected Door-2 permissions as the Edit-as-YAML overlay (admin-only)",
+	}, s.renderCustomOverlay)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "parse-custom-overlay", Method: "POST", Path: "/api/v1/apps/custom/overlay/parse",
+		Summary: "Parse + validate an Edit-as-YAML Door-2 permissions overlay back to form fields (admin-only)",
+	}, s.parseCustomOverlay)
+
+	huma.Register(api, huma.Operation{
 		OperationID: "install-custom-app", Method: "POST", Path: "/api/v1/apps/custom",
 		Summary: "Install a user-pasted (Door-2) compose (job)", DefaultStatus: http.StatusAccepted,
 	}, s.installCustomApp)
@@ -435,20 +445,28 @@ func (s *Server) inspectCustomApp(ctx context.Context, in *struct {
 
 func (s *Server) installCustomApp(ctx context.Context, in *struct {
 	Body struct {
-		Name        string `json:"name"`
-		Compose     string `json:"compose"`
-		MainService string `json:"main_service,omitempty"`
-		MainPort    int    `json:"main_port"`
-		Internet    *bool  `json:"internet,omitempty"` // elected internet access; default on (DASHBOARD.md # Permissions)
-		Scope       string `json:"scope,omitempty"`    // "household" | "personal"; default household for admins, forced personal for members
+		Name        string            `json:"name"`
+		Compose     string            `json:"compose"`
+		MainService string            `json:"main_service,omitempty"`
+		MainPort    int               `json:"main_port"`
+		Scope       string            `json:"scope,omitempty"` // "household" | "personal"; default household for admins, forced personal for members
+		Permissions *customPermsInput `json:"permissions,omitempty"`
+		Overlay     string            `json:"overlay,omitempty"` // Edit-as-YAML escape hatch; wins over permissions when set (DASHBOARD.md # Form is a projection)
 	}
 }) (*struct{ Body Job }, error) {
+	// The form sends structured permissions; the Edit-as-YAML toggle sends a raw
+	// overlay instead, parsed + validated through the same gate (DASHBOARD.md #
+	// Permissions). A malformed overlay surfaces inline as a 422.
+	perms, err := resolveCustomPerms(in.Body.Permissions, in.Body.Overlay)
+	if err != nil {
+		return nil, huma.Error422UnprocessableEntity(err.Error())
+	}
 	spec := lifecycle.CustomSpec{
 		Name:        in.Body.Name,
 		Compose:     in.Body.Compose,
 		MainService: in.Body.MainService,
 		MainPort:    in.Body.MainPort,
-		Internet:    in.Body.Internet == nil || *in.Body.Internet,
+		Permissions: perms,
 	}
 	owner, scope, err := s.resolveOwnerScope(ctx, in.Body.Scope, audit.ActionAppCustomCreate, map[string]any{"name": spec.Name})
 	if err != nil {
@@ -458,7 +476,7 @@ func (s *Server) installCustomApp(ctx context.Context, in *struct {
 	// Sync pre-checks so the user gets immediate, specific feedback instead of
 	// a failed job: synthesize (catches missing name/port, ambiguous service)
 	// and admit the compose (catches ports:/privileged/etc).
-	if _, _, err := manifest.Synthesize(spec.Name, []byte(spec.Compose), spec.MainService, spec.MainPort); err != nil {
+	if _, _, err := manifest.Synthesize(spec.Name, []byte(spec.Compose), spec.MainService, spec.MainPort, perms); err != nil {
 		return nil, huma.Error422UnprocessableEntity(err.Error())
 	}
 	if err := admission.Check(ctx, []byte(spec.Compose)); err != nil {

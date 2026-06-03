@@ -4,16 +4,29 @@
 // — that authors a synthetic manifest from a pasted docker-compose.yml. Admin-only.
 //
 // Flow: paste/upload compose → POST /apps/custom/inspect (read-only) drives the
-// service dropdown + best-effort main-port prefill from `expose:` → submit to
-// POST /apps/custom. Admission runs on submit; its field-named 422 is coached
-// inline against the compose rather than thrown as an opaque toast. Scope follows
-// the store row's split-button convention (silent personal on a single-user box).
+// service dropdown + best-effort main-port prefill → author the permission block
+// (internet/LAN/GPU toggles + folder grants, or the Edit-as-YAML escape hatch) →
+// submit to POST /apps/custom. Admission runs on submit; its field-named 422 is
+// coached inline against the compose. Scope follows the store row's split-button
+// convention (silent personal on a single-user box).
 import { ref, computed, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useMutation, useQueryClient } from "@tanstack/vue-query";
 import { SwitchRoot, SwitchThumb } from "reka-ui";
 import { useAuth } from "../auth";
-import { api, waitForJob, ApiError, type Job, type Scope, type CustomInspectResult } from "../api";
+import {
+  api,
+  waitForJob,
+  ApiError,
+  type Job,
+  type Scope,
+  type CustomInspectResult,
+  type CustomInstallRequest,
+  type CustomPermissions,
+  type CustomFolderGrant,
+  type CustomOverlayRenderResult,
+  type CustomOverlayParseResult,
+} from "../api";
 import SplitButton from "../components/SplitButton.vue";
 
 const router = useRouter();
@@ -39,9 +52,29 @@ const mainService = ref("");
 const mainPort = ref<number | undefined>(undefined);
 // Once the admin edits the port, inspect stops overwriting their value.
 const portTouched = ref(false);
+
+// Permissions (DASHBOARD.md # Permissions): internet defaults on, LAN/GPU off,
+// folder grants empty. `devices` has no form control — it's the long tail
+// reachable only via the Edit-as-YAML escape hatch — but we hold any the admin
+// added there so it survives flipping back to the form.
 const internet = ref(true);
+const lan = ref(false);
+const gpu = ref(false);
+const folders = ref<CustomFolderGrant[]>([]);
+const devices = ref<string[]>([]);
+
+// Edit-as-YAML escape hatch: "form" renders the toggles/rows; "yaml" replaces
+// them with a raw permissions-overlay editor. The brain owns all YAML
+// (render/parse endpoints) so the frontend ships no YAML dependency.
+const editMode = ref<"form" | "yaml">("form");
+const overlayText = ref("");
+const overlayError = ref<string | null>(null);
+
 // 422 synthesize/admission rejection (field-named), shown inline against the compose.
 const submitError = ref<string | null>(null);
+
+const USE_CASE_FOLDERS = ["photos", "documents", "movies", "music", "notes", "downloads"];
+const folderLabel = (f: string) => f.charAt(0).toUpperCase() + f.slice(1);
 
 const slug = computed(() =>
   name.value
@@ -84,7 +117,7 @@ watch(compose, () => {
   inspectTimer = setTimeout(runInspect, 350);
 });
 
-// Picking a service re-infers the port from that service's `expose:`.
+// Picking a service re-infers the port from that service's `expose:`/`ports:`.
 function onServiceChange() {
   if (!portTouched.value) runInspect();
 }
@@ -97,18 +130,78 @@ function onFile(e: Event) {
   });
 }
 
+// ── permissions ─────────────────────────────────────────────────────────────────
+function addFolder() {
+  folders.value.push({ folder: "photos", mode: "read", target: "" });
+}
+function removeFolder(i: number) {
+  folders.value.splice(i, 1);
+}
+
+// buildPerms projects the form state to the structured election the backend takes.
+function buildPerms(): CustomPermissions {
+  return {
+    internet: internet.value,
+    lan: lan.value,
+    gpu: gpu.value,
+    folders: folders.value
+      .filter((f) => f.folder)
+      .map((f) => ({ folder: f.folder, mode: f.mode, target: f.target?.trim() || undefined })),
+    devices: devices.value.length ? devices.value : undefined,
+  };
+}
+
+// Flip to YAML: the brain renders the current election as the overlay text.
+async function flipToYaml() {
+  overlayError.value = null;
+  try {
+    const res = await api.post<CustomOverlayRenderResult>("/apps/custom/overlay/render", {
+      permissions: buildPerms(),
+    });
+    overlayText.value = res.overlay;
+    editMode.value = "yaml";
+  } catch (err) {
+    overlayError.value = err instanceof ApiError ? err.message : (err as Error).message;
+  }
+}
+
+// Flip to form: the brain parses + validates the overlay back to form fields. A
+// bad target / unknown key / malformed YAML keeps us in YAML mode with the error
+// shown inline, so the edit isn't silently lost.
+async function flipToForm() {
+  overlayError.value = null;
+  try {
+    const res = await api.post<CustomOverlayParseResult>("/apps/custom/overlay/parse", {
+      overlay: overlayText.value,
+    });
+    const p = res.permissions;
+    internet.value = p.internet;
+    lan.value = p.lan;
+    gpu.value = p.gpu;
+    folders.value = p.folders.map((f) => ({ folder: f.folder, mode: f.mode ?? "read", target: f.target ?? "" }));
+    devices.value = p.devices ?? [];
+    editMode.value = "form";
+  } catch (err) {
+    overlayError.value = err instanceof ApiError ? err.message : (err as Error).message;
+  }
+}
+
 // ── install ─────────────────────────────────────────────────────────────────────
 const install = useMutation({
   mutationFn: async (scope: Scope) => {
     submitError.value = null;
-    const job = await api.post<Job>("/apps/custom", {
+    const body: CustomInstallRequest = {
       name: name.value,
       compose: compose.value,
       main_service: mainService.value || undefined,
       main_port: Number(mainPort.value),
-      internet: internet.value,
       scope,
-    });
+    };
+    // YAML mode submits the raw overlay (the admin may have edited it past what
+    // the form can express); form mode submits the structured election.
+    if (editMode.value === "yaml") body.overlay = overlayText.value;
+    else body.permissions = buildPerms();
+    const job = await api.post<Job>("/apps/custom", body);
     const done = await waitForJob(job.job_id);
     if (done.status !== "completed") {
       throw new Error(done.error?.message ?? "The install didn't finish.");
@@ -235,21 +328,146 @@ const submitLabel = computed(() => (install.isPending.value ? "Installing…" : 
       </p>
     </section>
 
-    <!-- 5. Internet access -->
-    <section class="flex items-start justify-between gap-4">
-      <div class="min-w-0">
-        <div class="text-sm font-medium">Internet access</div>
-        <div class="text-xs text-muted-foreground">Let this app reach the internet. On by default for custom apps.</div>
+    <!-- 5. Permissions — form toggles/rows, or the Edit-as-YAML escape hatch -->
+    <section class="space-y-3 border-t border-border pt-4">
+      <div class="flex items-center justify-between">
+        <h2 class="text-sm font-medium">Permissions</h2>
+        <button
+          type="button"
+          class="text-xs text-muted-foreground hover:underline"
+          @click="editMode === 'form' ? flipToYaml() : flipToForm()"
+        >
+          {{ editMode === "form" ? "Edit as YAML" : "Back to form" }}
+        </button>
       </div>
-      <SwitchRoot
-        v-model="internet"
-        aria-label="Internet access"
-        class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-border bg-muted outline-none transition-colors data-[state=checked]:border-accent data-[state=checked]:bg-accent"
+
+      <p
+        v-if="overlayError"
+        class="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
       >
-        <SwitchThumb
-          class="pointer-events-none block size-4 translate-x-0.5 rounded-full bg-card shadow transition-transform data-[state=checked]:translate-x-[1.125rem]"
+        {{ overlayError }}
+      </p>
+
+      <!-- Form view -->
+      <template v-if="editMode === 'form'">
+        <!-- Internet -->
+        <div class="flex items-start justify-between gap-4">
+          <div class="min-w-0">
+            <div class="text-sm font-medium">Internet access</div>
+            <div class="text-xs text-muted-foreground">Let this app reach the internet. On by default for custom apps.</div>
+          </div>
+          <SwitchRoot
+            v-model="internet"
+            aria-label="Internet access"
+            class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-border bg-muted outline-none transition-colors data-[state=checked]:border-accent data-[state=checked]:bg-accent"
+          >
+            <SwitchThumb
+              class="pointer-events-none block size-4 translate-x-0.5 rounded-full bg-card shadow transition-transform data-[state=checked]:translate-x-[1.125rem]"
+            />
+          </SwitchRoot>
+        </div>
+
+        <!-- LAN / mDNS -->
+        <div class="flex items-start justify-between gap-4">
+          <div class="min-w-0">
+            <div class="text-sm font-medium">Local network access</div>
+            <div class="text-xs text-muted-foreground">Let this app reach other devices on your LAN. Off by default.</div>
+          </div>
+          <SwitchRoot
+            v-model="lan"
+            aria-label="Local network access"
+            class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-border bg-muted outline-none transition-colors data-[state=checked]:border-accent data-[state=checked]:bg-accent"
+          >
+            <SwitchThumb
+              class="pointer-events-none block size-4 translate-x-0.5 rounded-full bg-card shadow transition-transform data-[state=checked]:translate-x-[1.125rem]"
+            />
+          </SwitchRoot>
+        </div>
+
+        <!-- GPU -->
+        <div class="flex items-start justify-between gap-4">
+          <div class="min-w-0">
+            <div class="text-sm font-medium">GPU access</div>
+            <div class="text-xs text-muted-foreground">
+              Pass the box's GPU through (transcoding, ML). Needs a GPU on this machine.
+            </div>
+          </div>
+          <SwitchRoot
+            v-model="gpu"
+            aria-label="GPU access"
+            class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-border bg-muted outline-none transition-colors data-[state=checked]:border-accent data-[state=checked]:bg-accent"
+          >
+            <SwitchThumb
+              class="pointer-events-none block size-4 translate-x-0.5 rounded-full bg-card shadow transition-transform data-[state=checked]:translate-x-[1.125rem]"
+            />
+          </SwitchRoot>
+        </div>
+
+        <!-- Folder grants -->
+        <div class="space-y-2">
+          <div class="text-sm font-medium">Folder access</div>
+          <div class="text-xs text-muted-foreground">
+            Give the app one of your content folders. <strong>Source</strong> is the folder on your box;
+            <strong>destination</strong> is where the app reads it inside the container (check the image's docs).
+          </div>
+          <div v-for="(f, i) in folders" :key="i" class="flex items-center gap-2">
+            <select
+              v-model="f.folder"
+              aria-label="Source folder"
+              class="rounded-lg border border-border px-2 py-1.5 text-sm"
+            >
+              <option v-for="uc in USE_CASE_FOLDERS" :key="uc" :value="uc">{{ folderLabel(uc) }}</option>
+            </select>
+            <span class="text-xs text-muted-foreground">→</span>
+            <input
+              v-model="f.target"
+              placeholder="/path/in/container"
+              aria-label="Destination path"
+              class="min-w-0 flex-1 rounded-lg border border-border px-2 py-1.5 font-mono text-xs"
+            />
+            <select v-model="f.mode" aria-label="Mode" class="rounded-lg border border-border px-2 py-1.5 text-sm">
+              <option value="read">read</option>
+              <option value="write">write</option>
+            </select>
+            <button
+              type="button"
+              class="rounded-lg border border-border px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted"
+              aria-label="Remove folder"
+              @click="removeFolder(i)"
+            >
+              ✕
+            </button>
+          </div>
+          <button
+            type="button"
+            class="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-muted"
+            @click="addFolder"
+          >
+            + Add a folder
+          </button>
+        </div>
+
+        <!-- Devices: no form control (the long tail); shown read-only when set via YAML -->
+        <p v-if="devices.length" class="text-xs text-muted-foreground">
+          Devices (set via YAML): <code>{{ devices.join(", ") }}</code>
+        </p>
+      </template>
+
+      <!-- YAML view: a raw editor over the permissions overlay only (the compose
+           keeps its own textarea above — the two are never merged). -->
+      <template v-else>
+        <textarea
+          v-model="overlayText"
+          rows="10"
+          spellcheck="false"
+          aria-label="Permissions overlay (YAML)"
+          class="w-full rounded-lg border border-border px-3 py-2 font-mono text-xs"
         />
-      </SwitchRoot>
+        <p class="text-xs text-muted-foreground">
+          The manifest overlay malmo wraps around your compose. Edit fields the form doesn't show (like
+          <code>devices</code>); the compose above is untouched. Admission still runs on install.
+        </p>
+      </template>
     </section>
 
     <!-- TOFU / no-auto-update honesty note -->
