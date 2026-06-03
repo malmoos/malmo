@@ -19,6 +19,7 @@ const (
 	ActionSetupFailure    = "setup.failure"
 	ActionLoginSuccess    = "login.success"
 	ActionLoginFailure    = "login.failure"
+	ActionLoginLockout    = "login.lockout"
 	ActionLogout          = "logout"
 	ActionAppInstall      = "app.install"
 	ActionAppUninstall    = "app.uninstall"
