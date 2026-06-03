@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/malmo/malmo/internal/hostclient"
+	"github.com/malmo/malmo/internal/manifest"
 	"github.com/malmo/malmo/internal/store"
 	"gopkg.in/yaml.v3"
 )
@@ -156,6 +157,55 @@ func TestInstallFolders_FolderlessSkipsIdentity(t *testing.T) {
 	}
 	if e.host.called("WellKnownIdentity") || e.host.called("ResolveHome") {
 		t.Error("folderless install must not resolve host identity")
+	}
+}
+
+// TestInstallCustomFolders_TargetDestination exercises the Door-2 divergence: a
+// custom app's folder grant carries an explicit in-container target, so the bind
+// lands there (not the fixed /malmo/<folder>) and MALMO_FOLDER_* reflects it. The
+// source is scope-derived — no per-folder election — so a household install reads
+// the shared tree (DASHBOARD.md # Folder grants carry an explicit destination).
+func TestInstallCustomFolders_TargetDestination(t *testing.T) {
+	e := newTestEnv(t)
+	e.docker.digests[testImage] = testDigest
+
+	inst, err := e.m.InstallCustom(context.Background(), CustomSpec{
+		Name: "Photo App", Compose: foldersCompose, MainPort: 8080,
+		Permissions: manifest.Permissions{
+			Internet: true,
+			Folders: []manifest.Folder{
+				{Folder: "documents", Mode: "write", Target: "/photoprism/originals"},
+			},
+		},
+	}, Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	dir := filepath.Join(e.stateDir, "instances", inst.ID)
+	ov, err := os.ReadFile(filepath.Join(dir, "compose.override.yml"))
+	if err != nil {
+		t.Fatalf("read override: %v", err)
+	}
+	var doc struct {
+		Services map[string]map[string]any `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(ov, &doc); err != nil {
+		t.Fatalf("parse override: %v", err)
+	}
+	app := doc.Services["app"]
+
+	// Household → shared source; write → :rw; bind lands at the typed target.
+	wantVol := "/srv/malmo/shared/Documents:/photoprism/originals:rw"
+	if !hasString(app["volumes"], wantVol) {
+		t.Errorf("volumes: want %q, got %v", wantVol, app["volumes"])
+	}
+	env, err := os.ReadFile(filepath.Join(dir, ".env"))
+	if err != nil {
+		t.Fatalf("read env: %v", err)
+	}
+	if !strings.Contains(string(env), "MALMO_FOLDER_DOCUMENTS=/photoprism/originals") {
+		t.Errorf("env should map MALMO_FOLDER_DOCUMENTS to the target, got:\n%s", env)
 	}
 }
 

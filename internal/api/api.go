@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
@@ -30,17 +31,19 @@ import (
 )
 
 type Server struct {
-	store   *store.Store
-	catalog *catalog.Catalog
-	life    *lifecycle.Manager
-	bus     *events.Bus
-	auth    *auth.Manager
-	host    *hostclient.Client
-	auditor *audit.Recorder
-	health  *health.Manager
-	live    *systemlive.Hub
-	streams *streamCap
-	jobs    *Jobs
+	store    *store.Store
+	catalog  *catalog.Catalog
+	life     *lifecycle.Manager
+	bus      *events.Bus
+	auth     *auth.Manager
+	throttle *auth.LoginThrottle
+	host     *hostclient.Client
+	auditor  *audit.Recorder
+	health   *health.Manager
+	live     *systemlive.Hub
+	streams  *streamCap
+	limiter  *rateLimiter
+	jobs     *Jobs
 }
 
 func NewServer(
@@ -56,9 +59,10 @@ func NewServer(
 ) *Server {
 	return &Server{
 		store: st, catalog: cat, life: life, bus: bus,
-		auth: authMgr, host: host, auditor: auditor,
+		auth: authMgr, throttle: auth.NewLoginThrottle(), host: host, auditor: auditor,
 		health: healthMgr, live: live,
 		streams: newStreamCap(maxStreamsPerSession),
+		limiter: newRateLimiter(time.Now),
 		jobs:    newJobs(),
 	}
 }
@@ -71,8 +75,10 @@ const (
 )
 
 // Handler builds the mux: huma-registered REST routes + the raw SSE endpoint.
-// The chain is CORS → auth → mux. CORS handles OPTIONS preflight (no auth
-// needed); auth gates everything else except the small public allowlist.
+// The chain is CORS → auth → rate-limit → mux. CORS handles OPTIONS preflight
+// (no auth needed); auth gates everything else except the small public
+// allowlist; the limiter then throttles per resolved session (or per IP on the
+// allowlist) before the mux dispatches (BRAIN_UI_PROTOCOL.md # Rate limiting).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	api := humago.New(mux, huma.DefaultConfig(openAPITitle, openAPIVersion))
@@ -83,7 +89,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/events", s.events)
 	mux.HandleFunc("GET /api/v1/system/live", s.systemLive)
 
-	return withCORS(s.authMiddleware(mux))
+	return withCORS(s.authMiddleware(s.rateLimit(mux)))
 }
 
 // registerAll registers every huma (OpenAPI-described) route on api. It is the
@@ -136,6 +142,21 @@ func (s *Server) register(api huma.API) {
 		OperationID: "install-app", Method: "POST", Path: "/api/v1/apps",
 		Summary: "Install an app (job)", DefaultStatus: http.StatusAccepted,
 	}, s.installApp)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "inspect-custom-app", Method: "POST", Path: "/api/v1/apps/custom/inspect",
+		Summary: "Inspect a pasted (Door-2) compose: service names + best-effort main port (admin-only, read-only)",
+	}, s.inspectCustomApp)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "render-custom-overlay", Method: "POST", Path: "/api/v1/apps/custom/overlay/render",
+		Summary: "Render elected Door-2 permissions as the Edit-as-YAML overlay (admin-only)",
+	}, s.renderCustomOverlay)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "parse-custom-overlay", Method: "POST", Path: "/api/v1/apps/custom/overlay/parse",
+		Summary: "Parse + validate an Edit-as-YAML Door-2 permissions overlay back to form fields (admin-only)",
+	}, s.parseCustomOverlay)
 
 	huma.Register(api, huma.Operation{
 		OperationID: "install-custom-app", Method: "POST", Path: "/api/v1/apps/custom",
@@ -420,20 +441,76 @@ func (s *Server) checkDuplicate(ctx context.Context, manifestID string, confirm 
 	return huma.Error409Conflict("duplicate-install", summaries...)
 }
 
+// inspectCustomApp is the read-only companion to installCustomApp: it parses a
+// pasted compose so the Door-2 form can drive its service dropdown and prefill
+// the main port (DASHBOARD.md # The form). Admin-only (Door 2 is admin-only) and
+// host-call-free; admission is deliberately NOT run here — it gates on submit,
+// where its field-named rejections are coached inline.
+func (s *Server) inspectCustomApp(ctx context.Context, in *struct {
+	Body struct {
+		Compose     string `json:"compose"`
+		MainService string `json:"main_service,omitempty"` // optional; lets the form re-infer the port after picking a service
+	}
+}) (*struct {
+	Body struct {
+		Services []string `json:"services"`
+		MainPort int      `json:"main_port"` // 0 = could not infer; the form asks
+	}
+}, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	services, err := manifest.ComposeServiceNames([]byte(in.Body.Compose))
+	if err != nil {
+		return nil, huma.Error422UnprocessableEntity(err.Error())
+	}
+	// Resolve which service's expose: to read for the port prefill: the one the
+	// form already picked, or the sole service when there's exactly one.
+	main := in.Body.MainService
+	if main == "" && len(services) == 1 {
+		main = services[0]
+	}
+	out := &struct {
+		Body struct {
+			Services []string `json:"services"`
+			MainPort int      `json:"main_port"`
+		}
+	}{}
+	out.Body.Services = services
+	out.Body.MainPort = manifest.InferMainPort([]byte(in.Body.Compose), main)
+	return out, nil
+}
+
 func (s *Server) installCustomApp(ctx context.Context, in *struct {
 	Body struct {
-		Name        string `json:"name"`
-		Compose     string `json:"compose"`
-		MainService string `json:"main_service,omitempty"`
-		MainPort    int    `json:"main_port"`
-		Scope       string `json:"scope,omitempty"` // "household" | "personal"; default household for admins, forced personal for members
+		Name        string            `json:"name"`
+		Compose     string            `json:"compose"`
+		MainService string            `json:"main_service,omitempty"`
+		MainPort    int               `json:"main_port"`
+		Scope       string            `json:"scope,omitempty"` // "household" | "personal"; default household for admins, forced personal for members
+		Permissions *customPermsInput `json:"permissions,omitempty"`
+		Overlay     string            `json:"overlay,omitempty"` // Edit-as-YAML escape hatch; wins over permissions when set (DASHBOARD.md # Form is a projection)
 	}
 }) (*struct{ Body Job }, error) {
+	// Admin-only gate: elevation-class rejection audits before synthesize/admission (APP_ISOLATION.md, DECISIONS.md 2026-06-02).
+	if err := requireAdmin(ctx); err != nil {
+		s.auditor.Record(ctx, audit.ActionAppCustomCreate, audit.Target{Kind: "app"},
+			map[string]any{"name": in.Body.Name}, false)
+		return nil, err
+	}
+	// The form sends structured permissions; the Edit-as-YAML toggle sends a raw
+	// overlay instead, parsed + validated through the same gate (DASHBOARD.md #
+	// Permissions). A malformed overlay surfaces inline as a 422.
+	perms, err := resolveCustomPerms(in.Body.Permissions, in.Body.Overlay)
+	if err != nil {
+		return nil, huma.Error422UnprocessableEntity(err.Error())
+	}
 	spec := lifecycle.CustomSpec{
 		Name:        in.Body.Name,
 		Compose:     in.Body.Compose,
 		MainService: in.Body.MainService,
 		MainPort:    in.Body.MainPort,
+		Permissions: perms,
 	}
 	owner, scope, err := s.resolveOwnerScope(ctx, in.Body.Scope, audit.ActionAppCustomCreate, map[string]any{"name": spec.Name})
 	if err != nil {
@@ -443,7 +520,7 @@ func (s *Server) installCustomApp(ctx context.Context, in *struct {
 	// Sync pre-checks so the user gets immediate, specific feedback instead of
 	// a failed job: synthesize (catches missing name/port, ambiguous service)
 	// and admit the compose (catches ports:/privileged/etc).
-	if _, _, err := manifest.Synthesize(spec.Name, []byte(spec.Compose), spec.MainService, spec.MainPort); err != nil {
+	if _, _, err := manifest.Synthesize(spec.Name, []byte(spec.Compose), spec.MainService, spec.MainPort, perms); err != nil {
 		return nil, huma.Error422UnprocessableEntity(err.Error())
 	}
 	if err := admission.Check(ctx, []byte(spec.Compose)); err != nil {

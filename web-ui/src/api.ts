@@ -83,6 +83,67 @@ export type FolderSources = Schemas["FolderSources"];
 // needs the literal union.
 export type Scope = "household" | "personal";
 
+// --- Door-2 hand-maintained types (not in the OpenAPI spec) -----------------
+// These types back the custom-container install endpoints which bypass huma
+// and are therefore not generated. See DASHBOARD.md # Door-2.
+
+// Door-2 inspect: admin-only parse of a pasted compose for service dropdown
+// and main-port prefill (main_port 0 = could not infer; the form asks).
+export interface CustomInspectResult {
+  services: string[];
+  main_port: number;
+}
+
+// CustomFolderGrant is one Door-2 folder grant: a use-case folder (Source
+// picker), the in-container destination the admin types (target — Door-2 has no
+// author to map MALMO_FOLDER_<NAME>), and read/write.
+export interface CustomFolderGrant {
+  folder: string;
+  mode?: "read" | "write";
+  target?: string;
+}
+
+// CustomPermissions is the structured Door-2 permission election (form mode).
+// internet defaults on server-side when omitted.
+export interface CustomPermissions {
+  internet?: boolean;
+  lan?: boolean;
+  gpu?: boolean;
+  folders?: CustomFolderGrant[];
+  devices?: string[];
+}
+
+// CustomPermissionsResolved is a parsed/normalized permission set (the parse
+// endpoint result the form repopulates from) — internet is concrete here.
+export interface CustomPermissionsResolved {
+  internet: boolean;
+  lan: boolean;
+  gpu: boolean;
+  folders: CustomFolderGrant[];
+  devices: string[];
+}
+
+export interface CustomOverlayRenderResult {
+  overlay: string;
+}
+export interface CustomOverlayParseResult {
+  permissions: CustomPermissionsResolved;
+}
+
+// CustomInstallRequest is the POST /api/v1/apps/custom body. The form sends
+// `permissions`; the Edit-as-YAML toggle sends a raw `overlay` instead, which
+// wins server-side. scope follows the store convention (household for admins by
+// choice, forced/silent personal otherwise).
+export interface CustomInstallRequest {
+  name: string;
+  compose: string;
+  main_service?: string;
+  main_port: number;
+  scope?: Scope;
+  permissions?: CustomPermissions;
+  overlay?: string;
+}
+
 // Poll a job to a terminal state (Pattern B). A useJob() composable with
 // refetchInterval is the real shape; this is enough for the skeleton.
 export async function waitForJob(jobId: string): Promise<Job> {

@@ -8,6 +8,9 @@ const routes: RouteRecordRaw[] = [
   { path: "/", name: "home", component: () => import("@/views/HomeView.vue") },
   { path: "/files", name: "files", component: () => import("@/views/FilesView.vue") },
   { path: "/store", name: "store", component: () => import("@/views/StoreView.vue") },
+  // Door-2 custom-container install — a dedicated full-screen form, admin-only
+  // (the view guards the role; the Store affordance is hidden from members).
+  { path: "/store/custom", name: "store-custom", component: () => import("@/views/CustomInstallView.vue") },
   { path: "/settings", name: "settings", component: () => import("@/views/SettingsView.vue") },
   // Unknown paths fall back to Home — the SPA never 404s its own chrome.
   { path: "/:pathMatch(.*)*", redirect: "/" },
