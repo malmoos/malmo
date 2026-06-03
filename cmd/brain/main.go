@@ -6,7 +6,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,6 +25,7 @@ import (
 	"github.com/malmo/malmo/internal/health"
 	"github.com/malmo/malmo/internal/hostclient"
 	"github.com/malmo/malmo/internal/lifecycle"
+	"github.com/malmo/malmo/internal/manifest"
 	"github.com/malmo/malmo/internal/notify"
 	"github.com/malmo/malmo/internal/protocol"
 	"github.com/malmo/malmo/internal/store"
@@ -96,13 +99,22 @@ func main() {
 	pullSystemHealth(pollCtx, host, healthMgr, auditor, notifier)
 	go systemHealthPollLoop(pollCtx, host, healthMgr, auditor, notifier, cfg.healthPollPeriod)
 
-	// Locus-D container-restart-loop detector (HEALTH.md # Detector catalog):
-	// sample managed containers' cumulative RestartCount on the health-poll
-	// cadence and raise per-instance when restarts climb past the threshold
-	// within the window. Brain-only — reads Docker through the shared lifecycle
-	// seam (no host-agent change, no EVENTS proxy grant needed).
+	// App-runtime health detectors on the health-poll cadence, both driven from
+	// ONE goroutine (issue #54: reuse the restart-loop timer, no parallel
+	// goroutine):
+	//   - container-restart-loop (locus D): sample managed containers' cumulative
+	//     RestartCount and raise per-instance when restarts climb past the
+	//     threshold within the window.
+	//   - app-unresponsive (locus C): for each steady-running instance that
+	//     declares a health_probe, GET the probe path through the app's Caddy
+	//     route and raise when it fails.
+	// Both read Docker through the shared lifecycle seam (no host-agent change, no
+	// EVENTS proxy grant). Order matters: the restart-loop check runs first so the
+	// probe can defer to a freshly-raised container-restart-loop and not
+	// double-banner a crash-looping app (HEALTH.md # app-unresponsive anti-flap).
 	rld := newRestartLoopDetector(dock, healthMgr, auditor, notifier)
-	go rld.run(pollCtx, cfg.healthPollPeriod)
+	probe := newAppProbeDetector(dock, st, life, cfg.caddyProbeURL, healthMgr, auditor, notifier)
+	go appRuntimeHealthLoop(pollCtx, cfg.healthPollPeriod, rld.check, probe.check)
 
 	// Bound the notifications table (NOTIFICATIONS.md # Locked decisions, the
 	// retention bullet): prune aged / over-cap rows once at boot, then on a slow
@@ -183,6 +195,7 @@ type config struct {
 	agentSock         string
 	caddyAdmin        string
 	caddyListen       string
+	caddyProbeURL     string
 	logLevel          string
 	logFormat         string
 	healthPollPeriod  time.Duration
@@ -190,18 +203,38 @@ type config struct {
 }
 
 func loadConfig() config {
+	caddyListen := env("MALMO_CADDY_LISTEN", ":80")
 	return config{
 		listen:            env("MALMO_LISTEN", ":8080"),
 		stateDir:          env("MALMO_STATE_DIR", "./.dev/state"),
 		catalogDir:        env("MALMO_CATALOG_DIR", "./catalog"),
 		agentSock:         env("MALMO_AGENT_SOCK", protocol.SocketPath),
 		caddyAdmin:        env("MALMO_CADDY_ADMIN", "http://localhost:2019"),
-		caddyListen:       env("MALMO_CADDY_LISTEN", ":80"),
+		caddyListen:       caddyListen,
+		caddyProbeURL:     env("MALMO_CADDY_PROBE_URL", probeBaseURL(caddyListen)),
 		logLevel:          env("MALMO_LOG_LEVEL", "info"),
 		logFormat:         env("MALMO_LOG_FORMAT", "text"),
 		healthPollPeriod:  envDuration("MALMO_HEALTH_POLL", 60*time.Second),
 		notifyPrunePeriod: envDuration("MALMO_NOTIFY_PRUNE", time.Hour),
 	}
+}
+
+// probeBaseURL turns the Caddy site-listener address (the same value passed to
+// EnsureServer) into a base URL the app-unresponsive probe can dial. ":80" →
+// "http://127.0.0.1:80". The probe sets the route Host header and Caddy routes
+// by Host, so the dial target is just Caddy's listener. Override with
+// MALMO_CADDY_PROBE_URL when Caddy isn't at localhost (e.g. the brain in a
+// container reaching a Caddy container by service name).
+func probeBaseURL(caddyListen string) string {
+	host, port, err := net.SplitHostPort(caddyListen)
+	if err != nil {
+		slog.Warn("caddy listen address unparseable; probe base defaults to :80", "caddy_listen", caddyListen, "err", err)
+		return "http://127.0.0.1"
+	}
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 func envDuration(k string, def time.Duration) time.Duration {
@@ -515,12 +548,20 @@ func newRestartLoopDetector(docker restartCountReader, healthMgr *health.Manager
 	}
 }
 
-// run takes the first sample immediately (establishing baselines) then re-samples
-// every interval. Locus-D is reactive in spirit, but the socket-proxy allowlist
-// grants CONTAINERS, not EVENTS (CONTROL_PLANE.md), so polling RestartCount is
-// the no-proxy-change path the issue prefers.
-func (d *restartLoopDetector) run(ctx context.Context, interval time.Duration) {
-	d.check(ctx)
+// appRuntimeHealthLoop drives the app-runtime health detectors (container-
+// restart-loop then app-unresponsive) on one ticker — issue #54's "reuse the
+// timer, no parallel goroutine." Each check runs once immediately (the
+// restart-loop detector establishes its RestartCount baseline on the first
+// sample) then re-runs every interval, in the given order. Locus-D is reactive
+// in spirit, but the socket-proxy allowlist grants CONTAINERS, not EVENTS
+// (CONTROL_PLANE.md), so polling is the no-proxy-change path.
+func appRuntimeHealthLoop(ctx context.Context, interval time.Duration, checks ...func(context.Context)) {
+	runAll := func() {
+		for _, c := range checks {
+			c(ctx)
+		}
+	}
+	runAll()
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -528,7 +569,7 @@ func (d *restartLoopDetector) run(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			d.check(ctx)
+			runAll()
 		}
 	}
 }
@@ -612,4 +653,200 @@ func (d *restartLoopDetector) check(ctx context.Context) {
 
 func sortByInstanceKey(ks []health.IssueKey) {
 	sort.Slice(ks, func(i, j int) bool { return ks[i].InstanceKey < ks[j].InstanceKey })
+}
+
+const (
+	// appProbeRaiseThreshold is the cross-cutting debounce (HEALTH.md
+	// # Cross-cutting detector policy) for app-unresponsive: raise only on the
+	// 2nd consecutive failed probe; one good probe clears.
+	appProbeRaiseThreshold = 2
+	// appProbeTimeout bounds a single probe request. The spec leaves the exact
+	// value open (issue #54); 5s matches the brain's other host-call timeouts and
+	// sits well under the 60s tick. Tune at first soak.
+	appProbeTimeout = 5 * time.Second
+)
+
+// managedContainerReader is the brain's consumer-side slice of the Docker seam
+// the probe needs: per-instance container service / running / StartedAt.
+// lifecycle.DockerDriver satisfies it.
+type managedContainerReader interface {
+	ManagedContainers(ctx context.Context) ([]lifecycle.ManagedContainer, error)
+}
+
+// instanceLister enumerates installed instances (id + slug + mDNS host).
+// *store.Store satisfies it.
+type instanceLister interface {
+	List() ([]store.Instance, error)
+}
+
+// instanceManifestLoader loads an instance's persisted manifest (main_service +
+// health_probe). *lifecycle.Manager satisfies it.
+type instanceManifestLoader interface {
+	InstanceManifest(id string) (*manifest.Manifest, error)
+}
+
+// appProbeDetector is the locus-C app-unresponsive detector (HEALTH.md #
+// Detector catalog). For each steady-running instance that declares a
+// health_probe (APP_MANIFEST.md # B), it GETs the probe path *through the app's
+// Caddy route* (Host header, never dialing the container — THREAT_MODEL.md # B2)
+// and reconciles the per-instance app-unresponsive issue. Not thread-safe: it
+// holds per-instance bad-sample counters and is driven from the single
+// app-runtime poll goroutine (appRuntimeHealthLoop), after the restart-loop
+// detector so a crash-looper surfaces as container-restart-loop, not here.
+type appProbeDetector struct {
+	docker    managedContainerReader
+	instances instanceLister
+	manifests instanceManifestLoader
+	healthMgr *health.Manager
+	auditor   *audit.Recorder
+	notifier  *notify.Notifier
+	client    *http.Client
+	baseURL   string // Caddy site-listener base, e.g. http://127.0.0.1:80
+	now       func() time.Time
+	bad       map[string]int // instance_id -> consecutive failed-probe count
+}
+
+func newAppProbeDetector(docker managedContainerReader, instances instanceLister, manifests instanceManifestLoader, baseURL string, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier) *appProbeDetector {
+	return &appProbeDetector{
+		docker:    docker,
+		instances: instances,
+		manifests: manifests,
+		healthMgr: healthMgr,
+		auditor:   auditor,
+		notifier:  notifier,
+		client:    &http.Client{Timeout: appProbeTimeout},
+		baseURL:   baseURL,
+		now:       func() time.Time { return time.Now().UTC() },
+		bad:       map[string]int{},
+	}
+}
+
+// check probes every eligible instance once and reconciles app-unresponsive.
+// Eligible = declares a health_probe, isn't already flagged
+// container-restart-loop, has its main_service container running, and is past
+// the start-period grace. A failed probe raises on the 2nd consecutive failure
+// (or immediately while already active); one good probe — or losing eligibility
+// (stopped, crash-looping, uninstalled) — clears.
+func (d *appProbeDetector) check(ctx context.Context) {
+	instances, err := d.instances.List()
+	if err != nil {
+		slog.Warn("app-probe check: list instances; skipping", "err", err)
+		return
+	}
+	containers, err := d.docker.ManagedContainers(ctx)
+	if err != nil {
+		slog.Warn("app-probe check: docker unreachable; skipping", "err", err)
+		return
+	}
+	byInstance := map[string]map[string]lifecycle.ManagedContainer{}
+	for _, c := range containers {
+		if byInstance[c.InstanceID] == nil {
+			byInstance[c.InstanceID] = map[string]lifecycle.ManagedContainer{}
+		}
+		byInstance[c.InstanceID][c.Service] = c
+	}
+
+	now := d.now()
+	probed := map[string]bool{}    // instances probed this tick
+	unhealthy := map[string]bool{} // instances holding/raising app-unresponsive this tick
+	var raised []health.IssueKey
+
+	for _, inst := range instances {
+		man, err := d.manifests.InstanceManifest(inst.ID)
+		if err != nil || man.HealthProbe == nil {
+			continue // unloadable, or opt-out → never probed
+		}
+		// Defer to container-restart-loop: a crash-looper is its domain, not ours
+		// (HEALTH.md # app-unresponsive anti-flap — don't double-banner).
+		if _, looping := d.healthMgr.Get("container-restart-loop", inst.ID); looping {
+			continue
+		}
+		main, ok := byInstance[inst.ID][man.MainService]
+		if !ok || !main.Running {
+			continue // not steady-running
+		}
+		if now.Sub(main.StartedAt) < man.HealthProbe.StartPeriod {
+			continue // start-period grace: warming up, don't count failures yet
+		}
+		probed[inst.ID] = true
+		host := inst.MDNSName
+		if host == "" {
+			host = inst.Slug + protocol.AppHostSuffix
+		}
+		if d.probe(ctx, host, man.HealthProbe) {
+			d.bad[inst.ID] = 0
+			continue // good sample → clear handled in the sweep below
+		}
+		d.bad[inst.ID]++
+		_, active := d.healthMgr.Get("app-unresponsive", inst.ID)
+		if active || d.bad[inst.ID] >= appProbeRaiseThreshold {
+			unhealthy[inst.ID] = true
+			details := "This app is running but didn't respond to its health check."
+			if d.healthMgr.Raise("app-unresponsive", inst.ID, details) {
+				raised = append(raised, health.IssueKey{ID: "app-unresponsive", InstanceKey: inst.ID})
+			}
+		}
+	}
+
+	// Drop bad-sample counters for instances not probed this tick (stopped, in
+	// grace, crash-looping, uninstalled) so a stale count can't carry across a
+	// gap — "2 consecutive" means consecutive probes.
+	for id := range d.bad {
+		if !probed[id] {
+			delete(d.bad, id)
+		}
+	}
+
+	// Clear any active app-unresponsive not held unhealthy this tick: a good
+	// sample, or the instance lost eligibility (stopped / now crash-looping /
+	// uninstalled) — all "no longer app-unresponsive".
+	var cleared []health.IssueKey
+	for _, iss := range d.healthMgr.List() {
+		if iss.ID != "app-unresponsive" || unhealthy[iss.InstanceKey] {
+			continue
+		}
+		if d.healthMgr.Clear("app-unresponsive", iss.InstanceKey) {
+			cleared = append(cleared, health.IssueKey{ID: "app-unresponsive", InstanceKey: iss.InstanceKey})
+		}
+	}
+
+	sortByInstanceKey(raised)
+	sortByInstanceKey(cleared)
+	emitHealthTransitions(ctx, d.auditor, raised, cleared)
+	emitHealthNotifications(d.notifier, d.healthMgr, raised, cleared)
+}
+
+// probe GETs the app's probe path through Caddy with Host: <route host> —
+// exactly the request a browser makes, never the brain dialing the container
+// (THREAT_MODEL.md # B2). Healthy = status in the app's healthy set. A timeout,
+// connection failure, or Caddy 502 (dead upstream) is unhealthy.
+func (d *appProbeDetector) probe(ctx context.Context, host string, p *manifest.HealthProbe) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.baseURL+p.Path, nil)
+	if err != nil {
+		slog.Warn("app-probe: build request", "host", host, "err", err)
+		return false
+	}
+	req.Host = host // route by Host through Caddy
+	resp, err := d.client.Do(req)
+	if err != nil {
+		return false // timeout / connection failure = unhealthy
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body) // drain so the keep-alive can be reused
+	return probeHealthy(resp.StatusCode, p.HealthyStatus)
+}
+
+// probeHealthy classifies a probe response. Empty allowed set ⇒ the default
+// "any status < 500" (the server answered coherently; 401/403/404 still count
+// as responding). A non-empty set is exact-match.
+func probeHealthy(status int, allowed []int) bool {
+	if len(allowed) == 0 {
+		return status < 500
+	}
+	for _, s := range allowed {
+		if s == status {
+			return true
+		}
+	}
+	return false
 }

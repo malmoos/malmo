@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -30,6 +31,80 @@ type Manifest struct {
 	// Absent ⇒ TOFU at install (Door-2 always, Door-1 until the catalog
 	// publishes a digest).
 	Images map[string]string `yaml:"images,omitempty"`
+
+	// HealthProbe is the optional "up but not responding" probe config
+	// (APP_MANIFEST.md # B). nil ⇒ the app is never probed and the
+	// app-unresponsive health issue is never raised for it. Door-2 synthetic
+	// manifests omit it.
+	HealthProbe *HealthProbe `yaml:"health_probe,omitempty"`
+}
+
+// HealthProbe declares the HTTP probe that backs the app-unresponsive detector
+// (APP_MANIFEST.md # B, HEALTH.md # app-unresponsive). It is not a Docker
+// HEALTHCHECK: the brain executes it through the app's Caddy route on the
+// health-poll tick. It accepts a shorthand string (`health_probe: /healthz`,
+// expanding to {path: /healthz}) or the full mapping.
+type HealthProbe struct {
+	// Path is the HTTP path the brain GETs (required; must be absolute).
+	Path string
+	// HealthyStatus is the set of status codes treated as healthy. Empty ⇒ the
+	// default "any status < 500" (the server answered coherently); 401/403/404
+	// still count as responding.
+	HealthyStatus []int
+	// StartPeriod is the grace after the container starts before a failing probe
+	// counts, so a warming-up app doesn't flap the banner on install/update.
+	// Defaults to DefaultStartPeriod when omitted.
+	StartPeriod time.Duration
+}
+
+// DefaultStartPeriod is the health_probe.start_period default (APP_MANIFEST.md
+// # B): the warm-up grace before a probe failure counts.
+const DefaultStartPeriod = 60 * time.Second
+
+// healthProbeWire is the YAML mapping shape. start_period is a Go duration
+// string ("60s") on the wire, parsed to a time.Duration in HealthProbe.
+type healthProbeWire struct {
+	Path          string `yaml:"path"`
+	HealthyStatus []int  `yaml:"healthy_status,omitempty"`
+	StartPeriod   string `yaml:"start_period,omitempty"`
+}
+
+// UnmarshalYAML accepts the shorthand string form or the full mapping
+// (APP_MANIFEST.md # B). The string form sets only Path.
+func (h *HealthProbe) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		var s string
+		if err := node.Decode(&s); err != nil {
+			return err
+		}
+		*h = HealthProbe{Path: s}
+		return nil
+	}
+	var w healthProbeWire
+	if err := node.Decode(&w); err != nil {
+		return fmt.Errorf("health_probe: %w", err)
+	}
+	h.Path = w.Path
+	h.HealthyStatus = w.HealthyStatus
+	if w.StartPeriod != "" {
+		d, err := time.ParseDuration(w.StartPeriod)
+		if err != nil {
+			return fmt.Errorf("health_probe.start_period %q: %w", w.StartPeriod, err)
+		}
+		h.StartPeriod = d
+	}
+	return nil
+}
+
+// MarshalYAML emits the mapping form so a parsed manifest round-trips through
+// the per-instance manifest.yml the installer writes (start_period back to a
+// duration string).
+func (h HealthProbe) MarshalYAML() (any, error) {
+	w := healthProbeWire{Path: h.Path, HealthyStatus: h.HealthyStatus}
+	if h.StartPeriod != 0 {
+		w.StartPeriod = h.StartPeriod.String()
+	}
+	return w, nil
 }
 
 type Permissions struct {
@@ -129,7 +204,36 @@ func (m *Manifest) validate() error {
 			return fmt.Errorf("slug %q must be kebab-case (lowercase alphanumerics, single internal hyphens)", slug)
 		}
 	}
+	if err := m.validateHealthProbe(); err != nil {
+		return err
+	}
 	return ValidatePermissions(&m.Permissions)
+}
+
+// validateHealthProbe checks the optional probe block and normalizes its
+// start_period default in place (APP_MANIFEST.md # B). Absent ⇒ no-op. The path
+// must be a non-empty absolute path (the brain GETs it through the app's Caddy
+// route); healthy_status entries must be plausible HTTP codes.
+func (m *Manifest) validateHealthProbe() error {
+	if m.HealthProbe == nil {
+		return nil
+	}
+	p := m.HealthProbe
+	if p.Path == "" || !strings.HasPrefix(p.Path, "/") {
+		return fmt.Errorf("health_probe.path must be a non-empty absolute path (e.g. /healthz), got %q", p.Path)
+	}
+	if p.StartPeriod < 0 {
+		return fmt.Errorf("health_probe.start_period must not be negative, got %s", p.StartPeriod)
+	}
+	if p.StartPeriod == 0 {
+		p.StartPeriod = DefaultStartPeriod
+	}
+	for _, s := range p.HealthyStatus {
+		if s < 100 || s > 599 {
+			return fmt.Errorf("health_probe.healthy_status: %d is not a valid HTTP status code", s)
+		}
+	}
+	return nil
 }
 
 // ValidatePermissions normalizes folder defaults (mode=read, scope=whole) in

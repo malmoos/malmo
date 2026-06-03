@@ -1,8 +1,12 @@
 package manifest
 
 import (
+	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestParseHappy(t *testing.T) {
@@ -436,5 +440,109 @@ func TestParseFoldersRejectsDefaultMisuse(t *testing.T) {
 	}
 	if _, err := Parse(withPerms("  folders:\n    - { folder: photos, scope: pick-subfolder, default: ../etc }\n")); err == nil || !strings.Contains(err.Error(), "relative subpath") {
 		t.Fatalf("want traversal error, got %v", err)
+	}
+}
+
+// withManifest wraps extra top-level YAML in an otherwise-valid manifest so the
+// health_probe tests exercise Parse end-to-end.
+func withManifest(extra string) []byte {
+	return []byte(`id: app
+manifest_version: 1
+name: App
+version: "1"
+compose_file: compose.yml
+main_service: app
+main_port: 80
+` + extra)
+}
+
+func TestParseHealthProbeAbsentIsNil(t *testing.T) {
+	m, err := Parse(withManifest(""))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if m.HealthProbe != nil {
+		t.Fatalf("absent health_probe must parse to nil, got %+v", m.HealthProbe)
+	}
+}
+
+// Shorthand `health_probe: /healthz` expands to the object {path: /healthz},
+// with the start_period default applied and healthy_status left empty (any <500).
+func TestParseHealthProbeShorthand(t *testing.T) {
+	m, err := Parse(withManifest("health_probe: /healthz\n"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if m.HealthProbe == nil {
+		t.Fatal("health_probe must parse to a non-nil object")
+	}
+	if m.HealthProbe.Path != "/healthz" {
+		t.Errorf("Path = %q, want /healthz", m.HealthProbe.Path)
+	}
+	if m.HealthProbe.StartPeriod != DefaultStartPeriod {
+		t.Errorf("StartPeriod = %s, want default %s", m.HealthProbe.StartPeriod, DefaultStartPeriod)
+	}
+	if len(m.HealthProbe.HealthyStatus) != 0 {
+		t.Errorf("HealthyStatus = %v, want empty (default any <500)", m.HealthProbe.HealthyStatus)
+	}
+}
+
+func TestParseHealthProbeFullForm(t *testing.T) {
+	m, err := Parse(withManifest("health_probe:\n  path: /up\n  healthy_status: [200, 204]\n  start_period: 30s\n"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	p := m.HealthProbe
+	if p == nil || p.Path != "/up" {
+		t.Fatalf("Path not parsed: %+v", p)
+	}
+	if !reflect.DeepEqual(p.HealthyStatus, []int{200, 204}) {
+		t.Errorf("HealthyStatus = %v, want [200 204]", p.HealthyStatus)
+	}
+	if p.StartPeriod != 30*time.Second {
+		t.Errorf("StartPeriod = %s, want 30s", p.StartPeriod)
+	}
+}
+
+func TestParseHealthProbeRejectsBadPath(t *testing.T) {
+	// Empty and relative paths are rejected — the probe GETs an absolute path
+	// through the app's Caddy route.
+	for _, bad := range []string{"healthz", `""`} {
+		if _, err := Parse(withManifest("health_probe:\n  path: " + bad + "\n")); err == nil || !strings.Contains(err.Error(), "path") {
+			t.Errorf("path %q accepted, want rejection (err=%v)", bad, err)
+		}
+	}
+}
+
+func TestParseHealthProbeRejectsBadStatus(t *testing.T) {
+	if _, err := Parse(withManifest("health_probe:\n  path: /healthz\n  healthy_status: [200, 999]\n")); err == nil || !strings.Contains(err.Error(), "status") {
+		t.Fatalf("want healthy_status error, got %v", err)
+	}
+}
+
+func TestParseHealthProbeRejectsBadDuration(t *testing.T) {
+	if _, err := Parse(withManifest("health_probe:\n  path: /healthz\n  start_period: soon\n")); err == nil || !strings.Contains(err.Error(), "start_period") {
+		t.Fatalf("want start_period parse error, got %v", err)
+	}
+}
+
+// The probe must survive the marshal→parse round-trip that writeInstanceDir /
+// loadInstanceManifest does (the on-disk manifest.yml). start_period in
+// particular must re-parse from its duration-string form, not raw nanoseconds.
+func TestHealthProbeRoundTrip(t *testing.T) {
+	orig, err := Parse(withManifest("health_probe:\n  path: /up\n  healthy_status: [200]\n  start_period: 45s\n"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	out, err := yaml.Marshal(orig)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got, err := Parse(out)
+	if err != nil {
+		t.Fatalf("re-parse marshaled manifest: %v\n%s", err, out)
+	}
+	if !reflect.DeepEqual(got.HealthProbe, orig.HealthProbe) {
+		t.Fatalf("round-trip changed probe:\n got  %+v\n want %+v", got.HealthProbe, orig.HealthProbe)
 	}
 }
