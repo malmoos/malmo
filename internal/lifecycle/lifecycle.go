@@ -564,9 +564,8 @@ func (m *Manager) loadInstanceManifest(id string) (*manifest.Manifest, error) {
 }
 
 // InstanceManifest returns the parsed manifest the installer persisted for an
-// installed instance. The brain's app-unresponsive probe (cmd/brain) reads
-// main_service and health_probe from it; thin exported wrapper over the on-disk
-// manifest so cmd/brain doesn't duplicate the instance-dir path layout.
+// installed instance. Thin export so callers don't duplicate the instance-dir
+// path layout.
 func (m *Manager) InstanceManifest(id string) (*manifest.Manifest, error) {
 	return m.loadInstanceManifest(id)
 }

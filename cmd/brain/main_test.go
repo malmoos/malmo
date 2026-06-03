@@ -1096,3 +1096,22 @@ func TestProbeHealthy(t *testing.T) {
 		}
 	}
 }
+
+func TestProbeBaseURL(t *testing.T) {
+	cases := []struct {
+		listen string
+		want   string
+	}{
+		{":80", "http://127.0.0.1:80"},
+		{":8080", "http://127.0.0.1:8080"},
+		{"0.0.0.0:80", "http://0.0.0.0:80"},
+		{"127.0.0.1:3000", "http://127.0.0.1:3000"},
+		{"caddy:80", "http://caddy:80"},   // containerised brain → Caddy service name
+		{"bad-value", "http://127.0.0.1"}, // SplitHostPort failure → safe fallback (port 80)
+	}
+	for _, c := range cases {
+		if got := probeBaseURL(c.listen); got != c.want {
+			t.Errorf("probeBaseURL(%q) = %q, want %q", c.listen, got, c.want)
+		}
+	}
+}

@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -242,12 +243,19 @@ func (cliDocker) ManagedContainers(ctx context.Context) ([]ManagedContainer, err
 	// service, running flag, and StartedAt (RFC3339) per line.
 	args := append([]string{"inspect", "--format",
 		`{{index .Config.Labels "malmo.instance_id"}} {{index .Config.Labels "com.docker.compose.service"}} {{.State.Running}} {{.State.StartedAt}}`}, idList...)
-	out, err := exec.CommandContext(ctx, "docker", args...).Output()
-	if err != nil {
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil && stdout.Len() == 0 {
+		// Docker daemon unreachable (not a TOCTOU race — that produces partial
+		// stdout). Return the error so the caller can skip this tick.
 		return nil, err
 	}
+	// TOCTOU: a container removed between the `docker ps` above and this inspect
+	// causes Docker to exit non-zero but still outputs the containers it inspected.
+	// Parse partial output — the missing containers simply won't appear.
 	var res []ManagedContainer
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
 		parts := strings.Fields(line)
 		if len(parts) != 4 {
 			continue
