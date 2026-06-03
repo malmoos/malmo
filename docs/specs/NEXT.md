@@ -1,4 +1,4 @@
-# malmo — What's Next
+# molma — What's Next
 
 > The single, prioritized list of design topics we still need to cover. Replaces the "Open questions" tail of every other doc. Companion to `DECISIONS.md` (what we figured out, and why).
 
@@ -29,7 +29,7 @@ Each entry: one-sentence shape, the doc it touches, and *why this tier*. The doc
 
 The in-product notification center (the dashboard bell) is **decided and specced in `NOTIFICATIONS.md`** — v1 is dashboard-only. What remains open is the *off-box* delivery that actually reaches the user who isn't looking at the dashboard (the pantry-box case the bell deliberately doesn't solve): **email** and **mobile push**. Both slot in behind the transport-agnostic seam already designed in `NOTIFICATIONS.md` — no model rework, just new sinks + per-user/per-category/per-severity delivery preferences. Email is gated on **email-on-file** (separate Tier-2 item below); push is gated on the mobile app (deferred with the mesh). Also still open: quiet-hours / snooze and daily-digest, which only earn their keep once an off-box transport exists.
 
-**Context:** `NOTIFICATIONS.md` (the model + seam), email-on-file entry below, `MALMO_NETWORK.md` (SMTP relay — own vs. transactional; residential-IP deliverability), mobile app (deferred, `MALMO_NETWORK.md` # mesh).
+**Context:** `NOTIFICATIONS.md` (the model + seam), email-on-file entry below, `MOLMA_NETWORK.md` (SMTP relay — own vs. transactional; residential-IP deliverability), mobile app (deferred, `MOLMA_NETWORK.md` # mesh).
 **Why Tier 2:** the bell closes the "I missed a transient banner" gap; it does **not** close the "nobody's looking" gap. Until an off-box transport lands, a degraded drive in a pantry goes unseen until someone next opens the dashboard.
 **Prior art:** Synology DSM (push/email/SMS center) is the target shape; TrueNAS pairs an always-on in-UI bell with opt-in transport services — exactly the seam we built. v1 = bell only (Umbrel's level, done well); off-box transports move us toward Synology-lite.
 
@@ -51,13 +51,13 @@ Two-part decision: (a) is v1 English-only? (very probably yes); (b) does the man
 
 `APP_STORE.md` pins the publish *mechanism* (signed catalog, PR-based, CI-validated). What's still open is the **content policy** the maintainer enforces in review: do we reject manifests that set `storage.app_managed_user_content: true`, or only label them with the absence of the `files_first_class` badge? Do we require apps to log to stdout/stderr (no `logging.driver:` overrides, no in-`command:` file redirects) so the dashboard Logs tab works (`LOGGING.md` # Apps are expected to log to stdout)? What other criteria gate inclusion (license, upstream maintenance signals, declared-vs-actual permission audit)?
 
-**Context:** `APP_STORE.md` # v1 catalog is hand-curated by malmo, `APP_MANIFEST.md` # External-storage convention, `STORAGE.md` # Files are first-class, `LOGGING.md`.
+**Context:** `APP_STORE.md` # v1 catalog is hand-curated by molma, `APP_MANIFEST.md` # External-storage convention, `STORAGE.md` # Files are first-class, `LOGGING.md`.
 **Why Tier 2:** the "files are first-class" principle only holds if curation defends it. Decided lazily, the catalog fills with opaque-library apps and the principle erodes. The mechanism is in place; the bar isn't written down.
 **Prior art:** Yunohost's app integration-level (0–9) rating is a useful model for surfacing curation outcomes as a small badge set (e.g. `Files-first-class`, `Backup-aware`, `Multi-instance`, `Stdout-clean`) — a single number is too coarse, but the underlying idea of "show users the integration-quality signal without exposing manifest internals" maps well.
 
 ### Shared folder management UX
 
-Who can add/rename subfolders under `~/Shared/`? How does an admin see what's in there vs. per-user? Does each user get a per-user view filtered to "things I have access to," or a flat view? Group management for `malmo-shared` (kick a user off shared content) — Settings surface.
+Who can add/rename subfolders under `~/Shared/`? How does an admin see what's in there vs. per-user? Does each user get a per-user view filtered to "things I have access to," or a flat view? Group management for `molma-shared` (kick a user off shared content) — Settings surface.
 
 **Context:** `STORAGE.md` # Permissions, `AUTH.md`.
 **Why Tier 2:** the on-disk mechanics are pinned; the dashboard UX isn't. Households without this can still use Shared/ via SMB, but the in-dashboard view needs design before public release.
@@ -101,16 +101,16 @@ App-level and managed-service migration are well-specced (`SERVICE_PROVISIONING.
 **Context:** `UPDATES.md`, `STORAGE.md` (system dataset vs. data drive split makes image-based A/B more feasible), `BUILD.md`.
 **Why Tier 3:** doesn't bite until Debian cuts the next stable (~2027). Pin the commitment now so design choices don't accidentally foreclose A/B.
 
-### `malmoctl` — on-box CLI
+### `molmactl` — on-box CLI
 
-A `malmoctl` for admins on the host: rescue operations, scripting hooks, listing apps, tailing logs, triggering updates. Today the host story is "SSH in and... do what?" — there are no commands beyond raw Docker. Either we ship one CLI that wraps the brain↔host-agent surface, or we declare that there is none and SSH is bash + journalctl + docker.
+A `molmactl` for admins on the host: rescue operations, scripting hooks, listing apps, tailing logs, triggering updates. Today the host story is "SSH in and... do what?" — there are no commands beyond raw Docker. Either we ship one CLI that wraps the brain↔host-agent surface, or we declare that there is none and SSH is bash + journalctl + docker.
 
 **Context:** `AUTH.md` (SSH as rescue), `BRAIN_HOST_PROTOCOL.md`, `CONTROL_PLANE.md`.
 **Why Tier 3:** tinkerers will ask for it on day one; nothing on the v1 critical path depends on it.
 
 ### API tokens vs. cookie-only auth
 
-Third-party stores, external tooling, and (later) `malmoctl` need non-interactive auth. `AUTH.md` ships cookie-only in v1. Open: do we add long-lived API tokens (user-scoped, listable, revocable in Settings), or push everything through a service-account model? Affects `BRAIN_UI_PROTOCOL.md` (header vs. cookie auth path) and the rate-limit posture (Tier 2).
+Third-party stores, external tooling, and (later) `molmactl` need non-interactive auth. `AUTH.md` ships cookie-only in v1. Open: do we add long-lived API tokens (user-scoped, listable, revocable in Settings), or push everything through a service-account model? Affects `BRAIN_UI_PROTOCOL.md` (header vs. cookie auth path) and the rate-limit posture (Tier 2).
 
 **Context:** `AUTH.md`, `BRAIN_UI_PROTOCOL.md`, `APP_STORE.md` (third-party stores).
 **Why Tier 3:** v1 ships without it; pin the shape before the first third-party integrator forces an ad-hoc answer.
@@ -124,9 +124,9 @@ A user granted Immich access to `~/Photos/`. Six months later they want to revok
 
 ### Hostname / box-name rename
 
-Can the user change the box's display name after first-run? Cascades into mDNS hostname (`malmo.local` → `kitchen.local`?), Let's Encrypt cert SANs on the `MALMO_NETWORK` side, audit log historical naming, SMB advertisement. Easy to forbid; easy to allow with caveats; expensive to retrofit if we wire the name into too many places. Also the forced-rename path: when Avahi conflict-resolves us to `malmo-2.local` (`HEALTH.md` `hostname-conflict`), how aggressively does the dashboard prompt for a real fix vs. let the user ride it out?
+Can the user change the box's display name after first-run? Cascades into mDNS hostname (`molma.local` → `kitchen.local`?), Let's Encrypt cert SANs on the `MOLMA_NETWORK` side, audit log historical naming, SMB advertisement. Easy to forbid; easy to allow with caveats; expensive to retrofit if we wire the name into too many places. Also the forced-rename path: when Avahi conflict-resolves us to `molma-2.local` (`HEALTH.md` `hostname-conflict`), how aggressively does the dashboard prompt for a real fix vs. let the user ride it out?
 
-**Context:** `FIRST_RUN.md`, `MALMO_NETWORK.md`, `STORAGE.md` (Samba), `LOGGING.md`, `DISCOVERY.md`, `HEALTH.md`.
+**Context:** `FIRST_RUN.md`, `MOLMA_NETWORK.md`, `STORAGE.md` (Samba), `LOGGING.md`, `DISCOVERY.md`, `HEALTH.md`.
 **Why Tier 3:** not a v1 feature; pin the architectural separation between "box-id" (stable) and "display name" (mutable) before too much code depends on conflating them.
 
 ### Per-app Bonjour service records (`_http._tcp`)
@@ -138,14 +138,14 @@ Can the user change the box's display name after first-run? Cascades into mDNS h
 
 ### URL-scheme unification
 
-Two URL schemes, two access models in users' heads: `.local` HTTP on the LAN, `<box-id>.malmo.network` HTTPS via the toggle. The current model accepts the cognitive cost because the alternatives (always cloud, always `.local`, private CA + cert install on every device) each impose worse failure modes. Worth revisiting once we have real first-run analytics: how many users flip the toggle, how many are confused by the scheme switch, do Android households self-select toward enrolled boxes.
+Two URL schemes, two access models in users' heads: `.local` HTTP on the LAN, `<box-id>.molma.network` HTTPS via the toggle. The current model accepts the cognitive cost because the alternatives (always cloud, always `.local`, private CA + cert install on every device) each impose worse failure modes. Worth revisiting once we have real first-run analytics: how many users flip the toggle, how many are confused by the scheme switch, do Android households self-select toward enrolled boxes.
 
-**Context:** `MALMO_NETWORK.md`, `DISCOVERY.md`, `FIRST_RUN.md`.
+**Context:** `MOLMA_NETWORK.md`, `DISCOVERY.md`, `FIRST_RUN.md`.
 **Why Tier 3:** unification is a v2 question — needs operational data we don't have yet.
 
 ### Documentation surface
 
-Where do user docs and app-author docs live? In-product help drawer, `docs.malmo.network` (separate Mkdocs/Astro site), `README` files in the catalog repo, all of the above? Yunohost has extensive in-product help; Umbrel docs live on a separate site; TrueNAS has both. Affects the dashboard codebase (`WEB_UI.md`) and the catalog repo layout (`APP_STORE.md`).
+Where do user docs and app-author docs live? In-product help drawer, `docs.molma.network` (separate Mkdocs/Astro site), `README` files in the catalog repo, all of the above? Yunohost has extensive in-product help; Umbrel docs live on a separate site; TrueNAS has both. Affects the dashboard codebase (`WEB_UI.md`) and the catalog repo layout (`APP_STORE.md`).
 
 **Context:** `WEB_UI.md`, `APP_STORE.md`, `SPEC.md`.
 **Why Tier 3:** can ship v1 with a thin docs site and add in-product help later, but the *split* between the two needs deciding before either is written at scale.
@@ -165,10 +165,10 @@ Slug is stable; the rename mechanic is straightforward but "who is `cindy` if sh
 
 ### App-facing background-job service (Tier-1)
 
-A managed queue + worker that apps can fire background work into (overnight re-encoding, ML indexing, etc.). Apps declare `services.jobs: { type: malmo-jobs }` in the manifest; brain provisions credentials + queue URL. Probable implementation: Redis Streams or NATS JetStream as the queue, a malmo-managed worker pool runs jobs during a configured idle window.
+A managed queue + worker that apps can fire background work into (overnight re-encoding, ML indexing, etc.). Apps declare `services.jobs: { type: molma-jobs }` in the manifest; brain provisions credentials + queue URL. Probable implementation: Redis Streams or NATS JetStream as the queue, a molma-managed worker pool runs jobs during a configured idle window.
 
 **Context:** `SERVICE_PROVISIONING.md` (Tier-1 catalog — would extend it), `APP_MANIFEST.md` (`services:` block).
-**Why Tier 3:** completely separate from brain↔host-agent jobs (which are OS-level). This is an app-platform feature; the bet is that "apps can offload async work to malmo" is a real differentiator vs. Umbrel/CasaOS. Pin the shape now so we don't accidentally make decisions in `SERVICE_PROVISIONING.md` that close it off; full design post-MVP.
+**Why Tier 3:** completely separate from brain↔host-agent jobs (which are OS-level). This is an app-platform feature; the bet is that "apps can offload async work to molma" is a real differentiator vs. Umbrel/CasaOS. Pin the shape now so we don't accidentally make decisions in `SERVICE_PROVISIONING.md` that close it off; full design post-MVP.
 
 ### Web terminal in the dashboard
 
@@ -188,9 +188,9 @@ Decided in principle: when hooks return, they're **one-shot container images**, 
 
 ### Cert-expired UX
 
-When a box has been offline long enough that `.malmo.network` certs expired: serve the expired cert with browser warning, transparently redirect to `.local`, or surface a banner in the dashboard. `DISCOVERY.md` makes the `.local` fallback well-defined (per-app records keep working without cloud reachability), so "redirect to `.local` + banner" is the leading option for desktop households — but it doesn't work for Android households, where `.local` URLs are unreachable. The open question is whether to special-case that audience (e.g., a static "your cert expired, plug in for an hour" page served on the LAN IP).
+When a box has been offline long enough that `.molma.network` certs expired: serve the expired cert with browser warning, transparently redirect to `.local`, or surface a banner in the dashboard. `DISCOVERY.md` makes the `.local` fallback well-defined (per-app records keep working without cloud reachability), so "redirect to `.local` + banner" is the leading option for desktop households — but it doesn't work for Android households, where `.local` URLs are unreachable. The open question is whether to special-case that audience (e.g., a static "your cert expired, plug in for an hour" page served on the LAN IP).
 
-**Context:** `MALMO_NETWORK.md` ("Failure modes"), `DISCOVERY.md`.
+**Context:** `MOLMA_NETWORK.md` ("Failure modes"), `DISCOVERY.md`.
 
 ### Phased rollout / cohort + beta channel activation
 
@@ -227,16 +227,16 @@ The architecture and the install/wizard/add-drive/eject mechanics are locked (`S
 
 ### Recovery dashboard spec (`RECOVERY.md`)
 
-`malmo-recovery.target` shrunk to two triggers in `DECISIONS.md` 2026-05-16: **TPM2 unseal failure on the root drive** (LUKS recovery passphrase at console — needs a printed-on-the-box / wizard-shown story), and **host-agent crashloop past `StartLimitBurst`** (static page on port 80 with one-click "roll back host-agent"). The page's actual content + UX, the rollback mechanism, and the mDNS discoverability story (`malmo-recovery.local`) are not specced. Most failure modes that the old strict-gate model routed here now flow through degraded mode (`HEALTH.md`) — recovery is now an honestly small surface.
+`molma-recovery.target` shrunk to two triggers in `DECISIONS.md` 2026-05-16: **TPM2 unseal failure on the root drive** (LUKS recovery passphrase at console — needs a printed-on-the-box / wizard-shown story), and **host-agent crashloop past `StartLimitBurst`** (static page on port 80 with one-click "roll back host-agent"). The page's actual content + UX, the rollback mechanism, and the mDNS discoverability story (`molma-recovery.local`) are not specced. Most failure modes that the old strict-gate model routed here now flow through degraded mode (`HEALTH.md`) — recovery is now an honestly small surface.
 
 **Context:** `BOOT.md` # Failure → recovery target — the narrow cases, `HEALTH.md` (the rest of what used to live here), `STORAGE.md` # Encryption posture, `AUTH.md` (recovery code vs. LUKS recovery passphrase distinction).
 **Why Tier 3:** doesn't block v1 happy-path development; bites the moment a user hits one of the two genuinely-unrecoverable-from-UI cases. Pin the shape before public release.
 
 ### Threat-model re-pass when the mesh ships
 
-`THREAT_MODEL.md` is scoped to v1 closed-by-default and explicitly names the trigger for a re-pass: remote access via the mesh (`MALMO_NETWORK.md` # Deferred) reshapes boundary **B1** (off-LAN reachability), introduces a new principal (a paired-but-non-household device — "grandma sees Photos"), and narrows "closed-by-default" to "closed except to identity-paired devices." When the mesh is picked up, the threat model gets a dedicated boundary pass + `DECISIONS.md` entries.
+`THREAT_MODEL.md` is scoped to v1 closed-by-default and explicitly names the trigger for a re-pass: remote access via the mesh (`MOLMA_NETWORK.md` # Deferred) reshapes boundary **B1** (off-LAN reachability), introduces a new principal (a paired-but-non-household device — "grandma sees Photos"), and narrows "closed-by-default" to "closed except to identity-paired devices." When the mesh is picked up, the threat model gets a dedicated boundary pass + `DECISIONS.md` entries.
 
-**Context:** `THREAT_MODEL.md` # When this model changes, `MALMO_NETWORK.md` # Deferred: remote access via mesh.
+**Context:** `THREAT_MODEL.md` # When this model changes, `MOLMA_NETWORK.md` # Deferred: remote access via mesh.
 **Why Tier 3:** rides the mesh work, which is itself deferred. Pinned here so the "living document" claim isn't hollow.
 
 ### fscrypt rollout plan
@@ -247,7 +247,7 @@ Per-user encryption is deferred but on the roadmap. Key-loading model (Model A v
 
 ### Caddy liveness self-heal (gated on brain-owned Caddy container lifecycle)
 
-The `service-down`(caddy) detector (`HEALTH.md` # Detector catalog, locus C) can't be a passive banner — Caddy fronts `malmo.local`, so when it's down there's no dashboard to show the banner. The decided shape (`DECISIONS.md` 2026-05-31) is **bounded self-heal**: the brain restarts the Caddy container on failure, capped like host-agent's `StartLimitBurst` (≈5/60s), raising the issue only when the budget is exhausted. The blocker is that **the brain does not yet own Caddy's container lifecycle** — it manages Caddy's *routes* (`EnsureServer`/`EnsureCatchAll`, `internal/lifecycle`) but never starts/stops/restarts the Caddy *container*; in prod "brain-managed Caddy" is intent, not implementation (`dev/docker-compose.yml` runs it standalone). The real prerequisite is a brain-owned Caddy container lifecycle (start/stop/restart via the socket-proxy), which is partly host-integrated and needs the VM outer loop. Once that lands, the self-heal detector is a thin layer on top (probe = Docker container-state + admin-API reachability; restart-budget; raise-on-exhaustion; reuse `internal/caddy.Client`).
+The `service-down`(caddy) detector (`HEALTH.md` # Detector catalog, locus C) can't be a passive banner — Caddy fronts `molma.local`, so when it's down there's no dashboard to show the banner. The decided shape (`DECISIONS.md` 2026-05-31) is **bounded self-heal**: the brain restarts the Caddy container on failure, capped like host-agent's `StartLimitBurst` (≈5/60s), raising the issue only when the budget is exhausted. The blocker is that **the brain does not yet own Caddy's container lifecycle** — it manages Caddy's *routes* (`EnsureServer`/`EnsureCatchAll`, `internal/lifecycle`) but never starts/stops/restarts the Caddy *container*; in prod "brain-managed Caddy" is intent, not implementation (`dev/docker-compose.yml` runs it standalone). The real prerequisite is a brain-owned Caddy container lifecycle (start/stop/restart via the socket-proxy), which is partly host-integrated and needs the VM outer loop. Once that lands, the self-heal detector is a thin layer on top (probe = Docker container-state + admin-API reachability; restart-budget; raise-on-exhaustion; reuse `internal/caddy.Client`).
 
 **Context:** `HEALTH.md` # Detector catalog (locus-C Caddy row), `CONTROL_PLANE.md` # Locked: Caddy runs as a container, `DECISIONS.md` 2026-05-31.
 **Why Tier 3:** doesn't block v1 happy-path; a fully-down Caddy is already visibly broken (dashboard unreachable). Pin the self-heal shape now (done); build it after the brain owns Caddy's container lifecycle.
@@ -259,7 +259,7 @@ The `service-down`(caddy) detector (`HEALTH.md` # Detector catalog, locus C) can
 Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 
 **Manifests & catalog**
-- Exact `MALMO_SERVICE_*` variable schema per service type — `APP_MANIFEST.md`, `SERVICE_PROVISIONING.md`.
+- Exact `MOLMA_SERVICE_*` variable schema per service type — `APP_MANIFEST.md`, `SERVICE_PROVISIONING.md`.
 - `permissions.devices` syntax — paths vs. categories (`webcam`, etc.). `APP_MANIFEST.md`. *(GPU split out into its own `gpu: true` field — `DECISIONS.md` 2026-05-30; this item now covers only non-GPU device shorthand.)*
 - **Store `permissions.capabilities` escape hatch (deferred).** A reviewed-at-submission list (`NET_ADMIN`, `SYS_TIME`) for the rare store app that legitimately needs one capability. Cut from the v1 schema (`DECISIONS.md` 2026-05-30 — store apps get `cap_drop: [ALL]`, no `cap_add`); capability needs go through Door-2 / Tier 2 today. Revisit if a curated app genuinely can't fit either path. `APP_MANIFEST.md`, `APP_ISOLATION.md`.
 - **Door-2 asymmetric admission relaxation (deferred).** v1 holds the line — admission is door-symmetric, Door-2 carries permissive *defaults* but the identical *sandbox* (`DECISIONS.md` 2026-06-02). If real demand appears, revisit relaxing the *app-bounded* primitives for Door-2 (host ports, arbitrary bind mounts minus the socket/host-root paths) while keeping the host-rooting ones (`privileged`, socket, host namespaces, near-root caps) refused — pairs with the deferred reviewed `permissions.capabilities` allowlist. `APP_ISOLATION.md` # Trust tiers, `APP_LIFECYCLE.md` # admission policy.
@@ -279,30 +279,30 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Container vulnerability scanning at catalog publish (Trivy/Grype in CI on every PR). `APP_STORE.md`.
 
 **Networking & cloud**
-- `box-id` allocation scheme — word-pair vs. random hex + check digit. `MALMO_NETWORK.md`.
-- DNS provider for the apex — Cloudflare free tier vs. self-hosted PowerDNS. `MALMO_NETWORK.md`.
-- ACME DNS-01 plugin path — Caddy generic vs. malmo-specific plugin. `MALMO_NETWORK.md`.
-- Privacy doc surface — what we log (DNS queries, enrollment metadata) and retention. `MALMO_NETWORK.md`.
+- `box-id` allocation scheme — word-pair vs. random hex + check digit. `MOLMA_NETWORK.md`.
+- DNS provider for the apex — Cloudflare free tier vs. self-hosted PowerDNS. `MOLMA_NETWORK.md`.
+- ACME DNS-01 plugin path — Caddy generic vs. molma-specific plugin. `MOLMA_NETWORK.md`.
+- Privacy doc surface — what we log (DNS queries, enrollment metadata) and retention. `MOLMA_NETWORK.md`.
 - **Multicast / discovery diagnostic-bundle probe — exact shape.** `LOGGING.md` and `DISCOVERY.md` commit to including a multicast self-test in the diagnostic bundle; the precise measurements (which queries we send, on which interfaces, how we present "responses: 0" to a support tech) need a pass. `LOGGING.md`, `DISCOVERY.md`.
-- **Windows Bonjour detection in first-run.** `FIRST_RUN.md` points Windows users at the Bonjour installer; the trigger today is User-Agent, which is unreliable. Consider a JS-side mDNS probe (does the browser actually resolve `malmo.local` *from this client*?) so the prompt only fires on clients that need it. `FIRST_RUN.md`, `DISCOVERY.md`.
-- Custom domain on the LAN — user owns `home.example.com` and wants the dashboard there. Caddy + ACME DNS-01 with their provider, or accept-cert-warning. `MALMO_NETWORK.md`.
-- Local DNS resolver shape — host runs dnsmasq (container resolution + free Pi-hole-shape ad-blocking as a side effect) vs. pure systemd-resolved. `APP_ISOLATION.md`, `MALMO_NETWORK.md`.
-- UPnP / port-forwarding stance — closed-by-default implies "no"; state it explicitly so a future "convenience" PR doesn't sleepwalk into it. `MALMO_NETWORK.md`, `SPEC.md`.
-- `status.malmo.network` outage-comms surface — boxes show a banner from a cached status JSON when cloud is down. `MALMO_NETWORK.md`.
-- Anti-clone check at enrollment — two boxes with the same `box-id` (cloned ISO) must not both enroll. `MALMO_NETWORK.md`.
+- **Windows Bonjour detection in first-run.** `FIRST_RUN.md` points Windows users at the Bonjour installer; the trigger today is User-Agent, which is unreliable. Consider a JS-side mDNS probe (does the browser actually resolve `molma.local` *from this client*?) so the prompt only fires on clients that need it. `FIRST_RUN.md`, `DISCOVERY.md`.
+- Custom domain on the LAN — user owns `home.example.com` and wants the dashboard there. Caddy + ACME DNS-01 with their provider, or accept-cert-warning. `MOLMA_NETWORK.md`.
+- Local DNS resolver shape — host runs dnsmasq (container resolution + free Pi-hole-shape ad-blocking as a side effect) vs. pure systemd-resolved. `APP_ISOLATION.md`, `MOLMA_NETWORK.md`.
+- UPnP / port-forwarding stance — closed-by-default implies "no"; state it explicitly so a future "convenience" PR doesn't sleepwalk into it. `MOLMA_NETWORK.md`, `SPEC.md`.
+- `status.molma.network` outage-comms surface — boxes show a banner from a cached status JSON when cloud is down. `MOLMA_NETWORK.md`.
+- Anti-clone check at enrollment — two boxes with the same `box-id` (cloned ISO) must not both enroll. `MOLMA_NETWORK.md`.
 - **Live-installer WiFi step.** A WiFi-only laptop has no ethernet, so the live ISO itself needs an SSID-picker before "Install to disk" (or be fully offline-installable). Also: WiFi credentials entered in the installer must survive into the installed system's NetworkManager config, not just the live environment. Driver coverage (Realtek/Broadcom non-free firmware) is the connected build-side concern. `BUILD.md`, `FIRST_RUN.md` # Step 1.
 - **Dashboard Settings → Network panel UX.** The plumbing (NM-backed endpoints) is in `BRAIN_HOST_PROTOCOL.md`; the UX details (saved-networks list, signal/security indicators, switch-network "you may briefly lose this page" confirmation, static-IP form, multi-NIC priority controls) belong to `WEB_UI.md`. `BRAIN_HOST_PROTOCOL.md` # Network endpoints, `WEB_UI.md`.
 
 **Isolation & runtime**
 - **GPU + device capacity enforcement.** `permissions.gpu` and `permissions.devices` are parsed and (for devices) passed through, but the spec's "refuse at capacity check if the GPU/device is absent" (`APP_ISOLATION.md` # GPU, # Devices) is not honored — the brain has no host hardware-capability query, so an absent GPU/device currently fails at `docker compose up` instead of giving the specced capacity error, and `gpu: true` emits no runtime stanza at all. Needs a host capability endpoint (sibling of `/v1/identity/well-known`) the install transaction checks before generating the override. Deferred from the folder-enforcement slice (`docs/progress/install-permissions-enforcement.md`). `APP_ISOLATION.md`, `BRAIN_HOST_PROTOCOL.md`.
-- **Ingress topology vs. "no inter-app traffic."** `APP_ISOLATION.md` # Inter-app traffic and `THREAT_MODEL.md` # B2 commit to **per-app bridges with no inter-app traffic** — the reverse proxy reaches each app over its own network. The implementation instead joins every app's `main_service` to a **shared `malmo-ingress`** network alongside Caddy (`internal/lifecycle`), which lets app main-services reach each other and thus diverges from the stated mitigation. The design (per-app bridge) is already locked; the open sub-question is the *mechanism* to preserve it — Caddy joins each per-app network (matches the spec literally), or the shared ingress stays but inter-app traffic is cut another way (ICC off / nftables on the bridge). Pin which, then converge the impl. The per-app HTTP health-probe (`DECISIONS.md` 2026-06-02) deliberately routes its probe through Caddy partly so it doesn't depend on this resolving. `APP_ISOLATION.md` # Inter-app traffic, `THREAT_MODEL.md` # B2, `CONTROL_PLANE.md`.
+- **Ingress topology vs. "no inter-app traffic."** `APP_ISOLATION.md` # Inter-app traffic and `THREAT_MODEL.md` # B2 commit to **per-app bridges with no inter-app traffic** — the reverse proxy reaches each app over its own network. The implementation instead joins every app's `main_service` to a **shared `molma-ingress`** network alongside Caddy (`internal/lifecycle`), which lets app main-services reach each other and thus diverges from the stated mitigation. The design (per-app bridge) is already locked; the open sub-question is the *mechanism* to preserve it — Caddy joins each per-app network (matches the spec literally), or the shared ingress stays but inter-app traffic is cut another way (ICC off / nftables on the bridge). Pin which, then converge the impl. The per-app HTTP health-probe (`DECISIONS.md` 2026-06-02) deliberately routes its probe through Caddy partly so it doesn't depend on this resolving. `APP_ISOLATION.md` # Inter-app traffic, `THREAT_MODEL.md` # B2, `CONTROL_PLANE.md`.
 - GPU sharing across apps (MIG / time-slice / exclusive). `APP_ISOLATION.md`.
 - macvlan on bonded / bridged host interfaces. `APP_ISOLATION.md`.
 - Read-only root rollout as a catalog requirement. `APP_ISOLATION.md`.
 - Egress allowlist for `internet: true`. `APP_ISOLATION.md`.
 - Per-app firewall rules (apps as L4 endpoints). `APP_ISOLATION.md`.
 - Author-declared default/hint for folder source (e.g. an `allow_shared`-style flag) so a manifest can bias the install-time personal-vs-shared toggle without removing the installer's choice. Resolved-for-now as fully installer-elected (`DECISIONS.md` 2026-05-30); revisit if catalog demand appears. `APP_MANIFEST.md` # `folders`.
-- fscrypt coverage for per-user app state under `/var/lib/malmo/instances/<id>/`. When per-home fscrypt lands, does it extend to managed-service data (per-user Postgres, etc.)? `APP_ISOLATION.md` # Managed services placement, `STORAGE.md` # Future: per-user encryption.
+- fscrypt coverage for per-user app state under `/var/lib/molma/instances/<id>/`. When per-home fscrypt lands, does it extend to managed-service data (per-user Postgres, etc.)? `APP_ISOLATION.md` # Managed services placement, `STORAGE.md` # Future: per-user encryption.
 
 **Storage & first-run**
 - UTF-8 filename normalization (NFC vs. NFD) across SMB clients — macOS uses NFD on the wire, Linux stores bytes verbatim; "files-first-class" makes this user-visible. `STORAGE.md`.
@@ -314,12 +314,12 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Filesystem on extra drives (ext4 vs. accept existing NTFS/exFAT). `STORAGE.md`.
 - OS-drive-only swap with data drive intact. `STORAGE.md`.
 - TPM-less hardware fallback. `FIRST_RUN.md`.
-- First-run on a box with pre-existing malmo data. `FIRST_RUN.md`.
+- First-run on a box with pre-existing molma data. `FIRST_RUN.md`.
 
 **Users & groups**
 - TPM-fail-and-admin-forgot-password rescue path. With `PermitRootLogin no` and no console root password, the LUKS recovery passphrase boots the box but leaves no clear next step. `USERS_AND_GROUPS.md` # Known gaps, `STORAGE.md`.
 - Demotion doesn't kill live `sudo` capability — existing SSH sessions retain group membership until logout. Acceptable for the household trust model; revisit if threat model changes. `USERS_AND_GROUPS.md` # Known gaps.
-- `malmo-shared` membership management UI — how an admin removes a user from household-shared content without deleting the account. Folds into shared-folder management UX (Tier 2). `USERS_AND_GROUPS.md`, `STORAGE.md`.
+- `molma-shared` membership management UI — how an admin removes a user from household-shared content without deleting the account. Folds into shared-folder management UX (Tier 2). `USERS_AND_GROUPS.md`, `STORAGE.md`.
 - Account deletion flow — what happens to `/home/<user>/` and per-user Tier-3 instances when an account is removed. (Audit-row handling is settled: FK `SET NULL` on `audit_events.actor_user_id` keeps history with a null actor.) `USERS_AND_GROUPS.md`, `AUTH.md`.
 - Account suspension — disable login without deleting data (kid grounded, ex-roommate archived). `AUTH.md`, `USERS_AND_GROUPS.md`.
 - Multi-admin invitation flow — UI affordance for "make a second admin." Today implicit (admin creates a member then promotes them). `AUTH.md`, `USERS_AND_GROUPS.md`.
@@ -337,10 +337,10 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Per-container live monitor ("Activity Monitor" view) — sortable table of all containers with live CPU/RAM/net/disk. Host-level live view is specced (top-bar dropdown); per-container live is the deferred surface. Mechanism same as system-resources SSE. `LOCAL_ANALYTICS.md`, `WEB_UI.md`.
 - App-level network bandwidth accounting (per-container veth stats). Useful for "which app is hammering my ISP" but expensive. `LOCAL_ANALYTICS.md`.
 - Storage growth attribution — what *kind* of data grew ("Photos +50 GB this month, mostly RAW files"). Compound on top of the per-app storage trend already specced. `LOCAL_ANALYTICS.md`, `STORAGE.md`.
-- "What's eating my disk" explorer — top-N folders/apps under `/srv/malmo`. Folds into Settings → Storage UX (Tier 3). `STORAGE.md`, `WEB_UI.md`.
+- "What's eating my disk" explorer — top-N folders/apps under `/srv/molma`. Folds into Settings → Storage UX (Tier 3). `STORAGE.md`, `WEB_UI.md`.
 
 **Time**
-- Captive-network NTP fallback — reconsider `time.malmo.network` if user reports surface (networks that block external NTP). `TIME.md`.
+- Captive-network NTP fallback — reconsider `time.molma.network` if user reports surface (networks that block external NTP). `TIME.md`.
 - Per-user display TZ — browser-side `Intl.DateTimeFormat` covers the traveler case in v1; revisit if box-time-regardless requests appear. `TIME.md`.
 - `last-known-time` rollback prevention — persist last-shutdown wall-clock so first-boot-no-network doesn't render 1970 in logs. Polish. `TIME.md`.
 
@@ -351,11 +351,11 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 
 **Backup & migration**
 - On-box / local backup to external USB drive — pre-cloud, v1-shaped: snapshot scheduling, retention, restore UI. Distinct from the off-site architecture entry above. `STORAGE.md`, `APP_LIFECYCLE.md`.
-- Cross-box migration — "I bought a new laptop, move my stuff." Same plumbing as restore-from-backup but a different flow (pair source + destination, switch identity). `STORAGE.md`, `MALMO_NETWORK.md`.
+- Cross-box migration — "I bought a new laptop, move my stuff." Same plumbing as restore-from-backup but a different flow (pair source + destination, switch identity). `STORAGE.md`, `MOLMA_NETWORK.md`.
 - Backup verification / restore-test cadence — untested backups aren't backups. `STORAGE.md`.
 
 **Developer / app-author surface**
-- Local dev/test subcommands beyond lint (`malmo install --local`, etc.) — let authors run a manifest on their own box before a catalog PR. `malmo manifest lint` (schema + sibling-compose validation) shipped in issue #7 and owns the `cmd/malmo` skeleton; this remaining item is the heavier "actually install it locally" surface. `APP_MANIFEST.md`, `APP_STORE.md`.
+- Local dev/test subcommands beyond lint (`molma install --local`, etc.) — let authors run a manifest on their own box before a catalog PR. `molma manifest lint` (schema + sibling-compose validation) shipped in issue #7 and owns the `cmd/molma` skeleton; this remaining item is the heavier "actually install it locally" surface. `APP_MANIFEST.md`, `APP_STORE.md`.
 - Catalog PR template + author-facing docs surface (subset of the Tier-3 "Documentation surface" entry). `APP_STORE.md`.
 - Manifest changelog discipline — when schema v1 → v2 ships, how authors find out. Revisit once we have a `v2` candidate. `APP_MANIFEST.md`.
 
@@ -386,7 +386,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 **Build & distribution**
 - Signing infrastructure for apt repo, registry images, ISO. `BUILD.md`.
 - ISO size budget. `BUILD.md`.
-- Installer shares code with `malmo-brain` vs. clean-sheet. `BUILD.md`.
+- Installer shares code with `molma-brain` vs. clean-sheet. `BUILD.md`.
 - Kiosk-installer failure-mode UX ("stuck at 73%"). `BUILD.md`.
 - Hardware-compatibility list process. `BUILD.md`.
 

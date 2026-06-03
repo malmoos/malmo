@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/malmo/malmo/internal/protocol"
+	"github.com/molmaos/molma/internal/protocol"
 	"golang.org/x/crypto/bcrypt"
 )
 

@@ -12,7 +12,7 @@ initramfs / LUKS / TPM half (and the QEMU+swtpm medium test lane) is
 deliberately deferred — tracked under "What's next" below.
 
 Per the architecture user picked at scope time: **host-agent reads
-`/run/malmo/health/storage.json` and forwards findings to the brain via
+`/run/molma/health/storage.json` and forwards findings to the brain via
 the existing protocol seam.** The brain's container stays isolated from the
 host filesystem.
 
@@ -38,7 +38,7 @@ Three new things compose the seam, end to end:
   "host-agent ran but storage looks bad" and "host-agent unreachable" stay
   cleanly separable.
 - **`internal/hostagent/healthsource`** is the production source for
-  `cmd/host-agent-real`: reads `/run/malmo/health/storage.json`, normalizes
+  `cmd/host-agent-real`: reads `/run/molma/health/storage.json`, normalizes
   the payload (missing file = empty findings, missing JSON field = empty
   slice not nil), and synthesizes a single `health-report-malformed`
   finding on parse error so the brain has *something* to surface rather
@@ -47,22 +47,22 @@ Three new things compose the seam, end to end:
   findings list, used by integration tests to seed specific findings and
   assert the brain raises the matching issue.
 
-### Reporter — `cmd/malmo-storage-verify`
+### Reporter — `cmd/molma-storage-verify`
 
-A small Go binary that runs at boot from `malmo-storage-verify.service`.
+A small Go binary that runs at boot from `molma-storage-verify.service`.
 Checks:
 
-1. Read `/etc/malmo/data-drive.enrolled`. No marker → Level-0 boot, empty
+1. Read `/etc/molma/data-drive.enrolled`. No marker → Level-0 boot, empty
    findings (per `STORAGE.md` # Data drive enrollment marker).
-2. Read `/srv/malmo/.canary`. Missing → `data-drive-missing`. UUID mismatch
+2. Read `/srv/molma/.canary`. Missing → `data-drive-missing`. UUID mismatch
    vs. marker → `data-drive-wrong`.
-3. Read `/var/lib/malmo/.canary`. Missing or differs from `/srv/malmo/.canary`
+3. Read `/var/lib/molma/.canary`. Missing or differs from `/srv/molma/.canary`
    → `canary-mismatch` (bind landed on the wrong filesystem — the
    silent-orphan bug class `STORAGE.md` # Storage canary is built to catch).
 
-Writes the result to `/run/malmo/health/storage.json` atomically (temp file
+Writes the result to `/run/molma/health/storage.json` atomically (temp file
 + rename). **Exits 0 always** — per `BOOT.md` # Failure → recovery target,
-the verifier is a *reporter*, not a gate. `malmo-storage-verify.service`
+the verifier is a *reporter*, not a gate. `molma-storage-verify.service`
 carries no `OnFailure=` routing.
 
 The check logic lives in `internal/storageverify` (cmd is a thin wrapper)
@@ -114,18 +114,18 @@ lands. The SSE `health.issue_raised` / `health.issue_cleared` events are
 
 New directory holding the unit files this slice introduces. Per `BOOT.md`
 # Tier-2 services get drop-ins, the upstream Debian units get drop-ins at
-`/etc/systemd/system/<unit>.service.d/malmo.conf` rather than replacement
+`/etc/systemd/system/<unit>.service.d/molma.conf` rather than replacement
 units.
 
 | File | What it does |
 |---|---|
-| `malmo-storage-ready.target` | Synthetic target, `Wants=malmo-storage-verify.service`. Best-effort milestone. |
-| `malmo-storage-verify.service` | Type=oneshot, `TimeoutStartSec=60s`, no `OnFailure=`. Runs the reporter. No `[Install]` block — the target's hardcoded `Wants=` pulls it in (single source of dependency, no enable-time symlink confusion). |
-| `host-agent.service` | After=storage-ready + docker, `OnFailure=malmo-recovery.target`, `StartLimitBurst=5/60s` per `BOOT.md`. `StartLimit*` live in `[Unit]` (canonical since systemd 229; the `[Service]` aliases behave subtly differently under `systemctl reset-failed`). |
-| `malmo-recovery.target` | Placeholder so `OnFailure=` routing has a target to land on. Recovery UI deferred to `RECOVERY.md`. |
-| `dropins/docker.service.d/malmo.conf` | After/Wants=storage-ready (Wants=, not Requires=). |
-| `dropins/smbd.service.d/malmo.conf` | After/Wants=storage-ready. Blocks-writes reload path is separate. |
-| `dropins/avahi-daemon.service.d/malmo.conf` | After/Wants=storage-ready for ordering only. |
+| `molma-storage-ready.target` | Synthetic target, `Wants=molma-storage-verify.service`. Best-effort milestone. |
+| `molma-storage-verify.service` | Type=oneshot, `TimeoutStartSec=60s`, no `OnFailure=`. Runs the reporter. No `[Install]` block — the target's hardcoded `Wants=` pulls it in (single source of dependency, no enable-time symlink confusion). |
+| `host-agent.service` | After=storage-ready + docker, `OnFailure=molma-recovery.target`, `StartLimitBurst=5/60s` per `BOOT.md`. `StartLimit*` live in `[Unit]` (canonical since systemd 229; the `[Service]` aliases behave subtly differently under `systemctl reset-failed`). |
+| `molma-recovery.target` | Placeholder so `OnFailure=` routing has a target to land on. Recovery UI deferred to `RECOVERY.md`. |
+| `dropins/docker.service.d/molma.conf` | After/Wants=storage-ready (Wants=, not Requires=). |
+| `dropins/smbd.service.d/molma.conf` | After/Wants=storage-ready. Blocks-writes reload path is separate. |
+| `dropins/avahi-daemon.service.d/molma.conf` | After/Wants=storage-ready for ordering only. |
 
 A `dist/systemd/README.md` documents install paths and what's intentionally
 not here yet.
@@ -137,11 +137,11 @@ not here yet.
   the brain converts them into issues. `Wants=`, not `Requires=`, on every
   downstream — a missing data drive does not stop the dashboard.
 - `BOOT.md` # Failure → recovery target — the narrow cases: only
-  `host-agent.service` has `OnFailure=malmo-recovery.target` with the
-  bounded restart policy. `malmo-storage-verify.service` is a pure reporter
+  `host-agent.service` has `OnFailure=molma-recovery.target` with the
+  bounded restart policy. `molma-storage-verify.service` is a pure reporter
   with no `OnFailure=` — matches the rule.
 - `BOOT.md` # The bootstrap marker is written by the brain — not changed
-  here; called out so the next slice (`malmo-prepare-wizard.service`)
+  here; called out so the next slice (`molma-prepare-wizard.service`)
   remembers it.
 - `HEALTH.md` # The health-issue model: in-memory implementation matches
   the JSON shape and severity/tier semantics. `Actions` is deferred until
@@ -159,7 +159,7 @@ not here yet.
   (sync read) endpoint. Always returns 200 with a parseable body —
   documented on the handler.
 - `STORAGE.md` # Storage canary: the reporter implements the content-match
-  check (`/srv/malmo/.canary` vs. marker UUID, bind-mount canary vs.
+  check (`/srv/molma/.canary` vs. marker UUID, bind-mount canary vs.
   data-drive canary). The **device-backing check via `findmnt -no SOURCE`**
   is not implemented — see "Known gaps."
 
@@ -194,11 +194,11 @@ not here yet.
   target activation shape. That is the obvious next slice — see "What's
   next." Today, the units have been hand-validated by reading; that's not
   enough for a slice that ships, but it's what slice #1 commits to.
-- **`malmo-recovery.target` is a placeholder.** It exists so `OnFailure=`
+- **`molma-recovery.target` is a placeholder.** It exists so `OnFailure=`
   has somewhere to land. There is no static page server, no
-  `malmo-recovery.local` mDNS, no rollback button. `RECOVERY.md` is
+  `molma-recovery.local` mDNS, no rollback button. `RECOVERY.md` is
   deferred per `NEXT.md`; documented in `dist/systemd/README.md`.
-- **No tmpfiles.d entry for `/run/malmo/health/`.** The reporter binary
+- **No tmpfiles.d entry for `/run/molma/health/`.** The reporter binary
   `mkdir -p`s the directory on first write. A `tmpfiles.d` entry is the
   cleaner long-term shape.
 - **`StorageHealth.CheckedAt` is an unvalidated passthrough.** The wire
@@ -220,9 +220,9 @@ In recommended order:
 - **nspawn fast-lane tests for the boot chain.** Extend
   `dev/test-nspawn/` (from slice 0018) to load the units in
   `dist/systemd/`, assert dependencies (`systemctl list-dependencies
-  malmo-storage-ready.target` is sane), drop-ins apply
-  (`systemctl cat docker.service | grep malmo-storage-ready`), and the
-  reporter runs and writes `/run/malmo/health/storage.json`. This is
+  molma-storage-ready.target` is sane), drop-ins apply
+  (`systemctl cat docker.service | grep molma-storage-ready`), and the
+  reporter runs and writes `/run/molma/health/storage.json`. This is
   exactly the "service-level integration" bucket `TESTING.md` # Fast lane
   enumerates.
 - **QEMU + swtpm medium-lane scaffolding.** A single happy-path boot in a
@@ -237,9 +237,9 @@ In recommended order:
 - **Device-backing canary check.** `findmnt -no SOURCE`-based check
   matched to the enrolled UUID. Needs a real mount setup (medium lane).
 - **`storage-verify-timeout` synthesis.** Either an `ExecStopPost=` script
-  on `malmo-storage-verify.service`, or a wrapper unit. Decide once the
+  on `molma-storage-verify.service`, or a wrapper unit. Decide once the
   medium lane exists and we can actually trigger the timeout.
-- **`malmo-prepare-wizard.service` oneshot.** The marker-write rule in
+- **`molma-prepare-wizard.service` oneshot.** The marker-write rule in
   `BOOT.md` lands when the first-run slice picks this up.
 - **`Type=notify` + watchdog on `host-agent.service`.**
   `CONTROL_PLANE.md` # host-agent specifies the full hardening; this slice

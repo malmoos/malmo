@@ -25,10 +25,10 @@ Realizes `BRAIN_HOST_PROTOCOL.md` # User info endpoints (new section). The patte
 
 `cmd/host-agent-real/main.go` wires `a.UserMgr = &usermgr.LinuxUserManager{}` — `ResolveHome` is automatically live in the real binary once `LinuxUserManager` implements the interface, which it now does. No main changes needed.
 
-The well-known box constants slice 4 also needs (`malmo_app_uid`/`malmo_app_gid`/`malmo_shared_gid` for household-scope instances) are deferred to slice 4, which can add `GET /v1/identity/well-known` or fold them into an existing summary endpoint. Flagged in slice 4's scope.
+The well-known box constants slice 4 also needs (`molma_app_uid`/`molma_app_gid`/`molma_shared_gid` for household-scope instances) are deferred to slice 4, which can add `GET /v1/identity/well-known` or fold them into an existing summary endpoint. Flagged in slice 4's scope.
 
 ## What's next
 
 - **Slice 3** — `GET /api/v1/catalog/{id}/install-plan`: read-only endpoint that returns permission lines, role-derived scope options, per-folder source options, and pick-subfolder prompts. No host call needed; reads from the parsed manifest.
-- **Slice 4** — `writeOverride` + `writeEnv` enforce permissions: `user:`, folder bind mounts from elected source, `group_add` for shared, devices, GPU, `MALMO_FOLDER_*` injection. Calls `ResolveHome` (this slice). Decide whether `GET /v1/identity/well-known` belongs here or can use hard-coded defaults.
+- **Slice 4** — `writeOverride` + `writeEnv` enforce permissions: `user:`, folder bind mounts from elected source, `group_add` for shared, devices, GPU, `MOLMA_FOLDER_*` injection. Calls `ResolveHome` (this slice). Decide whether `GET /v1/identity/well-known` belongs here or can use hard-coded defaults.
 - **Slice 5** — consent + config UI in `web-ui/src/views/StoreView.vue`.

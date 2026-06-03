@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/malmo/malmo/internal/hostagent"
+	"github.com/molmaos/molma/internal/hostagent"
 )
 
 // LinuxUserManager implements hostagent.UserManager against the local system.
@@ -28,7 +28,7 @@ import (
 //     `unix password sync = yes` configured (see AUTH.md # Samba password
 //     backend).
 //
-// UID assignment: relies on /etc/login.defs (UID_MIN ≥ 3000 on a malmo OS,
+// UID assignment: relies on /etc/login.defs (UID_MIN ≥ 3000 on a molma OS,
 // per FIRST_RUN.md # Identity & display names). Not forced via -u so the
 // system picks the next free UID in range.
 //
@@ -38,7 +38,7 @@ import (
 type LinuxUserManager struct {
 	// Shell is the login shell to assign to new users. Empty → "/bin/bash".
 	Shell string
-	// PrimaryGroup is the primary group for new users. Empty → "malmo".
+	// PrimaryGroup is the primary group for new users. Empty → "molma".
 	// The host is expected to already have this group present (provisioned
 	// by the box build, not by host-agent).
 	PrimaryGroup string
@@ -87,7 +87,7 @@ func (m *LinuxUserManager) useraddArgs(slug string) []string {
 	}
 	gid := m.PrimaryGroup
 	if gid == "" {
-		gid = "malmo"
+		gid = "molma"
 	}
 	return []string{"--create-home", "--shell", shell, "--gid", gid, slug}
 }
@@ -155,7 +155,7 @@ func isInGroup(slug, group string) (bool, error) {
 //
 // Returns false for an empty slug — `strings.Split("", ",")` yields `[""]`,
 // which would otherwise match the empty member field of a group like
-// `malmo:x:3000:` and surprise callers. Upstream guards already reject empty
+// `molma:x:3000:` and surprise callers. Upstream guards already reject empty
 // slugs, but the helper should be safe in isolation.
 func parseGroupMembership(content []byte, slug, group string) bool {
 	if slug == "" {
@@ -197,7 +197,7 @@ func parseGroupMembership(content []byte, slug, group string) bool {
 // A just-deleted user could still appear cached (we'd call userdel again,
 // harmless under -f); a just-created user could appear cached as missing
 // (UpsertPassword would re-run useradd → "already exists"). nscd is not
-// installed on a stock malmo box; if that ever changes, switch to direct
+// installed on a stock molma box; if that ever changes, switch to direct
 // /etc/passwd parsing (same shape as isInGroup).
 func (m *LinuxUserManager) DeleteUser(slug string) error {
 	if slug == "" {
@@ -243,34 +243,34 @@ func (m *LinuxUserManager) ResolveHome(username string) (home string, uid, gid i
 	return u.HomeDir, parsedUID, parsedGID, nil
 }
 
-// WellKnownIdentity implements hostagent.UserManager. Resolves the malmo-app
-// system user (UID/GID) and the malmo-shared group (GID) from the host's
+// WellKnownIdentity implements hostagent.UserManager. Resolves the molma-app
+// system user (UID/GID) and the molma-shared group (GID) from the host's
 // /etc/passwd and /etc/group via os/user. These system accounts are provisioned
 // by the box build, not by host-agent; the lookups here are read-only.
 //
-// NOTE: malmo-app and malmo-shared are not present on the dev box — only the
+// NOTE: molma-app and molma-shared are not present on the dev box — only the
 // fake branch runs in the dev loop. This implementation is correct for prod and
 // must compile cleanly even when the accounts are absent.
 func (m *LinuxUserManager) WellKnownIdentity() (appUID, appGID, sharedGID int, err error) {
-	u, err := user.Lookup("malmo-app")
+	u, err := user.Lookup("molma-app")
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("lookup malmo-app user: %w", err)
+		return 0, 0, 0, fmt.Errorf("lookup molma-app user: %w", err)
 	}
 	parsedUID, err := strconv.Atoi(u.Uid)
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("parse malmo-app uid %q: %w", u.Uid, err)
+		return 0, 0, 0, fmt.Errorf("parse molma-app uid %q: %w", u.Uid, err)
 	}
 	parsedGID, err := strconv.Atoi(u.Gid)
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("parse malmo-app gid %q: %w", u.Gid, err)
+		return 0, 0, 0, fmt.Errorf("parse molma-app gid %q: %w", u.Gid, err)
 	}
-	g, err := user.LookupGroup("malmo-shared")
+	g, err := user.LookupGroup("molma-shared")
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("lookup malmo-shared group: %w", err)
+		return 0, 0, 0, fmt.Errorf("lookup molma-shared group: %w", err)
 	}
 	parsedSharedGID, err := strconv.Atoi(g.Gid)
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("parse malmo-shared gid %q: %w", g.Gid, err)
+		return 0, 0, 0, fmt.Errorf("parse molma-shared gid %q: %w", g.Gid, err)
 	}
 	return parsedUID, parsedGID, parsedSharedGID, nil
 }

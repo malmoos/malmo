@@ -1,11 +1,11 @@
-// Command malmo-storage-verify is the boot-time storage reporter
+// Command molma-storage-verify is the boot-time storage reporter
 // (BOOT.md # The storage-ready target). It checks the enrollment marker, the
 // canary file on the data drive, and the canary visible through the
-// /var/lib/malmo bind mount, and writes its findings to
-// /run/malmo/health/storage.json.
+// /var/lib/molma bind mount, and writes its findings to
+// /run/molma/health/storage.json.
 //
 // **It is a reporter, not a gate.** Every exit is 0, even when findings are
-// raised — `malmo-storage-verify.service` carries no OnFailure routing and
+// raised — `molma-storage-verify.service` carries no OnFailure routing and
 // must never trip the systemd-level recovery target. Findings become typed
 // health issues the brain raises in degraded mode (HEALTH.md # Storage).
 package main
@@ -19,22 +19,22 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/malmo/malmo/internal/protocol"
-	"github.com/malmo/malmo/internal/storageverify"
+	"github.com/molmaos/molma/internal/protocol"
+	"github.com/molmaos/molma/internal/storageverify"
 )
 
 func main() {
-	root := os.Getenv("MALMO_VERIFY_ROOT") // tests inject a tempdir; prod = ""
-	outPath := os.Getenv("MALMO_VERIFY_OUT")
+	root := os.Getenv("MOLMA_VERIFY_ROOT") // tests inject a tempdir; prod = ""
+	outPath := os.Getenv("MOLMA_VERIFY_OUT")
 	if outPath == "" {
-		outPath = "/run/malmo/health/storage.json"
+		outPath = "/run/molma/health/storage.json"
 	}
 
 	findings := storageverify.Check(storageverify.Config{
 		Root:                root,
-		MarkerPath:          "/etc/malmo/data-drive.enrolled",
-		DataDriveCanaryPath: "/srv/malmo/.canary",
-		BindMountCanaryPath: "/var/lib/malmo/.canary",
+		MarkerPath:          "/etc/molma/data-drive.enrolled",
+		DataDriveCanaryPath: "/srv/molma/.canary",
+		BindMountCanaryPath: "/var/lib/molma/.canary",
 	})
 
 	payload := protocol.StorageHealth{

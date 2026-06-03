@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/malmo/malmo/internal/store"
+	"github.com/molmaos/molma/internal/store"
 )
 
 // fixture spins up a real SQLite store with one seeded admin user. Tests use

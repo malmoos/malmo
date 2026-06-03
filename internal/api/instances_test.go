@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/malmo/malmo/internal/auth"
-	"github.com/malmo/malmo/internal/store"
+	"github.com/molmaos/molma/internal/auth"
+	"github.com/molmaos/molma/internal/store"
 )
 
 // seedInstance writes an instance row directly, bypassing the install

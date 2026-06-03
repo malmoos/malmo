@@ -4,7 +4,7 @@
 // useradd+chpasswd for set-password (POST /v1/auth/set-password), gpasswd
 // for set-role (POST /v1/auth/set-role), userdel -r -f for delete-user
 // (POST /v1/auth/delete-user), and serves GET /v1/health/system from
-// /run/malmo/health/storage.json (storage category) plus `systemctl is-active`
+// /run/molma/health/storage.json (storage category) plus `systemctl is-active`
 // over the core-unit allowlist (services category, service-down). All host ops
 // now hit the real system.
 //
@@ -12,7 +12,7 @@
 //   - Linux only
 //   - CGO enabled (for PAM)
 //   - libpam0g-dev installed (apt install libpam0g-dev)
-//   - /etc/pam.d/malmo present (copy dev/pam/malmo)
+//   - /etc/pam.d/molma present (copy dev/pam/molma)
 //   - avahi-daemon running with the system DBus accessible
 //   - Must run as root (pam_unix.so requires privilege)
 //
@@ -26,19 +26,19 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/malmo/malmo/internal/hostagent"
-	"github.com/malmo/malmo/internal/hostagent/avahipublisher"
-	"github.com/malmo/malmo/internal/hostagent/healthsource"
-	"github.com/malmo/malmo/internal/hostagent/pamverifier"
-	"github.com/malmo/malmo/internal/hostagent/servicehealth"
-	"github.com/malmo/malmo/internal/hostagent/usermgr"
-	"github.com/malmo/malmo/internal/protocol"
+	"github.com/molmaos/molma/internal/hostagent"
+	"github.com/molmaos/molma/internal/hostagent/avahipublisher"
+	"github.com/molmaos/molma/internal/hostagent/healthsource"
+	"github.com/molmaos/molma/internal/hostagent/pamverifier"
+	"github.com/molmaos/molma/internal/hostagent/servicehealth"
+	"github.com/molmaos/molma/internal/hostagent/usermgr"
+	"github.com/molmaos/molma/internal/protocol"
 )
 
 func main() {
 	pub := &avahipublisher.DBusPublisher{HostSuffix: protocol.AppHostSuffix}
 
-	sockPath := os.Getenv("MALMO_AGENT_SOCK")
+	sockPath := os.Getenv("MOLMA_AGENT_SOCK")
 	if sockPath == "" {
 		sockPath = protocol.SocketPath
 	}
@@ -54,7 +54,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer ln.Close()
-	// 0660 root:malmo — brain's container UID is in the malmo group.
+	// 0660 root:molma — brain's container UID is in the molma group.
 	_ = os.Chmod(sockPath, 0o660)
 
 	// verifyPassword uses real PAM; Avahi A records are published via DBus;
@@ -62,7 +62,7 @@ func main() {
 	// flips sudo group membership via gpasswd; delete-user shells out to
 	// userdel -r -f (see docs/progress/0017-host-agent-delete-user.md).
 	a := hostagent.New(
-		&pamverifier.PAMVerifier{Service: "malmo"},
+		&pamverifier.PAMVerifier{Service: "molma"},
 		pub,
 	)
 	a.UserMgr = &usermgr.LinuxUserManager{}

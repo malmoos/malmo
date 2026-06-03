@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/malmo/malmo/internal/protocol"
+	"github.com/molmaos/molma/internal/protocol"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -40,11 +40,11 @@ type Publisher interface {
 }
 
 // HealthSource is a consumer-side interface for reading the latest storage
-// findings written by malmo-storage-verify (BOOT.md # The storage-ready
+// findings written by molma-storage-verify (BOOT.md # The storage-ready
 // target). It backs the storage category of GET /v1/health/system. Provider
 // packages return concrete types: FakeHealthSource for the fake binary,
 // healthsource.FilesystemHealthSource (which reads
-// /run/malmo/health/storage.json) for cmd/host-agent-real.
+// /run/molma/health/storage.json) for cmd/host-agent-real.
 //
 // Read must always return a usable StorageHealth — missing report = empty
 // findings, malformed report = a single "health-report-malformed" finding.
@@ -77,7 +77,7 @@ type ServiceReporter interface {
 // (admin → in `sudo`, member → not in `sudo`); idempotent. ResolveHome returns
 // the user's home directory path and POSIX UID/GID; returns ErrUnknownUser when
 // the user does not exist. WellKnownIdentity returns the fixed service-account
-// UIDs/GIDs for malmo-app and malmo-shared. See BRAIN_HOST_PROTOCOL.md # User
+// UIDs/GIDs for molma-app and molma-shared. See BRAIN_HOST_PROTOCOL.md # User
 // info endpoints and USERS_AND_GROUPS.md # Roles.
 type UserManager interface {
 	UpsertPassword(user, password string) error
@@ -218,7 +218,7 @@ func (a *Agent) discoveryState(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 	writeJSON(w, http.StatusOK, protocol.DiscoveryState{
 		Publisher:  "avahi-fake",
-		HostName:   "malmo",
+		HostName:   "molma",
 		RenamedTo:  nil,
 		Published:  names,
 		Interfaces: []string{"eth0"},
@@ -227,7 +227,7 @@ func (a *Agent) discoveryState(w http.ResponseWriter, r *http.Request) {
 
 func (a *Agent) systemStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, protocol.SystemStatus{
-		Hostname:     "malmo-dev",
+		Hostname:     "molma-dev",
 		UptimeS:      int64(time.Since(a.startedAt).Seconds()),
 		DiskPressure: false,
 		AgentVersion: AgentVersion,
@@ -486,7 +486,7 @@ func (a *Agent) resolveHome(w http.ResponseWriter, r *http.Request) {
 }
 
 // wellKnownIdentity returns the fixed service-account UIDs/GIDs for the
-// malmo-app system user and the malmo-shared group.
+// molma-app system user and the molma-shared group.
 //
 // When UserMgr is wired (cmd/host-agent-real), delegates to WellKnownIdentity
 // which resolves the real system user/group via os/user.Lookup. When nil
@@ -501,9 +501,9 @@ func (a *Agent) wellKnownIdentity(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, protocol.WellKnownIdentityResponse{
-			MalmoAppUID:    appUID,
-			MalmoAppGID:    appGID,
-			MalmoSharedGID: sharedGID,
+			MolmaAppUID:    appUID,
+			MolmaAppGID:    appGID,
+			MolmaSharedGID: sharedGID,
 		})
 		return
 	}
@@ -512,9 +512,9 @@ func (a *Agent) wellKnownIdentity(w http.ResponseWriter, r *http.Request) {
 	// 2000/2001 sit below the per-user FNV hash range [3000, 3999] so service
 	// identities don't collide with hashed user UIDs in the fake host-agent.
 	writeJSON(w, http.StatusOK, protocol.WellKnownIdentityResponse{
-		MalmoAppUID:    2000,
-		MalmoAppGID:    2000,
-		MalmoSharedGID: 2001,
+		MolmaAppUID:    2000,
+		MolmaAppGID:    2000,
+		MolmaSharedGID: 2001,
 	})
 }
 

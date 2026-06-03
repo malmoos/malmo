@@ -9,9 +9,9 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/malmo/malmo/internal/audit"
-	"github.com/malmo/malmo/internal/auth"
-	"github.com/malmo/malmo/internal/store"
+	"github.com/molmaos/molma/internal/audit"
+	"github.com/molmaos/molma/internal/auth"
+	"github.com/molmaos/molma/internal/store"
 )
 
 func (s *Server) registerMeRoutes(api huma.API) {

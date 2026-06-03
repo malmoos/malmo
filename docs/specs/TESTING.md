@@ -1,12 +1,12 @@
-# malmo Testing
+# molma Testing
 
-> Working spec for malmo's test infrastructure — what runs in CI, at which speed lane, and what each lane catches. Companion to `BOOT.md` (the system-under-test for the bulk of these tests), `BUILD.md` (the image pipeline that feeds them).
+> Working spec for molma's test infrastructure — what runs in CI, at which speed lane, and what each lane catches. Companion to `BOOT.md` (the system-under-test for the bulk of these tests), `BUILD.md` (the image pipeline that feeds them).
 
 ## Stance
 
-malmo's correctness story isn't unit tests in isolation. Most of what we get wrong is **boot ordering, mount race conditions, TPM behavior, and failure modes that only surface during real boots.** The test strategy is built around that reality.
+molma's correctness story isn't unit tests in isolation. Most of what we get wrong is **boot ordering, mount race conditions, TPM behavior, and failure modes that only surface during real boots.** The test strategy is built around that reality.
 
-Three lanes, fastest to slowest. Each catches a different class of bug. Together they convert "boot ordering is hard to test" into "boot ordering is among the most-tested parts of malmo."
+Three lanes, fastest to slowest. Each catches a different class of bug. Together they convert "boot ordering is hard to test" into "boot ordering is among the most-tested parts of molma."
 
 ## Fast lane — `systemd-nspawn` (per-PR, ~1 minute)
 
@@ -24,9 +24,9 @@ Runs systemd userspace in a Linux namespace. No initramfs, no kernel boot, no TP
 - Real kernel + driver behavior
 - Hardware-level race conditions
 
-Implementation: a `nspawn` test harness that mounts a built malmo rootfs, boots it with synthetic disks (loopback files), and runs assertion scripts inside. Each test is a separate nspawn instance, run in parallel where possible.
+Implementation: a `nspawn` test harness that mounts a built molma rootfs, boots it with synthetic disks (loopback files), and runs assertion scripts inside. Each test is a separate nspawn instance, run in parallel where possible.
 
-**PAM verify coverage:** real `verifyPassword` test coverage (via `PAMVerifier` in `host-agent-real`) requires `/etc/pam.d/malmo` installed in the nspawn rootfs plus a provisioned test user (`useradd malmo-pamtest && chpasswd`). The `pam_linux_test.go` skeleton (`-tags pamtest`) is the entry point; it lands with this lane's full build-out, not earlier.
+**PAM verify coverage:** real `verifyPassword` test coverage (via `PAMVerifier` in `host-agent-real`) requires `/etc/pam.d/molma` installed in the nspawn rootfs plus a provisioned test user (`useradd molma-pamtest && chpasswd`). The `pam_linux_test.go` skeleton (`-tags pamtest`) is the entry point; it lands with this lane's full build-out, not earlier.
 
 ## Medium lane — QEMU + swtpm (per-PR or per-merge, ~10 minutes)
 
@@ -45,15 +45,15 @@ Full VM boot with a software TPM (`swtpm`). Mature stack — `systemd`'s own CI 
 | Test | Setup | Assertion |
 |---|---|---|
 | Happy-path boot | Two virtio disks (OS + data), enrolled vTPM | Boot completes; dashboard reachable; canary file matches |
-| No data drive | OS drive only, no enrollment marker | Level-0 boot; malmo userspace starts on OS-drive paths |
+| No data drive | OS drive only, no enrollment marker | Level-0 boot; molma userspace starts on OS-drive paths |
 | Data drive missing (enrolled, absent) | OS drive + marker, no data disk attached | Recovery mode reached; `smbd` not serving; `host-agent` not started |
 | Data drive detached mid-write | Boot, write file, `device_del` data drive | host-agent stops; no writes to OS-drive `/home` |
-| Canary mismatch | Tamper with `/srv/malmo/.canary` between boots | `malmo-storage-verify.service` fails; recovery mode reached |
-| Ordering inversion | Remove `After=srv-malmo.mount` from a bind mount | Verify oneshot catches it; box does not expose empty `/home` |
+| Canary mismatch | Tamper with `/srv/molma/.canary` between boots | `molma-storage-verify.service` fails; recovery mode reached |
+| Ordering inversion | Remove `After=srv-molma.mount` from a bind mount | Verify oneshot catches it; box does not expose empty `/home` |
 | TPM2 unseal happy path | Boot with sealed TPM, no policy change | Auto-unlock succeeds; no passphrase prompt |
 | Clock skew | `-rtc base=1970-01-01`, no NTP | Caddy delays ACME until `time-sync.target` reached |
-| host-agent crashloop | Ship a known-broken host-agent in a test variant | `malmo-recovery.target` activates; recovery page reachable on port 80 |
-| nftables coexistence with Docker | Boot, capture `nft list ruleset`, restart Docker, diff | malmo's `inet malmo` table is unchanged across Docker restarts |
+| host-agent crashloop | Ship a known-broken host-agent in a test variant | `molma-recovery.target` activates; recovery page reachable on port 80 |
+| nftables coexistence with Docker | Boot, capture `nft list ruleset`, restart Docker, diff | molma's `inet molma` table is unchanged across Docker restarts |
 
 Implementation: built on `mkosi qemu` (or the equivalent for whichever image-build tool wins in `BUILD.md`). Each test boots a VM, runs an assertion script via SSH or serial console, tears down.
 

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/malmo/malmo/internal/protocol"
+	"github.com/molmaos/molma/internal/protocol"
 )
 
 // TestWriteAtomic_NoTempLeftovers asserts the standard atomic-write

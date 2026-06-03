@@ -9,8 +9,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/malmo/malmo/internal/auth"
-	"github.com/malmo/malmo/internal/store"
+	"github.com/molmaos/molma/internal/auth"
+	"github.com/molmaos/molma/internal/store"
 )
 
 // v1 action vocabulary (LOGGING.md # Write path).

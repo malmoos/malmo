@@ -97,7 +97,7 @@ type DBusPublisher struct {
 // The primary name is "<slug>" + HostSuffix (e.g. "photos.local"). If Avahi
 // reports a name collision (another device on the LAN already owns it), Publish
 // retries once with a box-qualified fallback, "<slug>-<box>" + HostSuffix (e.g.
-// "photos-malmo.local"), where <box> is this host's name. The caller (the
+// "photos-molma.local"), where <box> is this host's name. The caller (the
 // brain) must use the *returned* name for the URL it shows and the Caddy route
 // it writes — it may differ from the primary on collision. See DISCOVERY.md.
 //
@@ -183,7 +183,7 @@ func (p *DBusPublisher) tryPublish(hostname, localIP string) (dbus.ObjectPath, e
 func (p *DBusPublisher) boxLabel() string {
 	h, err := os.Hostname()
 	if err != nil {
-		return "malmo"
+		return "molma"
 	}
 	return sanitizeBoxLabel(h)
 }

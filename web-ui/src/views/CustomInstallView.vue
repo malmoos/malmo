@@ -464,7 +464,7 @@ const submitLabel = computed(() => (install.isPending.value ? "Installing…" : 
           class="w-full rounded-lg border border-border px-3 py-2 font-mono text-xs"
         />
         <p class="text-xs text-muted-foreground">
-          The manifest overlay malmo wraps around your compose. Edit fields the form doesn't show (like
+          The manifest overlay molma wraps around your compose. Edit fields the form doesn't show (like
           <code>devices</code>); the compose above is untouched. Admission still runs on install.
         </p>
       </template>
@@ -472,7 +472,7 @@ const submitLabel = computed(() => (install.isPending.value ? "Installing…" : 
 
     <!-- TOFU / no-auto-update honesty note -->
     <p class="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-      malmo pins the <strong>exact image it pulls now</strong> and won't change it underneath you — a custom app
+      molma pins the <strong>exact image it pulls now</strong> and won't change it underneath you — a custom app
       <strong>does not auto-update</strong>. To move to a newer image, uninstall and paste again.
     </p>
 

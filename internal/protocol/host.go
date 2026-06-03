@@ -3,16 +3,16 @@
 package protocol
 
 // SocketPath is the production socket location. In dev the brain and the
-// fake host-agent agree on a path via MALMO_AGENT_SOCK.
-const SocketPath = "/var/run/malmo/agent.sock"
+// fake host-agent agree on a path via MOLMA_AGENT_SOCK.
+const SocketPath = "/var/run/molma/agent.sock"
 
 // AppHostSuffix is the LAN hostname suffix for app instances: an app with slug
 // <slug> is reachable at "<slug>" + AppHostSuffix, e.g. "photos.local".
 //
-// It is single-label on purpose. The earlier "<slug>.malmo.local" shape was
+// It is single-label on purpose. The earlier "<slug>.molma.local" shape was
 // multi-label relative to .local and is rejected outright by nss-mdns on Linux
 // (and is unreliable on other resolvers), so the no-cloud LAN URL never
-// resolved there. The ".malmo" infix bought nothing in mDNS (no zones, no
+// resolved there. The ".molma" infix bought nothing in mDNS (no zones, no
 // delegation, no wildcards — each name is published individually regardless),
 // so it was dropped. See DECISIONS.md (2026-05-31) and DISCOVERY.md.
 //
@@ -142,7 +142,7 @@ type DeleteUserRequest struct {
 }
 
 // SetRoleRequest is POST /v1/auth/set-role. Updates the user's Linux group
-// membership (malmo-admin) to match the new role. Role must be "admin" or "member".
+// membership (molma-admin) to match the new role. Role must be "admin" or "member".
 type SetRoleRequest struct {
 	User string `json:"user"`
 	Role string `json:"role"`
@@ -186,7 +186,7 @@ type SystemHealth struct {
 }
 
 // StorageHealth is the on-disk storage findings file
-// (/run/malmo/health/storage.json) written by malmo-storage-verify (BOOT.md
+// (/run/molma/health/storage.json) written by molma-storage-verify (BOOT.md
 // # The storage-ready target) and read by host-agent's storage source, which
 // folds the findings into SystemHealth's storage category. It is also the
 // boot reporter's wire shape.
@@ -230,13 +230,13 @@ type ResolveHomeResponse struct {
 // service-account identities the brain needs to emit correct user:/group_add
 // directives in compose overrides for household-scope app instances.
 //
-// MalmoAppUID/GID is the shared service identity (compose user:).
-// MalmoSharedGID is the GID of the malmo-shared group (apps electing a shared
+// MolmaAppUID/GID is the shared service identity (compose user:).
+// MolmaSharedGID is the GID of the molma-shared group (apps electing a shared
 // folder source are added to it via group_add).
 type WellKnownIdentityResponse struct {
-	MalmoAppUID    int `json:"malmo_app_uid"`
-	MalmoAppGID    int `json:"malmo_app_gid"`
-	MalmoSharedGID int `json:"malmo_shared_gid"`
+	MolmaAppUID    int `json:"molma_app_uid"`
+	MolmaAppGID    int `json:"molma_app_gid"`
+	MolmaSharedGID int `json:"molma_shared_gid"`
 }
 
 // Error is the JSON error body shape on non-2xx responses.

@@ -28,7 +28,7 @@ credential mutation neighbourhood per `BRAIN_HOST_PROTOCOL.md`.
 
 Fake host-agent stores the last role in `roles map[string]string`. Validates
 `role ∈ {admin,member}`, returns 400 otherwise. Real impl would call
-`gpasswd -a/-d` to flip `malmo-admin` group membership.
+`gpasswd -a/-d` to flip `molma-admin` group membership.
 
 ### Hostclient — `SetRole` (`internal/hostclient/hostclient.go`)
 

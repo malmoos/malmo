@@ -1,10 +1,10 @@
-# malmo Storage Architecture
+# molma Storage Architecture
 
-> Working spec for how malmo lays out storage, what disks the user sees, and how encryption works. Companion to `SPEC.md`, `CONTROL_PLANE.md`, `APP_MANIFEST.md`, `SERVICE_PROVISIONING.md`, `APP_ISOLATION.md`.
+> Working spec for how molma lays out storage, what disks the user sees, and how encryption works. Companion to `SPEC.md`, `CONTROL_PLANE.md`, `APP_MANIFEST.md`, `SERVICE_PROVISIONING.md`, `APP_ISOLATION.md`.
 
 ## Stance
 
-NAS power users have TrueNAS, Unraid, Proxmox, HexOS. malmo is not trying to be a NAS. The storage story optimizes for the home user who has one or two disks and wants apps and shared folders that just work.
+NAS power users have TrueNAS, Unraid, Proxmox, HexOS. molma is not trying to be a NAS. The storage story optimizes for the home user who has one or two disks and wants apps and shared folders that just work.
 
 **No NAS vocabulary in the UI.** No "pool," "vdev," "RAID," "parity." The only storage concepts a user sees are **OS drive** and **data drive**.
 
@@ -43,10 +43,10 @@ ext4 + LUKS keeps every door open. Once we'd reach for ZFS we'd be in Level-4 te
 
 - **Every drive LUKS-encrypted.** OS drive and each data drive get their own LUKS volume.
 - **One recovery passphrase covers all drives, present and future.** Generated once at install. The same key material is enrolled as a LUKS keyslot on the OS drive, the data drive (if present at install), and every drive added later. The user sees one secret, not one per drive.
-- **The passphrase is not shown to the user by default.** At install, the box silently generates it and stores it on the (LUKS-encrypted) OS drive at `/etc/malmo/secrets/luks-recovery.key`, owned `root:root`, mode `0400`. The wizard does not display it; there is no "write this down" screen at first-run. The dashboard recovery code (`AUTH.md` # The recovery code) is the only "save this" moment in first-run.
+- **The passphrase is not shown to the user by default.** At install, the box silently generates it and stores it on the (LUKS-encrypted) OS drive at `/etc/molma/secrets/luks-recovery.key`, owned `root:root`, mode `0400`. The wizard does not display it; there is no "write this down" screen at first-run. The dashboard recovery code (`AUTH.md` # The recovery code) is the only "save this" moment in first-run.
 - **Surfaced in Settings → Storage → Advanced** for users who need it: *"Show recovery passphrase — only needed if your box ever fails to boot. Most people never need this."* Tinkerers who move drives between boxes or fiddle with BIOS can fetch it; non-technical users never see it.
 - **Why hide it.** The passphrase only matters in scenarios where the box can't auto-unlock at boot (TPM wiped via BIOS reset, Secure Boot policy change invalidates the PCR 7 seal, drive moved to another box). All three are tinkerer scenarios. For non-technical users, hardware death is already a *restore from off-box backup* path (see # What we don't do in v1), not a *type the passphrase at the console* path. Shipping a "save this 32-character secret" screen at install for a string most users will never need is friction without payoff. The doubly-lost case (box can't boot, no off-box backup) is honest and accepted.
-- **Auto-unlock via TPM2, sealed against PCR 7 only.** Headless boot survives reboots without a passphrase prompt — non-negotiable for a home server. PCR 7 is the Secure Boot policy state, which is stable across kernel updates — sealing against PCR 11 (kernel measurement) would brick auto-unlock every time Debian ships a kernel security update. PCR 7 trades some attacker-against-Secure-Boot resistance for a working unattended-boot story; the malmo threat model (home appliance, primary threats are remote attackers and casual theft) accepts that trade.
+- **Auto-unlock via TPM2, sealed against PCR 7 only.** Headless boot survives reboots without a passphrase prompt — non-negotiable for a home server. PCR 7 is the Secure Boot policy state, which is stable across kernel updates — sealing against PCR 11 (kernel measurement) would brick auto-unlock every time Debian ships a kernel security update. PCR 7 trades some attacker-against-Secure-Boot resistance for a working unattended-boot story; the molma threat model (home appliance, primary threats are remote attackers and casual theft) accepts that trade.
 - **Upgrade path open.** Each LUKS slot is independent. We can add stricter TPM2 policies later (PCR 7+11 with signed policy, or PCR 7+14) via `systemd-cryptenroll` without destructive migration. Tracked in `NEXT.md`.
 
 ### Threat model — explicit
@@ -54,13 +54,13 @@ ext4 + LUKS keeps every door open. Once we'd reach for ZFS we'd be in Level-4 te
 - ✅ Defends against **drive removal / drive theft / drive RMA**. A drive that leaves the building is unreadable. This is the realistic threat.
 - ❌ Does **not** defend against **whole-box theft**. The TPM is in the box; an attacker with the box has time. Closing this gap means a boot PIN, which breaks unattended boot. v1 accepts the limit. A future "high-security mode" with PIN-on-boot is a Settings toggle.
 - ❌ Does **not** defend against **a doubly-lost scenario** — the box can't auto-unlock (TPM wiped, motherboard swap) *and* the user has no off-box backup *and* never fetched the hidden recovery passphrase from Settings → Advanced. Data is gone. Honest position; same shape as "lost both copies of any single-copy secret."
-- ❌ Does **not** defend against **the box admin reading another user's data**. Once LUKS unlocks at boot, every file on the disk is plaintext to root. Filesystem permissions (`0750` on `/home/<user>/`) protect against the UI surface and other malmo users; they do not stop someone with shell-as-root. **Per-user, admin-resistant privacy is on the roadmap** as a layered fscrypt addition — see "Future: per-user encryption" below.
+- ❌ Does **not** defend against **the box admin reading another user's data**. Once LUKS unlocks at boot, every file on the disk is plaintext to root. Filesystem permissions (`0750` on `/home/<user>/`) protect against the UI surface and other molma users; they do not stop someone with shell-as-root. **Per-user, admin-resistant privacy is on the roadmap** as a layered fscrypt addition — see "Future: per-user encryption" below.
 
 ### Data drive enrollment marker
 
-A box without a data drive (Level 0) and a box whose data drive is *currently missing* are two completely different situations. The first is normal; the second is a recovery scenario. malmo distinguishes them with a marker file on the OS drive.
+A box without a data drive (Level 0) and a box whose data drive is *currently missing* are two completely different situations. The first is normal; the second is a recovery scenario. molma distinguishes them with a marker file on the OS drive.
 
-- **Path:** `/etc/malmo/data-drive.enrolled`.
+- **Path:** `/etc/molma/data-drive.enrolled`.
 - **Lives on the OS drive** (not the data drive), so it survives data-drive failure or removal.
 - **Contents:** JSON — at minimum the LUKS UUID of the enrolled drive and the timestamp of enrollment. The UUID lets us also catch "wrong data drive plugged in" (different physical disk, different UUID → recovery mode, not silent acceptance).
 - **Written at:** data-drive enrollment time (first-run wizard, or "add data drive" flow in Settings).
@@ -75,21 +75,21 @@ Boot logic, in plain terms:
 
 ### Storage canary
 
-Bind mounts that race their parent mount can silently land on the wrong filesystem (e.g., `/home/<user>` bound to an empty OS-drive directory because `/srv/malmo` wasn't ready yet). Apps then write user data into the wrong tree; the next boot shadows it with the correct bind and the writes are orphaned.
+Bind mounts that race their parent mount can silently land on the wrong filesystem (e.g., `/home/<user>` bound to an empty OS-drive directory because `/srv/molma` wasn't ready yet). Apps then write user data into the wrong tree; the next boot shadows it with the correct bind and the writes are orphaned.
 
 To make this class of bug **detectable instead of silent**, every data drive carries a canary file:
 
-- **Path on the data drive:** `/srv/malmo/.canary` — contents are the drive's UUID.
-- **Path through the bind-mount view:** `/var/lib/malmo/.canary` — should resolve to the same file, same contents.
+- **Path on the data drive:** `/srv/molma/.canary` — contents are the drive's UUID.
+- **Path through the bind-mount view:** `/var/lib/molma/.canary` — should resolve to the same file, same contents.
 - **The device backing each bind** (via `findmnt -no SOURCE`) should match the UUID enrolled in the marker. Content match alone is not sufficient — a stale canary on the OS drive plus a failed data-drive mount would otherwise read as healthy. Device-backing check is the structural verifier; content check is the secondary confirmation.
 
-**`malmo-storage-verify.service`** (a `Type=oneshot` in the boot chain, owned by `BOOT.md`) performs both checks and writes its findings to `/run/malmo/health/storage.json`. **It is a reporter, not a gatekeeper** — findings become health issues the brain raises in degraded mode, not boot failures that brick the box. See `BOOT.md` # The storage-ready target — best-effort assembly and `HEALTH.md` for the full degraded-mode model.
+**`molma-storage-verify.service`** (a `Type=oneshot` in the boot chain, owned by `BOOT.md`) performs both checks and writes its findings to `/run/molma/health/storage.json`. **It is a reporter, not a gatekeeper** — findings become health issues the brain raises in degraded mode, not boot failures that brick the box. See `BOOT.md` # The storage-ready target — best-effort assembly and `HEALTH.md` for the full degraded-mode model.
 
 The canary plus device-backing check is the difference between "the mount unit returned success" and "the bind actually landed on the right filesystem." Cheap and load-bearing.
 
 ## Disk roles, mount layout, and what apps see
 
-The user-visible model is two roles (OS drive, data drive). The on-disk reality involves mergerfs and bind mounts, but those are plumbing — **apps and users only ever see `/home/<user>/`, `~/Shared/`, and `/var/lib/malmo/`**. Standard Linux paths, no invented vocabulary.
+The user-visible model is two roles (OS drive, data drive). The on-disk reality involves mergerfs and bind mounts, but those are plumbing — **apps and users only ever see `/home/<user>/`, `~/Shared/`, and `/var/lib/molma/`**. Standard Linux paths, no invented vocabulary.
 
 ### Files are first-class; apps are windows onto them
 
@@ -104,34 +104,34 @@ Two kinds of app data, two locations:
 | Kind | Lives at | Survives uninstall? | User sees it? |
 |---|---|---|---|
 | **User content** (photo files, music, notes) | `/home/<user>/Photos/`, etc. | Yes, always | Yes, daily |
-| **App state** (indexes, caches, DBs) | `/var/lib/malmo/instances/<id>/data/` | No (or archived on "keep data") | No, ever |
+| **App state** (indexes, caches, DBs) | `/var/lib/molma/instances/<id>/data/` | No (or archived on "keep data") | No, ever |
 
 ### OS drive
 
 Required. Small (32–64 GB is plenty). Holds:
 
 - Debian root, kernel, initramfs.
-- `host-agent` binary, systemd units, vendor config (`/etc/malmo/defaults/`).
+- `host-agent` binary, systemd units, vendor config (`/etc/molma/defaults/`).
 - Bundled brain image for offline first-boot.
 
-**Designed to be replaceable.** No irreplaceable state lives here. If it dies: install fresh malmo on a new SSD, point at the existing data drive, the world resumes.
+**Designed to be replaceable.** No irreplaceable state lives here. If it dies: install fresh molma on a new SSD, point at the existing data drive, the world resumes.
 
 ### Data drive(s)
 
 Optional but expected. One or more drives, each ext4 + LUKS + TPM-enrolled independently. Each drive mounts at `/mnt/disk<N>/`.
 
-**Mergerfs unions them at `/srv/malmo/`** — a single tree across all data drives, `epmfs` placement policy ("existing path, most-free-space" — keeps related files on the same drive, balances new directory trees). Apps and users never reference `/mnt/disk<N>/` directly.
+**Mergerfs unions them at `/srv/molma/`** — a single tree across all data drives, `epmfs` placement policy ("existing path, most-free-space" — keeps related files on the same drive, balances new directory trees). Apps and users never reference `/mnt/disk<N>/` directly.
 
 ```
 /mnt/disk1                       data drive #1, ext4+LUKS+TPM
 /mnt/disk2                       data drive #2, if added
-   └── mergerfs union → /srv/malmo/
+   └── mergerfs union → /srv/molma/
                           ├── home/      → bind-mounted to /home
-                          ├── state/     → bind-mounted to /var/lib/malmo
+                          ├── state/     → bind-mounted to /var/lib/molma
                           └── shared/    → exposed as ~/Shared per user
 ```
 
-**No data drive (Level 0):** `/srv/malmo/` is a directory on the OS drive root. Same paths from app/user perspective. Adding a data drive later mounts it, sets up mergerfs, migrates contents, transparently.
+**No data drive (Level 0):** `/srv/molma/` is a directory on the OS drive root. Same paths from app/user perspective. Adding a data drive later mounts it, sets up mergerfs, migrates contents, transparently.
 
 ### What apps and users actually see
 
@@ -143,12 +143,12 @@ Optional but expected. One or more drives, each ext4 + LUKS + TPM-enrolled indep
   Documents/
   Notes/
   Downloads/
-  Shared/                        → symlink to /srv/malmo/shared/
+  Shared/                        → symlink to /srv/molma/shared/
 
-/srv/malmo/shared/               household-shared content (mirrors the use-case folders)
+/srv/molma/shared/               household-shared content (mirrors the use-case folders)
   Photos/  Music/  Movies/  Documents/
 
-/var/lib/malmo/                  malmo's bookkeeping (brain SQLite, app instances)
+/var/lib/molma/                  molma's bookkeeping (brain SQLite, app instances)
   brain/state.db
   instances/<id>/                 app working dirs — never user-facing
   managed-services/
@@ -161,8 +161,8 @@ The use-case folders (`Photos`, `Music`, `Movies`, `Documents`, `Notes`, `Downlo
 ### Permissions
 
 - **Per-user content:** `/home/<user>/` owned `<user>:<user>`, mode `0750`. Tier-3 (per-user) app instances run as the user's UID — direct owner access, no group plumbing.
-- **Household-shared content:** `/srv/malmo/shared/` owned `root:malmo-shared`, mode `02770` (setgid bit — new files inherit `malmo-shared` group automatically). Every household user is added to `malmo-shared` at user creation. See `USERS_AND_GROUPS.md` for the full group reference (and the distinction between `malmo-shared` and the unrelated `malmo` IPC group).
-- **Tier-1/2 shared services** (e.g., a household-level Jellyfin): run as a dedicated service UID in the `malmo-shared` group. They see the shared tree, not individual users' homes (unless the manifest declares specific user folders).
+- **Household-shared content:** `/srv/molma/shared/` owned `root:molma-shared`, mode `02770` (setgid bit — new files inherit `molma-shared` group automatically). Every household user is added to `molma-shared` at user creation. See `USERS_AND_GROUPS.md` for the full group reference (and the distinction between `molma-shared` and the unrelated `molma` IPC group).
+- **Tier-1/2 shared services** (e.g., a household-level Jellyfin): run as a dedicated service UID in the `molma-shared` group. They see the shared tree, not individual users' homes (unless the manifest declares specific user folders).
 - **Defense in depth:** manifest declarations (brain-enforced via bind-mount scope + mode) are the user-visible layer; POSIX permissions are the kernel-enforced safety net.
 
 ### Cross-device access (SMB)
@@ -171,8 +171,8 @@ Files on the box are reachable from any other device on the LAN via Samba — th
 
 | Share | Maps to | Auth |
 |---|---|---|
-| `\\malmo\<user>` | `/home/<user>/` | that user's malmo password (same as dashboard) |
-| `\\malmo\shared` | `/srv/malmo/shared/` | any household user's malmo password |
+| `\\molma\<user>` | `/home/<user>/` | that user's molma password (same as dashboard) |
+| `\\molma\shared` | `/srv/molma/shared/` | any household user's molma password |
 
 mDNS (`_smb._tcp`) advertises the box via Avahi so it appears automatically in:
 
@@ -181,22 +181,22 @@ mDNS (`_smb._tcp`) advertises the box via Avahi so it appears automatically in:
 - iOS Files.app "Connect to Server" suggestions
 - Android file managers' SMB tabs (NSD-aware file managers find SMB advertisements even though Android browsers can't resolve `.local` URLs)
 
-Samba's Avahi integration is shipped upstream; the malmo systemd drop-in keeps it ordered behind `malmo-storage-ready.target` but unblocking. The publisher itself (Avahi) and the LAN-only interface scoping are owned in `DISCOVERY.md`.
+Samba's Avahi integration is shipped upstream; the molma systemd drop-in keeps it ordered behind `molma-storage-ready.target` but unblocking. The publisher itself (Avahi) and the LAN-only interface scoping are owned in `DISCOVERY.md`.
 
 **TimeMachine compatibility** is enabled on a per-user dedicated share (`fruit:time machine = yes`) — Mac users get a backup target without configuration.
 
-Auth uses the **user's malmo password** — the same credential they use for the dashboard. SMB access is off by default per account; the user opts in via Settings (which adds them to Samba's allowlist). The password itself is shared across surfaces; what's off-by-default is service access, not the credential. See `AUTH.md` # Device access (SSH + SMB).
+Auth uses the **user's molma password** — the same credential they use for the dashboard. SMB access is off by default per account; the user opts in via Settings (which adds them to Samba's allowlist). The password itself is shared across surfaces; what's off-by-default is service access, not the credential. See `AUTH.md` # Device access (SSH + SMB).
 
 ### Anything else
 
-A third drive plugged in beyond the OS drive can be added to the mergerfs pool (becomes another data drive) or mounted as a named "extra drive" outside the pool. Extra drives are an escape hatch — not pooled, not backed up by malmo, not visible to apps by default. Door-2 custom compose can bind-mount them for power users.
+A third drive plugged in beyond the OS drive can be added to the mergerfs pool (becomes another data drive) or mounted as a named "extra drive" outside the pool. Extra drives are an escape hatch — not pooled, not backed up by molma, not visible to apps by default. Door-2 custom compose can bind-mount them for power users.
 
 ## First-run flow
 
 1. Installer detects all attached disks.
 2. User picks the **OS drive** (defaults to the smallest non-removable disk, typically the NVMe).
 3. If a second non-removable disk is present, user is offered "use this to expand your storage" — yes by default, picks the largest remaining disk. Single-drive boxes skip the question and surface a soft "you can add a data drive later from Settings → Storage" hint on the dashboard after first-run.
-4. Installer generates one recovery passphrase, formats both drives as LUKS + ext4, enrolls the passphrase as a keyslot on each, enrolls a TPM2 keyslot against PCR 7 on each, writes the passphrase to `/etc/malmo/secrets/luks-recovery.key` (mode `0400`, root-owned).
+4. Installer generates one recovery passphrase, formats both drives as LUKS + ext4, enrolls the passphrase as a keyslot on each, enrolls a TPM2 keyslot against PCR 7 on each, writes the passphrase to `/etc/molma/secrets/luks-recovery.key` (mode `0400`, root-owned).
 5. **The passphrase is not displayed.** The user is not asked to write anything down. See # Encryption posture for why.
 6. Boot proceeds. Subsequent boots auto-unlock via TPM, no prompt.
 
@@ -210,8 +210,8 @@ Mergerfs runs from day 1, so adding drive #N is a brain-orchestrated operation, 
 
 1. New drive shows up in Settings → Storage.
 2. Admin clicks "Use this drive." Dashboard re-prompts for the admin password — this bypasses the 5-minute elevation window (see `AUTH.md`); add-drive is treated as an enrollment-class action, fresh password required every time.
-3. Brain calls host-agent `POST /v1/storage/enroll-drive` (see `BRAIN_HOST_PROTOCOL.md`). host-agent verifies the password via PAM, then: reads `/etc/malmo/secrets/luks-recovery.key`, formats the drive, runs `cryptsetup luksFormat` adding the recovery passphrase as a keyslot, enrolls a second keyslot against PCR 7 via `systemd-cryptenroll`, mounts at `/mnt/disk<N>/`, writes the canary.
-4. Brain calls `mergerfs add` on the running pool. Zero downtime; `/srv/malmo/` gains capacity immediately.
+3. Brain calls host-agent `POST /v1/storage/enroll-drive` (see `BRAIN_HOST_PROTOCOL.md`). host-agent verifies the password via PAM, then: reads `/etc/molma/secrets/luks-recovery.key`, formats the drive, runs `cryptsetup luksFormat` adding the recovery passphrase as a keyslot, enrolls a second keyslot against PCR 7 via `systemd-cryptenroll`, mounts at `/mnt/disk<N>/`, writes the canary.
+4. Brain calls `mergerfs add` on the running pool. Zero downtime; `/srv/molma/` gains capacity immediately.
 5. Existing files stay where they are; new writes distribute by `epmfs` policy.
 
 The user never sees or types the LUKS passphrase. The promise *one passphrase covers all drives* is upheld silently by host-agent reading it back from disk after admin authentication.
@@ -224,7 +224,7 @@ Inverse of add-drive, same gate. Used when an admin wants to physically remove t
 
 1. Admin clicks "Eject this drive" in Settings → Storage. Re-prompt for admin password (same fresh-password rule as add-drive).
 2. Brain stops every app that uses the drive (Tier-1, Tier-2, and per-user Tier-3 instances), then unmounts the mergerfs pool, then unmounts the LUKS volume.
-3. host-agent removes the enrollment marker (`/etc/malmo/data-drive.enrolled`).
+3. host-agent removes the enrollment marker (`/etc/molma/data-drive.enrolled`).
 4. Dashboard tells the user "safe to remove."
 
 Multi-data-drive eject (mergerfs has to migrate files off the ejected drive first) is out of scope for v1 — v1 supports one data drive at a time. The single-drive eject is the inverse of single-drive add; the multi-drive case lands when we ship multi-data-drive UX.

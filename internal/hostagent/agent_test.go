@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/malmo/malmo/internal/protocol"
+	"github.com/molmaos/molma/internal/protocol"
 )
 
 // --- stub verifier ---
@@ -232,7 +232,7 @@ func TestSetPassword_DelegatesToUserMgrWhenSet(t *testing.T) {
 }
 
 func TestSetPassword_UserMgrError_Returns500(t *testing.T) {
-	mgr := &stubUserMgr{err: errors.New("useradd: group 'malmo' does not exist")}
+	mgr := &stubUserMgr{err: errors.New("useradd: group 'molma' does not exist")}
 	a := New(&stubVerifier{}, NewFakePublisher(".local"))
 	a.UserMgr = mgr
 	mux := http.NewServeMux()
@@ -245,7 +245,7 @@ func TestSetPassword_UserMgrError_Returns500(t *testing.T) {
 		t.Fatalf("want 500, got %d", w.Code)
 	}
 	// Body must NOT leak the underlying system error.
-	if bytes.Contains(w.Body.Bytes(), []byte("useradd")) || bytes.Contains(w.Body.Bytes(), []byte("malmo")) {
+	if bytes.Contains(w.Body.Bytes(), []byte("useradd")) || bytes.Contains(w.Body.Bytes(), []byte("molma")) {
 		t.Errorf("response leaked system detail: %s", w.Body.String())
 	}
 }
@@ -756,14 +756,14 @@ func TestWellKnownIdentity_FakeBranch_ReturnsFixedConstants(t *testing.T) {
 		t.Fatalf("want 200, got %d", w.Code)
 	}
 	resp := decodeBody[protocol.WellKnownIdentityResponse](t, w)
-	if resp.MalmoAppUID != 2000 {
-		t.Errorf("malmo_app_uid: want 2000, got %d", resp.MalmoAppUID)
+	if resp.MolmaAppUID != 2000 {
+		t.Errorf("molma_app_uid: want 2000, got %d", resp.MolmaAppUID)
 	}
-	if resp.MalmoAppGID != 2000 {
-		t.Errorf("malmo_app_gid: want 2000, got %d", resp.MalmoAppGID)
+	if resp.MolmaAppGID != 2000 {
+		t.Errorf("molma_app_gid: want 2000, got %d", resp.MolmaAppGID)
 	}
-	if resp.MalmoSharedGID != 2001 {
-		t.Errorf("malmo_shared_gid: want 2001, got %d", resp.MalmoSharedGID)
+	if resp.MolmaSharedGID != 2001 {
+		t.Errorf("molma_shared_gid: want 2001, got %d", resp.MolmaSharedGID)
 	}
 }
 
@@ -779,7 +779,7 @@ func TestWellKnownIdentity_DelegatesToUserMgrWhenSet(t *testing.T) {
 		t.Fatalf("want 200, got %d", w.Code)
 	}
 	resp := decodeBody[protocol.WellKnownIdentityResponse](t, w)
-	if resp.MalmoAppUID != 1500 || resp.MalmoAppGID != 1500 || resp.MalmoSharedGID != 1501 {
+	if resp.MolmaAppUID != 1500 || resp.MolmaAppGID != 1500 || resp.MolmaSharedGID != 1501 {
 		t.Errorf("unexpected response: %+v", resp)
 	}
 	if mgr.wellKnownIdentityCalls != 1 {
@@ -788,7 +788,7 @@ func TestWellKnownIdentity_DelegatesToUserMgrWhenSet(t *testing.T) {
 }
 
 func TestWellKnownIdentity_UserMgrError_Returns500(t *testing.T) {
-	mgr := &stubUserMgr{wellKnownIdentityErr: errors.New("lookup malmo-app user: user: unknown user malmo-app")}
+	mgr := &stubUserMgr{wellKnownIdentityErr: errors.New("lookup molma-app user: user: unknown user molma-app")}
 	a := New(&stubVerifier{}, NewFakePublisher(".local"))
 	a.UserMgr = mgr
 	mux := http.NewServeMux()
@@ -798,7 +798,7 @@ func TestWellKnownIdentity_UserMgrError_Returns500(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("want 500, got %d", w.Code)
 	}
-	if bytes.Contains(w.Body.Bytes(), []byte("malmo-app")) {
+	if bytes.Contains(w.Body.Bytes(), []byte("molma-app")) {
 		t.Errorf("response leaked system detail: %s", w.Body.String())
 	}
 }

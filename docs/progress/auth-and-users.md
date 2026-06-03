@@ -61,7 +61,7 @@ rule). Surface:
 - `Manager.Revoke(token)` — idempotent.
 - `Manager.Cookie(token)` / `ClearCookie()` — `HttpOnly`, `SameSite=Lax`,
   `Path=/`, no `Domain` (so the same cookie works for `.local` HTTP today and
-  `<box-id>.malmo.network` HTTPS later, per `MALMO_NETWORK.md`). `Secure` is
+  `<box-id>.molma.network` HTTPS later, per `MOLMA_NETWORK.md`). `Secure` is
   opt-in via `SecureCookies` — off in dev where the brain serves plain HTTP
   (the browser would drop a Secure cookie over `http://`).
 - `WithIdentity` / `FromContext` — single context key, no token leak to
@@ -125,7 +125,7 @@ code must be shown first. `setupComplete()` (called by the ack button) flips
 ## How it maps to the specs
 
 - **`AUTH.md`** — password-only v1; server-side opaque cookies
-  (`malmo_session`, `HttpOnly`, `SameSite=Lax`, 256-bit token); admin
+  (`molma_session`, `HttpOnly`, `SameSite=Lax`, 256-bit token); admin
   recovery code generated once, hash-stored, shown once; the brain holds no
   password hash (PAM via host-agent is the source of truth).
 - **`USERS_AND_GROUPS.md`** — `users.role` is the dashboard role; `RoleAdmin`

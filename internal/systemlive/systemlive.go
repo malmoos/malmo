@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/malmo/malmo/internal/protocol"
+	"github.com/molmaos/molma/internal/protocol"
 )
 
 // sampler is the brain's consumer-side slice of hostclient.Client: just the one

@@ -1,4 +1,4 @@
-# malmo
+# molma
 
 Home server OS — same category as Umbrel / ZimaOS / CasaOS. North star: **simplicity for non-technical users**. Tinkerers are early adopters, not the destination.
 
@@ -14,7 +14,7 @@ Home server OS — same category as Umbrel / ZimaOS / CasaOS. North star: **simp
 
 ## How we differ from neighbors
 
-malmo's positioning is a *combination*, not a single axis: branding, hardware openness (BYO, broad compatibility), ease of install and daily use, **the app ecosystem (the strongest pillar)**, and developer-friendliness for app authors. The per-competitor view:
+molma's positioning is a *combination*, not a single axis: branding, hardware openness (BYO, broad compatibility), ease of install and daily use, **the app ecosystem (the strongest pillar)**, and developer-friendliness for app authors. The per-competitor view:
 
 | OS | Category | What we copy | Where we differ | Notes |
 |---|---|---|---|---|
@@ -23,12 +23,12 @@ malmo's positioning is a *combination*, not a single axis: branding, hardware op
 | **ZimaOS** | Same category | Install-time storage presets (radio buttons, plain-language guidance) is directly inspired by their UX. Container-first. | Multi-user, managed services, subdomain routing. ZimaOS bundles with Zima hardware; we're explicitly BYO. | We copy ZimaOS's storage-setup language ("Maximize storage" / "Protect my data") because it's the right plain-English framing. |
 | **Runtipi** | Same category, different vibe | App-catalog model. | Same architectural bets. | Acknowledge, don't actively study. |
 | **Yunohost** | Same category, different vibe | App-catalog model. Two concrete borrowings: (a) the **`yunohost diagnosis` check taxonomy** as prior art for the v1 health-check set in `HEALTH.md`; (b) the **app integration-level (0–9) rating** as a model for catalog badges (`Files-first-class`, `Backup-aware`, `Multi-instance`). Their per-app `backup`/`restore` script convention is also a useful reference for our manifest backup hints. | Native packages (no containers), LDAP+SSOwat SSO across apps, path-based routing as default (works because nginx + package-time path patching — won't translate to Docker apps), public-facing assumptions baked in (email stack, DynDNS), sysadmin/activist audience. We're closed-by-default, Docker-app, no cross-app SSO. | Path-based routing is right *for them* because of native apps; doesn't change our subdomain-routing call. |
-| **TrueNAS (CORE/SCALE) / HexOS** | **Different category** | Failure-mode philosophy: explicit boot states, "pool missing is a first-class state," graceful degraded UI (`DECISIONS.md` 2026-05-16). System dataset vs. data pool split (we have the same split via `/var/lib/malmo-state` vs. `/var/lib/malmo`). | We are explicitly NOT a NAS. No ZFS, no pools/vdevs/parity-as-first-class. No NAS vocabulary in the UI. Apps are the product, storage is plumbing. HexOS is "TrueNAS made friendly" + cloud-pairing for recovery; we're closed-by-default with no cloud recovery in v1. | Closest model for failure-mode UX; furthest from us in target audience. Study how they handle storage-anomaly states; do not adopt their NAS-first framing. |
+| **TrueNAS (CORE/SCALE) / HexOS** | **Different category** | Failure-mode philosophy: explicit boot states, "pool missing is a first-class state," graceful degraded UI (`DECISIONS.md` 2026-05-16). System dataset vs. data pool split (we have the same split via `/var/lib/molma-state` vs. `/var/lib/molma`). | We are explicitly NOT a NAS. No ZFS, no pools/vdevs/parity-as-first-class. No NAS vocabulary in the UI. Apps are the product, storage is plumbing. HexOS is "TrueNAS made friendly" + cloud-pairing for recovery; we're closed-by-default with no cloud recovery in v1. | Closest model for failure-mode UX; furthest from us in target audience. Study how they handle storage-anomaly states; do not adopt their NAS-first framing. |
 | **Synology DSM** | Different category (closed) | **The gold-standard reference for failure-mode UX.** UI always reachable, drive issues surface as banners with guided walkthroughs, the box never bricks. Recovery is one-click from the dashboard, not "SSH in and read logs." | Closed-source, hardware-locked, proprietary. We're open and BYO. Synology is also weak on third-party app ecosystem (Docker is bolted on, not first-class); ours is the opposite. | When designing UX for failure modes, "what would Synology do?" is the right question. (See `HEALTH.md`.) |
 | **Unraid** | Different category | Nothing direct. | Power-user storage features, paid OS, NAS vocabulary throughout. | Acknowledge as the "Unraid land" we are not entering. |
 | **Proxmox** | Different category | Nothing. | Virtualization / cluster orchestration, sysadmin tool. | Out of category. |
 
-**Pattern across the differences:** malmo sits in the Umbrel/ZimaOS/CasaOS category by *audience and pitch*, and borrows Synology's *failure-mode philosophy* (which TrueNAS also approximates). The combination is the position — "Umbrel-category product with Synology-grade graceful degradation."
+**Pattern across the differences:** molma sits in the Umbrel/ZimaOS/CasaOS category by *audience and pitch*, and borrows Synology's *failure-mode philosophy* (which TrueNAS also approximates). The combination is the position — "Umbrel-category product with Synology-grade graceful degradation."
 
 **Two phrases worth internalizing:**
 
@@ -40,7 +40,7 @@ malmo's positioning is a *combination*, not a single axis: branding, hardware op
 **Spec + early implementation.** The markdown design docs remain the source of truth; a walking-skeleton implementation now lives alongside them. The skeleton proves the spine end-to-end (UI → brain → docker compose → Caddy route → SSE → uninstall) and runs natively on a dev box — no VM. The real host-integrated parts (Avahi, LUKS/TPM, boot ordering, auth) are still stubbed or unbuilt.
 
 Implementation layout:
-- `cmd/brain/` + `internal/` — `malmo-brain` (Go, huma API + SQLite, `docker compose` CLI driver). Packages: `api`, `lifecycle`, `catalog`, `manifest`, `store`, `caddy`, `hostclient`, `events`, `protocol`, `auth`, `audit`, `admission`.
+- `cmd/brain/` + `internal/` — `molma-brain` (Go, huma API + SQLite, `docker compose` CLI driver). Packages: `api`, `lifecycle`, `catalog`, `manifest`, `store`, `caddy`, `hostclient`, `events`, `protocol`, `auth`, `audit`, `admission`.
 - `cmd/host-agent/` — **fake** host-agent: real `BRAIN_HOST_PROTOCOL.md` wire format over a real UNIX socket, canned host ops (no Avahi/LUKS/apt yet).
 - `web-ui/` — Vue 3 + Vite + TanStack Query dashboard (Tailwind/shadcn-vue deferred; plain CSS for now).
 - `catalog/` — hand-written sample manifests (currently `whoami`).
@@ -65,7 +65,7 @@ When extending the implementation, keep it faithful to the locked specs and upda
 Every change ships with documentation — a code change is not complete until its docs are written in the same change.
 
 - **Three doc homes.** Design source of truth → `docs/specs/`. Implementation progress → `docs/progress/`. Developer how-to (running locally, code-level architecture) → `docs/dev/`.
-- **Project knowledge lives in checked-in docs, never in a coding agent's local/private memory.** Anything worth remembering about malmo — decisions, conventions, workflows, gotchas — must land in the repo (the three doc homes above, `DECISIONS.md`, or `CLAUDE.md`) so the whole team and every future session sees it. Per-tool "memory" features are local to one machine and one person; they are not a substitute for writing it down here.
+- **Project knowledge lives in checked-in docs, never in a coding agent's local/private memory.** Anything worth remembering about molma — decisions, conventions, workflows, gotchas — must land in the repo (the three doc homes above, `DECISIONS.md`, or `CLAUDE.md`) so the whole team and every future session sees it. Per-tool "memory" features are local to one machine and one person; they are not a substitute for writing it down here.
 - **Every unit of work gets a progress entry.** Add a `docs/progress/<slug>.md` (ADR-style, kebab-slug, not numbered) that records **what was done** and **what's next**, following the template in `docs/progress/walking-skeleton.md`. **Progress entries are frozen ADR-style snapshots** — once written, do not retroactively edit a prior entry's "what's next" or "known gaps" when a follow-up lands (no strikethroughs, no "done in X" annotations). A new entry references the one it closes in its opening paragraph; the index below plus chronological reading is the "where we are now" view. Filenames carry no order — **append the new entry to the bottom of the index in `docs/progress/README.md`** (oldest-first); that index is the only record of build order now that the `NNNN-` prefix is gone.
 - **Keep specs and reality in sync.** When the implementation realizes or diverges from a spec, update the matching `docs/specs/` doc in the same change (and add a `DECISIONS.md` entry if a locked decision flips).
 - **The doc map is load-bearing.** Keep `docs/README.md` and `docs/progress/README.md` (the indexes) current in the same change. A doc not linked from the map is a bug.
@@ -90,18 +90,18 @@ Small set of rules. Codified now so we don't have to back them out later.
 ## Load-bearing decisions (don't relitigate without cause)
 
 - **Debian base, single-node, BYO x86, Docker apps, custom YAML manifest, ISO install.**
-- **Subdomain routing** (`photos.malmo.local`), explicitly *not* path-based — browser same-origin policy is the reason. See `SPEC.md`.
+- **Subdomain routing** (`photos.molma.local`), explicitly *not* path-based — browser same-origin policy is the reason. See `SPEC.md`.
 - **Headscale + DERP (BSD-3)** for the mesh. Tailscale's coordinator is proprietary; NetBird's server is AGPLv3. Both rejected.
 - **ext4 + LUKS, not ZFS.** ZFS forecloses mergerfs/SnapRAID upgrades and adds CDDL/kernel licensing pain.
 - **Mergerfs from day 1** when a data drive is present (pool of one with one drive; `epmfs` placement). Enables zero-downtime drive addition. SnapRAID parity stays deferred.
-- **User content at `/home/<user>/`** with macOS-style capitalized use-case folders (`Photos/`, `Music/`, `Movies/`, `Documents/`, `Notes/`, `Downloads/`). Data drive mounts at `/srv/malmo/` with bind mounts to `/home/` and `/var/lib/malmo/`.
-- **Files are first-class, apps are windows.** User content lives in use-case folders; app state in `/var/lib/malmo/instances/<id>/`. Uninstalling an app never deletes user content. Manifests bind-mount use-case folders by declaration.
+- **User content at `/home/<user>/`** with macOS-style capitalized use-case folders (`Photos/`, `Music/`, `Movies/`, `Documents/`, `Notes/`, `Downloads/`). Data drive mounts at `/srv/molma/` with bind mounts to `/home/` and `/var/lib/molma/`.
+- **Files are first-class, apps are windows.** User content lives in use-case folders; app state in `/var/lib/molma/instances/<id>/`. Uninstalling an app never deletes user content. Manifests bind-mount use-case folders by declaration.
 - **SMB shares via Samba** for cross-device access (Windows, macOS, iOS, Android, Linux). mDNS-advertised. TimeMachine-compatible.
 - **Avahi as the LAN publisher; per-app `.local` records owned by the reconciler.** No mDNS wildcards exist; each app slug is a real announced name, published by host-agent via Avahi DBus `EntryGroup.AddAddress` alongside the Caddy site block. LAN interfaces only (not mesh, not Docker bridges). `.local` is HTTP-only by definition (no public DNS → no Let's Encrypt) and Android browsers don't resolve it — secure URLs are the compatibility path. See `DISCOVERY.md`.
-- **One malmo password per user, PAM is the source of truth.** Dashboard, SSH, and SMB all authenticate against the same `/etc/shadow` entry. Brain has no password hash; it calls host-agent's `verify_password` on every login. Per-protocol opt-in (SSH and SMB off-by-account-by-default) is done via service allowlists, not separate credentials.
+- **One molma password per user, PAM is the source of truth.** Dashboard, SSH, and SMB all authenticate against the same `/etc/shadow` entry. Brain has no password hash; it calls host-agent's `verify_password` on every login. Per-protocol opt-in (SSH and SMB off-by-account-by-default) is done via service allowlists, not separate credentials.
 - **SSH and SMB scoped to LAN + mesh via nftables** — RFC1918 + the mesh interface. Public internet blocked structurally, not per-account.
 - **NetworkManager owns every network interface** (ethernet, WiFi, future bridges/VPN); not systemd-networkd. WiFi is first-class in first-run because the "old laptop in the pantry" install includes WiFi-only machines. host-agent drives NM over DBus; the primary connection is the one with `connection.required-for-network-online=true`. See `BOOT.md`, `BRAIN_HOST_PROTOCOL.md`, `FIRST_RUN.md`.
-- **Brain is one Go binary in a container**, not microservices. SQLite for malmo's own state; managed Postgres is for *apps*.
+- **Brain is one Go binary in a container**, not microservices. SQLite for molma's own state; managed Postgres is for *apps*.
 - **Closed by default for remote access** — no public exposure toggle in v1; identity-based mesh only.
 - **Manifest schema versioned from day one**, public, two-major back-compat. Required fields are minimal (~7-line manifests valid).
 - **Permissions are declared and enforced**, not metadata.

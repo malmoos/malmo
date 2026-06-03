@@ -1,4 +1,4 @@
-// Command brain is malmo-brain — the control-plane daemon (CONTROL_PLANE.md).
+// Command brain is molma-brain — the control-plane daemon (CONTROL_PLANE.md).
 // In production it runs as a container supervised by host-agent; in dev it runs
 // natively (`go run`) against the local Docker socket and the fake host-agent.
 package main
@@ -16,20 +16,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/malmo/malmo/internal/api"
-	"github.com/malmo/malmo/internal/audit"
-	"github.com/malmo/malmo/internal/auth"
-	"github.com/malmo/malmo/internal/caddy"
-	"github.com/malmo/malmo/internal/catalog"
-	"github.com/malmo/malmo/internal/events"
-	"github.com/malmo/malmo/internal/health"
-	"github.com/malmo/malmo/internal/hostclient"
-	"github.com/malmo/malmo/internal/lifecycle"
-	"github.com/malmo/malmo/internal/manifest"
-	"github.com/malmo/malmo/internal/notify"
-	"github.com/malmo/malmo/internal/protocol"
-	"github.com/malmo/malmo/internal/store"
-	"github.com/malmo/malmo/internal/systemlive"
+	"github.com/molmaos/molma/internal/api"
+	"github.com/molmaos/molma/internal/audit"
+	"github.com/molmaos/molma/internal/auth"
+	"github.com/molmaos/molma/internal/caddy"
+	"github.com/molmaos/molma/internal/catalog"
+	"github.com/molmaos/molma/internal/events"
+	"github.com/molmaos/molma/internal/health"
+	"github.com/molmaos/molma/internal/hostclient"
+	"github.com/molmaos/molma/internal/lifecycle"
+	"github.com/molmaos/molma/internal/manifest"
+	"github.com/molmaos/molma/internal/notify"
+	"github.com/molmaos/molma/internal/protocol"
+	"github.com/molmaos/molma/internal/store"
+	"github.com/molmaos/molma/internal/systemlive"
 )
 
 func main() {
@@ -40,7 +40,7 @@ func main() {
 		fatal("create state dir", "err", err)
 	}
 
-	st, err := store.Open(filepath.Join(cfg.stateDir, "malmo.db"))
+	st, err := store.Open(filepath.Join(cfg.stateDir, "molma.db"))
 	if err != nil {
 		fatal("open store", "err", err)
 	}
@@ -148,7 +148,7 @@ func main() {
 
 	srv := api.NewServer(st, cat, life, bus, authMgr, host, auditor, healthMgr, live)
 	httpSrv := &http.Server{Addr: cfg.listen, Handler: srv.Handler()}
-	slog.Info("malmo-brain listening",
+	slog.Info("molma-brain listening",
 		"listen", cfg.listen, "state_dir", cfg.stateDir, "catalog_dir", cfg.catalogDir)
 	if err := httpSrv.ListenAndServe(); err != nil {
 		fatal("http server", "err", err)
@@ -203,19 +203,19 @@ type config struct {
 }
 
 func loadConfig() config {
-	caddyListen := env("MALMO_CADDY_LISTEN", ":80")
+	caddyListen := env("MOLMA_CADDY_LISTEN", ":80")
 	return config{
-		listen:            env("MALMO_LISTEN", ":8080"),
-		stateDir:          env("MALMO_STATE_DIR", "./.dev/state"),
-		catalogDir:        env("MALMO_CATALOG_DIR", "./catalog"),
-		agentSock:         env("MALMO_AGENT_SOCK", protocol.SocketPath),
-		caddyAdmin:        env("MALMO_CADDY_ADMIN", "http://localhost:2019"),
+		listen:            env("MOLMA_LISTEN", ":8080"),
+		stateDir:          env("MOLMA_STATE_DIR", "./.dev/state"),
+		catalogDir:        env("MOLMA_CATALOG_DIR", "./catalog"),
+		agentSock:         env("MOLMA_AGENT_SOCK", protocol.SocketPath),
+		caddyAdmin:        env("MOLMA_CADDY_ADMIN", "http://localhost:2019"),
 		caddyListen:       caddyListen,
-		caddyProbeURL:     env("MALMO_CADDY_PROBE_URL", probeBaseURL(caddyListen)),
-		logLevel:          env("MALMO_LOG_LEVEL", "info"),
-		logFormat:         env("MALMO_LOG_FORMAT", "text"),
-		healthPollPeriod:  envDuration("MALMO_HEALTH_POLL", 60*time.Second),
-		notifyPrunePeriod: envDuration("MALMO_NOTIFY_PRUNE", time.Hour),
+		caddyProbeURL:     env("MOLMA_CADDY_PROBE_URL", probeBaseURL(caddyListen)),
+		logLevel:          env("MOLMA_LOG_LEVEL", "info"),
+		logFormat:         env("MOLMA_LOG_FORMAT", "text"),
+		healthPollPeriod:  envDuration("MOLMA_HEALTH_POLL", 60*time.Second),
+		notifyPrunePeriod: envDuration("MOLMA_NOTIFY_PRUNE", time.Hour),
 	}
 }
 
@@ -223,7 +223,7 @@ func loadConfig() config {
 // EnsureServer) into a base URL the app-unresponsive probe can dial. ":80" →
 // "http://127.0.0.1:80". The probe sets the route Host header and Caddy routes
 // by Host, so the dial target is just Caddy's listener. Override with
-// MALMO_CADDY_PROBE_URL when Caddy isn't at localhost (e.g. the brain in a
+// MOLMA_CADDY_PROBE_URL when Caddy isn't at localhost (e.g. the brain in a
 // container reaching a Caddy container by service name).
 func probeBaseURL(caddyListen string) string {
 	host, port, err := net.SplitHostPort(caddyListen)

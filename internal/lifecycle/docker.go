@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/malmo/malmo/internal/protocol"
+	"github.com/molmaos/molma/internal/protocol"
 )
 
 // DockerDriver is the narrow surface lifecycle needs from Docker. Production
@@ -41,7 +41,7 @@ type DockerDriver interface {
 	ManagedContainers(ctx context.Context) ([]ManagedContainer, error)
 	// RemoveContainersByInstance is the orphan-teardown escape hatch: when the
 	// instance dir is gone, compose can't drive the cleanup, so we kill all
-	// containers labeled malmo.instance_id=<id> directly.
+	// containers labeled molma.instance_id=<id> directly.
 	RemoveContainersByInstance(ctx context.Context, instanceID string) error
 	// RemoveImage removes one locally-stored image by its pinned `repo@sha256:…`
 	// reference (APP_LIFECYCLE.md # stop, start, uninstall — uninstall-time image
@@ -81,8 +81,8 @@ type HostDriver interface {
 	// by writeOverride to build bind-mount sources and the user: directive for
 	// personal-scope app instances.
 	ResolveHome(ctx context.Context, user string) (protocol.ResolveHomeResponse, error)
-	// WellKnownIdentity returns the fixed host service identities: the malmo-app
-	// service UID/GID a household instance runs as, and the malmo-shared GID a
+	// WellKnownIdentity returns the fixed host service identities: the molma-app
+	// service UID/GID a household instance runs as, and the molma-shared GID a
 	// shared-source folder mount joins via group_add.
 	WellKnownIdentity(ctx context.Context) (protocol.WellKnownIdentityResponse, error)
 }
@@ -146,7 +146,7 @@ func composeRun(ctx context.Context, dir, project string, args ...string) (strin
 
 func (cliDocker) Inspect(ctx context.Context, instanceID, mainService string) (bool, string, error) {
 	cid, err := exec.CommandContext(ctx, "docker", "ps", "-q",
-		"--filter", "label=malmo.instance_id="+instanceID,
+		"--filter", "label=molma.instance_id="+instanceID,
 		"--filter", "label=com.docker.compose.service="+mainService).Output()
 	container := strings.TrimSpace(string(cid))
 	if err != nil || container == "" {
@@ -187,7 +187,7 @@ func (cliDocker) NetworkRemove(ctx context.Context, name string) error {
 
 func (cliDocker) RemoveContainersByInstance(ctx context.Context, instanceID string) error {
 	ids, err := exec.CommandContext(ctx, "docker", "ps", "-aq",
-		"--filter", "label=malmo.instance_id="+instanceID).Output()
+		"--filter", "label=molma.instance_id="+instanceID).Output()
 	if err != nil {
 		return err
 	}
@@ -206,7 +206,7 @@ func (cliDocker) RemoveImage(ctx context.Context, ref string) error {
 
 func (cliDocker) RestartCounts(ctx context.Context) (map[string]int, error) {
 	ids, err := exec.CommandContext(ctx, "docker", "ps", "-aq",
-		"--filter", "label=malmo.managed=true").Output()
+		"--filter", "label=molma.managed=true").Output()
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +218,7 @@ func (cliDocker) RestartCounts(ctx context.Context) (map[string]int, error) {
 	// One `docker inspect` over all managed containers: one line each, mapping
 	// the owning instance_id to that container's cumulative RestartCount.
 	args := append([]string{"inspect", "--format",
-		`{{index .Config.Labels "malmo.instance_id"}} {{.RestartCount}}`}, idList...)
+		`{{index .Config.Labels "molma.instance_id"}} {{.RestartCount}}`}, idList...)
 	out, err := exec.CommandContext(ctx, "docker", args...).Output()
 	if err != nil {
 		return nil, err
@@ -243,7 +243,7 @@ func (cliDocker) RestartCounts(ctx context.Context) (map[string]int, error) {
 
 func (cliDocker) ManagedContainers(ctx context.Context) ([]ManagedContainer, error) {
 	ids, err := exec.CommandContext(ctx, "docker", "ps", "-aq",
-		"--filter", "label=malmo.managed=true").Output()
+		"--filter", "label=molma.managed=true").Output()
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +254,7 @@ func (cliDocker) ManagedContainers(ctx context.Context) ([]ManagedContainer, err
 	// One `docker inspect` over all managed containers: instance_id, compose
 	// service, running flag, and StartedAt (RFC3339) per line.
 	args := append([]string{"inspect", "--format",
-		`{{index .Config.Labels "malmo.instance_id"}} {{index .Config.Labels "com.docker.compose.service"}} {{.State.Running}} {{.State.StartedAt}}`}, idList...)
+		`{{index .Config.Labels "molma.instance_id"}} {{index .Config.Labels "com.docker.compose.service"}} {{.State.Running}} {{.State.StartedAt}}`}, idList...)
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
@@ -287,8 +287,8 @@ func (cliDocker) ManagedContainers(ctx context.Context) ([]ManagedContainer, err
 
 func (cliDocker) PSManaged(ctx context.Context) (map[string]bool, error) {
 	out, err := exec.CommandContext(ctx, "docker", "ps", "-a",
-		"--filter", "label=malmo.managed=true",
-		"--format", `{{.Label "malmo.instance_id"}} {{.State}}`).Output()
+		"--filter", "label=molma.managed=true",
+		"--format", `{{.Label "molma.instance_id"}} {{.State}}`).Output()
 	if err != nil {
 		return nil, err
 	}

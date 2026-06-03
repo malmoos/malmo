@@ -17,10 +17,10 @@ Only `deleteUser` remains in-memory after this slice.
 
 ## What was done
 
-### Spec hygiene — `sudo` vs `malmo-admin`
+### Spec hygiene — `sudo` vs `molma-admin`
 
 `BRAIN_HOST_PROTOCOL.md:115` said `set-role` updates membership in
-**`malmo-admin`**. Every other doc — `USERS_AND_GROUPS.md`, `FIRST_RUN.md`,
+**`molma-admin`**. Every other doc — `USERS_AND_GROUPS.md`, `FIRST_RUN.md`,
 `CLAUDE.md` Load-bearing decisions, `DECISIONS.md` 2026-05-15 — locks the
 group as **`sudo`**. Protocol doc was wrong; corrected in this change to point
 at `USERS_AND_GROUPS.md` # Roles as the owning policy. Per CLAUDE.md
@@ -76,7 +76,7 @@ spurious 500s.
 Pre-flight check during the plan surfaced that the bootstrap paths never
 called SetRole; they only flipped the role in SQLite. With the fake this was
 invisible. With real `gpasswd` it means the first admin would be created with
-the `malmo` primary group but never added to `sudo` — breaking the
+the `molma` primary group but never added to `sudo` — breaking the
 shell-rescue path that's the entire reason admins get sudo in the first place
 (`USERS_AND_GROUPS.md` # Why admins get sudo).
 
@@ -137,7 +137,7 @@ package-doc comment updated.
 ## How it maps to the specs
 
 - `BRAIN_HOST_PROTOCOL.md` # Credential mutation endpoints — `set-role`
-  contract unchanged on the wire; back-end becomes real; `malmo-admin` →
+  contract unchanged on the wire; back-end becomes real; `molma-admin` →
   `sudo` correction landed in the same change.
 - `USERS_AND_GROUPS.md` # Roles — admin = in `sudo`, member = not. First
   admin added to `sudo` at account creation (now actually enforced).
@@ -165,7 +165,7 @@ package-doc comment updated.
   rolled back but the Linux user stays. Same shape as the
   `0015` orphan-on-chpasswd-failure gap; closes when real `deleteUser` lands
   and the rollback paths can call it.
-- **Stale group caches.** No `nscd` on a stock malmo box, so reads from
+- **Stale group caches.** No `nscd` on a stock molma box, so reads from
   `/etc/group` after a `gpasswd` reflect immediately. If `nscd` / `sssd` ever
   enters the picture, the read-after-write in the integration test could flake.
 - **TOCTOU window in the demote pre-check.** `SetRole("member")` reads
@@ -180,7 +180,7 @@ package-doc comment updated.
 
 - Real `deleteUser` in `host-agent-real` (`userdel -r`; cleanup-on-failure
   hooks in `/setup` and `createUser` rollback paths).
-- nspawn-lane wiring for `test-usermgr` (provision `malmo` group + ensure
+- nspawn-lane wiring for `test-usermgr` (provision `molma` group + ensure
   `sudo` group present, run under systemd-nspawn instead of host root).
 - Use-case folder creation (`Photos/`, `Documents/`, ...) at user-create time
   (`STORAGE.md` territory).

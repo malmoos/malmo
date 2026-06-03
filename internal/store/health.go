@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/malmo/malmo/internal/health"
+	"github.com/molmaos/molma/internal/health"
 )
 
 // IntegrityCheck runs SQLite's PRAGMA integrity_check and returns its result.

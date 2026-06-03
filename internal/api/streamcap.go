@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/malmo/malmo/internal/auth"
+	"github.com/molmaos/molma/internal/auth"
 )
 
 // maxStreamsPerSession caps concurrent SSE streams per session

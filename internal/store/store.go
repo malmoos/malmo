@@ -38,7 +38,7 @@ const (
 	ScopePersonal  = "personal"
 )
 
-// User is a malmo dashboard account. The brain mirrors a Linux account
+// User is a molma dashboard account. The brain mirrors a Linux account
 // (USERS_AND_GROUPS.md); the *password* lives in PAM via host-agent, never
 // in this row. `recovery_hash` is set only for admins (AUTH.md # Recovery).
 type User struct {

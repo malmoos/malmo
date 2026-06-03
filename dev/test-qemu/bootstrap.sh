@@ -8,11 +8,11 @@
 #   2. Build the storage-verify binary statically.
 #   3. Generate a test SSH keypair under .dev/qemu/ if absent.
 #   4. Stage mkosi.extra/ with: dist/systemd/ units at their on-target
-#      paths, the storage-verify binary at /usr/lib/malmo/, root's
+#      paths, the storage-verify binary at /usr/lib/molma/, root's
 #      authorized_keys, and sshd config drop-in.
 #   5. Invoke `mkosi build` (cached after first run).
 #
-# Idempotent via .dev/qemu/.malmo-medium-ready (versioned content gate,
+# Idempotent via .dev/qemu/.molma-medium-ready (versioned content gate,
 # same idiom as dev/test-nspawn/bootstrap.sh).
 set -euo pipefail
 
@@ -20,10 +20,10 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 TEST_DIR="${REPO_ROOT}/dev/test-qemu"
 WORK="${REPO_ROOT}/.dev/qemu"
 EXTRA="${TEST_DIR}/mkosi.extra"
-CANARY="${WORK}/.malmo-medium-ready"
+CANARY="${WORK}/.molma-medium-ready"
 CANARY_VERSION="v16"  # bump when mkosi.conf changes require a clean rebuild
 PASSPHRASE_FILE="${TEST_DIR}/mkosi.passphrase"  # LUKS recovery key (slice 0023); gitignored
-IMAGE_OUT="${WORK}/malmo-medium.raw"
+IMAGE_OUT="${WORK}/molma-medium.raw"
 SSH_KEY="${WORK}/ssh-key"
 
 if [ "${EUID:-$(id -u)}" -ne 0 ]; then
@@ -131,22 +131,22 @@ if [ -f "$CANARY" ] && [ "$(cat "$CANARY")" = "$CANARY_VERSION" ] \
 fi
 
 # --- 2. build storage-verify statically
-VERIFY_BIN="${WORK}/malmo-storage-verify"
+VERIFY_BIN="${WORK}/molma-storage-verify"
 if [ -n "$CALLER" ]; then
     sudo -u "$CALLER" env CGO_ENABLED=0 "$GO" build -o "$VERIFY_BIN" \
-        "${REPO_ROOT}/cmd/malmo-storage-verify/"
+        "${REPO_ROOT}/cmd/molma-storage-verify/"
 else
     CGO_ENABLED=0 "$GO" build -o "$VERIFY_BIN" \
-        "${REPO_ROOT}/cmd/malmo-storage-verify/"
+        "${REPO_ROOT}/cmd/molma-storage-verify/"
 fi
 
 # --- 3. SSH keypair
 if [ ! -f "$SSH_KEY" ]; then
     if [ -n "$CALLER" ]; then
-        sudo -u "$CALLER" ssh-keygen -t ed25519 -N "" -C "malmo-medium-test" \
+        sudo -u "$CALLER" ssh-keygen -t ed25519 -N "" -C "molma-medium-test" \
             -f "$SSH_KEY"
     else
-        ssh-keygen -t ed25519 -N "" -C "malmo-medium-test" -f "$SSH_KEY"
+        ssh-keygen -t ed25519 -N "" -C "molma-medium-test" -f "$SSH_KEY"
     fi
 fi
 chmod 0600 "$SSH_KEY"
@@ -158,7 +158,7 @@ chmod 0600 "$SSH_KEY"
 # generated recovery passphrase. Generated once, persisted, gitignored.
 # run-medium-tests.sh reads it back to build the first-boot SMBIOS
 # credential; the enrollment service reads the staged copy at
-# /etc/malmo/secrets/luks-recovery.key. Single source of truth.
+# /etc/molma/secrets/luks-recovery.key. Single source of truth.
 if [ ! -f "$PASSPHRASE_FILE" ]; then
     # 32 hex chars, no newline — matches the cryptsetup/crypttab keyfile format.
     head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$PASSPHRASE_FILE"
@@ -171,19 +171,19 @@ fi
 # --- 4. stage mkosi.extra/
 rm -rf "$EXTRA"
 mkdir -p "$EXTRA/etc/systemd/system" \
-         "$EXTRA/usr/lib/malmo" \
+         "$EXTRA/usr/lib/molma" \
          "$EXTRA/root/.ssh" \
          "$EXTRA/etc/ssh/sshd_config.d" \
-         "$EXTRA/etc/malmo/secrets" \
+         "$EXTRA/etc/molma/secrets" \
          "$EXTRA/usr/local/bin"
 
 # Recovery keyfile baked at the production path STORAGE.md specifies
-# (/etc/malmo/secrets/luks-recovery.key, mode 0400, root-owned). The
+# (/etc/molma/secrets/luks-recovery.key, mode 0400, root-owned). The
 # first-boot enrollment service reads it via systemd-cryptenroll
 # --unlock-key-file to authorize adding the TPM2 keyslot — exactly what
 # host-agent's first-run would do in production.
-cp "$PASSPHRASE_FILE" "$EXTRA/etc/malmo/secrets/luks-recovery.key"
-chmod 0400 "$EXTRA/etc/malmo/secrets/luks-recovery.key"
+cp "$PASSPHRASE_FILE" "$EXTRA/etc/molma/secrets/luks-recovery.key"
+chmod 0400 "$EXTRA/etc/molma/secrets/luks-recovery.key"
 
 # Kernel cmdline for the encrypted root (slice 0023). systemd-repart
 # derives the LUKS header UUID from the pinned root partition UUID (see
@@ -211,29 +211,29 @@ printf 'rd.luks.uuid=%s rd.luks.options=tpm2-device=auto root=/dev/mapper/luks-%
 
 # dist/systemd units. Same shape as 0020's staging but installed
 # permanently into the image rather than bind-mounted at runtime.
-cp "${REPO_ROOT}/dist/systemd/malmo-storage-ready.target"   "$EXTRA/etc/systemd/system/"
-cp "${REPO_ROOT}/dist/systemd/malmo-storage-verify.service" "$EXTRA/etc/systemd/system/"
-cp "${REPO_ROOT}/dist/systemd/malmo-recovery.target"        "$EXTRA/etc/systemd/system/"
+cp "${REPO_ROOT}/dist/systemd/molma-storage-ready.target"   "$EXTRA/etc/systemd/system/"
+cp "${REPO_ROOT}/dist/systemd/molma-storage-verify.service" "$EXTRA/etc/systemd/system/"
+cp "${REPO_ROOT}/dist/systemd/molma-recovery.target"        "$EXTRA/etc/systemd/system/"
 
-# host-agent.service references /usr/lib/malmo/host-agent-real which we
+# host-agent.service references /usr/lib/molma/host-agent-real which we
 # don't have in the medium-lane image (the brain stack isn't part of
 # this slice). Drop a /bin/true symlink so the unit loads if anything
 # inspects it; but DON'T enable the unit — nothing in /etc/systemd/system/
 # *.wants/ pulls host-agent.service in.
 cp "${REPO_ROOT}/dist/systemd/host-agent.service" "$EXTRA/etc/systemd/system/"
-ln -sf /bin/true "$EXTRA/usr/lib/malmo/host-agent-real"
+ln -sf /bin/true "$EXTRA/usr/lib/molma/host-agent-real"
 
 # storage-verify binary.
-cp "$VERIFY_BIN" "$EXTRA/usr/lib/malmo/malmo-storage-verify"
-chmod 0755 "$EXTRA/usr/lib/malmo/malmo-storage-verify"
+cp "$VERIFY_BIN" "$EXTRA/usr/lib/molma/molma-storage-verify"
+chmod 0755 "$EXTRA/usr/lib/molma/molma-storage-verify"
 
 # First-boot TPM2 enrollment (slice 0023 Stage 2): the run-once unit +
 # its enrollment script. The unit gates on a marker (run-once); the
-# postinst wires its .wants symlink under malmo-storage-ready.target.
+# postinst wires its .wants symlink under molma-storage-ready.target.
 # This is the test-lane stand-in for host-agent's first-run enrollment.
-cp "${TEST_DIR}/malmo-tpm-enroll.service" "$EXTRA/etc/systemd/system/"
-cp "${TEST_DIR}/first-boot-tpm-enroll.sh" "$EXTRA/usr/lib/malmo/first-boot-tpm-enroll.sh"
-chmod 0755 "$EXTRA/usr/lib/malmo/first-boot-tpm-enroll.sh"
+cp "${TEST_DIR}/molma-tpm-enroll.service" "$EXTRA/etc/systemd/system/"
+cp "${TEST_DIR}/first-boot-tpm-enroll.sh" "$EXTRA/usr/lib/molma/first-boot-tpm-enroll.sh"
+chmod 0755 "$EXTRA/usr/lib/molma/first-boot-tpm-enroll.sh"
 
 # sshd: allow root key-login, no passwords (test image only).
 cat >"$EXTRA/etc/ssh/sshd_config.d/medium-test.conf" <<'EOF'
@@ -321,8 +321,8 @@ fi
 # and ImageId).
 if [ ! -f "$IMAGE_OUT" ]; then
     # mkosi 22+ default extension is .raw; some versions emit
-    # malmo-medium.raw or malmo-medium.
-    for cand in "${WORK}/malmo-medium.raw" "${WORK}/malmo-medium"; do
+    # molma-medium.raw or molma-medium.
+    for cand in "${WORK}/molma-medium.raw" "${WORK}/molma-medium"; do
         if [ -f "$cand" ]; then
             ln -sf "$(basename "$cand")" "$IMAGE_OUT" 2>/dev/null || \
                 cp "$cand" "$IMAGE_OUT"

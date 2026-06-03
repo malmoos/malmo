@@ -1,18 +1,18 @@
-# malmo Authentication & Sessions
+# molma Authentication & Sessions
 
-> How the malmo dashboard authenticates users, how sessions are managed, and how admin vs. member roles are enforced. Companion to `FIRST_RUN.md`, `MALMO_NETWORK.md`, `CONTROL_PLANE.md`, `SERVICE_PROVISIONING.md`.
+> How the molma dashboard authenticates users, how sessions are managed, and how admin vs. member roles are enforced. Companion to `FIRST_RUN.md`, `MOLMA_NETWORK.md`, `CONTROL_PLANE.md`, `SERVICE_PROVISIONING.md`.
 
 ## Scope
 
-The malmo session governs **malmo's own surfaces only**:
+The molma session governs **molma's own surfaces only**:
 
 - The dashboard (install apps, see system status, browse the catalog).
 - Settings (network, storage, users, telemetry).
 - Tier-2 admin UIs (Tailscale, Samba, DLNA) — served *inside* the dashboard at `/settings/<service>/*`. Same origin as the dashboard, same session.
 
-The malmo session does **not** govern:
+The molma session does **not** govern:
 
-- **Tier-3 apps** (`photos.local`, etc.). Each app has its own auth — explicit no-SSO call (`SPEC.md` # Accounts & users). Subdomain isolation is load-bearing for security; the malmo cookie is scoped to the dashboard host and never reaches app subdomains.
+- **Tier-3 apps** (`photos.local`, etc.). Each app has its own auth — explicit no-SSO call (`SPEC.md` # Accounts & users). Subdomain isolation is load-bearing for security; the molma cookie is scoped to the dashboard host and never reaches app subdomains.
 - **Device access (SSH + SMB).** Linux PAM + Samba directly. These services authenticate against the same password the user uses for the dashboard (PAM is the source of truth), but the brain's session cookie does not apply to them. Each protocol is opt-in per user — see "Device access (SSH + SMB)" below.
 
 ## Identity primitive: password
@@ -21,7 +21,7 @@ The malmo session does **not** govern:
 
 **Why not passkeys in v1:**
 
-- Passkeys are origin-bound by design. A passkey on `malmo.local` doesn't work on `cindy-zx9.malmo.network`. With the toggle that flips schemes, users would re-enroll per origin — terrible UX.
+- Passkeys are origin-bound by design. A passkey on `molma.local` doesn't work on `cindy-zx9.molma.network`. With the toggle that flips schemes, users would re-enroll per origin — terrible UX.
 - No email = no fallback recovery for a lost passkey. Password recovery still has to exist anyway.
 - WebAuthn ceremony + attestation + recovery flows is real complexity for a v1 audience that's tinkerers-then-households.
 
@@ -41,12 +41,12 @@ The brain has a `sessions` table in SQLite. Login mints a row, returns a 256-bit
 
 | Attribute   | Value                                                                 |
 |-------------|-----------------------------------------------------------------------|
-| Name        | `malmo_session`                                                       |
+| Name        | `molma_session`                                                       |
 | Value       | 256 bits of CSPRNG entropy, base64url-encoded                         |
 | `HttpOnly`  | yes                                                                   |
-| `Secure`    | yes on `.malmo.network`, no on `malmo.local` (HTTP-only there)        |
+| `Secure`    | yes on `.molma.network`, no on `molma.local` (HTTP-only there)        |
 | `SameSite`  | `Lax`                                                                 |
-| `Domain`    | *unset* — scoped to the exact host (`malmo.local`). Critical: do NOT set a broader `Domain` such as `.local`, which would leak the session to every `.local` host on the LAN — all app origins (`<slug>.local`) and any other `.local` device — defeating origin isolation. Apps are single-label siblings (`<slug>.local`), not subdomains of `malmo.local`, so host-scoping keeps the dashboard session off every app origin. |
+| `Domain`    | *unset* — scoped to the exact host (`molma.local`). Critical: do NOT set a broader `Domain` such as `.local`, which would leak the session to every `.local` host on the LAN — all app origins (`<slug>.local`) and any other `.local` device — defeating origin isolation. Apps are single-label siblings (`<slug>.local`), not subdomains of `molma.local`, so host-scoping keeps the dashboard session off every app origin. |
 | `Path`      | `/`                                                                   |
 
 **Why opaque cookies over JWTs:** JWTs win when multiple services need to verify without a roundtrip. We have one backend (the brain). JWTs would just give us non-revocable tokens with bigger payloads. Opaque cookies give us instant server-side revocation (logout, password change, "sign out everywhere"), tiny client cookies, and no JWT-key rotation theater. The DB hit per request is negligible at home-server scale.
@@ -81,10 +81,10 @@ sessions:
 
 The cookie is scoped to the exact host. So:
 
-- On `malmo.local`, the user has a `malmo_session` cookie for `malmo.local`.
-- On `cindy-zx9.malmo.network`, they have a separate `malmo_session` cookie for `cindy-zx9.malmo.network`. Different cookie, different session row server-side.
+- On `molma.local`, the user has a `molma_session` cookie for `molma.local`.
+- On `cindy-zx9.molma.network`, they have a separate `molma_session` cookie for `cindy-zx9.molma.network`. Different cookie, different session row server-side.
 
-When the user flips the "Use secure URLs" toggle in Settings → Network (see `MALMO_NETWORK.md`):
+When the user flips the "Use secure URLs" toggle in Settings → Network (see `MOLMA_NETWORK.md`):
 
 1. Brain marks the current session's `origin` as the *old* one.
 2. Brain proactively expires all sessions whose `origin` matches the off-mode (so a stale `.local` session doesn't linger after the user committed to `.network`).
@@ -104,7 +104,7 @@ The login page lists every account on the box — first name + colored letter gl
 - "Enter your username" is friction. Users remember first names; they forget exact slugs.
 - Matches consumer multi-user OS UX (macOS login, Plex profile picker).
 
-**Tradeoff:** anyone who reaches the dashboard URL sees the user list. Acceptable in the household trust model — the security boundary is "you're authenticated to malmo," not "you don't know who lives here." Tinkerers who want stricter posture can flip a Settings toggle to switch to a blank username + password form.
+**Tradeoff:** anyone who reaches the dashboard URL sees the user list. Acceptable in the household trust model — the security boundary is "you're authenticated to molma," not "you don't know who lives here." Tinkerers who want stricter posture can flip a Settings toggle to switch to a blank username + password form.
 
 ## Rate limiting
 
@@ -151,13 +151,13 @@ Routes are grouped by role at the router level (e.g., `/api/admin/*` requires ad
 
 Critical architectural decision — separate doc-section because it shapes auth heavily.
 
-Tier-2 apps (Tailscale, Samba, DLNA) install as **native Debian packages under systemd**, not Docker containers. Their admin UIs are **not exposed at their own subdomain**. Instead, the malmo dashboard surfaces a hand-curated UI for each Tier-2 service at `/settings/<service>/*` (e.g., `/settings/tailscale`, `/settings/shares`).
+Tier-2 apps (Tailscale, Samba, DLNA) install as **native Debian packages under systemd**, not Docker containers. Their admin UIs are **not exposed at their own subdomain**. Instead, the molma dashboard surfaces a hand-curated UI for each Tier-2 service at `/settings/<service>/*` (e.g., `/settings/tailscale`, `/settings/shares`).
 
-The brain edits config files (`/etc/samba/smb.conf`) and toggles systemd units (`systemctl restart smbd`) via host-agent. The user never sees the upstream admin UI; they see malmo's UI talking about the same underlying knobs.
+The brain edits config files (`/etc/samba/smb.conf`) and toggles systemd units (`systemctl restart smbd`) via host-agent. The user never sees the upstream admin UI; they see molma's UI talking about the same underlying knobs.
 
-**Why this collapses the auth problem:** Tier-2 routes are same-origin as the dashboard. The `malmo_session` cookie just works. No forward-auth, no per-app subdomain, no embedded iframes, no Authelia-style central-login redirect dance.
+**Why this collapses the auth problem:** Tier-2 routes are same-origin as the dashboard. The `molma_session` cookie just works. No forward-auth, no per-app subdomain, no embedded iframes, no Authelia-style central-login redirect dance.
 
-**Tier-2 vs. Tier-3 in one sentence:** Tier-2 is *malmo's UI for things it manages on the host*; Tier-3 is *third-party apps malmo runs in containers with their own UIs at their own subdomains*. Different shapes, different auth stories.
+**Tier-2 vs. Tier-3 in one sentence:** Tier-2 is *molma's UI for things it manages on the host*; Tier-3 is *third-party apps molma runs in containers with their own UIs at their own subdomains*. Different shapes, different auth stories.
 
 See `SERVICE_PROVISIONING.md` for the full Tier-2 architecture.
 
@@ -205,7 +205,7 @@ The user lands on the dashboard with a fresh password and a fresh recovery code.
 ### Threat model
 
 - **Lost code, forgotten password = no recovery.** Same as LUKS recovery passphrase semantics. Honest.
-- **Phone-photo of code lands in iCloud/Google Photos.** Worth being explicit about in the privacy doc. Threat trade is "I forget my password" (likely) vs. "cloud photo backup is breached AND attacker correlates it to my malmo box AND reaches my box on LAN" (extremely unlikely). For the household audience, convenience wins. Tinkerers who care write it down instead.
+- **Phone-photo of code lands in iCloud/Google Photos.** Worth being explicit about in the privacy doc. Threat trade is "I forget my password" (likely) vs. "cloud photo backup is breached AND attacker correlates it to my molma box AND reaches my box on LAN" (extremely unlikely). For the household audience, convenience wins. Tinkerers who care write it down instead.
 - **No physical-access reset.** Box gets stolen → TPM auto-unlocks LUKS → if "physical access = admin reset" were a path, the thief would become admin of a now-decrypted system. Rejected for this reason — see `DECISIONS.md` 2026-05-14.
 
 ### Separate from LUKS recovery passphrase
@@ -220,7 +220,7 @@ The LUKS recovery passphrase (shown at install, see `STORAGE.md`) recovers **dis
 
 **Default posture: services on, accounts off.** sshd and Samba are enabled at boot, but no Linux account can log in to either until explicitly allowed:
 
-- `sshd_config.d/malmo-allowed.conf` carries an `AllowUsers` allowlist. Empty at install — sshd rejects every account by default.
+- `sshd_config.d/molma-allowed.conf` carries an `AllowUsers` allowlist. Empty at install — sshd rejects every account by default.
 - `smb.conf` carries a `valid users` directive per share. Empty at install — Samba rejects every account.
 
 The password exists in PAM and is valid; the services just don't accept any user yet.
@@ -231,7 +231,7 @@ The password exists in PAM and is valid; the services just don't accept any user
 2. Confirm dashboard password (re-auth gate, prevents stolen-session abuse).
 3. Optional: paste an SSH public key (preferred for SSH; SMB doesn't use keys).
 4. Brain calls host-agent → adds the user to the relevant allowlist (`sshd AllowUsers` and/or Samba `valid users`) → reloads the service. Optionally writes `~/.ssh/authorized_keys`.
-5. User can now connect using their existing malmo password.
+5. User can now connect using their existing molma password.
 
 **Why one password instead of two:**
 
@@ -247,14 +247,14 @@ The password exists in PAM and is valid; the services just don't accept any user
 
 For the operations that need host privilege:
 
-- **Dashboard login (every login):** brain → host-agent `verify_password(user, password)` → PAM `authenticate()` → yes/no. The brain mints a session on yes; rate-limits on no. The PAM service name is `malmo`; the stack lives at `/etc/pam.d/malmo`.
+- **Dashboard login (every login):** brain → host-agent `verify_password(user, password)` → PAM `authenticate()` → yes/no. The brain mints a session on yes; rate-limits on no. The PAM service name is `molma`; the stack lives at `/etc/pam.d/molma`.
 - **Password change** (Settings → My account → password, or recovery-code flow): brain → host-agent → `passwd <user>` + Samba sync (one atomic operation).
 - **SSH/SMB opt-in toggles:** brain → host-agent → add user to `AllowUsers` / `valid users` allowlist + service reload. Optional `authorized_keys` write.
 - **Tier-2 admin operations:** brain → host-agent → edit config, `systemctl` restart.
 
 The brain's session middleware reaches host-agent for *credential verification* on each login (PAM is the credential store, not brain SQLite). After a session is established, role + ACL checks stay inside the brain — no per-request roundtrip. Host-agent trusts the brain because brain ↔ host-agent communication is over a private channel: a UNIX socket whose access is kernel-enforced via group membership. See `BRAIN_HOST_PROTOCOL.md` for the full protocol.
 
-**Test invariant (CI must assert):** the `malmo` group on the running system contains exactly one member — the brain's container runtime UID. Any additional member is a configuration error and fails the test. This is the entire authn/authz model for the brain↔host-agent boundary; if group membership is wrong, the security boundary is broken.
+**Test invariant (CI must assert):** the `molma` group on the running system contains exactly one member — the brain's container runtime UID. Any additional member is a configuration error and fails the test. This is the entire authn/authz model for the brain↔host-agent boundary; if group membership is wrong, the security boundary is broken.
 
 ## Sharp edges
 
@@ -268,7 +268,7 @@ The brain's session middleware reaches host-agent for *credential verification* 
 
 - **Identity primitive: password only in v1.** No passkeys, no TOTP, no email-based recovery.
 - **Password storage: PAM (`/etc/shadow`) is the source of truth.** Brain verifies via host-agent's `verify_password`. Brain SQLite carries no password hash.
-- **One password for dashboard, SSH, and SMB.** The user has a single malmo password; service access (SSH, SMB) is gated per-protocol via allowlists, not separate credentials.
+- **One password for dashboard, SSH, and SMB.** The user has a single molma password; service access (SSH, SMB) is gated per-protocol via allowlists, not separate credentials.
 - **Session shape: server-side opaque cookie**, 256-bit random ID, `HttpOnly`, `SameSite=Lax`, host-scoped (no `Domain` attribute), `Secure` on HTTPS origins.
 - **Session lifetime: 30-day rolling, 90-day hard cap.**
 - **Login UX: user-list style** with first name + letter glyph. Settings toggle to switch to a blank-form login for privacy-conscious users.
@@ -284,5 +284,5 @@ The brain's session middleware reaches host-agent for *credential verification* 
 - `FIRST_RUN.md` — Step 2 adds the recovery-code sub-step. Per-account SSH/SMB opt-in explicitly out of the first-run flow (it's a post-install Settings toggle, not a wizard step).
 - `SERVICE_PROVISIONING.md` — Tier-2 implementation locked as "native Debian + systemd; UI in the dashboard." Previously left as "container or host service — implementation detail."
 - `CONTROL_PLANE.md` — host-agent scope expands to include Tier-2 systemd/config management, user-credential verification (`verify_password`), and credential mutations (`passwd`, `authorized_keys`, sshd/Samba allowlists).
-- `MALMO_NETWORK.md` — "toggle-flip re-auth" sharp edge points here for the concrete mechanism.
-- `SPEC.md` — "No malmo SSO into apps" still correct; this doc covers what the malmo session *does* govern.
+- `MOLMA_NETWORK.md` — "toggle-flip re-auth" sharp edge points here for the concrete mechanism.
+- `SPEC.md` — "No molma SSO into apps" still correct; this doc covers what the molma session *does* govern.

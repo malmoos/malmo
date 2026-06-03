@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/malmo/malmo/internal/auth"
+	"github.com/molmaos/molma/internal/auth"
 )
 
 // --- streamCap unit tests (deterministic, no HTTP) -----------------------

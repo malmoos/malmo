@@ -10,7 +10,7 @@ Door-2's *permission authoring* (LAN/GPU toggles, folder-grant rows, the Edit-as
 
 ## What was done
 
-**Backend — `expose:` port inference** (`internal/manifest/synthesize.go`): new `InferMainPort(composeBytes, mainService) int` reads the main service's single `expose:` value and returns it (1..65535), or `0` when the compose is silent, exposes several ports (ambiguous), or the value isn't a plain port (a range, say). Host-call-free and advisory: malmo can't read the image's real `EXPOSE` without pulling it, so `main_port` stays required and editable in the form. The helper is written as the seam #57 grows to also mine the container side of a published `ports:` mapping.
+**Backend — `expose:` port inference** (`internal/manifest/synthesize.go`): new `InferMainPort(composeBytes, mainService) int` reads the main service's single `expose:` value and returns it (1..65535), or `0` when the compose is silent, exposes several ports (ambiguous), or the value isn't a plain port (a range, say). Host-call-free and advisory: molma can't read the image's real `EXPOSE` without pulling it, so `main_port` stays required and editable in the form. The helper is written as the seam #57 grows to also mine the container side of a published `ports:` mapping.
 
 **Backend — read-only inspect endpoint** (`internal/api/api.go` `inspectCustomApp`): `POST /api/v1/apps/custom/inspect` → `{services, main_port}`. Admin-only (`requireAdmin`; Door 2 is admin-only), host-call-free, and deliberately **not** admission-checked — admission gates on submit, where its field-named rejection is coached inline. It resolves the service whose `expose:` to read (the form's pick, or the sole service) so the form can prefill the port both on first paste and after a dropdown choice.
 

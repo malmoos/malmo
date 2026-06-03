@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
-	"github.com/malmo/malmo/internal/lifecycle"
-	"github.com/malmo/malmo/internal/manifest"
-	"github.com/malmo/malmo/internal/store"
+	"github.com/molmaos/molma/internal/lifecycle"
+	"github.com/molmaos/molma/internal/manifest"
+	"github.com/molmaos/molma/internal/store"
 )
 
 // jellyfinManifest parses the shared folders fixture: movies (write,

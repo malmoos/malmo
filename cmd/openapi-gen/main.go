@@ -19,7 +19,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/malmo/malmo/internal/api"
+	"github.com/molmaos/molma/internal/api"
 )
 
 func main() {

@@ -68,7 +68,7 @@ func Synthesize(name string, composeBytes []byte, mainService string, mainPort i
 // ComposeServiceNames returns the service names declared under `services:` in a
 // compose document, erroring if the bytes aren't valid YAML or declare no
 // services. Two consumers: Synthesize (Door-2 main-service inference) and the
-// `malmo manifest lint` CLI (confirming a manifest's main_service exists in its
+// `molma manifest lint` CLI (confirming a manifest's main_service exists in its
 // sibling compose).
 func ComposeServiceNames(composeBytes []byte) ([]string, error) {
 	var doc struct {
@@ -95,7 +95,7 @@ func ComposeServiceNames(composeBytes []byte) ([]string, error) {
 // rejection (Caddy fronts every app; we read the container side for the prefill,
 // we don't honor the host binding). Returns 0 when the compose is silent,
 // declares several ports (ambiguous), or the value isn't a plain 1..65535 port —
-// the form then asks. `main_port` stays required and editable regardless: malmo
+// the form then asks. `main_port` stays required and editable regardless: molma
 // can't read the image's real EXPOSE without pulling it, so this is
 // prefill-and-confirm only.
 func InferMainPort(composeBytes []byte, mainService string) int {

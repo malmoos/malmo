@@ -115,7 +115,7 @@ type Permissions struct {
 	// (APP_MANIFEST.md # folders). The manifest declares *what* content the app
 	// touches (folder + mode + subfolder granularity); it does NOT declare the
 	// source. Source — the owner's personal `~/<Folder>/` vs the household
-	// `/srv/malmo/shared/<Folder>/` — is the installer's per-folder election at
+	// `/srv/molma/shared/<Folder>/` — is the installer's per-folder election at
 	// install time, because the author can't know whether a given household
 	// wants "my own Jellyfin on my movies" or "on the family library"
 	// (DECISIONS.md 2026-05-30 — folder source is installer-elected). Supersedes
@@ -146,9 +146,9 @@ type Folder struct {
 	// Target is the explicit in-container destination path, set ONLY by Door-2
 	// synthetic manifests (DASHBOARD.md # Folder grants carry an explicit
 	// destination path). A pasted third-party compose has no author to map
-	// MALMO_FOLDER_<NAME>, so the admin types where the app reads its data and
+	// MOLMA_FOLDER_<NAME>, so the admin types where the app reads its data and
 	// the brain binds the elected source straight there. Store manifests omit it
-	// and keep the fixed `/malmo/<folder>` + env-var convention.
+	// and keep the fixed `/molma/<folder>` + env-var convention.
 	Target string `yaml:"target,omitempty"`
 }
 

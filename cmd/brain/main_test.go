@@ -10,13 +10,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/malmo/malmo/internal/audit"
-	"github.com/malmo/malmo/internal/health"
-	"github.com/malmo/malmo/internal/lifecycle"
-	"github.com/malmo/malmo/internal/manifest"
-	"github.com/malmo/malmo/internal/notify"
-	"github.com/malmo/malmo/internal/protocol"
-	"github.com/malmo/malmo/internal/store"
+	"github.com/molmaos/molma/internal/audit"
+	"github.com/molmaos/molma/internal/health"
+	"github.com/molmaos/molma/internal/lifecycle"
+	"github.com/molmaos/molma/internal/manifest"
+	"github.com/molmaos/molma/internal/notify"
+	"github.com/molmaos/molma/internal/protocol"
+	"github.com/molmaos/molma/internal/store"
 )
 
 // fakeEventStore captures audit rows so the per-issue emission can be asserted

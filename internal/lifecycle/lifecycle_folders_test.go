@@ -2,7 +2,7 @@ package lifecycle
 
 // Folder-enforcement scenarios: writeOverride/writeEnv stamping user:, bind
 // mounts from the elected source, group_add for shared sources, device
-// passthrough, and MALMO_FOLDER_* injection (APP_ISOLATION.md # User content).
+// passthrough, and MOLMA_FOLDER_* injection (APP_ISOLATION.md # User content).
 
 import (
 	"context"
@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/malmo/malmo/internal/hostclient"
-	"github.com/malmo/malmo/internal/manifest"
-	"github.com/malmo/malmo/internal/store"
+	"github.com/molmaos/molma/internal/hostclient"
+	"github.com/molmaos/molma/internal/manifest"
+	"github.com/molmaos/molma/internal/store"
 	"gopkg.in/yaml.v3"
 )
 
@@ -83,20 +83,20 @@ func TestInstallFolders_HouseholdSharedWrite(t *testing.T) {
 		foldersManifest("write", "whole"),
 		[]FolderMount{{Folder: "documents", Source: sourceShared}})
 
-	// Household instances run as the malmo-app service identity (fake: 2000).
+	// Household instances run as the molma-app service identity (fake: 2000).
 	if got := app["user"]; got != "2000:2000" {
 		t.Errorf("user: want 2000:2000, got %v", got)
 	}
-	wantVol := "/srv/malmo/shared/Documents:/malmo/documents:rw" // write → :rw
+	wantVol := "/srv/molma/shared/Documents:/molma/documents:rw" // write → :rw
 	if !hasString(app["volumes"], wantVol) {
 		t.Errorf("volumes: want %q, got %v", wantVol, app["volumes"])
 	}
-	// Shared source → group_add the malmo-shared GID (fake: 2001).
+	// Shared source → group_add the molma-shared GID (fake: 2001).
 	if !hasString(app["group_add"], "2001") {
 		t.Errorf("group_add: want 2001, got %v", app["group_add"])
 	}
-	if !strings.Contains(env, "MALMO_FOLDER_DOCUMENTS=/malmo/documents") {
-		t.Errorf("env missing MALMO_FOLDER_DOCUMENTS, got:\n%s", env)
+	if !strings.Contains(env, "MOLMA_FOLDER_DOCUMENTS=/molma/documents") {
+		t.Errorf("env missing MOLMA_FOLDER_DOCUMENTS, got:\n%s", env)
 	}
 }
 
@@ -111,7 +111,7 @@ func TestInstallFolders_PersonalSourceReadWithSubfolder(t *testing.T) {
 	if got := app["user"]; got != "3000:3000" {
 		t.Errorf("user: want 3000:3000, got %v", got)
 	}
-	wantVol := "/home/alex/Documents/Work:/malmo/documents:ro" // read → :ro, subfolder narrows source
+	wantVol := "/home/alex/Documents/Work:/molma/documents:ro" // read → :ro, subfolder narrows source
 	if !hasString(app["volumes"], wantVol) {
 		t.Errorf("volumes: want %q, got %v", wantVol, app["volumes"])
 	}
@@ -162,7 +162,7 @@ func TestInstallFolders_FolderlessSkipsIdentity(t *testing.T) {
 
 // TestInstallCustomFolders_TargetDestination exercises the Door-2 divergence: a
 // custom app's folder grant carries an explicit in-container target, so the bind
-// lands there (not the fixed /malmo/<folder>) and MALMO_FOLDER_* reflects it. The
+// lands there (not the fixed /molma/<folder>) and MOLMA_FOLDER_* reflects it. The
 // source is scope-derived — no per-folder election — so a household install reads
 // the shared tree (DASHBOARD.md # Folder grants carry an explicit destination).
 func TestInstallCustomFolders_TargetDestination(t *testing.T) {
@@ -196,7 +196,7 @@ func TestInstallCustomFolders_TargetDestination(t *testing.T) {
 	app := doc.Services["app"]
 
 	// Household → shared source; write → :rw; bind lands at the typed target.
-	wantVol := "/srv/malmo/shared/Documents:/photoprism/originals:rw"
+	wantVol := "/srv/molma/shared/Documents:/photoprism/originals:rw"
 	if !hasString(app["volumes"], wantVol) {
 		t.Errorf("volumes: want %q, got %v", wantVol, app["volumes"])
 	}
@@ -204,8 +204,8 @@ func TestInstallCustomFolders_TargetDestination(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read env: %v", err)
 	}
-	if !strings.Contains(string(env), "MALMO_FOLDER_DOCUMENTS=/photoprism/originals") {
-		t.Errorf("env should map MALMO_FOLDER_DOCUMENTS to the target, got:\n%s", env)
+	if !strings.Contains(string(env), "MOLMA_FOLDER_DOCUMENTS=/photoprism/originals") {
+		t.Errorf("env should map MOLMA_FOLDER_DOCUMENTS to the target, got:\n%s", env)
 	}
 }
 

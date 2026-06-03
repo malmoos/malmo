@@ -21,8 +21,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/malmo/malmo/internal/events"
-	"github.com/malmo/malmo/internal/health"
+	"github.com/molmaos/molma/internal/events"
+	"github.com/molmaos/molma/internal/health"
 )
 
 // Category groups notifications in the inbox (NOTIFICATIONS.md # The
@@ -109,7 +109,7 @@ const (
 // saving is paused. Which drive fault caused it is admin detail.
 const (
 	memberPausedSummary = "Saving is paused"
-	memberPausedBody    = "A storage problem on your malmo needs your admin's attention. They've been notified."
+	memberPausedBody    = "A storage problem on your molma needs your admin's attention. They've been notified."
 	memberClearSummary  = "Saving is back to normal"
 	memberClearBody     = "The storage problem is resolved — saving works again."
 )

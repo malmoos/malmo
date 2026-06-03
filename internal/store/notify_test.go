@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/malmo/malmo/internal/notify"
+	"github.com/molmaos/molma/internal/notify"
 )
 
 func newNotification(dedupKey string) notify.Notification {

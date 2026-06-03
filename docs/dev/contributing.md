@@ -1,4 +1,4 @@
-# Working on malmo
+# Working on molma
 
 The end-to-end loop for contributing an implementation slice: get oriented, pick a task, branch, build, test, document, open a PR. Read this once; it links out to the docs that own each step rather than repeating them.
 
@@ -8,7 +8,7 @@ This guide is written so a contributor **and their coding agent** can both follo
 
 Read in this order. Don't skip [`../../CLAUDE.md`](../../CLAUDE.md) — it holds the load-bearing conventions and overrides default agent behavior.
 
-1. **[`../../CLAUDE.md`](../../CLAUDE.md)** — what malmo is, the audience, the locked decisions, and the code/doc discipline you're held to. The **Documents** section is the annotated map of every spec.
+1. **[`../../CLAUDE.md`](../../CLAUDE.md)** — what molma is, the audience, the locked decisions, and the code/doc discipline you're held to. The **Documents** section is the annotated map of every spec.
 2. **[`../specs/SPEC.md`](../specs/SPEC.md)** and **[`../specs/CONTROL_PLANE.md`](../specs/CONTROL_PLANE.md)** — the vision and the control-plane architecture (brain + host-agent + Caddy).
 3. **[`../README.md`](../README.md)** — the doc map. You don't read every spec now; you read the one(s) your task touches, end-to-end, when you pick it up.
 4. **[`running-locally.md`](running-locally.md)** — get the stack running natively (no VM) before you write a line.
@@ -18,7 +18,7 @@ The spec docs are the source of truth and cross-reference each other heavily. Wh
 
 ## Step 1 — Pick a task
 
-Actionable implementation work lives in **[GitHub Issues](https://github.com/onel/malmo/issues)** — the parallel-work board. Find work and claim it:
+Actionable implementation work lives in **[GitHub Issues](https://github.com/molmaos/molma/issues)** — the parallel-work board. Find work and claim it:
 
 ```bash
 gh issue list --label accepted --label P1           # accepted + highest priority; also P2, P3

@@ -14,7 +14,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/malmo/malmo/internal/manifest"
+	"github.com/molmaos/molma/internal/manifest"
 )
 
 // customFolderDTO is one Door-2 folder grant on the wire: a use-case folder

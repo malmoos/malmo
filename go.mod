@@ -1,4 +1,4 @@
-module github.com/malmo/malmo
+module github.com/molmaos/molma
 
 go 1.25.0
 

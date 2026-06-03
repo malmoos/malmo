@@ -1,4 +1,4 @@
-// Command malmo is the app-author's inner-loop CLI. v1 ships a single
+// Command molma is the app-author's inner-loop CLI. v1 ships a single
 // subcommand, `manifest lint`, which validates a manifest.yml against the
 // schema (APP_MANIFEST.md) and sanity-checks its sibling compose file — the
 // same checks that back the catalog's CI schema-lint step (APP_STORE.md # CI on
@@ -19,10 +19,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/malmo/malmo/internal/manifest"
+	"github.com/molmaos/molma/internal/manifest"
 )
 
-const usage = "usage: malmo manifest lint <path/to/manifest.yml>"
+const usage = "usage: molma manifest lint <path/to/manifest.yml>"
 
 // errUsage signals a malformed invocation (wrong/missing subcommand or args),
 // as opposed to a lint failure. It maps to exit 2 (Unix convention for usage
@@ -37,7 +37,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
 	default:
-		fmt.Fprintln(os.Stderr, "malmo: "+err.Error())
+		fmt.Fprintln(os.Stderr, "molma: "+err.Error())
 		os.Exit(1)
 	}
 }

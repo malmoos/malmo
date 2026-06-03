@@ -85,15 +85,15 @@ func TestErrCollision_Sentinel(t *testing.T) {
 // collision-fallback name "<slug>-<box>.local".
 func TestSanitizeBoxLabel(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{"malmo", "malmo"},
+		{"molma", "molma"},
 		{"claw-stack", "claw-stack"},
-		{"MALMO", "malmo"},         // lowercased
+		{"MOLMA", "molma"},         // lowercased
 		{"box.lan.example", "box"}, // first label only
 		{"box.local", "box"},       //
 		{"my_box!", "mybox"},       // drops chars outside [a-z0-9-]
 		{"Föö-box", "f-box"},       // non-ASCII dropped, hyphen kept
-		{"", "malmo"},              // empty → fallback
-		{"...", "malmo"},           // sanitizes to empty → fallback
+		{"", "molma"},              // empty → fallback
+		{"...", "molma"},           // sanitizes to empty → fallback
 		{"123", "123"},             // digits ok
 	}
 	for _, c := range cases {

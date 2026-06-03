@@ -1,6 +1,6 @@
 # Code review
 
-Source of truth for reviewing a PR on malmo. Used both by contributors running a self-review before opening a PR (Step 6 of [`contributing.md`](contributing.md)) and by a dedicated review agent. The lenses here define what "reviewed" means on this project.
+Source of truth for reviewing a PR on molma. Used both by contributors running a self-review before opening a PR (Step 6 of [`contributing.md`](contributing.md)) and by a dedicated review agent. The lenses here define what "reviewed" means on this project.
 
 ## Before you start
 

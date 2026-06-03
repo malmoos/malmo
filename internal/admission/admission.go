@@ -91,7 +91,7 @@ func sortStrings(s []string) {
 func checkService(name string, svc rawService) error {
 	switch {
 	case len(svc.Ports) > 0:
-		return reject("service %q declares host ports (ports:) — malmo routes apps via Caddy on internal networks; remove the ports mapping", name)
+		return reject("service %q declares host ports (ports:) — molma routes apps via Caddy on internal networks; remove the ports mapping", name)
 	case svc.Privileged:
 		return reject("service %q sets privileged: true — Tier-3 apps run unprivileged; capability-needing apps belong in Tier 2", name)
 	case len(svc.CapAdd) > 0:
@@ -102,7 +102,7 @@ func checkService(name string, svc rawService) error {
 		return reject("service %q uses extends: — apps must be self-contained in one compose file", name)
 	}
 	if m := svc.NetworkMode; m == "host" || m == "none" || strings.HasPrefix(m, "container:") {
-		return reject("service %q sets network_mode: %s — not allowed; malmo manages app networking", name, m)
+		return reject("service %q sets network_mode: %s — not allowed; molma manages app networking", name, m)
 	}
 	for _, ns := range []struct{ field, val string }{
 		{"pid", svc.Pid}, {"ipc", svc.Ipc}, {"userns_mode", svc.UsernsMode},
@@ -165,7 +165,7 @@ func isPath(src string) bool {
 // validateSyntax shells out to `docker compose config -q`, which parses and
 // validates the file (catching malformed compose before we write any state).
 func validateSyntax(ctx context.Context, composeBytes []byte) error {
-	dir, err := os.MkdirTemp("", "malmo-admit-")
+	dir, err := os.MkdirTemp("", "molma-admit-")
 	if err != nil {
 		return fmt.Errorf("admission tempdir: %w", err)
 	}

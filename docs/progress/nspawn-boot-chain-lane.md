@@ -35,7 +35,7 @@ upgrade is loud (`rebuilding` log line), not silent.
 
 ### `dev/test-nspawn/boot-assertions.sh` — in-container assertions
 
-Runs inside the booted nspawn under `malmo-boot-test.service`. Six
+Runs inside the booted nspawn under `molma-boot-test.service`. Six
 assertion groups:
 
 1. `systemd-analyze verify` parses every unit. (The bookworm systemd
@@ -43,19 +43,19 @@ assertion groups:
    systemd 245 does not support `--root`, so the static check lives
    inside.)
 2. `systemctl cat <unit>` for `docker`, `smbd`, `avahi-daemon` finds
-   each drop-in's `malmo-storage-ready.target` reference. Stub parent
+   each drop-in's `molma-storage-ready.target` reference. Stub parent
    units (see below) make this work in a rootfs that lacks the real
    services.
-3. `systemctl list-dependencies malmo-storage-ready.target` lists
-   `malmo-storage-verify.service` in its dependency tree.
-4. `malmo-storage-verify.service` carries `Before=malmo-storage-ready.target`.
-5. `host-agent.service` carries `After=malmo-storage-ready.target docker.service`,
-   `OnFailure=malmo-recovery.target`, and `StartLimitBurst=5`.
-6. `systemctl start malmo-storage-verify.service` succeeds, writes a
-   parseable `/run/malmo/health/storage.json`, and the payload is
+3. `systemctl list-dependencies molma-storage-ready.target` lists
+   `molma-storage-verify.service` in its dependency tree.
+4. `molma-storage-verify.service` carries `Before=molma-storage-ready.target`.
+5. `host-agent.service` carries `After=molma-storage-ready.target docker.service`,
+   `OnFailure=molma-recovery.target`, and `StartLimitBurst=5`.
+6. `systemctl start molma-storage-verify.service` succeeds, writes a
+   parseable `/run/molma/health/storage.json`, and the payload is
    Level-0-shaped (empty findings against a clean rootfs).
 
-Verdict is written to `/var/lib/malmo-boot-result` (PASS or `FAIL: <line>`);
+Verdict is written to `/var/lib/molma-boot-result` (PASS or `FAIL: <line>`);
 that file is bind-mounted RW from the host so the driver can read it
 after the container powers off.
 
@@ -64,20 +64,20 @@ after the container powers off.
 Mirrors `run-usermgr-tests.sh`'s shape (caller resolution, Go binary
 discovery under sudo, root check, bootstrap-if-absent). Then:
 
-- Builds `malmo-storage-verify` statically (`CGO_ENABLED=0`) under the
+- Builds `molma-storage-verify` statically (`CGO_ENABLED=0`) under the
   invoking user so the Go module cache stays user-owned. The Go build
   is needed because the rootfs has no Go toolchain — same pattern as
   0018.
 - Stages units into `.dev/nspawn/boot-stage/etc/systemd/system/`:
   - Real units + targets from `dist/systemd/`.
-  - Drop-ins copied to `<unit>.service.d/malmo.conf` (matching the
+  - Drop-ins copied to `<unit>.service.d/molma.conf` (matching the
     on-target layout in `dist/systemd/README.md` # Layout).
   - **Stub parent units** for `docker.service`, `smbd.service`,
     `avahi-daemon.service` (`Type=oneshot ExecStart=/bin/true`).
     systemd does not surface drop-ins whose parent unit is missing;
     the stubs let `systemctl cat <svc>` succeed without installing the
     real packages.
-  - The `malmo-boot-test.service` driver unit (oneshot, after
+  - The `molma-boot-test.service` driver unit (oneshot, after
     `basic.target`, `ExecStopPost=/bin/systemctl --no-block poweroff`),
     plus a `basic.target.wants/` symlink to enable it. (We attach to
     `basic.target` rather than `multi-user.target` because the latter
@@ -86,11 +86,11 @@ discovery under sudo, root check, bootstrap-if-absent). Then:
     queries the assertions run.)
 - Boots `systemd-nspawn --boot --ephemeral` with the staging tree bound
   onto `/etc/systemd/system`, the verifier binary bound at
-  `/usr/lib/malmo/malmo-storage-verify`, `/bin/true` stubbed at
-  `/usr/lib/malmo/host-agent-real` (so `host-agent.service` can load —
+  `/usr/lib/molma/molma-storage-verify`, `/bin/true` stubbed at
+  `/usr/lib/molma/host-agent-real` (so `host-agent.service` can load —
   it never starts because nothing pulls it in), the assertions script
   at `/usr/local/bin/boot-assertions.sh`, and the host's result file
-  bound RW at `/var/lib/malmo-boot-result`.
+  bound RW at `/var/lib/molma-boot-result`.
 - Wraps the whole nspawn invocation in `timeout 60s` — assertions
   should complete in single-digit seconds; the ceiling catches a hung
   container so CI doesn't burn an hour.
@@ -112,9 +112,9 @@ deliberately omitted to avoid host-side `systemd-machined` flake.
   brain ↔ host-agent ↔ Caddy contracts" is `test-health` / `test-caddy`'s
   job; this slice is unit-shape only.
 - `BOOT.md` # The storage-ready target — the dependency chain
-  `malmo-storage-ready.target ← malmo-storage-verify.service` is
+  `molma-storage-ready.target ← molma-storage-verify.service` is
   asserted at boot.
-- `BOOT.md` # Failure → recovery target — `OnFailure=malmo-recovery.target`
+- `BOOT.md` # Failure → recovery target — `OnFailure=molma-recovery.target`
   on `host-agent.service` is asserted; the verifier's *absence* of
   `OnFailure=` is implicit (any `OnFailure=` line would surface via
   `systemctl show`, but we don't assert the negative explicitly).
@@ -206,8 +206,8 @@ In recommended order:
   `systemd-nspawn` available.
 - **Extend the boot lane with the avahi reconciler chain** once
   `0013-avahi-dbus-publisher.md`'s host-side units land — assert their
-  drop-in ordering against `malmo-storage-ready.target` and
-  `malmo-recovery.target`.
+  drop-in ordering against `molma-storage-ready.target` and
+  `molma-recovery.target`.
 - **Replace stub parent units with real packages** opportunistically
   — installing `docker.io` in the rootfs is a non-starter (image
   bloat), but `avahi-daemon` and `samba` are cheap and would let us

@@ -7,10 +7,10 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/malmo/malmo/internal/auth"
-	"github.com/malmo/malmo/internal/events"
-	"github.com/malmo/malmo/internal/notify"
-	"github.com/malmo/malmo/internal/store"
+	"github.com/molmaos/molma/internal/auth"
+	"github.com/molmaos/molma/internal/events"
+	"github.com/molmaos/molma/internal/notify"
+	"github.com/molmaos/molma/internal/store"
 )
 
 // maxNotificationLimit caps the bell list page size (mirrors maxAuditLimit).

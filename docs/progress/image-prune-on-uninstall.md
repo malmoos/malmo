@@ -4,7 +4,7 @@
 - **Date:** 2026-06-03
 - **Specs touched:** `docs/specs/APP_LIFECYCLE.md` (# stop, start, uninstall — documented the uninstall-time image reclaim under the Delete teardown sequence). No `DECISIONS.md`/`NEXT.md` change — the post-uninstall reclaim was already scoped into the locked plan; `NEXT.md` # Container image cleanup keeps only the deferred periodic/update-orphaned sweep.
 
-Closes issue #9. Image bytes accumulated on the OS drive after every uninstall: `compose down -v` removes volumes but never images, and malmo pins images by digest and keeps them **tagged** (`repo@sha256:…`), so they are not *dangling* — a plain `docker image prune` reclaims nothing. This adds a precise, targeted reclaim at uninstall time.
+Closes issue #9. Image bytes accumulated on the OS drive after every uninstall: `compose down -v` removes volumes but never images, and molma pins images by digest and keeps them **tagged** (`repo@sha256:…`), so they are not *dangling* — a plain `docker image prune` reclaims nothing. This adds a precise, targeted reclaim at uninstall time.
 
 ## What was done
 

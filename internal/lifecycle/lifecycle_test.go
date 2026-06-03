@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/malmo/malmo/internal/admission"
-	"github.com/malmo/malmo/internal/catalog"
-	"github.com/malmo/malmo/internal/events"
-	"github.com/malmo/malmo/internal/manifest"
-	"github.com/malmo/malmo/internal/store"
+	"github.com/molmaos/molma/internal/admission"
+	"github.com/molmaos/molma/internal/catalog"
+	"github.com/molmaos/molma/internal/events"
+	"github.com/molmaos/molma/internal/manifest"
+	"github.com/molmaos/molma/internal/store"
 	"gopkg.in/yaml.v3"
 )
 
@@ -46,7 +46,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 	stateDir := t.TempDir()
 	catDir := t.TempDir()
-	s, err := store.Open(filepath.Join(stateDir, "malmo.db"))
+	s, err := store.Open(filepath.Join(stateDir, "molma.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestInstallUnpullableImageRollsBack(t *testing.T) {
 	// Rollback before any network / route / compose work.
 	for _, m := range []string{"NetworkCreate", "ComposeUp"} {
 		// NetworkCreate for the per-app net specifically; allow no calls.
-		if methodsContainArg(e.docker.Calls(), m, "malmo-app-") {
+		if methodsContainArg(e.docker.Calls(), m, "molma-app-") {
 			t.Fatalf("%s for per-app net must not run on pull failure", m)
 		}
 	}
@@ -295,7 +295,7 @@ func TestInstallComposeUpFailureRollsBack(t *testing.T) {
 		t.Fatalf("instance row must be rolled back")
 	}
 	// teardown drops the per-app network.
-	if !methodsContainArg(e.docker.Calls(), "NetworkRemove", "malmo-app-") {
+	if !methodsContainArg(e.docker.Calls(), "NetworkRemove", "molma-app-") {
 		t.Fatalf("expected NetworkRemove for per-app net during rollback")
 	}
 }
@@ -357,7 +357,7 @@ func TestUninstallTearsDownEvenIfStepsFail(t *testing.T) {
 	if e.host.isPublished(inst.Slug) {
 		t.Fatalf("mDNS still published")
 	}
-	if !methodsContainArg(e.docker.Calls(), "NetworkRemove", "malmo-app-"+inst.ID) {
+	if !methodsContainArg(e.docker.Calls(), "NetworkRemove", "molma-app-"+inst.ID) {
 		t.Fatalf("per-app NetworkRemove not called: %v", e.docker.methods())
 	}
 	if _, err := os.Stat(filepath.Join(e.stateDir, "instances", inst.ID)); !os.IsNotExist(err) {
@@ -475,7 +475,7 @@ func TestReconcileBringsRunningInstanceBackUp(t *testing.T) {
 	if err := e.m.Reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if !methodsContainArg(e.docker.Calls(), "ComposeUp", "malmo-"+inst.ID) {
+	if !methodsContainArg(e.docker.Calls(), "ComposeUp", "molma-"+inst.ID) {
 		t.Fatalf("ComposeUp not called for drifted instance: %v", e.docker.methods())
 	}
 	// Route re-asserted.
@@ -502,7 +502,7 @@ func TestReconcileStopsStoppedButRunningInstance(t *testing.T) {
 	if err := e.m.Reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if !methodsContainArg(e.docker.Calls(), "ComposeStop", "malmo-"+inst.ID) {
+	if !methodsContainArg(e.docker.Calls(), "ComposeStop", "molma-"+inst.ID) {
 		t.Fatalf("ComposeStop not called: %v", e.docker.methods())
 	}
 }
@@ -520,7 +520,7 @@ func TestReconcileTearsDownOrphanContainers(t *testing.T) {
 	if !e.docker.called("RemoveContainersByInstance") {
 		t.Fatalf("orphan path must call RemoveContainersByInstance: %v", e.docker.methods())
 	}
-	if !methodsContainArg(e.docker.Calls(), "NetworkRemove", "malmo-app-ghost-id") {
+	if !methodsContainArg(e.docker.Calls(), "NetworkRemove", "molma-app-ghost-id") {
 		t.Fatalf("orphan NetworkRemove not called: %v", e.docker.methods())
 	}
 }

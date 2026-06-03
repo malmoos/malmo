@@ -1,18 +1,18 @@
-# malmo Threat Model
+# molma Threat Model
 
-> The security lens for the whole spec. `AUTH.md`, `APP_ISOLATION.md`, `STORAGE.md`, `MALMO_NETWORK.md`, and `USERS_AND_GROUPS.md` each defend against an attacker; this doc writes down *who that attacker is*, *what we protect*, and — most importantly — *what we deliberately don't defend against*. It is a checking framework and a place to point when arguing edge cases.
+> The security lens for the whole spec. `AUTH.md`, `APP_ISOLATION.md`, `STORAGE.md`, `MOLMA_NETWORK.md`, and `USERS_AND_GROUPS.md` each defend against an attacker; this doc writes down *who that attacker is*, *what we protect*, and — most importantly — *what we deliberately don't defend against*. It is a checking framework and a place to point when arguing edge cases.
 
 ## Stance — this doc owns no mitigations
 
 Every "how we defend X" lives in the doc that owns X. This document is an **index of what we defend and what we don't**; the other docs are the *how*. If reading this makes us want to change a defense, that's the threat model doing its job — but the change lands in the owning doc, and an entry goes in `DECISIONS.md`. The threat model documents; it does not decide.
 
-**Scope: v1 only — closed-by-default, LAN-first.** The deferred mesh / remote-access surface (`MALMO_NETWORK.md` # Deferred) changes the internet-facing boundary materially; it is **out of scope here** and gets its own pass when it ships (see # When this model changes). Everything below assumes the v1 posture: no app or service publicly exposed, cloud is DNS + certs only.
+**Scope: v1 only — closed-by-default, LAN-first.** The deferred mesh / remote-access surface (`MOLMA_NETWORK.md` # Deferred) changes the internet-facing boundary materially; it is **out of scope here** and gets its own pass when it ships (see # When this model changes). Everything below assumes the v1 posture: no app or service publicly exposed, cloud is DNS + certs only.
 
 ## The trust model (read this first)
 
-malmo is a **household appliance**, and almost every security decision follows from one assumption:
+molma is a **household appliance**, and almost every security decision follows from one assumption:
 
-> **Members of a household broadly trust each other. malmo is not hardening one member against another at kernel grade. The real adversaries are (1) the network — LAN and internet, (2) a compromised app, and (3) physical possession of a drive that left the building.**
+> **Members of a household broadly trust each other. molma is not hardening one member against another at kernel grade. The real adversaries are (1) the network — LAN and internet, (2) a compromised app, and (3) physical possession of a drive that left the building.**
 
 This single paragraph justifies a large fraction of the spec, and naming it stops reviewers from relitigating decisions against the wrong adversary:
 
@@ -29,22 +29,22 @@ Where the trust model does **not** extend: the network (treated as hostile), app
 |---|---|---|
 | User content (Photos, Documents, …) | `/home/<user>/` (`STORAGE.md`) | Cross-user read; drive theft; ransomware-via-app |
 | PAM credentials | `/etc/shadow` (`AUTH.md`) | Credential theft, offline cracking |
-| App state + per-user managed-service DBs | `/var/lib/malmo/instances/<id>/` (`APP_ISOLATION.md`) | Cross-app / cross-user access |
-| Brain SQLite (accounts, sessions, audit log) | `/var/lib/malmo/brain/state.db` | Tamper (esp. audit log), session theft |
+| App state + per-user managed-service DBs | `/var/lib/molma/instances/<id>/` (`APP_ISOLATION.md`) | Cross-app / cross-user access |
+| Brain SQLite (accounts, sessions, audit log) | `/var/lib/molma/brain/state.db` | Tamper (esp. audit log), session theft |
 | LUKS keys / TPM seal | OS drive + TPM (`STORAGE.md`) | Whole-box theft, Secure-Boot subversion |
-| Box network position | nftables, closed-by-default (`MALMO_NETWORK.md`) | Remote exploitation, lateral movement |
-| Privacy metadata (who-runs-what, audit trail, cloud DNS queries) | brain SQLite + cloud (`LOGGING.md`, `MALMO_NETWORK.md`) | Disclosure / correlation |
+| Box network position | nftables, closed-by-default (`MOLMA_NETWORK.md`) | Remote exploitation, lateral movement |
+| Privacy metadata (who-runs-what, audit trail, cloud DNS queries) | brain SQLite + cloud (`LOGGING.md`, `MOLMA_NETWORK.md`) | Disclosure / correlation |
 
 ## Actors / principals
 
 | Principal | Capability assumption |
 |---|---|
 | **Anonymous LAN device** | On the same L2 network; can reach any LAN-exposed port; can attempt mDNS spoofing, ARP tricks. Present and untrusted. |
-| **Authenticated member** | Valid malmo password; unprivileged Linux user; owns their own data + per-user app instances. Trusted (household). |
+| **Authenticated member** | Valid molma password; unprivileged Linux user; owns their own data + per-user app instances. Trusted (household). |
 | **Admin** | Member + `sudo` + host mutation via the dashboard/host-agent. Trusted; a compromised admin is high-impact by design. |
 | **App container** | Runs code we didn't write. **Assume it can be compromised.** Confined to its declared permissions. |
 | **Catalog app author** | Submits manifests. Trusted via curation, not via sandbox. A *deliberately* malicious author is out of scope (curation's job). |
-| **malmo cloud** | DNS resolver + ACME helper. Sees box-ids and query metadata; never sees traffic or data. Honest-but-curious. |
+| **molma cloud** | DNS resolver + ACME helper. Sees box-ids and query metadata; never sees traffic or data. Honest-but-curious. |
 | **Possessor of a removed drive** | Has a drive that left the box. Hostile. Defended by LUKS. |
 | **Possessor of the whole box** | Physical theft of the running/poweroff box incl. TPM. **Out of scope beyond at-rest encryption.** |
 | **Internet attacker** | Off-LAN, no mesh credential. In v1 has **no reachable surface** (closed-by-default). |
@@ -59,9 +59,9 @@ The box presents **no surface to the public internet in v1.** SSH/SMB are firewa
 
 | Threat | Mitigation (owner) | Residual |
 |---|---|---|
-| Remote exploitation of an exposed service | Closed-by-default; SSH/SMB scoped to RFC1918+mesh via nftables (`AUTH.md` # Device access, `BUILD.md` # SSH); no public-exposure toggle (`MALMO_NETWORK.md` # closed by default) | BYO-domain + explicit advanced exposure is the user's consciously-accepted risk |
+| Remote exploitation of an exposed service | Closed-by-default; SSH/SMB scoped to RFC1918+mesh via nftables (`AUTH.md` # Device access, `BUILD.md` # SSH); no public-exposure toggle (`MOLMA_NETWORK.md` # closed by default) | BYO-domain + explicit advanced exposure is the user's consciously-accepted risk |
 | Apps reaching the internet uninvited | `internet: false` → `internal: true` bridge, kernel-level (no NAT route) (`APP_ISOLATION.md` # internet) | — (host ports are admission-rejected for both doors; nothing binds to the host) |
-| Cloud-mediated LAN access concerns | Cloud resolves names + sets ACME TXT only; no proxy/tunnel (`MALMO_NETWORK.md`) | Cloud learns box-id exists and who queries it (metadata, not content) |
+| Cloud-mediated LAN access concerns | Cloud resolves names + sets ACME TXT only; no proxy/tunnel (`MOLMA_NETWORK.md`) | Cloud learns box-id exists and who queries it (metadata, not content) |
 
 ### B2 — App container ↔ host (assume breach)
 
@@ -86,13 +86,13 @@ The richest boundary. The right question is not "can an app be compromised" (ass
 | Demoted admin retains power | `gpasswd -d` flips group membership (`USERS_AND_GROUPS.md`) | Live `sudo`/SSH session keeps capability until logout — accepted under household trust |
 | Compromised admin SSH | SSH off-by-account-by-default; admin must opt in (`AUTH.md` # Device access) | A compromised admin shell is root — accepted; marginal, since the admin can already mutate the host via host-agent |
 
-### B4 — Box ↔ malmo cloud
+### B4 — Box ↔ molma cloud
 
 | Threat | Mitigation (owner) | Residual |
 |---|---|---|
-| Cloud compromise injects bad data | Cloud is DNS + ACME-helper only; per-box keypair auth; enrollment opt-in (`MALMO_NETWORK.md`) | Compromised cloud could mis-resolve a box-id; cannot decrypt traffic or reach data |
-| Cloud sees user activity | No traffic ever traverses cloud servers (`MALMO_NETWORK.md` # What cloud actually does) | Cloud sees box-ids and which devices query them — disclosed; privacy-doc surface |
-| Privacy-strict user wants zero cloud | Enrollment is opt-in; box never contacts cloud if declined; BYO-domain alternative (`MALMO_NETWORK.md`) | — |
+| Cloud compromise injects bad data | Cloud is DNS + ACME-helper only; per-box keypair auth; enrollment opt-in (`MOLMA_NETWORK.md`) | Compromised cloud could mis-resolve a box-id; cannot decrypt traffic or reach data |
+| Cloud sees user activity | No traffic ever traverses cloud servers (`MOLMA_NETWORK.md` # What cloud actually does) | Cloud sees box-ids and which devices query them — disclosed; privacy-doc surface |
+| Privacy-strict user wants zero cloud | Enrollment is opt-in; box never contacts cloud if declined; BYO-domain alternative (`MOLMA_NETWORK.md`) | — |
 
 ### B5 — At-rest disk ↔ removed drive / stolen box
 
@@ -129,8 +129,8 @@ The most-trusted internal boundary: host-agent runs as root and trusts the brain
 
 | Threat | Mitigation (owner) | Residual |
 |---|---|---|
-| Unauthorized process drives host-agent | UNIX socket access gated by the `malmo` group, kernel-enforced; **exactly one member** (brain's runtime UID), CI-asserted (`USERS_AND_GROUPS.md` # Group reference, `AUTH.md` # Test invariant) | The CI invariant *is* the entire authz model here — if group membership is wrong, the boundary is broken |
-| Brain compromise | — | A compromised brain = host compromise, by design. The brain is the trusted control plane; isolating it from host-agent would defeat its purpose. Defense is keeping the brain small + the `malmo`-group invariant tight |
+| Unauthorized process drives host-agent | UNIX socket access gated by the `molma` group, kernel-enforced; **exactly one member** (brain's runtime UID), CI-asserted (`USERS_AND_GROUPS.md` # Group reference, `AUTH.md` # Test invariant) | The CI invariant *is* the entire authz model here — if group membership is wrong, the boundary is broken |
+| Brain compromise | — | A compromised brain = host compromise, by design. The brain is the trusted control plane; isolating it from host-agent would defeat its purpose. Defense is keeping the brain small + the `molma`-group invariant tight |
 
 ## Out of scope (named loudly)
 
@@ -169,7 +169,7 @@ The per-boundary tables above are the deliverable. **STRIDE** (Spoofing, Tamperi
 
 ## When this model changes
 
-This is a **living document**, revisited when a trust boundary moves. The known future trigger: **remote access via the mesh** (`MALMO_NETWORK.md` # Deferred). When it ships, B1 changes shape — `.malmo.network` names become reachable off-LAN, scoped pairing introduces a new principal (a paired-but-non-household device, e.g. "grandma sees Photos"), and the closed-by-default claim narrows to "closed except to identity-paired devices." That warrants a dedicated boundary pass and `DECISIONS.md` entries; it is explicitly not modeled here.
+This is a **living document**, revisited when a trust boundary moves. The known future trigger: **remote access via the mesh** (`MOLMA_NETWORK.md` # Deferred). When it ships, B1 changes shape — `.molma.network` names become reachable off-LAN, scoped pairing introduces a new principal (a paired-but-non-household device, e.g. "grandma sees Photos"), and the closed-by-default claim narrows to "closed except to identity-paired devices." That warrants a dedicated boundary pass and `DECISIONS.md` entries; it is explicitly not modeled here.
 
 ## Locked decisions
 

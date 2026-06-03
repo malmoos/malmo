@@ -3,7 +3,7 @@
 - **Status:** done
 - **Date:** 2026-05-28
 - **Specs touched:** `TESTING.md`, `BOOT.md`, `STORAGE.md`
-- **Verified on:** Ubuntu 20.04 dev box (KVM). swtpm from jammy backport, mkosi v27 via pipx + python3.10 (deadsnakes). `make test-medium-qemu` → PASS: SSH at ~8s, `malmo-storage-verify.service` active, `storage.json` present with empty findings, `tpm2_pcrread sha256:7` succeeds.
+- **Verified on:** Ubuntu 20.04 dev box (KVM). swtpm from jammy backport, mkosi v27 via pipx + python3.10 (deadsnakes). `make test-medium-qemu` → PASS: SSH at ~8s, `molma-storage-verify.service` active, `storage.json` present with empty findings, `tpm2_pcrread sha256:7` succeeds.
 
 Closes the "no real kernel / no real TPM" gap from `TESTING.md` # Medium lane. Slice 0020's fast lane proves unit shape inside an nspawn namespace; this slice boots a real Linux kernel under QEMU with a software TPM and runs our reporter in real systemd userspace. SSH-driven assertions read back the verdict.
 
@@ -13,32 +13,32 @@ Closes the "no real kernel / no real TPM" gap from `TESTING.md` # Medium lane. S
 
 ### `dev/test-qemu/mkosi.conf` — image build config
 
-bookworm + `systemd-boot` + `tpm2-tools` + `openssh-server` + the packages needed for a small bootable disk. `ExtraTrees=mkosi.extra/` bakes our `dist/systemd/` units at `/etc/systemd/system/`, the `malmo-storage-verify` binary at `/usr/lib/malmo/`, and the assertion script at `/usr/local/bin/`. `PostInstallationScripts=mkosi.postinst` runs in mkosi's chroot to enable units and set tmpfiles.
+bookworm + `systemd-boot` + `tpm2-tools` + `openssh-server` + the packages needed for a small bootable disk. `ExtraTrees=mkosi.extra/` bakes our `dist/systemd/` units at `/etc/systemd/system/`, the `molma-storage-verify` binary at `/usr/lib/molma/`, and the assertion script at `/usr/local/bin/`. `PostInstallationScripts=mkosi.postinst` runs in mkosi's chroot to enable units and set tmpfiles.
 
 mkosi was chosen for the test-lane image build per the spec call (`live-build` remains the v1 *production* ISO tool — different concern). `NEXT.md` # Tier 4 # Testing has the open entry "live-build vs mkosi revisit weighted by test-story" which this slice partly informs.
 
 ### `dev/test-qemu/mkosi.postinst.chroot`
 
-Runs inside the chroot (`.chroot` extension = mkosi v27+ chroot mode; the image root is mounted at `/`). Adds a `.wants` symlink for `malmo-storage-ready.target` under `multi-user.target.wants/`, writes `/etc/tmpfiles.d/malmo.conf` for `/run/malmo/health/`, ensures the verify binary is executable, disables `systemd-networkd-wait-online` (would otherwise eat boot time in a slirp-networked VM with no DHCP lease guarantees), enables ssh.service + disables host-agent.service in the system preset, commits a machine-id (prevents the `systemd-firstboot` interactive wizard from blocking `sysinit.target`), and enables `systemd-networkd` with a DHCP `.network` file for virtio NIC.
+Runs inside the chroot (`.chroot` extension = mkosi v27+ chroot mode; the image root is mounted at `/`). Adds a `.wants` symlink for `molma-storage-ready.target` under `multi-user.target.wants/`, writes `/etc/tmpfiles.d/molma.conf` for `/run/molma/health/`, ensures the verify binary is executable, disables `systemd-networkd-wait-online` (would otherwise eat boot time in a slirp-networked VM with no DHCP lease guarantees), enables ssh.service + disables host-agent.service in the system preset, commits a machine-id (prevents the `systemd-firstboot` interactive wizard from blocking `sysinit.target`), and enables `systemd-networkd` with a DHCP `.network` file for virtio NIC.
 
 ### `dev/test-qemu/bootstrap.sh` — preflight + build
 
 Probes for `mkosi`, `swtpm`, `qemu-system-x86_64`, `ssh`/`scp`, and a usable OVMF firmware path. Missing tools emit a clear install pointer rather than silently failing or auto-`apt install`ing system packages (host changes belong to the user). Versions: mkosi must be v22+ (Ubuntu 20.04 ships v9; `pipx install mkosi` is the supported escape).
 
-Builds `malmo-storage-verify` statically as the invoking user, generates a per-image ed25519 SSH keypair into `.dev/qemu/ssh-key`, stages `mkosi.extra/`, then invokes `mkosi build`. Idempotent via a versioned canary file (same idiom as 0020's bootstrap).
+Builds `molma-storage-verify` statically as the invoking user, generates a per-image ed25519 SSH keypair into `.dev/qemu/ssh-key`, stages `mkosi.extra/`, then invokes `mkosi build`. Idempotent via a versioned canary file (same idiom as 0020's bootstrap).
 
-`host-agent.service` is staged but never enabled — its `Requires=docker.service` would fail at boot in this minimal image. `/usr/lib/malmo/host-agent-real` is symlinked to `/bin/true` so the unit *loads* (matching the fast-lane stub posture).
+`host-agent.service` is staged but never enabled — its `Requires=docker.service` would fail at boot in this minimal image. `/usr/lib/molma/host-agent-real` is symlinked to `/bin/true` so the unit *loads* (matching the fast-lane stub posture).
 
 ### `dev/test-qemu/medium-assertions.sh` — in-VM checks
 
 Baked into the image at `/usr/local/bin/`. Four assertion groups:
 
 1. `systemctl is-system-running` returns `running` or `degraded` (not `starting` / `maintenance`).
-2. `malmo-storage-verify.service` reached `active`.
-3. `/run/malmo/health/storage.json` exists, has `checked_at` + `findings` keys, and `findings` is empty (Level-0 VM has no data drive).
+2. `molma-storage-verify.service` reached `active`.
+3. `/run/molma/health/storage.json` exists, has `checked_at` + `findings` keys, and `findings` is empty (Level-0 VM has no data drive).
 4. **TPM plumbing is live**: `/dev/tpmrm0` is a character device and `tpm2_pcrread sha256:7` succeeds and returns a parseable PCR reading. This proves the swtpm → QEMU `-tpmdev tpm-crb` → kernel TPM2 driver → userspace `tpm2-tools` chain works end-to-end. The PCR *value* isn't asserted — slice 0022 will use it for sealing.
 
-Same posture as 0020's `boot-assertions.sh`: `set -uo pipefail` (deliberately no `-e`; every check is `... || fail "..."`), STARTED sentinel pre-write, EXIT trap upgrades sentinel to FAIL on abort, verdict written to `/var/lib/malmo-medium-result`.
+Same posture as 0020's `boot-assertions.sh`: `set -uo pipefail` (deliberately no `-e`; every check is `... || fail "..."`), STARTED sentinel pre-write, EXIT trap upgrades sentinel to FAIL on abort, verdict written to `/var/lib/molma-medium-result`.
 
 ### `dev/test-qemu/run-medium-tests.sh` — host driver
 
@@ -113,8 +113,8 @@ On 22.04+ none of this is needed; `sudo apt-get install -y qemu-system-x86 swtpm
 ## Known gaps & deviations
 
 - **No LUKS, no TPM-sealed unseal.** See above — slice 0022.
-- **No data drive.** Single virtio disk, no second disk for the data-drive enrollment path. `malmo-storage-verify` runs in its Level-0 path (no `/etc/malmo/data-drive.enrolled`). The second-drive shape lands when device-backing canary work picks up.
-- **`host-agent.service` is staged-but-disabled.** Its `Requires=docker.service` would fail at boot. Additionally, `host-agent.service` carries `RuntimeDirectory=malmo`; when the stub (`/bin/true`) exits, systemd removes `/run/malmo/` — destroying `storage.json` before any assertion can read it. The fix: explicit `disable host-agent.service` in the preset and in the postinst. The brain stack as a whole isn't exercised in the VM yet.
+- **No data drive.** Single virtio disk, no second disk for the data-drive enrollment path. `molma-storage-verify` runs in its Level-0 path (no `/etc/molma/data-drive.enrolled`). The second-drive shape lands when device-backing canary work picks up.
+- **`host-agent.service` is staged-but-disabled.** Its `Requires=docker.service` would fail at boot. Additionally, `host-agent.service` carries `RuntimeDirectory=molma`; when the stub (`/bin/true`) exits, systemd removes `/run/molma/` — destroying `storage.json` before any assertion can read it. The fix: explicit `disable host-agent.service` in the preset and in the postinst. The brain stack as a whole isn't exercised in the VM yet.
 - **No CI integration.** Same posture as the fast lane (0018/0020). Each lane is invocable locally via `make`; wiring all the lanes into a CI workflow is its own slice.
 - **mkosi v22+ requirement.** Ubuntu 20.04's apt has v9; bootstrap detects and bails. `pipx install mkosi` is the documented escape; we don't (yet) ship a pinned version. A reproducibility concern when the lane spreads to more developer machines.
 - **slirp networking.** Adequate for SSH port-forward; not adequate for any future test that needs multicast/mDNS reachable from the host. Bridged networking is the upgrade path when that test lands.

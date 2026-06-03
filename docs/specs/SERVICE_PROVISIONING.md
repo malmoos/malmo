@@ -1,10 +1,10 @@
-# malmo Service Provisioning
+# molma Service Provisioning
 
-> Working spec for how malmo provides shared infrastructure to apps and how OS-level integrations are exposed. Companion to `SPEC.md`, `CONTROL_PLANE.md`, `APP_MANIFEST.md`.
+> Working spec for how molma provides shared infrastructure to apps and how OS-level integrations are exposed. Companion to `SPEC.md`, `CONTROL_PLANE.md`, `APP_MANIFEST.md`.
 
 ## The three tiers
 
-Every "service" on a malmo box falls into one of three tiers, distinguished by **how deeply it integrates with the OS**. The tier determines the design.
+Every "service" on a molma box falls into one of three tiers, distinguished by **how deeply it integrates with the OS**. The tier determines the design.
 
 ### Tier 1 — Managed data services
 
@@ -24,18 +24,18 @@ These cannot be regular apps because:
 - They need privileged capabilities (`NET_ADMIN`, `/dev/net/tun`, raw sockets, host networking).
 - They affect *other* apps' network/storage/visibility, not just themselves.
 - Misconfiguration has system-wide blast radius.
-- They have authentication flows external to malmo (e.g., Tailscale's browser auth).
+- They have authentication flows external to molma (e.g., Tailscale's browser auth).
 - Their updates belong with the OS, not the app store.
 
-**Home: malmo Settings UI**, not the App Store. **Curated by us** — no third-party Tier-2 modules in v1.
+**Home: molma Settings UI**, not the App Store. **Curated by us** — no third-party Tier-2 modules in v1.
 
-**Implementation is locked: native Debian packages, managed under systemd, with admin UIs surfaced inside the malmo dashboard.** No Tier-2 service runs in a Docker container; no Tier-2 service exposes its upstream admin UI at its own subdomain. The user-facing surface is "Settings → Tailscale" (a malmo-built UI on `malmo.local/settings/tailscale`), not "Install Tailscale from store" or "open the Tailscale admin UI at tailscale.local." See `DECISIONS.md` 2026-05-14 and `AUTH.md` for the reasoning chain.
+**Implementation is locked: native Debian packages, managed under systemd, with admin UIs surfaced inside the molma dashboard.** No Tier-2 service runs in a Docker container; no Tier-2 service exposes its upstream admin UI at its own subdomain. The user-facing surface is "Settings → Tailscale" (a molma-built UI on `molma.local/settings/tailscale`), not "Install Tailscale from store" or "open the Tailscale admin UI at tailscale.local." See `DECISIONS.md` 2026-05-14 and `AUTH.md` for the reasoning chain.
 
 ### Tier 3 — Regular apps
 
 Everything else. Run with whatever permissions they declared in their manifest. The 99% case.
 
-## Mental model: how do I install software on malmo?
+## Mental model: how do I install software on molma?
 
 1. **Standard case:** install from app store (Tier 3).
 2. **Need Postgres / Redis:** the manifest just declares it. Brain provides it (Tier 1, invisible).
@@ -72,12 +72,12 @@ Plausible v2+ additions: MariaDB (some apps require it specifically — Nextclou
 4. Brain stores the credentials in its SQLite, encrypted at rest.
 5. At app start, brain injects env vars into the app's container:
    ```
-   MALMO_SERVICE_DATABASE_HOST=postgres-15.malmo.internal
-   MALMO_SERVICE_DATABASE_PORT=5432
-   MALMO_SERVICE_DATABASE_NAME=photoprism_a4f7
-   MALMO_SERVICE_DATABASE_USER=photoprism_a4f7
-   MALMO_SERVICE_DATABASE_PASSWORD=<generated>
-   MALMO_SERVICE_DATABASE_DSN=postgres://photoprism_a4f7:...@postgres-15.malmo.internal:5432/photoprism_a4f7
+   MOLMA_SERVICE_DATABASE_HOST=postgres-15.molma.internal
+   MOLMA_SERVICE_DATABASE_PORT=5432
+   MOLMA_SERVICE_DATABASE_NAME=photoprism_a4f7
+   MOLMA_SERVICE_DATABASE_USER=photoprism_a4f7
+   MOLMA_SERVICE_DATABASE_PASSWORD=<generated>
+   MOLMA_SERVICE_DATABASE_DSN=postgres://photoprism_a4f7:...@postgres-15.molma.internal:5432/photoprism_a4f7
    ```
 6. The app's compose maps these to whatever variables the app actually expects (per `APP_MANIFEST.md` — naming convention is **app-defined**).
 
@@ -117,13 +117,13 @@ When the new app version's manifest declares a different major (e.g., now needs 
 4. App starts pointed at the new instance.
 5. Old DB and role on the previous version are dropped.
 
-**Auto-migrate is the policy** — happens transparently as part of the app update. The pre-migration backup is the safety net; if the migration fails, malmo rolls back to the old version + restored DB and surfaces the failure to the user. We accept the responsibility of getting this right; the alternative (force every cross-version app update through a manual user prompt) creates worse UX for the non-technical audience.
+**Auto-migrate is the policy** — happens transparently as part of the app update. The pre-migration backup is the safety net; if the migration fails, molma rolls back to the old version + restored DB and surfaces the failure to the user. We accept the responsibility of getting this right; the alternative (force every cross-version app update through a manual user prompt) creates worse UX for the non-technical audience.
 
 ### Network architecture
 
-- Each managed service instance runs on a dedicated internal Docker network: `malmo-svc-postgres-15`, `malmo-svc-redis-7`, etc.
+- Each managed service instance runs on a dedicated internal Docker network: `molma-svc-postgres-15`, `molma-svc-redis-7`, etc.
 - Apps that declared a service in their manifest are attached to the matching network at start time.
-- Internal DNS: `postgres-15.malmo.internal` resolves **only on networks where that service is reachable**.
+- Internal DNS: `postgres-15.molma.internal` resolves **only on networks where that service is reachable**.
 - Apps **cannot reach managed services they didn't declare**. Network membership is the enforcement mechanism, not a software allowlist.
 
 ### Per-app isolation in shared instances
@@ -157,20 +157,20 @@ Three integrations targeted for v1. All three have clear demand, established imp
 
 - Settings → Network → Tailscale.
 - Installed as the upstream `tailscale` Debian package. `tailscaled` runs under systemd on the host.
-- Malmo's UI at `/settings/tailscale` is a thin wrapper over host-agent operations (`tailscale up`, `tailscale status`, etc.).
+- Molma's UI at `/settings/tailscale` is a thin wrapper over host-agent operations (`tailscale up`, `tailscale status`, etc.).
 - User clicks "Sign in"; brain triggers `tailscale up` via host-agent, which prints a one-time auth URL. The dashboard surfaces the URL as a button that opens Tailscale's standard browser auth flow.
 - Once joined, the box is on the user's tailnet.
 - Apps that declare `permissions.tailscale: true` (manifest perm) are reachable via Tailscale's MagicDNS from any device on the user's tailnet.
-- **Coexists with malmo's built-in mesh.** Two separate networks. A user might use the malmo mesh for "people I share photos with" and personal Tailscale for "all my own machines."
-- Tailscale account is between the user and Tailscale Inc. — malmo doesn't broker auth.
+- **Coexists with molma's built-in mesh.** Two separate networks. A user might use the molma mesh for "people I share photos with" and personal Tailscale for "all my own machines."
+- Tailscale account is between the user and Tailscale Inc. — molma doesn't broker auth.
 
 ### Samba / SMB
 
 - Settings → Sharing → Network shares.
 - Installed as the upstream `samba` Debian package. `smbd` and `nmbd` run under systemd on the host.
-- Exposes two share shapes over SMB so Windows / macOS / Linux clients can mount them as network drives: per-user home (`\\malmo\<user>` → `/home/<user>/`) and household-shared (`\\malmo\shared` → `/srv/malmo/shared/`). See `STORAGE.md` # Cross-device access (SMB).
-- Malmo's UI at `/settings/shares` lets each user opt in/out of their own SMB share (off-by-account-by-default per `AUTH.md`). Brain edits `/etc/samba/smb.conf` (specifically `valid users` allowlists) and asks host-agent to `systemctl reload smbd`. Credentials are the user's malmo password — no per-share password.
-- Critical for the "I plug in malmo and want it as a NAS for my laptop" use case.
+- Exposes two share shapes over SMB so Windows / macOS / Linux clients can mount them as network drives: per-user home (`\\molma\<user>` → `/home/<user>/`) and household-shared (`\\molma\shared` → `/srv/molma/shared/`). See `STORAGE.md` # Cross-device access (SMB).
+- Molma's UI at `/settings/shares` lets each user opt in/out of their own SMB share (off-by-account-by-default per `AUTH.md`). Brain edits `/etc/samba/smb.conf` (specifically `valid users` allowlists) and asks host-agent to `systemctl reload smbd`. Credentials are the user's molma password — no per-share password.
+- Critical for the "I plug in molma and want it as a NAS for my laptop" use case.
 
 ### DLNA / UPnP media streaming
 
@@ -195,18 +195,18 @@ We don't accept third-party Tier-2 contributions in v1. Adding a new Tier-2 inte
 
 Ideas explicitly out of scope for v1, kept here so we don't lose them. Nothing in this section is committed — each entry would need a separate design pass before becoming a locked decision.
 
-The bar for promotion is the same we apply to new Tier-1 types: (1) 5+ apps would actually use it, (2) sharing creates real benefit beyond convenience (security patching, ops integration, user-visible UX), (3) does not require app upstreams to redesign themselves around malmo, (4) bounded API surface.
+The bar for promotion is the same we apply to new Tier-1 types: (1) 5+ apps would actually use it, (2) sharing creates real benefit beyond convenience (security patching, ops integration, user-visible UX), (3) does not require app upstreams to redesign themselves around molma, (4) bounded API surface.
 
 ### Scheduled / deferred jobs
 
-A unified facility for apps to declare periodic or constraint-based background work. Cron-style schedules ("re-index every 24h") and constraint-based dispatch ("run when the box is idle, on AC power") in one shape — Android's `WorkManager` is the model. Apps declare jobs in the manifest; malmo arbitrates execution.
+A unified facility for apps to declare periodic or constraint-based background work. Cron-style schedules ("re-index every 24h") and constraint-based dispatch ("run when the box is idle, on AC power") in one shape — Android's `WorkManager` is the model. Apps declare jobs in the manifest; molma arbitrates execution.
 
 Value:
 - Single observability surface — Activity view can show *why your box is loud at 3am* (Immich indexing, Paperless OCR'ing). Synology-tier ops visibility.
 - Resource arbitration — don't let five apps kick off heavy jobs simultaneously.
 - Power-aware — defer expensive jobs when the laptop-in-the-pantry is on battery.
 
-Caveat: apps with framework-embedded schedulers (Sidekiq-cron, APScheduler, etc.) won't fully migrate; malmo's scheduler covers what apps choose to declare, not all background work.
+Caveat: apps with framework-embedded schedulers (Sidekiq-cron, APScheduler, etc.) won't fully migrate; molma's scheduler covers what apps choose to declare, not all background work.
 
 ### Additional managed data services (Tier-1 catalog growth)
 
@@ -217,7 +217,7 @@ Plausible additions:
 - **MongoDB** — common in modern self-hosted apps.
 - **Kafka, RabbitMQ** — queue/streaming *substrates*, if app demand emerges.
 
-We host queue substrates, not queue libraries. Sidekiq (Ruby), BullMQ (Node), Celery (Python), RQ — these are libraries that run *inside the app's own container*, pointed at a substrate we provide (already-managed Redis for most; potentially Kafka or RabbitMQ later). Malmo does not build or expose a queue API of its own.
+We host queue substrates, not queue libraries. Sidekiq (Ruby), BullMQ (Node), Celery (Python), RQ — these are libraries that run *inside the app's own container*, pointed at a substrate we provide (already-managed Redis for most; potentially Kafka or RabbitMQ later). Molma does not build or expose a queue API of its own.
 
 ### Cross-box services (federated state)
 
@@ -238,9 +238,9 @@ The bigger unresolved piece is **cross-box identity and consent**, which is the 
 Why this is post-v1:
 - Scope is large across multiple unsettled axes (sync model, identity, consent, revocation).
 - No concrete apps demand it in 2026 — the self-hosted ecosystem is single-box-shaped. Risk of building rails for users who don't exist.
-- Ecosystem seeding: this only pays off if apps adopt the pattern, which likely requires malmo shipping reference apps to demonstrate it.
+- Ecosystem seeding: this only pays off if apps adopt the pattern, which likely requires molma shipping reference apps to demonstrate it.
 
-Locked now: **the malmo mesh is the intended transport for future cross-box services.** Whatever we build later rides on the same Headscale/DERP substrate we ship for personal device access, not a separate network plane.
+Locked now: **the molma mesh is the intended transport for future cross-box services.** Whatever we build later rides on the same Headscale/DERP substrate we ship for personal device access, not a separate network plane.
 
 ---
 
@@ -253,9 +253,9 @@ Locked now: **the malmo mesh is the intended transport for future cross-box serv
 - **Lazy spinup.** Tier-1 instances start when first needed, shut down with a grace period after the last app using them is uninstalled.
 - **Cross-version migration: auto-migrate** with an automatic pre-migration backup as the rollback safety net. No prompts.
 - **Network isolation:** apps reach Tier-1 services only via dedicated Docker networks; no manifest declaration → no network membership → no reachability.
-- **Env-var injection:** stable `MALMO_SERVICE_*` names; app maps them in its compose to whatever it actually expects (per `APP_MANIFEST.md`).
+- **Env-var injection:** stable `MOLMA_SERVICE_*` names; app maps them in its compose to whatever it actually expects (per `APP_MANIFEST.md`).
 - **Tier 2 is curated, not open.** No third-party Tier-2 in v1.
-- **Tier 2 runs as native Debian packages under systemd**, not as Docker containers. The admin UI lives in the malmo dashboard at `/settings/<service>/*` — no upstream admin UI is exposed at its own subdomain. Tier 2 updates ride apt.
+- **Tier 2 runs as native Debian packages under systemd**, not as Docker containers. The admin UI lives in the molma dashboard at `/settings/<service>/*` — no upstream admin UI is exposed at its own subdomain. Tier 2 updates ride apt.
 
 ## Open questions
 

@@ -4,15 +4,15 @@
 - **Date:** 2026-06-03
 - **Specs touched:** none — implements the already-locked posture (`BRAIN_UI_PROTOCOL.md` # Rate limiting & abuse, # Locked decisions; `DECISIONS.md` 2026-06-02). No divergence, so no spec edit.
 
-Closes issue #53. The brain↔UI API is malmo's public surface from day one, but until now there was no general request throttling — a runaway dashboard tab, a tight CLI loop, or a compromised LAN device could grind a modest single-node box into CPU/goroutine/memory pressure. The 2026-06-02 spec drop locked the posture (throttle-not-ban, in-memory, three orthogonal planes) but only plane 3 (the ≤16-stream SSE cap, issue #47/`streamcap.go`) was built. This adds the two request-rate planes — per-session and per-IP — with the locked `429` + `Retry-After` contract.
+Closes issue #53. The brain↔UI API is molma's public surface from day one, but until now there was no general request throttling — a runaway dashboard tab, a tight CLI loop, or a compromised LAN device could grind a modest single-node box into CPU/goroutine/memory pressure. The 2026-06-02 spec drop locked the posture (throttle-not-ban, in-memory, three orthogonal planes) but only plane 3 (the ≤16-stream SSE cap, issue #47/`streamcap.go`) was built. This adds the two request-rate planes — per-session and per-IP — with the locked `429` + `Retry-After` contract.
 
 ## What was done
 
 - **`internal/api/ratelimit.go`** (new) — a token-bucket limiter, in-package alongside `streamcap.go` (its sibling plane). `bucketSet` is a keyed family of lazily-refilled token buckets sharing one capacity (= instantaneous burst) and refill rate (= sustained rate); `allow(key)` returns `(true, 0)` when a token was free or `(false, retry)` when empty, where `retry` is the time until one token refills. `rateLimiter` bundles the two planes:
-  - **Plane 1 — per-session:** keyed on the `malmo_session` token, **120 req/min sustained, burst 60**.
+  - **Plane 1 — per-session:** keyed on the `molma_session` token, **120 req/min sustained, burst 60**.
   - **Plane 2 — per-IP:** keyed on `clientIP(r)`, **30 req/min/IP**, governing the unauthenticated allowlist only.
 - **`rateLimit` middleware** — wired into the served chain as `withCORS(authMiddleware(rateLimit(mux)))` (`api.go`). It sits *after* auth resolves identity and *before* the mux, so it keys on the session token when authenticated and falls back to client IP otherwise. Long-lived streams (`/api/v1/events`, `/api/v1/system/live`, and the future streaming `/api/v1/files/content`) are exempt — they're governed by the per-session stream cap (plane 3), not the request-rate bucket, so opening a stream never draws from plane 1.
-- **`429` contract** — `writeRateLimited` emits the locked envelope `{ "code": "rate-limited", "message": "...", "details": { "scope": "session"|"ip", "retry_after_s": N } }` plus a `Retry-After` header in whole seconds (floored at 1). The message is plain-English for the dashboard ("malmo is busy — please retry in a moment."); the raw scope/IP/retry detail goes to `slog` only (plane 2 logs the IP at `warn`, plane 1 the user at `info` — neither bans).
+- **`429` contract** — `writeRateLimited` emits the locked envelope `{ "code": "rate-limited", "message": "...", "details": { "scope": "session"|"ip", "retry_after_s": N } }` plus a `Retry-After` header in whole seconds (floored at 1). The message is plain-English for the dashboard ("molma is busy — please retry in a moment."); the raw scope/IP/retry detail goes to `slog` only (plane 2 logs the IP at `warn`, plane 1 the user at `info` — neither bans).
 - **GC of idle buckets** — `allow` opportunistically sweeps buckets untouched for longer than `rateLimitIdleTTL` (5 min), gated to run at most once per `rateLimitReapEvery` (5 min) via the injected clock. No goroutine, no persistence: the whole limiter resets on restart, mirroring the login throttle and `streamcap`.
 
 ## Design decisions (within the locked spec)
@@ -47,6 +47,6 @@ Closes issue #53. The brain↔UI API is malmo's public surface from day one, but
 
 ## What's next
 
-- **Dashboard surface for the `429`.** The TS client should treat `code: "rate-limited"` as a non-alarming "malmo is busy — retrying…" and back off on `Retry-After` (TanStack Query retry), per the spec — a `web-ui` follow-up, not this backend issue.
+- **Dashboard surface for the `429`.** The TS client should treat `code: "rate-limited"` as a non-alarming "molma is busy — retrying…" and back off on `Retry-After` (TanStack Query retry), per the spec — a `web-ui` follow-up, not this backend issue.
 - **Login-throttle composition (#8).** When the login backoff lands, add a test that `/login`'s stricter per-IP bucket wins over plane 2.
 - **File-transfer concurrency cap.** Deferred to `NEXT.md` (Tier-4 control plane); the streaming `/files/content` endpoints are ungoverned by all three planes until then.

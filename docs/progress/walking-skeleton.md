@@ -4,7 +4,7 @@
 - **Date:** 2026-05-22
 - **Specs touched:** `CONTROL_PLANE.md`, `APP_LIFECYCLE.md`, `APP_MANIFEST.md`, `BRAIN_UI_PROTOCOL.md`, `BRAIN_HOST_PROTOCOL.md`, `WEB_UI.md`, `APP_STORE.md`
 
-The first vertical slice of malmo. Goal: prove the architecture spine
+The first vertical slice of molma. Goal: prove the architecture spine
 end-to-end with the fastest possible dev loop — everything runs natively on a
 dev box, no VM. The thread exercised:
 
@@ -14,7 +14,7 @@ dev box, no VM. The thread exercised:
 
 ## What was done
 
-### Backend — `malmo-brain` (Go)
+### Backend — `molma-brain` (Go)
 
 A single Go binary (`cmd/brain`) with clean internal packages, matching the
 "one binary, internal modularity" decision in `CONTROL_PLANE.md`:
@@ -42,8 +42,8 @@ A single Go binary (`cmd/brain`) with clean internal packages, matching the
 The generated override is faithful to `APP_LIFECYCLE.md` # override file
 contents: every service gets `cap_drop: [ALL]`, `security_opt:
 [no-new-privileges:true]`, forced `restart: unless-stopped`, and attachment to
-the per-app network; `main_service` additionally joins `malmo-ingress` with a
-per-instance alias (`malmo-<id>-<service>`) so Caddy reaches exactly that
+the per-app network; `main_service` additionally joins `molma-ingress` with a
+per-instance alias (`molma-<id>-<service>`) so Caddy reaches exactly that
 instance.
 
 ### host-agent — **fake** (Go)
@@ -100,7 +100,7 @@ all-native inner loop (`make help`). See
 - **No Tailwind/shadcn-vue.** Plain CSS placeholder; the `WEB_UI.md` component
   stack is deferred.
 - **`.local` URLs are illustrative** — the dashboard shows
-  `http://<slug>.malmo.local`, which won't resolve until the real host-agent +
+  `http://<slug>.molma.local`, which won't resolve until the real host-agent +
   Avahi land. Real routing today is via Caddy on `:8088` with a `Host` header.
 - **Go installed user-local** at `~/.local/go` (no system package).
 

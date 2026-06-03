@@ -6,13 +6,13 @@
 //
 // Env vars:
 //
-//	MALMO_AGENT_SOCK  — UNIX socket path (default protocol.SocketPath)
-//	MALMO_HEALTH_PATH — when set, back the storage category of GET
+//	MOLMA_AGENT_SOCK  — UNIX socket path (default protocol.SocketPath)
+//	MOLMA_HEALTH_PATH — when set, back the storage category of GET
 //	                    /v1/health/system from this file (read via the same
 //	                    FilesystemHealthSource the real binary uses). When
 //	                    unset, the storage category is an empty findings list
 //	                    ("storage looks healthy").
-//	MALMO_DEV_AVAHI   — when "1", publish per-app .local names via the real
+//	MOLMA_DEV_AVAHI   — when "1", publish per-app .local names via the real
 //	                    Avahi DBus publisher instead of the in-memory fake, so
 //	                    <slug>.local resolves on the LAN (and from other
 //	                    devices) in dev. Requires avahi-daemon running; runs
@@ -26,14 +26,14 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/malmo/malmo/internal/hostagent"
-	"github.com/malmo/malmo/internal/hostagent/avahipublisher"
-	"github.com/malmo/malmo/internal/hostagent/healthsource"
-	"github.com/malmo/malmo/internal/protocol"
+	"github.com/molmaos/molma/internal/hostagent"
+	"github.com/molmaos/molma/internal/hostagent/avahipublisher"
+	"github.com/molmaos/molma/internal/hostagent/healthsource"
+	"github.com/molmaos/molma/internal/protocol"
 )
 
 func main() {
-	sockPath := os.Getenv("MALMO_AGENT_SOCK")
+	sockPath := os.Getenv("MOLMA_AGENT_SOCK")
 	if sockPath == "" {
 		sockPath = protocol.SocketPath
 	}
@@ -57,14 +57,14 @@ func main() {
 	// stays fake. Default is the in-memory fake, keeping make run-agent and
 	// the hermetic test-health.sh free of any avahi-daemon dependency.
 	var pub hostagent.Publisher = hostagent.NewFakePublisher(protocol.AppHostSuffix)
-	if os.Getenv("MALMO_DEV_AVAHI") == "1" {
+	if os.Getenv("MOLMA_DEV_AVAHI") == "1" {
 		pub = &avahipublisher.DBusPublisher{HostSuffix: protocol.AppHostSuffix}
 		slog.Info("host-agent (fake) using real Avahi DBus publisher for .local names")
 	}
 
 	a := hostagent.New(nil, pub) // verifier wired after construction
 	a.Verifier = hostagent.NewFakeVerifier(a)
-	if healthPath := os.Getenv("MALMO_HEALTH_PATH"); healthPath != "" {
+	if healthPath := os.Getenv("MOLMA_HEALTH_PATH"); healthPath != "" {
 		a.Health = healthsource.New(healthPath)
 		slog.Info("host-agent (fake) wired to storage health file", "path", healthPath)
 	}

@@ -14,7 +14,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/malmo/malmo/internal/protocol"
+	"github.com/molmaos/molma/internal/protocol"
 )
 
 type Client struct {
@@ -117,8 +117,8 @@ func (c *Client) ResolveHome(ctx context.Context, username string) (protocol.Res
 	return out, nil
 }
 
-// WellKnownIdentity returns the fixed service-account UIDs/GIDs for malmo-app
-// and malmo-shared from the host. The brain calls this during install to build
+// WellKnownIdentity returns the fixed service-account UIDs/GIDs for molma-app
+// and molma-shared from the host. The brain calls this during install to build
 // user: and group_add directives for household-scope app instances.
 //
 // All non-200 responses are generic host errors (there is no unknown-user case

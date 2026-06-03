@@ -1,8 +1,8 @@
-# Running malmo locally
+# Running molma locally
 
-malmo's dev model is **two loops**:
+molma's dev model is **two loops**:
 
-- **Inner loop (seconds) — all native, no VM.** The product logic — `malmo-brain`
+- **Inner loop (seconds) — all native, no VM.** The product logic — `molma-brain`
   and the dashboard — runs directly on your machine against the local Docker
   socket. The host-agent is a **fake** that speaks the real protocol but stubs
   host ops. This is where ~90% of development happens.
@@ -14,7 +14,7 @@ This guide covers the inner loop.
 
 ## Who can contribute to what
 
-malmo's dev model splits cleanly along the inner/outer loop boundary, and that
+molma's dev model splits cleanly along the inner/outer loop boundary, and that
 boundary is also the **macOS/Windows ↔ Linux** boundary. The Go code is
 deliberately build-tagged so the cross-platform surface compiles and runs
 anywhere; the Linux-only parts are the *real host integration*, which by design
@@ -74,10 +74,10 @@ behavior is required.
 - **Go 1.23+.** If `go` isn't on your `PATH`, the `Makefile` falls back to
   `~/.local/go/bin/go`.
 - **Host port `:80` free.** The dev Caddy binds `:80` (matching production) so
-  `<slug>.malmo.local` URLs work portless. If something else holds `:80` (another
+  `<slug>.molma.local` URLs work portless. If something else holds `:80` (another
   web server, a system service), stop it first or `make caddy` will fail to bind.
 - **`avahi-daemon` running** (Linux, for the `make dev` loop). `make dev` sets
-  `MALMO_DEV_AVAHI=1`, which publishes each app's `.local` name over the real
+  `MOLMA_DEV_AVAHI=1`, which publishes each app's `.local` name over the real
   Avahi DBus API so it resolves on the LAN. Without the daemon, the fake
   host-agent still starts but app installs fail at the publish step. Check with
   `systemctl is-active avahi-daemon`; the publisher itself needs no sudo.
@@ -124,7 +124,7 @@ group on signal.
 ```bash
 make caddy        # 1. dev reverse proxy (Caddy container, detached)
 make run-agent    # 2. fake host-agent (UNIX socket at .dev/agent.sock)
-make run-brain    # 3. malmo-brain (:8080, native)
+make run-brain    # 3. molma-brain (:8080, native)
 make ui           # 4. dashboard (Vite, :5173)
 ```
 
@@ -140,22 +140,22 @@ browser ──▶ Vite :5173 ──(proxy /api)──▶ brain :8080
                                            │  ├─ docker compose CLI ─▶ Docker
                                            │  ├─ UNIX socket ─────────▶ host-agent (fake)
                                            │  └─ admin API ───────────▶ Caddy :2019
-app HTTP:  http://<slug>.malmo.local/ ─▶ Caddy :80 ─▶ app container
+app HTTP:  http://<slug>.molma.local/ ─▶ Caddy :80 ─▶ app container
 ```
 
 - **Caddy listens on host `:80`** (free it first — see prerequisites) and exposes
-  its admin API on `:2019`. App containers join the `malmo-ingress` network so
+  its admin API on `:2019`. App containers join the `molma-ingress` network so
   Caddy reaches them by per-instance alias.
 - **`.local` URLs resolve under `make dev`.** `make dev` runs the fake host-agent
-  with `MALMO_DEV_AVAHI=1`, which swaps the in-memory discovery publisher for the
+  with `MOLMA_DEV_AVAHI=1`, which swaps the in-memory discovery publisher for the
   real Avahi DBus publisher (`internal/hostagent/avahipublisher`) — the same code
-  path `host-agent-real` uses. Each installed app's `<slug>.malmo.local` is then
+  path `host-agent-real` uses. Each installed app's `<slug>.molma.local` is then
   announced on the LAN, reachable by its portless URL from this box and other LAN
   devices. Requires `avahi-daemon` running; the publisher works unprivileged.
   Android browsers don't resolve `.local` (a production limitation too — see
   `DISCOVERY.md`); secure URLs are the Android path.
   ```bash
-  curl http://whoami.malmo.local/        # under make dev, no Host header needed
+  curl http://whoami.molma.local/        # under make dev, no Host header needed
   ```
 - **The multi-terminal path (`make run-agent`) stays pure-fake** — no Avahi, so
   `.local` won't resolve there. Use the `Host`-header recipe below, or run
@@ -170,18 +170,18 @@ Everything dev-generated is under `.dev/` (git-ignored):
 ├── agent.sock                    # host-agent UNIX socket
 ├── brain  host-agent             # compiled binaries
 └── state/
-    ├── malmo.db                  # brain SQLite
+    ├── molma.db                  # brain SQLite
     └── instances/<id>/           # per-app: manifest, compose, override, .env, data/
 ```
 
-Override defaults with env vars: `MALMO_LISTEN`, `MALMO_STATE_DIR`,
-`MALMO_CATALOG_DIR`, `MALMO_AGENT_SOCK`, `MALMO_CADDY_ADMIN`,
-`MALMO_CADDY_LISTEN`.
+Override defaults with env vars: `MOLMA_LISTEN`, `MOLMA_STATE_DIR`,
+`MOLMA_CATALOG_DIR`, `MOLMA_AGENT_SOCK`, `MOLMA_CADDY_ADMIN`,
+`MOLMA_CADDY_LISTEN`.
 
 ## Reset
 
 ```bash
-make clean        # stop the dev Caddy, remove malmo app containers + networks,
+make clean        # stop the dev Caddy, remove molma app containers + networks,
                   # wipe .dev/state
 ```
 
@@ -195,7 +195,7 @@ in-memory fakes (tracked in `docs/progress/host-agent-pam-verify.md`).
 
 ```bash
 apt install libpam0g-dev      # PAM headers for CGO
-sudo cp dev/pam/malmo /etc/pam.d/malmo
+sudo cp dev/pam/molma /etc/pam.d/molma
 ```
 
 **Build and run:**
@@ -205,18 +205,18 @@ go build ./cmd/host-agent-real
 sudo ./cmd/host-agent-real    # must run as root — pam_unix.so requires privilege
 ```
 
-Point the brain at it by setting `MALMO_AGENT_SOCK` to the same path the real
+Point the brain at it by setting `MOLMA_AGENT_SOCK` to the same path the real
 binary listens on. Note: because `set-password` is still fake, dashboard login
 will fail until real `useradd`/`passwd` integration lands — use
 `cmd/host-agent` (fake) for all normal dev work.
 
 ## Verifying routing
 
-malmo uses **Host-header-based subdomain routing** — each installed app gets a
-virtual host (`<slug>.malmo.local`), never a path prefix. This keeps apps in
+molma uses **Host-header-based subdomain routing** — each installed app gets a
+virtual host (`<slug>.molma.local`), never a path prefix. This keeps apps in
 separate browser origins (same-origin policy enforcement — see `SPEC.md`).
 
-**Dev port:** Caddy listens on `:80` in dev (matching production), so `<slug>.malmo.local`
+**Dev port:** Caddy listens on `:80` in dev (matching production), so `<slug>.molma.local`
 resolves portless. Under `make dev` (real Avahi) the name is announced on the LAN and
 works from a browser on this box or another LAN device. With `make run-agent` (no Avahi)
 the name won't resolve — fall back to the `Host`-header / `--resolve` recipes below, which
@@ -226,13 +226,13 @@ work regardless of mDNS.
 
 ```bash
 # Under make dev — real Avahi, portless, no Host header
-curl http://whoami.malmo.local/
+curl http://whoami.molma.local/
 
 # Host-header method — works without Avahi (e.g. under make run-agent)
-curl -H "Host: whoami.malmo.local" http://localhost:80/
+curl -H "Host: whoami.molma.local" http://localhost:80/
 
 # --resolve variant — same effect, avoids quoting issues in scripts
-curl --resolve "whoami.malmo.local:80:127.0.0.1" http://whoami.malmo.local:80/
+curl --resolve "whoami.molma.local:80:127.0.0.1" http://whoami.molma.local:80/
 
 # Path-based — should NOT return 200 (route does not exist)
 curl -s -o /dev/null -w "%{http_code}" http://localhost:80/whoami/

@@ -15,18 +15,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/malmo/malmo/internal/admission"
-	"github.com/malmo/malmo/internal/catalog"
-	"github.com/malmo/malmo/internal/events"
-	"github.com/malmo/malmo/internal/hostclient"
-	"github.com/malmo/malmo/internal/manifest"
-	"github.com/malmo/malmo/internal/protocol"
-	"github.com/malmo/malmo/internal/store"
+	"github.com/molmaos/molma/internal/admission"
+	"github.com/molmaos/molma/internal/catalog"
+	"github.com/molmaos/molma/internal/events"
+	"github.com/molmaos/molma/internal/hostclient"
+	"github.com/molmaos/molma/internal/manifest"
+	"github.com/molmaos/molma/internal/protocol"
+	"github.com/molmaos/molma/internal/store"
 
 	"gopkg.in/yaml.v3"
 )
 
-const ingressNetwork = "malmo-ingress"
+const ingressNetwork = "molma-ingress"
 
 // Folder-source election values (the installer's per-folder choice). Mirrors
 // the api package's source constants; kept local so lifecycle doesn't import
@@ -38,7 +38,7 @@ const (
 
 // folderDir maps a taxonomy folder name to its capitalized on-disk directory
 // (STORAGE.md # user content). Personal source binds <home>/<dir>, shared binds
-// /srv/malmo/shared/<dir>.
+// /srv/molma/shared/<dir>.
 var folderDir = map[string]string{
 	"photos": "Photos", "documents": "Documents", "movies": "Movies",
 	"music": "Music", "notes": "Notes", "downloads": "Downloads",
@@ -55,9 +55,9 @@ type FolderMount struct {
 	Subfolder string // optional relative subpath under the folder (pick-subfolder)
 
 	// Target is the in-container destination for a Door-2 grant — the path the
-	// admin typed because a pasted compose has no author to map MALMO_FOLDER_<NAME>
+	// admin typed because a pasted compose has no author to map MOLMA_FOLDER_<NAME>
 	// (DASHBOARD.md # Folder grants carry an explicit destination path). Empty for
-	// a store (Door-1) mount, which keeps the fixed `/malmo/<folder>` convention.
+	// a store (Door-1) mount, which keeps the fixed `/molma/<folder>` convention.
 	Target string
 }
 
@@ -66,16 +66,16 @@ type FolderMount struct {
 // folders (writeOverride then emits today's network/cap_drop-only override).
 type isolation struct {
 	uid, gid  int    // container runtime identity (compose user:)
-	sharedGID int    // malmo-shared GID for group_add on shared-source mounts
+	sharedGID int    // molma-shared GID for group_add on shared-source mounts
 	home      string // owner home dir (personal scope); "" for household
 	mounts    []FolderMount
 }
 
 // hostSource resolves the host path bound for one mount: the owner's
-// <home>/<Folder>/ for a personal source, /srv/malmo/shared/<Folder>/ for a
+// <home>/<Folder>/ for a personal source, /srv/molma/shared/<Folder>/ for a
 // shared source, narrowed by Subfolder when present.
 func (it *isolation) hostSource(mt FolderMount) string {
-	base := filepath.Join("/srv/malmo/shared", folderDir[mt.Folder])
+	base := filepath.Join("/srv/molma/shared", folderDir[mt.Folder])
 	if mt.Source == sourcePersonal {
 		base = filepath.Join(it.home, folderDir[mt.Folder])
 	}
@@ -86,18 +86,18 @@ func (it *isolation) hostSource(mt FolderMount) string {
 }
 
 // containerDest is where a mount lands inside the container: the admin-typed
-// Door-2 `target` when set, else the fixed `/malmo/<folder>` a store app's
-// author maps via MALMO_FOLDER_<NAME> (DASHBOARD.md # Folder grants carry an
+// Door-2 `target` when set, else the fixed `/molma/<folder>` a store app's
+// author maps via MOLMA_FOLDER_<NAME> (DASHBOARD.md # Folder grants carry an
 // explicit destination path).
 func containerDest(mt FolderMount) string {
 	if mt.Target != "" {
 		return mt.Target
 	}
-	return "/malmo/" + mt.Folder
+	return "/molma/" + mt.Folder
 }
 
 var reservedSlugs = map[string]bool{
-	"api": true, "admin": true, "dashboard": true, "malmo": true,
+	"api": true, "admin": true, "dashboard": true, "molma": true,
 	"host": true, "setup": true,
 }
 
@@ -278,8 +278,8 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 
 	// 6. Resolve the per-instance isolation (container identity + folder binds)
 	// when the manifest declares folders. Personal instances run as the owner's
-	// UID/GID; household instances run as the shared malmo-app identity. Both
-	// learn the malmo-shared GID for shared-source group_add. Folderless apps
+	// UID/GID; household instances run as the shared molma-app identity. Both
+	// learn the molma-shared GID for shared-source group_add. Folderless apps
 	// (and Door-2 custom apps) skip this and keep the network/cap_drop-only
 	// override (APP_ISOLATION.md # User content).
 	var iso *isolation
@@ -288,9 +288,9 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 		if err != nil {
 			return rollback(fmt.Errorf("resolve host identity: %w", err))
 		}
-		iso = &isolation{sharedGID: wk.MalmoSharedGID, mounts: mounts}
+		iso = &isolation{sharedGID: wk.MolmaSharedGID, mounts: mounts}
 		if scope == store.ScopeHousehold {
-			iso.uid, iso.gid = wk.MalmoAppUID, wk.MalmoAppGID
+			iso.uid, iso.gid = wk.MolmaAppUID, wk.MolmaAppGID
 		} else {
 			rh, err := m.host.ResolveHome(ctx, owner.Username)
 			if errors.Is(err, hostclient.ErrUnknownUser) {
@@ -316,7 +316,7 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 
 	// 8. Create per-app network.
 	step("creating_network")
-	appNet := "malmo-app-" + id
+	appNet := "molma-app-" + id
 	if err := m.docker.NetworkCreate(ctx, appNet, !man.Permissions.Internet); err != nil {
 		return rollback(fmt.Errorf("create network: %w", err))
 	}
@@ -350,7 +350,7 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 
 	// 10. docker compose up -d.
 	step("compose_up")
-	if out, err := m.docker.ComposeUp(ctx, m.instanceDir(id), "malmo-"+id); err != nil {
+	if out, err := m.docker.ComposeUp(ctx, m.instanceDir(id), "molma-"+id); err != nil {
 		return rollback(fmt.Errorf("compose up: %w\n%s", err, out))
 	}
 
@@ -370,7 +370,7 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 
 	// 12. Flip the Caddy upstream from splash to the real container.
 	step("flipping_route")
-	upstream := fmt.Sprintf("malmo-%s-%s:%d", id, man.MainService, man.MainPort)
+	upstream := fmt.Sprintf("molma-%s-%s:%d", id, man.MainService, man.MainPort)
 	if err := m.caddy.AddRoute(ctx, id, host, upstream); err != nil {
 		slog.Warn("caddy upstream flip failed (continuing)",
 			"instance_id", id, "host", host, "upstream", upstream, "err", err)
@@ -505,7 +505,7 @@ func (m *Manager) inUseImageRefs() (map[string]bool, error) {
 // a partial install can always be cleaned up.
 func (m *Manager) teardown(ctx context.Context, inst store.Instance, removeDir bool) error {
 	if _, err := os.Stat(m.composeFile(inst.ID)); err == nil {
-		if out, err := m.docker.ComposeDown(ctx, m.instanceDir(inst.ID), "malmo-"+inst.ID); err != nil {
+		if out, err := m.docker.ComposeDown(ctx, m.instanceDir(inst.ID), "molma-"+inst.ID); err != nil {
 			slog.Warn("teardown: compose down",
 				"instance_id", inst.ID, "err", err, "output", out)
 		}
@@ -516,7 +516,7 @@ func (m *Manager) teardown(ctx context.Context, inst store.Instance, removeDir b
 	if err := m.host.Unpublish(ctx, inst.Slug); err != nil {
 		slog.Warn("teardown: mDNS unpublish", "slug", inst.Slug, "err", err)
 	}
-	_ = m.docker.NetworkRemove(ctx, "malmo-app-"+inst.ID)
+	_ = m.docker.NetworkRemove(ctx, "molma-app-"+inst.ID)
 	if removeDir {
 		_ = os.RemoveAll(m.instanceDir(inst.ID))
 	}
@@ -556,7 +556,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			if !actual[inst.ID] {
 				slog.Info("reconcile: starting drifted instance",
 					"instance_id", inst.ID, "reason", "no containers")
-				if out, err := m.docker.ComposeUp(ctx, m.instanceDir(inst.ID), "malmo-"+inst.ID); err != nil {
+				if out, err := m.docker.ComposeUp(ctx, m.instanceDir(inst.ID), "molma-"+inst.ID); err != nil {
 					slog.Warn("reconcile: compose up",
 						"instance_id", inst.ID, "err", err, "output", out)
 					continue
@@ -575,7 +575,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			if actual[inst.ID] {
 				slog.Info("reconcile: stopping drifted instance",
 					"instance_id", inst.ID, "reason", "containers up but state=stopped")
-				if out, err := m.docker.ComposeStop(ctx, m.instanceDir(inst.ID), "malmo-"+inst.ID); err != nil {
+				if out, err := m.docker.ComposeStop(ctx, m.instanceDir(inst.ID), "molma-"+inst.ID); err != nil {
 					slog.Warn("reconcile: compose stop",
 						"instance_id", inst.ID, "err", err, "output", out)
 				}
@@ -625,7 +625,7 @@ func (m *Manager) reassertRouting(ctx context.Context, inst store.Instance) bool
 	if host == "" {
 		host = inst.Slug + protocol.AppHostSuffix
 	}
-	upstream := fmt.Sprintf("malmo-%s-%s:%d", inst.ID, man.MainService, man.MainPort)
+	upstream := fmt.Sprintf("molma-%s-%s:%d", inst.ID, man.MainService, man.MainPort)
 	if err := m.caddy.AddRoute(ctx, inst.ID, host, upstream); err != nil {
 		slog.Warn("reconcile: caddy route",
 			"instance_id", inst.ID, "host", host, "upstream", upstream, "err", err)
@@ -637,7 +637,7 @@ func (m *Manager) teardownOrphan(ctx context.Context, id string) {
 	// Prefer compose if the instance dir survived; otherwise remove containers
 	// by label and drop the per-app network directly.
 	if _, err := os.Stat(m.composeFile(id)); err == nil {
-		if out, err := m.docker.ComposeDown(ctx, m.instanceDir(id), "malmo-"+id); err != nil {
+		if out, err := m.docker.ComposeDown(ctx, m.instanceDir(id), "molma-"+id); err != nil {
 			slog.Warn("reconcile: compose down orphan",
 				"instance_id", id, "err", err, "output", out)
 		}
@@ -648,7 +648,7 @@ func (m *Manager) teardownOrphan(ctx context.Context, id string) {
 		}
 	}
 	_ = m.caddy.RemoveRoute(ctx, id)
-	_ = m.docker.NetworkRemove(ctx, "malmo-app-"+id)
+	_ = m.docker.NetworkRemove(ctx, "molma-app-"+id)
 }
 
 func (m *Manager) loadInstanceManifest(id string) (*manifest.Manifest, error) {
@@ -748,13 +748,13 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 	for _, f := range man.Permissions.Folders {
 		modeByFolder[f.Folder] = f.Mode
 	}
-	appNet := "malmo-app-" + id
+	appNet := "molma-app-" + id
 	services := map[string]any{}
 	for _, svc := range svcNames {
 		nets := map[string]any{appNet: nil}
 		if svc == man.MainService {
 			nets[ingressNetwork] = map[string]any{
-				"aliases": []string{fmt.Sprintf("malmo-%s-%s", id, man.MainService)},
+				"aliases": []string{fmt.Sprintf("molma-%s-%s", id, man.MainService)},
 			}
 		}
 		entry := map[string]any{
@@ -766,16 +766,16 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 			// back to instances (APP_LIFECYCLE.md # an app instance is a
 			// compose project).
 			"labels": map[string]string{
-				"malmo.managed":     "true",
-				"malmo.instance_id": id,
-				"malmo.manifest_id": man.ID,
+				"molma.managed":     "true",
+				"molma.instance_id": id,
+				"molma.manifest_id": man.ID,
 			},
 		}
 		if ref, ok := pinBySvc[svc]; ok {
 			entry["image"] = ref
 		}
 		// Folder enforcement: run as the elected identity, bind each declared
-		// folder at /malmo/<folder> from its elected source, and join malmo-shared
+		// folder at /molma/<folder> from its elected source, and join molma-shared
 		// when any source is the household tree (APP_ISOLATION.md # User content).
 		if iso != nil {
 			entry["user"] = fmt.Sprintf("%d:%d", iso.uid, iso.gid)
@@ -827,17 +827,17 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 func (m *Manager) writeEnv(id, slug string, iso *isolation) error {
 	dataDir, _ := filepath.Abs(filepath.Join(m.instanceDir(id), "data"))
 	lines := []string{
-		"MALMO_INSTANCE_ID=" + id,
-		"MALMO_APP_URL=http://" + slug + protocol.AppHostSuffix,
-		"MALMO_DATA_DIR=" + dataDir,
+		"MOLMA_INSTANCE_ID=" + id,
+		"MOLMA_APP_URL=http://" + slug + protocol.AppHostSuffix,
+		"MOLMA_DATA_DIR=" + dataDir,
 	}
 	// Inject the in-container path for each bound folder (APP_MANIFEST.md #
-	// folders) — a store app's compose maps MALMO_FOLDER_<NAME> to its library
+	// folders) — a store app's compose maps MOLMA_FOLDER_<NAME> to its library
 	// path; a Door-2 grant already bound straight to its target, but the var still
 	// reflects the real in-container path. Stable regardless of the elected source.
 	if iso != nil {
 		for _, mt := range iso.mounts {
-			lines = append(lines, "MALMO_FOLDER_"+strings.ToUpper(mt.Folder)+"="+containerDest(mt))
+			lines = append(lines, "MOLMA_FOLDER_"+strings.ToUpper(mt.Folder)+"="+containerDest(mt))
 		}
 	}
 	env := strings.Join(append(lines, ""), "\n")

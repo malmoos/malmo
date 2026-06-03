@@ -8,7 +8,7 @@ import (
 func TestUseraddArgs_Defaults(t *testing.T) {
 	m := &LinuxUserManager{}
 	got := m.useraddArgs("cindy")
-	want := []string{"--create-home", "--shell", "/bin/bash", "--gid", "malmo", "cindy"}
+	want := []string{"--create-home", "--shell", "/bin/bash", "--gid", "molma", "cindy"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("useraddArgs default: got %v, want %v", got, want)
 	}
@@ -55,7 +55,7 @@ func TestParseGroupMembership(t *testing.T) {
 	const content = `# comment line ignored
 root:x:0:
 sudo:x:27:alice,bob,cindy
-malmo:x:3000:
+molma:x:3000:
 nogroup:x:65534:
 `
 	cases := []struct {
@@ -66,7 +66,7 @@ nogroup:x:65534:
 		{"bob", "sudo", true},
 		{"cindy", "sudo", true},
 		{"dave", "sudo", false},         // not listed
-		{"alice", "malmo", false},       // listed in sudo, not malmo
+		{"alice", "molma", false},       // listed in sudo, not molma
 		{"alice", "nonexistent", false}, // group not present
 		{"", "sudo", false},
 	}

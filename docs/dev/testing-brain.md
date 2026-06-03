@@ -1,6 +1,6 @@
 # Testing the brain
 
-How we test `malmo-brain` and its sibling packages. Scoped to the **inner
+How we test `molma-brain` and its sibling packages. Scoped to the **inner
 loop** (the Go code that drives Docker + Caddy + host-agent). The system-
 level lanes — `systemd-nspawn`, QEMU+swtpm, ISO end-to-end — live in
 [`../specs/TESTING.md`](../specs/TESTING.md) and target boot ordering, LUKS,
@@ -138,7 +138,7 @@ The manual verifications we've redone four slices in a row, codified. A
 script in `dev/e2e/` that runs against `make run-brain`:
 
 1. Door-1 install whoami → assert override contains `@sha256:`, app reaches
-   `http://whoami.malmo.local`.
+   `http://whoami.molma.local`.
 2. Tamper catalog `images:` → reinstall fails at `resolving_digests` with
    mismatch message, no state.
 3. Door-2 paste compose → install + reachable.

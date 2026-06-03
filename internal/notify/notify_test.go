@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/malmo/malmo/internal/events"
-	"github.com/malmo/malmo/internal/health"
+	"github.com/molmaos/molma/internal/events"
+	"github.com/molmaos/molma/internal/health"
 )
 
 // fakeStore captures Raise/Resolve calls so the derivation logic can be tested

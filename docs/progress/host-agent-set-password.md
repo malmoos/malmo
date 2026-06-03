@@ -48,7 +48,7 @@ New package with `LinuxUserManager`:
 ```go
 type LinuxUserManager struct {
     Shell        string // default "/bin/bash"
-    PrimaryGroup string // default "malmo"
+    PrimaryGroup string // default "molma"
 }
 
 func (m *LinuxUserManager) UpsertPassword(slug, password string) error
@@ -73,7 +73,7 @@ structured log; never reaches the wire.
 ### Wiring — `cmd/host-agent-real/main.go`
 
 ```go
-a := hostagent.New(&pamverifier.PAMVerifier{Service: "malmo"}, pub)
+a := hostagent.New(&pamverifier.PAMVerifier{Service: "molma"}, pub)
 a.UserMgr = &usermgr.LinuxUserManager{}
 ```
 
@@ -93,7 +93,7 @@ only `set-role / delete-user`.
   `useraddArgs` (default + override) and the empty-slug guard. No system calls.
 - `internal/hostagent/usermgr/integration_test.go` — `//go:build usermgrtest`,
   exercises real `useradd` + `chpasswd` against `/etc/passwd` and
-  `/etc/shadow`. Creates `malmo-usermgrtest`, asserts the shadow hash is
+  `/etc/shadow`. Creates `molma-usermgrtest`, asserts the shadow hash is
   non-empty, then rotates the password (update path). Cleans up with `userdel
   -r`. Skips when not root. Intended for the nspawn lane.
 
@@ -112,7 +112,7 @@ updated.
   source of truth; brain holds no hash; `chpasswd` (PAM path) is the
   Samba-sync-friendly mutator.
 - `USERS_AND_GROUPS.md` — accounts are real Linux users with primary group
-  `malmo`; promotion into `sudo` is a separate operation (still fake, will land
+  `molma`; promotion into `sudo` is a separate operation (still fake, will land
   with the real `setRole`).
 - `FIRST_RUN.md` # Identity & display names — UID range ≥ 3000 honored via
   `/etc/login.defs` (host responsibility), not forced by host-agent.
@@ -129,7 +129,7 @@ updated.
   `Downloads/` (per `STORAGE.md` # What apps and users actually see). That's a
   separate slice — likely a sibling host-agent endpoint or an extension of this
   one once the storage layer lands.
-- **`malmo` group must pre-exist.** `useradd --gid malmo` fails if the group is
+- **`molma` group must pre-exist.** `useradd --gid molma` fails if the group is
   absent. The box build is expected to create it; host-agent does not. The
   integration test falls back to `nogroup` / `users` on a stock Debian nspawn
   so the test still runs before the build pipeline provisions the group.
@@ -151,5 +151,5 @@ updated.
 - Real `deleteUser` in `host-agent-real` (`userdel -r`).
 - Use-case folder creation (`Photos/`, `Documents/`, ...) as a follow-up
   host-agent op; owner TBD between this package and a future `storage` package.
-- nspawn lane wiring for `test-usermgr` (provision `malmo` group, run under
+- nspawn lane wiring for `test-usermgr` (provision `molma` group, run under
   systemd-nspawn instead of host root).

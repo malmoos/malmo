@@ -23,7 +23,7 @@ async function submit() {
 
 <template>
   <main class="auth">
-    <h1>malmo</h1>
+    <h1>molma</h1>
     <form @submit.prevent="submit">
       <h2>Sign in</h2>
       <label>

@@ -1,4 +1,4 @@
-# Author's compose, held verbatim by malmo. traefik/whoami is a ~5MB image
+# Author's compose, held verbatim by molma. traefik/whoami is a ~5MB image
 # that prints the HTTP request it received — ideal for proving the Caddy route
 # reaches the right container.
 services:

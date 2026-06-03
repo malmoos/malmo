@@ -1,6 +1,6 @@
 # Brain ↔ host-agent protocol
 
-> The wire-level contract between the malmo brain (in a container) and `host-agent` (running on the host with root). Companion to `CONTROL_PLANE.md`, `AUTH.md`, `SERVICE_PROVISIONING.md`.
+> The wire-level contract between the molma brain (in a container) and `host-agent` (running on the host with root). Companion to `CONTROL_PLANE.md`, `AUTH.md`, `SERVICE_PROVISIONING.md`.
 >
 > Covers transport, wire format, patterns, auth, versioning, and failure semantics. The reconciler pattern (desired-vs-actual state) that goes with this protocol is in `APP_LIFECYCLE.md` # "same reconciler pattern extends to all host-managed state."
 
@@ -28,13 +28,13 @@ If a host capability isn't in the list above, it doesn't live behind host-agent.
 
 host-agent listens on a UNIX socket:
 
-| Path        | `/var/run/malmo/agent.sock`          |
+| Path        | `/var/run/molma/agent.sock`          |
 |-------------|--------------------------------------|
 | Owner       | `root`                               |
-| Group       | `malmo`                              |
+| Group       | `molma`                              |
 | Mode        | `0660`                               |
 
-The brain's container UID is a member of the `malmo` group. The socket is mounted into the brain's container; nothing else on the host can connect. The `malmo` group is **unrelated to `malmo-shared`** (the household-content group) — see `USERS_AND_GROUPS.md` # Group reference.
+The brain's container UID is a member of the `molma` group. The socket is mounted into the brain's container; nothing else on the host can connect. The `molma` group is **unrelated to `molma-shared`** (the household-content group) — see `USERS_AND_GROUPS.md` # Group reference.
 
 **Why UNIX socket over loopback TCP:**
 - File-permission access control is kernel-enforced and stronger than any app-level token.
@@ -49,8 +49,8 @@ Plain HTTP over the socket, with JSON request and response bodies. Versioned URL
 
 - **Debuggability is a first-class goal.** From any shell on the host:
   ```
-  curl --unix-socket /var/run/malmo/agent.sock http://localhost/v1/system/status
-  curl --unix-socket /var/run/malmo/agent.sock -X POST http://localhost/v1/system/reboot
+  curl --unix-socket /var/run/molma/agent.sock http://localhost/v1/system/status
+  curl --unix-socket /var/run/molma/agent.sock -X POST http://localhost/v1/system/reboot
   ```
   This is invaluable during spec/early-implementation iteration, for incident response, and for any future tinkerer-facing tooling.
 - Brain already runs an HTTP server (for the dashboard); reusing the HTTP client stack on the brain side is trivial.
@@ -94,7 +94,7 @@ GET /v1/system/resources
 
 **Live system-resources sample (`GET /v1/system/resources`).** Pattern A; the host source for the all-users live-resources view (`LOCAL_ANALYTICS.md` # Real-time system resources). Returns the **raw cumulative counters** from `/proc/stat`, `/proc/meminfo`, `/proc/loadavg`, `/proc/net/dev`, `/sys/block/<dev>/stat` plus a monotonic `ts_ns`. host-agent is stateless — it reads on request and computes no rates; the brain polls once per second *while a UI is watching*, diffs successive samples (rate denominator = `ts_ns` delta), and fans the derived rates out over its own SSE channel. host-agent applies the interface/device allowlist — physical LAN NICs + mesh, excluding `lo`/`docker0`/`veth*`/`br-*`, whole-disk devices only — so the brain never sees container-bridge noise. Distinct from `GET /v1/health/system`, which is a coarse 60s health poll, not a 1 Hz live feed.
 
-**Health findings report (`GET /v1/health/system`).** The brain can't read host hardware directly (it's containerized behind the socket-proxy), so all *physical* health detection — SMART, `statfs`, mount flags, `systemctl is-active`, memory pressure — is host-agent's job. host-agent samples on its own cadence and the brain polls this one report on the 60s heartbeat, reconciling findings into typed health issues (`HEALTH.md` # Detector catalog, locus B). It returns findings across domains (storage, drives, services, resources) in one payload — **not** a proliferation of per-domain endpoints — so the brain's `ApplyFindings(category, …)` reconcile can clear-absent / raise-present per category atomically. This supersedes the slice-1 single-purpose storage report (`/run/malmo/health/storage.json` boot reporter stays; the polled endpoint generalizes). See `DECISIONS.md` 2026-05-29.
+**Health findings report (`GET /v1/health/system`).** The brain can't read host hardware directly (it's containerized behind the socket-proxy), so all *physical* health detection — SMART, `statfs`, mount flags, `systemctl is-active`, memory pressure — is host-agent's job. host-agent samples on its own cadence and the brain polls this one report on the 60s heartbeat, reconciling findings into typed health issues (`HEALTH.md` # Detector catalog, locus B). It returns findings across domains (storage, drives, services, resources) in one payload — **not** a proliferation of per-domain endpoints — so the brain's `ApplyFindings(category, …)` reconcile can clear-absent / raise-present per category atomically. This supersedes the slice-1 single-purpose storage report (`/run/molma/health/storage.json` boot reporter stays; the polled endpoint generalizes). See `DECISIONS.md` 2026-05-29.
 
 ```
 POST /v1/auth/verify-password
@@ -140,14 +140,14 @@ GET /v1/users/{username}/home
 
 The brain maps `unknown-user` to an installation error (not a 500 retry) — the user was deleted between the install-plan call and the install commit. The fake host-agent returns a deterministic result derived from the username (UID in [3000, 3999]) so the dev loop is coherent without a real `/etc/passwd`. See `APP_ISOLATION.md` # User content for the personal-scope bind-mount contract this feeds.
 
-For a **household-scope** app the owner's UID doesn't apply — the instance runs as a shared service identity (`malmo-app`) and any folder electing a shared source is added to the `malmo-shared` group. The brain learns those fixed identities through a companion Pattern A endpoint:
+For a **household-scope** app the owner's UID doesn't apply — the instance runs as a shared service identity (`molma-app`) and any folder electing a shared source is added to the `molma-shared` group. The brain learns those fixed identities through a companion Pattern A endpoint:
 
 ```
 GET /v1/identity/well-known
-→ 200 OK  { "malmo_app_uid": 2000, "malmo_app_gid": 2000, "malmo_shared_gid": 2001 }
+→ 200 OK  { "molma_app_uid": 2000, "molma_app_gid": 2000, "molma_shared_gid": 2001 }
 ```
 
-`malmo_app_uid`/`malmo_app_gid` is the shared service identity stamped as the compose `user:` for household instances; `malmo_shared_gid` is the GID added via `group_add` whenever any folder elects the shared source (`/srv/malmo/shared/<Folder>/`), in either scope. The real host-agent resolves these from `/etc/passwd` and `/etc/group` (`os/user.Lookup("malmo-app")`, `os/user.LookupGroup("malmo-shared")`); these accounts are provisioned by the box build, not by host-agent. The fake host-agent returns fixed dev constants (`2000`/`2000`/`2001`) that sit below the per-user `[3000, 3999]` range so service identities never collide with hashed user UIDs. See `APP_ISOLATION.md` # User content and `USERS_AND_GROUPS.md` # Group reference.
+`molma_app_uid`/`molma_app_gid` is the shared service identity stamped as the compose `user:` for household instances; `molma_shared_gid` is the GID added via `group_add` whenever any folder elects the shared source (`/srv/molma/shared/<Folder>/`), in either scope. The real host-agent resolves these from `/etc/passwd` and `/etc/group` (`os/user.Lookup("molma-app")`, `os/user.LookupGroup("molma-shared")`); these accounts are provisioned by the box build, not by host-agent. The fake host-agent returns fixed dev constants (`2000`/`2000`/`2001`) that sit below the per-user `[3000, 3999]` range so service identities never collide with hashed user UIDs. See `APP_ISOLATION.md` # User content and `USERS_AND_GROUPS.md` # Group reference.
 
 **Network endpoints (NetworkManager-backed).** host-agent exposes Pattern A routes that wrap NetworkManager's DBus surface:
 
@@ -183,16 +183,16 @@ POST /v1/discovery/unpublish
   → 200 OK
 
 GET  /v1/discovery/state
-  → { "publisher": "avahi", "host_name": "malmo", "renamed_to": null,
+  → { "publisher": "avahi", "host_name": "molma", "renamed_to": null,
       "published": [{ "slug": "photos", "name": "photos.local", "state": "established" }, ...],
       "interfaces": ["eth0", "wlan0"] }
 ```
 
-Implementation: `publish` writes `/etc/avahi/services/app-<slug>.service`, waits on Avahi's DBus for `EntryGroup.StateChanged → ESTABLISHED` (typically <1s), returns. `unpublish` removes the file. Both ops are idempotent — duplicate publish is a no-op, unpublish on an unknown slug returns 200. Avahi's RFC 6762 §9 conflict-resolution (host rename to `malmo-2.local`) surfaces in `state.renamed_to` and the brain raises `hostname-conflict` (`HEALTH.md`). The Avahi interface allow-list (`allow-interfaces=` in `/etc/avahi/avahi-daemon.conf`) is computed by host-agent from NetworkManager state at boot and on interface change — eth/wlan in, `tailscale0` / `docker0` / `br-*` out. See `DISCOVERY.md` for the full record model and gotchas.
+Implementation: `publish` writes `/etc/avahi/services/app-<slug>.service`, waits on Avahi's DBus for `EntryGroup.StateChanged → ESTABLISHED` (typically <1s), returns. `unpublish` removes the file. Both ops are idempotent — duplicate publish is a no-op, unpublish on an unknown slug returns 200. Avahi's RFC 6762 §9 conflict-resolution (host rename to `molma-2.local`) surfaces in `state.renamed_to` and the brain raises `hostname-conflict` (`HEALTH.md`). The Avahi interface allow-list (`allow-interfaces=` in `/etc/avahi/avahi-daemon.conf`) is computed by host-agent from NetworkManager state at boot and on interface change — eth/wlan in, `tailscale0` / `docker0` / `br-*` out. See `DISCOVERY.md` for the full record model and gotchas.
 
-**`enroll-drive` and `eject-drive` carry credentials inline** because host-agent verifies them via PAM as the first step of the job and uses them to authorize reading `/etc/malmo/secrets/luks-recovery.key`. The brain does not cache or forward the password beyond the single request. On invalid credentials the job fails immediately with `error.code = "auth-failed"`; otherwise host-agent proceeds with format → LUKS → TPM enrollment → mount → mergerfs add (enroll) or stop apps → unmount → marker removal (eject). Declared attributes: `Dangerous: true`, `ResourceClass: "disk"`, `MaxDuration: 10m`. See `STORAGE.md` # Adding a data drive and # Ejecting a data drive for the user-facing flow; `AUTH.md` # Roles for the fresh-password requirement.
+**`enroll-drive` and `eject-drive` carry credentials inline** because host-agent verifies them via PAM as the first step of the job and uses them to authorize reading `/etc/molma/secrets/luks-recovery.key`. The brain does not cache or forward the password beyond the single request. On invalid credentials the job fails immediately with `error.code = "auth-failed"`; otherwise host-agent proceeds with format → LUKS → TPM enrollment → mount → mergerfs add (enroll) or stop apps → unmount → marker removal (eject). Declared attributes: `Dangerous: true`, `ResourceClass: "disk"`, `MaxDuration: 10m`. See `STORAGE.md` # Adding a data drive and # Ejecting a data drive for the user-facing flow; `AUTH.md` # Roles for the fresh-password requirement.
 
-**Files endpoints (`/v1/files/*`).** Back the in-dashboard file manager (`FILES.md`). The brain is containerized and cannot touch `/home` or `/srv/malmo`, so every file operation runs here, **with host-agent dropping to the requesting user's Linux UID/GID for the duration of the op** (`setresuid`/`setresgid` to the malmo 3000+ UID, or a forked child). This makes POSIX `0750`/`02770` the kernel-enforced backstop — a member's op cannot read another user's `0750` home even past a brain-side bug — and gives created files correct ownership natively, the same contract the compose `user:` directive gives app instances (`APP_ISOLATION.md` # User content). host-agent owns logical-root resolution: `root` is `home` (→ the user's home, resolved as in `/v1/users/{username}/home`) or `shared` (→ `/srv/malmo/shared/`); it re-validates path containment before acting. The brain passes `user` on every call; there is no "act as a different user" parameter.
+**Files endpoints (`/v1/files/*`).** Back the in-dashboard file manager (`FILES.md`). The brain is containerized and cannot touch `/home` or `/srv/molma`, so every file operation runs here, **with host-agent dropping to the requesting user's Linux UID/GID for the duration of the op** (`setresuid`/`setresgid` to the molma 3000+ UID, or a forked child). This makes POSIX `0750`/`02770` the kernel-enforced backstop — a member's op cannot read another user's `0750` home even past a brain-side bug — and gives created files correct ownership natively, the same contract the compose `user:` directive gives app instances (`APP_ISOLATION.md` # User content). host-agent owns logical-root resolution: `root` is `home` (→ the user's home, resolved as in `/v1/users/{username}/home`) or `shared` (→ `/srv/molma/shared/`); it re-validates path containment before acting. The brain passes `user` on every call; there is no "act as a different user" parameter.
 
 Metadata ops are Pattern A:
 
@@ -304,15 +304,15 @@ A web terminal has independent security implications (root PTY = root on the hos
 
 **Authentication = socket file permissions. There is no application-layer token.**
 
-The kernel enforces it: anything not in the `malmo` group can't connect. Anything in the `malmo` group can do everything host-agent exposes. There's no per-caller authorization because the only caller is the brain.
+The kernel enforces it: anything not in the `molma` group can't connect. Anything in the `molma` group can do everything host-agent exposes. There's no per-caller authorization because the only caller is the brain.
 
 **Test invariant (CI must assert):**
 
-> The `malmo` group on the running system contains exactly one member: the brain's container runtime UID. Any additional member is a configuration error and fails the test.
+> The `molma` group on the running system contains exactly one member: the brain's container runtime UID. Any additional member is a configuration error and fails the test.
 
 This is the entire authn/authz model for this boundary. If group membership is wrong, the security boundary is broken; the test is the safety net.
 
-If a future tool ever needs host-agent access (a debug CLI, a recovery tool), we either add it explicitly to the test allowlist *and* the `malmo` group, or it talks through the brain.
+If a future tool ever needs host-agent access (a debug CLI, a recovery tool), we either add it explicitly to the test allowlist *and* the `molma` group, or it talks through the brain.
 
 ## Versioning: lockstep with OS release
 
@@ -370,7 +370,7 @@ Covered in Pattern C above. Self-contained: monotonic event IDs, ~256 KB per-job
 
 Protocol-shaped rules about *when and how* the protocol is exercised. Not new protocol surface.
 
-**host-agent self-update.** When the OS updater installs a new `malmo-host-agent` package:
+**host-agent self-update.** When the OS updater installs a new `molma-host-agent` package:
 
 1. Brain stops accepting new jobs.
 2. Brain waits for running jobs to drain. Hard cap (5 minutes): if a job is still running, the OS update fails with "an operation is still running, retry later."
@@ -385,7 +385,7 @@ Brain treats "host-agent unreachable" during this window as expected, not as an 
 
 ## Test invariants (CI)
 
-Beyond the malmo-group membership assertion (above), CI asserts:
+Beyond the molma-group membership assertion (above), CI asserts:
 
 - Every registered `JobKind` has non-zero `MaxDuration` and an explicit `Dangerous` value (no defaults).
 - A round-trip test for SSE reconnect: kill the brain mid-stream, restart, verify resume with the same `Last-Event-ID` recovers continuity (or emits `lost: true` if the buffer was overrun).
@@ -393,10 +393,10 @@ Beyond the malmo-group membership assertion (above), CI asserts:
 
 ## Locked decisions
 
-- **Transport:** UNIX socket at `/var/run/malmo/agent.sock`, owner `root:malmo`, mode `0660`.
+- **Transport:** UNIX socket at `/var/run/molma/agent.sock`, owner `root:molma`, mode `0660`.
 - **Wire format:** HTTP/1.1 + JSON, versioned URL prefix (`/v1/...`).
 - **API patterns:** sync request/response (Pattern A) for <5s ops; explicit `Job` objects (Pattern B) for anything that can exceed ~5s or needs progress/cancel; SSE (Pattern C) for one-way streams; WebSocket (Pattern D) reserved for future bidirectional needs (web terminal).
-- **Authentication:** socket file permissions only; no app-layer token. CI test asserts `malmo` group has exactly one member (brain's container UID).
+- **Authentication:** socket file permissions only; no app-layer token. CI test asserts `molma` group has exactly one member (brain's container UID).
 - **Versioning:** lockstep with OS release. No protocol-version negotiation.
 - **Out of scope for host-agent:** Docker daemon (brain talks to Docker via docker-socket-proxy), Caddy (managed container), Tier-1 app-facing services.
 - **Debuggability is a first-class design constraint.** Choices that would make the protocol harder to debug from `curl` need an explicit justification.
@@ -413,7 +413,7 @@ Beyond the malmo-group membership assertion (above), CI asserts:
 ## Knock-ons to other docs
 
 - `CONTROL_PLANE.md` — points to this doc as the authoritative spec for the brain↔host-agent boundary.
-- `AUTH.md` — the "Brain ↔ host-agent in the auth path" section is consistent with this protocol (private channel, no app-layer token); the malmo-group test invariant is now documented here.
+- `AUTH.md` — the "Brain ↔ host-agent in the auth path" section is consistent with this protocol (private channel, no app-layer token); the molma-group test invariant is now documented here.
 - `SERVICE_PROVISIONING.md` — Tier-2 ops (systemctl, config edits) flow through host-agent via this protocol's Pattern A and Pattern B.
 - `UPDATES.md` — apt operations are Pattern B (jobs with SSE log streams). The "brain ↔ host-agent protocol versioning" open item is resolved (lockstep).
 - `NEXT.md` — carries the future web-terminal and app-facing-background-jobs items (failure semantics is now closed).

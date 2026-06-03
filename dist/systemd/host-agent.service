@@ -1,26 +1,26 @@
 [Unit]
-Description=malmo host-agent (HTTP/JSON over /var/run/malmo/agent.sock)
-Documentation=https://github.com/malmo/malmo/blob/main/docs/specs/BRAIN_HOST_PROTOCOL.md
-Documentation=https://github.com/malmo/malmo/blob/main/docs/specs/BOOT.md
-After=malmo-storage-ready.target docker.service
-Wants=malmo-storage-ready.target
+Description=molma host-agent (HTTP/JSON over /var/run/molma/agent.sock)
+Documentation=https://github.com/molmaos/molma/blob/main/docs/specs/BRAIN_HOST_PROTOCOL.md
+Documentation=https://github.com/molmaos/molma/blob/main/docs/specs/BOOT.md
+After=molma-storage-ready.target docker.service
+Wants=molma-storage-ready.target
 Requires=docker.service
 # Per BOOT.md # Failure → recovery target: OnFailure routes to recovery
 # *only* on host-agent's bounded restart policy (5 starts in 60s).
 # StartLimit* must live in [Unit] (canonical since systemd 229); the [Service]
 # aliases behave subtly differently under `systemctl reset-failed`.
-OnFailure=malmo-recovery.target
+OnFailure=molma-recovery.target
 StartLimitBurst=5
 StartLimitIntervalSec=60s
 
 [Service]
 Type=simple
-ExecStart=/usr/lib/malmo/host-agent-real
+ExecStart=/usr/lib/molma/host-agent-real
 Restart=on-failure
 RestartSec=2s
 # Hardening (Type=notify + watchdog deferred to CONTROL_PLANE.md follow-up).
 User=root
-RuntimeDirectory=malmo
+RuntimeDirectory=molma
 RuntimeDirectoryMode=0755
 
 [Install]

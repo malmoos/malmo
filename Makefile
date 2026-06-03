@@ -1,4 +1,4 @@
-# malmo dev orchestration. The fast inner loop runs everything natively on the
+# molma dev orchestration. The fast inner loop runs everything natively on the
 # host (no VM): host-agent + brain as Go processes, Caddy as a container, the
 # UI on Vite. The VM is the outer loop for host-integrated parts (boot, LUKS,
 # systemd) and is not wired here yet.
@@ -11,9 +11,9 @@ DEV_DIR := .dev
 STATE_DIR := $(DEV_DIR)/state
 AGENT_SOCK := $(abspath $(DEV_DIR)/agent.sock)
 
-export MALMO_AGENT_SOCK := $(AGENT_SOCK)
-export MALMO_STATE_DIR := $(STATE_DIR)
-export MALMO_CATALOG_DIR := ./catalog
+export MOLMA_AGENT_SOCK := $(AGENT_SOCK)
+export MOLMA_STATE_DIR := $(STATE_DIR)
+export MOLMA_CATALOG_DIR := ./catalog
 
 .PHONY: build host-agent brain host-agent-real check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev openapi openapi-check clean help
 
@@ -28,7 +28,7 @@ help:
 	@echo "make fmt         - rewrite Go sources into gofmt-canonical form (autofix)"
 	@echo "make dev         - all three foreground procs in one terminal (recommended)"
 	@echo "make build       - compile brain + host-agent"
-	@echo "make net         - create the malmo-ingress docker network"
+	@echo "make net         - create the molma-ingress docker network"
 	@echo "make caddy       - start the dev Caddy reverse proxy (container)"
 	@echo "make run-agent   - run the fake host-agent (foreground)"
 	@echo "make run-brain   - run the brain (foreground)"
@@ -150,7 +150,7 @@ test-health:
 	./dev/test-health.sh
 
 net:
-	@docker network inspect malmo-ingress >/dev/null 2>&1 || docker network create malmo-ingress
+	@docker network inspect molma-ingress >/dev/null 2>&1 || docker network create molma-ingress
 
 caddy: net
 	docker compose -f dev/docker-compose.yml up -d
@@ -178,7 +178,7 @@ dev: build caddy
 	@mkdir -p $(STATE_DIR)
 	@cd web-ui && [ -d node_modules ] || npm install
 	@trap 'kill 0' INT TERM EXIT; \
-	  (MALMO_DEV_AVAHI=1 $(DEV_DIR)/host-agent 2>&1 | sed -u 's/^/[agent] /') & \
+	  (MOLMA_DEV_AVAHI=1 $(DEV_DIR)/host-agent 2>&1 | sed -u 's/^/[agent] /') & \
 	  ($(DEV_DIR)/brain      2>&1 | sed -u 's/^/[brain] /') & \
 	  (cd web-ui && npm run dev 2>&1 | sed -u 's/^/[ui]    /') & \
 	  wait
@@ -205,6 +205,6 @@ openapi-check:
 	  rm -rf $$tmp; echo "openapi spec is fresh"
 
 clean: caddy-down
-	-@docker ps -aq --filter "label=com.docker.compose.project" --filter "name=malmo-" | xargs -r docker rm -f
-	-@docker network ls -q --filter "name=malmo-app-" | xargs -r docker network rm
+	-@docker ps -aq --filter "label=com.docker.compose.project" --filter "name=molma-" | xargs -r docker rm -f
+	-@docker network ls -q --filter "name=molma-app-" | xargs -r docker network rm
 	rm -rf $(DEV_DIR)/state

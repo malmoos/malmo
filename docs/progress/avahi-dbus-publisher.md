@@ -6,7 +6,7 @@
 
 ## The 0012 false start
 
-Slice 0012 wrote `/etc/avahi/services/app-<slug>.service` XML files as the per-app A-record mechanism. We tested this against a real Avahi daemon and it does not work: static service files announce *services*, not bare A-record aliases. The file loaded without error (Avahi logged "Service ... successfully established") but `avahi-resolve -n <slug>.malmo.local` timed out. Avahi will not publish a standalone A record for a `<host-name>` declared inside a service-group file — it owns only the service record. See `DECISIONS.md` entry 2026-05-24 for the full rationale.
+Slice 0012 wrote `/etc/avahi/services/app-<slug>.service` XML files as the per-app A-record mechanism. We tested this against a real Avahi daemon and it does not work: static service files announce *services*, not bare A-record aliases. The file loaded without error (Avahi logged "Service ... successfully established") but `avahi-resolve -n <slug>.molma.local` timed out. Avahi will not publish a standalone A record for a `<host-name>` declared inside a service-group file — it owns only the service record. See `DECISIONS.md` entry 2026-05-24 for the full rationale.
 
 0012 is deleted. Its `FilePublisher` implementation, test file, and progress doc are gone. The nspawn lane entry ("provision Avahi, write a service file, verify the A record resolves") is dropped — the premise was wrong.
 
@@ -55,7 +55,7 @@ This covers both "brain restart while host-agent was running" and "both restart 
 
 ### Binary wiring
 
-- `cmd/host-agent-real/main.go` — instantiates `&avahipublisher.DBusPublisher{HostSuffix: ".malmo.local"}`, passes it to `hostagent.New`. Defers `pub.Close()` on shutdown.
+- `cmd/host-agent-real/main.go` — instantiates `&avahipublisher.DBusPublisher{HostSuffix: ".molma.local"}`, passes it to `hostagent.New`. Defers `pub.Close()` on shutdown.
 - `cmd/host-agent/main.go` — unchanged; still uses `FakePublisher`.
 - `internal/hostagent/agent.go` — unchanged; `Publisher` interface is unmodified.
 
@@ -77,7 +77,7 @@ This covers both "brain restart while host-agent was running" and "both restart 
 - **Local-IP detection assumes single primary IPv4.** First non-loopback non-link-local address wins. Multi-homed or dual-stack boxes may announce on the wrong interface. Future: prefer the NM primary connection's address.
 - **DBus calls not real-tested in CI until the nspawn lane lands.** `go test ./...` does not run `avahitest`-tagged tests. Unit tests cover slug validation and the ErrCollision sentinel only.
 - **`/etc/avahi/avahi-daemon.conf` interface scoping not written.** `DISCOVERY.md` § "Interface scoping" specifies host-agent computes the allow/deny-interfaces list from NetworkManager state at boot. Deferred.
-- **The host record (`malmo.local`)** — published at boot time, not by the per-app reconciler. Deferred to boot-sequence integration.
+- **The host record (`molma.local`)** — published at boot time, not by the per-app reconciler. Deferred to boot-sequence integration.
 - **`setPassword`, `setRole`, `deleteUser` still fake in `host-agent-real`.** Carried from 0011.
 
 ## What's next

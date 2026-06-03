@@ -1,20 +1,20 @@
 <div align="center">
 
-# malmo
+# molma
 
 **A home-server OS for people who want to own their data — not become sysadmins.**
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
-[What is malmo?](#what-is-malmo) · [Principles](#principles) · [Status](#status) · [Quickstart](#quickstart-local-dev-no-vm) · [Documentation](#documentation) · [Contributing](#contributing) · [Contributors](#contributors)
+[What is molma?](#what-is-molma) · [Principles](#principles) · [Status](#status) · [Quickstart](#quickstart-local-dev-no-vm) · [Documentation](#documentation) · [Contributing](#contributing) · [Contributors](#contributors)
 
 </div>
 
 ---
 
-## What is malmo
+## What is molma
 
-malmo is a home-server OS in the same category as **Umbrel / ZimaOS / CasaOS**. Its north star is **simplicity for non-technical users**.
+molma is a home-server OS in the same category as **Umbrel / ZimaOS / CasaOS**. Its north star is **simplicity for non-technical users**.
 
 Install it on an old laptop or PC, leave it running in the pantry, and run the apps you use daily — photos, notes, files, a shared grocery list — on hardware you own, with data you own. If the original app developer disappears, your app keeps working.
 
@@ -55,13 +55,13 @@ Run each in a separate terminal:
 ```bash
 make caddy        # dev reverse proxy (container; apps on :80, admin :2019)
 make run-agent    # fake host-agent (UNIX socket)
-make run-brain    # malmo-brain (:8080, native Go)
+make run-brain    # molma-brain (:8080, native Go)
 make ui           # dashboard (Vite, :5173)
 ```
 
 Then open <http://localhost:5173> and install **Whoami** from the catalog.
 
-> **Tip:** `make dev` runs all of the above in one terminal and additionally publishes each app's `<slug>.malmo.local` name over real Avahi (`MALMO_DEV_AVAHI=1`), so installed apps are reachable by their portless `.local` URL from this box and other LAN devices (non-Android). Requires `avahi-daemon` running and host port `:80` free.
+> **Tip:** `make dev` runs all of the above in one terminal and additionally publishes each app's `<slug>.molma.local` name over real Avahi (`MOLMA_DEV_AVAHI=1`), so installed apps are reachable by their portless `.local` URL from this box and other LAN devices (non-Android). Requires `avahi-daemon` running and host port `:80` free.
 
 ## Documentation
 
@@ -79,14 +79,14 @@ Then open <http://localhost:5173> and install **Whoami** from the catalog.
 
 New contributor (or pointing a coding agent at the repo)? Start with [`docs/dev/contributing.md`](docs/dev/contributing.md) — the end-to-end loop (orient → pick a task → branch → build → test → document → PR).
 
-- Open implementation tasks live in [GitHub Issues](https://github.com/onel/malmo/issues) (`gh issue list --label P1`).
+- Open implementation tasks live in [GitHub Issues](https://github.com/molmaos/molma/issues) (`gh issue list --label P1`).
 - All work happens on a branch and lands via a PR into `main`.
 - Link the issue your PR closes with `Closes #<N>`.
 - **Every change ships with documentation** — a code change is not complete until its docs are written in the same change.
 
 ## License
 
-malmo is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only). By contributing, you agree to the [Contributor License Agreement](CLA.md).
+molma is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only). By contributing, you agree to the [Contributor License Agreement](CLA.md).
 
 ## Contributors
 

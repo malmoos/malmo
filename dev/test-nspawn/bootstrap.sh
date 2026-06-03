@@ -3,8 +3,8 @@
 #
 # Produces a minimal Debian rootfs at .dev/nspawn/rootfs/ with the
 # user/group tooling we exercise (useradd, chpasswd, gpasswd, userdel)
-# plus the `malmo` and `sudo` groups pre-provisioned — matching the
-# layout the real malmo OS will ship.
+# plus the `molma` and `sudo` groups pre-provisioned — matching the
+# layout the real molma OS will ship.
 #
 # Source = `docker export debian:bookworm`. We use docker (already a
 # project dep for Caddy) rather than mmdebstrap/debootstrap because
@@ -27,8 +27,8 @@ fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ROOTFS="${REPO_ROOT}/.dev/nspawn/rootfs"
-CANARY="${ROOTFS}/.malmo-nspawn-ready"
-IMAGE="${MALMO_NSPAWN_IMAGE:-debian:bookworm}"
+CANARY="${ROOTFS}/.molma-nspawn-ready"
+IMAGE="${MOLMA_NSPAWN_IMAGE:-debian:bookworm}"
 
 # Bumped to v2 when slice 0020 added systemd-sysv (needed for --boot in the
 # boot-chain lane). Older v1 rootfs lacks /sbin/init; force a rebuild rather
@@ -62,7 +62,7 @@ trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
 docker export "$CID" | tar -x -C "$ROOTFS"
 
 # debian:bookworm ships with passwd + login but no sudo group. Add it
-# (so SetRole's "admin → sudo" path is real), pre-provision the `malmo`
+# (so SetRole's "admin → sudo" path is real), pre-provision the `molma`
 # primary group at GID 3000 per FIRST_RUN.md # Identity & display names,
 # and install libpam-modules so chpasswd can update /etc/shadow via PAM.
 #
@@ -80,7 +80,7 @@ systemd-nspawn --quiet -D "$ROOTFS" --pipe \
         apt-get update -qq
         apt-get install -y -qq --no-install-recommends \
             sudo libpam-modules systemd-sysv
-        getent group malmo >/dev/null || groupadd -g 3000 malmo
+        getent group molma >/dev/null || groupadd -g 3000 molma
         apt-get clean
         rm -rf /var/lib/apt/lists/*
     '
