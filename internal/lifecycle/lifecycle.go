@@ -53,6 +53,12 @@ type FolderMount struct {
 	Folder    string // taxonomy name (lowercase): photos|documents|movies|music|notes|downloads
 	Source    string // sourcePersonal | sourceShared
 	Subfolder string // optional relative subpath under the folder (pick-subfolder)
+
+	// Target is the in-container destination for a Door-2 grant — the path the
+	// admin typed because a pasted compose has no author to map MALMO_FOLDER_<NAME>
+	// (DASHBOARD.md # Folder grants carry an explicit destination path). Empty for
+	// a store (Door-1) mount, which keeps the fixed `/malmo/<folder>` convention.
+	Target string
 }
 
 // isolation is the resolved per-instance identity + folder binds writeOverride
@@ -77,6 +83,17 @@ func (it *isolation) hostSource(mt FolderMount) string {
 		base = filepath.Join(base, mt.Subfolder)
 	}
 	return base
+}
+
+// containerDest is where a mount lands inside the container: the admin-typed
+// Door-2 `target` when set, else the fixed `/malmo/<folder>` a store app's
+// author maps via MALMO_FOLDER_<NAME> (DASHBOARD.md # Folder grants carry an
+// explicit destination path).
+func containerDest(mt FolderMount) string {
+	if mt.Target != "" {
+		return mt.Target
+	}
+	return "/malmo/" + mt.Folder
 }
 
 var reservedSlugs = map[string]bool{
@@ -152,30 +169,46 @@ func (m *Manager) Install(ctx context.Context, manifestID string, owner Owner, s
 }
 
 // CustomSpec is a user-pasted (Door-2) app: a raw compose plus the bits the
-// brain can't infer.
+// brain can't infer — the elected permission set (DASHBOARD.md # Permissions),
+// which the API layer resolves from the form (or the Edit-as-YAML overlay)
+// before it reaches here.
 type CustomSpec struct {
 	Name        string
 	Compose     string
 	MainService string // optional if the compose has exactly one service
 	MainPort    int
-	Internet    bool // elected internet access (DASHBOARD.md # Permissions; default on)
+	Permissions manifest.Permissions
 }
 
 // InstallCustom synthesizes a manifest from a pasted compose (APP_MANIFEST.md #
 // Custom container — synthetic manifest) and installs it through the same
-// transaction as catalog apps.
+// transaction as catalog apps. The synthetic manifest carries the admin-elected
+// permissions verbatim, so the folder grants it declares drive the same
+// isolation/bind machinery a store app uses.
 func (m *Manager) InstallCustom(ctx context.Context, spec CustomSpec, owner Owner, scope string, progress func(step string)) (store.Instance, error) {
-	man, composeBytes, err := manifest.Synthesize(spec.Name, []byte(spec.Compose), spec.MainService, spec.MainPort)
+	man, composeBytes, err := manifest.Synthesize(spec.Name, []byte(spec.Compose), spec.MainService, spec.MainPort, spec.Permissions)
 	if err != nil {
 		return store.Instance{}, err
 	}
-	// The Door-2 form elects internet access (DASHBOARD.md # Permissions);
-	// Synthesize defaults it on, so honor an admin who turned it off. LAN/GPU
-	// and folder election are layered onto the synthetic manifest separately.
-	man.Permissions.Internet = spec.Internet
-	// Door-2 synthesized manifests declare no folders, so a custom install
-	// elects no mounts (the user owns their own compose, including any user:).
-	return m.install(ctx, man, composeBytes, owner, scope, nil, progress)
+	return m.install(ctx, man, composeBytes, owner, scope, customMounts(man.Permissions.Folders, scope), progress)
+}
+
+// customMounts resolves a Door-2 manifest's folder grants into FolderMounts.
+// Unlike the catalog path, where the installer elects each folder's source per
+// folder (internal/api resolveElections), a Door-2 paste has no per-folder
+// election UI: the source follows the install scope — a personal install reads
+// the owner's `~/<Folder>/`, a household install the shared tree. The grant's
+// admin-typed `target` is the in-container destination the bind lands at.
+func customMounts(folders []manifest.Folder, scope string) []FolderMount {
+	src := sourceShared
+	if scope == store.ScopePersonal {
+		src = sourcePersonal
+	}
+	mounts := make([]FolderMount, len(folders))
+	for i, f := range folders {
+		mounts[i] = FolderMount{Folder: f.Folder, Source: src, Target: f.Target}
+	}
+	return mounts
 }
 
 // install is the shared transaction both doors converge on (APP_MANIFEST.md #
@@ -688,7 +721,7 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 				if modeByFolder[mt.Folder] == "write" {
 					mode = ":rw"
 				}
-				volumes = append(volumes, iso.hostSource(mt)+":/malmo/"+mt.Folder+mode)
+				volumes = append(volumes, iso.hostSource(mt)+":"+containerDest(mt)+mode)
 				if mt.Source == sourceShared {
 					needShared = true
 				}
@@ -734,11 +767,12 @@ func (m *Manager) writeEnv(id, slug string, iso *isolation) error {
 		"MALMO_DATA_DIR=" + dataDir,
 	}
 	// Inject the in-container path for each bound folder (APP_MANIFEST.md #
-	// folders) — the app's compose maps MALMO_FOLDER_<NAME> to its library path.
-	// The path is stable regardless of the elected source.
+	// folders) — a store app's compose maps MALMO_FOLDER_<NAME> to its library
+	// path; a Door-2 grant already bound straight to its target, but the var still
+	// reflects the real in-container path. Stable regardless of the elected source.
 	if iso != nil {
 		for _, mt := range iso.mounts {
-			lines = append(lines, "MALMO_FOLDER_"+strings.ToUpper(mt.Folder)+"=/malmo/"+mt.Folder)
+			lines = append(lines, "MALMO_FOLDER_"+strings.ToUpper(mt.Folder)+"="+containerDest(mt))
 		}
 	}
 	env := strings.Join(append(lines, ""), "\n")
