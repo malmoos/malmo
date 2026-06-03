@@ -49,6 +49,12 @@ Returns everything the install-consent screen needs before the user confirms. Re
   "version": "10.9.6",
   "scope_options": ["household", "personal"],  // role-derived: admin gets both, member gets ["personal"] only
   "scope_default": "household",                 // admin → "household", member → "personal"
+  "footprint": {
+    "download_bytes": 612000000,                // images still to pull — excludes layers already on this box
+    "image_disk_bytes": 1480000000,             // decompressed image cost incremental to this box
+    "estimated_state_bytes": 10737418240,       // manifest storage.estimated_size, parsed to bytes (omitted if unset)
+    "free_bytes": 412000000000                  // free space on the target data disk, for a not-enough-space warning
+  },
   "permissions": {
     "internet": false,
     "lan": true,
@@ -72,6 +78,7 @@ Returns everything the install-consent screen needs before the user confirms. Re
 
 **Key properties of the response:**
 
+- **Footprint is box-specific and incremental.** Unlike the coarse `footprint` summary in the catalog entry (`APP_STORE.md` # Catalog schema, used for the store grid), `download_bytes` and `image_disk_bytes` here are computed *for this box*: the brain inspects which of the app's images and layers are already present locally and subtracts them, so an app that reuses a base image you already have reads as cheaper. `estimated_state_bytes` is the manifest's `storage.estimated_size` parsed to bytes (the app's own working data — never user content; `APP_MANIFEST.md` # Storage), omitted when the manifest sets no estimate. `free_bytes` is the free space on the target data disk so the dialog can warn before an install that won't fit — same disk-pressure surface as `HEALTH.md` # `disk-full`. The UI owns all wording and unit rounding; the brain returns raw bytes. Like the rest of this endpoint, footprint is **advisory** — it makes no host mutation and the pull-time reality is authoritative.
 - **Role-derived scope options.** `scope_options` and `scope_default` are computed from the caller's role. `POST /api/v1/apps` enforces the same rule (members are rejected on household scope). The scope is no longer selected inside the consent dialog — it is set externally by the split-button in the store row (see `DASHBOARD.md` # single-user simplification) and passed into the dialog as context. `scope_options`/`scope_default` remain in the response for future use but the dashboard does not render a picker from them.
 - **Per-scope source menus (Option A).** Each folder carries `sources.household` and `sources.personal`, each a `{options, default}` menu. The UI does zero policy derivation: pick a scope, look up `folder.sources[<scope>]`, render. A single-option menu (`household → ["shared"]`) renders as fixed/disabled. Both menus are always populated regardless of the caller's role — the household menu is unreachable for members (household scope isn't offered) but keeping the shape uniform means the UI doesn't branch on role when rendering a folder row.
 - **Structured fields only, no copy.** The brain returns `mode`/`scope`/`subfolder_default` and source fields. The UI owns all wording ("can add, change & delete files in…", "Which folder should this app manage?"). This matches how the rest of the brain returns data, not sentences.

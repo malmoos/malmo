@@ -21,6 +21,21 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-03 — Surface an app's on-disk footprint before install (image + app-state, user content excluded)
+
+**Previously:** the only size signal was `storage.estimated_size` (app state, for small-disk warnings) — never shown to the user. `NEXT.md` parked a narrow `storage.image_size` field for the download alone.
+
+**Now:** the brain shows a **footprint** — container image(s) + app-state estimate — on the store card and in the install consent dialog, so the user sees what an app costs their box before confirming. Three calls fix the shape:
+- **App only; user content excluded.** The number is image + app state. The user's Photos/Music/Documents are first-class, unbounded, and survive uninstall, so they're never attributed to the app — counting them would mislead ("this app needs 500 GB"). The dialog calls the exclusion out for reassurance.
+- **Image size is CI-derived, not author-declared.** The catalog build resolves `download_bytes` / `disk_bytes` from the registry alongside the digest it already pins. Authors would guess wrong and go stale. This supersedes the rejected `storage.image_size` manifest field.
+- **Coarse on the card, sharp in the dialog.** The catalog carries a coarse upper-bound `footprint` (browse grid renders it without fetching the manifest). The install-plan endpoint returns a box-specific number that subtracts already-present images and includes `free_bytes` for a not-enough-space warning.
+
+**Why:** "you're about to use this much of your box" is exactly the kind of implication the non-technical audience needs before committing, and it ties into the existing disk-pressure surfaces (`HEALTH.md` # `disk-full`). Sizes stay strictly advisory — only the digest gates the pull, so a drifted size is cosmetic, never an integrity failure.
+
+**Affected docs:** `APP_MANIFEST.md` # Storage, `APP_STORE.md` # Catalog schema / Trust model, `BRAIN_UI_PROTOCOL.md` # GET /api/v1/catalog/:id/install-plan, `DASHBOARD.md` # Install authorization, `NEXT.md`.
+
+---
+
 ## 2026-06-03 — Project renamed malmo → molma (clean break, no back-compat shims)
 
 **Previously:** the project was named **malmo** throughout — Go module (`github.com/malmo/malmo`), GitHub org/repo, on-disk runtime identifiers (`/var/lib/malmo`, `/srv/malmo`, `malmo.db`, `malmo_session` cookie, `malmo`/`malmo-admin` Linux groups, Docker labels, systemd units, domain `malmo.local` / `malmo.network`).
