@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -311,6 +312,20 @@ func (s *Server) login(ctx context.Context, in *struct {
 		return nil, huma.Error401Unauthorized("invalid credentials")
 	}
 
+	// Throttle BEFORE the PAM round-trip (AUTH.md # Rate limiting): the gate
+	// both enforces the backoff/lock and avoids burning the deliberately-
+	// expensive VerifyPassword on attempts that should be rejected outright.
+	ip, _ := audit.ClientIPFromContext(ctx)
+	if ok, retryAfter := s.throttle.AllowAttempt(username, ip); !ok {
+		// Don't audit-spam: the failures that built the backoff were already
+		// audited (login.failure), and the lock crossing emits login.lockout
+		// once below. Log the rejection so a flood is visible operationally.
+		slog.Warn("login throttled", "username", username, "host", ip,
+			"retry_after", retryAfter.Round(time.Second).String())
+		return nil, huma.NewError(http.StatusTooManyRequests,
+			fmt.Sprintf("too many attempts; try again in %s", retryAfter.Round(time.Second)))
+	}
+
 	// Look up the user first; verify password regardless of the result so
 	// timing doesn't leak whether the username exists.
 	u, lookupErr := s.store.GetUserByUsername(username)
@@ -319,9 +334,18 @@ func (s *Server) login(ctx context.Context, in *struct {
 		return nil, huma.Error502BadGateway("host-agent verify failed", vErr)
 	}
 	if lookupErr != nil || !valid {
+		// Record against the supplied username (existing or not) so the throttle
+		// can't be used to enumerate accounts.
+		lockedNow := s.throttle.RecordFailure(username)
 		s.auditor.Record(ctx, audit.ActionLoginFailure, audit.Target{}, map[string]any{"username": username}, false)
+		if lockedNow {
+			s.auditor.Record(ctx, audit.ActionLoginLockout, audit.Target{}, map[string]any{"username": username}, false)
+		}
 		return nil, huma.Error401Unauthorized("invalid credentials")
 	}
+
+	// Clean login resets the per-username backoff (AUTH.md # Rate limiting).
+	s.throttle.RecordSuccess(username)
 
 	sess, err := s.auth.Issue(u.ID)
 	if err != nil {

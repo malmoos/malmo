@@ -309,6 +309,69 @@ func TestLoginLogoutFlow(t *testing.T) {
 	resp.Body.Close()
 }
 
+// TestLoginLockoutAfterRepeatedFailures drives 20 wrong-password logins to the
+// 15-minute lock and proves (a) the throttle gates BEFORE the PAM round-trip —
+// a 21st attempt with the CORRECT password is still 429'd — and (b) exactly one
+// login.lockout audit row is emitted at the crossing (AUTH.md # Rate limiting).
+func TestLoginLockoutAfterRepeatedFailures(t *testing.T) {
+	h := newHarness(t)
+	resp := h.do("POST", "/api/v1/setup", map[string]string{
+		"username": "andrei", "password": "hunter2",
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("setup: %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Crank the throttle clock so each wrong attempt clears the previous backoff
+	// tier and actually reaches PAM (otherwise attempts 4+ are 429'd before they
+	// count, and the account never accrues 20 real failures). The session minted
+	// by /setup rides the auth.Manager's independent real clock, so it stays
+	// valid for the audit read below.
+	cur := time.Unix(1_700_000_000, 0)
+	h.srvServer().throttle.Clock = func() time.Time { return cur }
+
+	for i := 0; i < 20; i++ {
+		cur = cur.Add(16 * time.Minute) // past the 60s max pre-lock cooldown
+		r := h.do("POST", "/api/v1/login", map[string]string{
+			"username": "andrei", "password": "wrong",
+		})
+		if r.StatusCode != 401 {
+			t.Fatalf("wrong-login #%d = %d; want 401", i+1, r.StatusCode)
+		}
+		r.Body.Close()
+	}
+
+	// Locked now. Correct password, but still rejected with 429 — only possible
+	// if the gate precedes VerifyPassword.
+	cur = cur.Add(time.Second)
+	r := h.do("POST", "/api/v1/login", map[string]string{
+		"username": "andrei", "password": "hunter2",
+	})
+	if r.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("locked correct-password login = %d; want 429", r.StatusCode)
+	}
+	r.Body.Close()
+
+	// Exactly one login.lockout row, readable by the admin session from /setup.
+	resp = h.do("GET", "/api/v1/audit?limit=200", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("audit list = %d", resp.StatusCode)
+	}
+	got := decodeJSON[struct {
+		Events []AuditEventDTO `json:"events"`
+	}](t, resp)
+	lockouts := 0
+	for _, e := range got.Events {
+		if e.Action == audit.ActionLoginLockout {
+			lockouts++
+		}
+	}
+	if lockouts != 1 {
+		t.Fatalf("login.lockout count = %d; want 1", lockouts)
+	}
+}
+
 func TestSetupRollsBackOnHostFailure(t *testing.T) {
 	h := newHarness(t)
 	// Replace the host-agent stand-in's handler with one that always 500s

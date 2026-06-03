@@ -30,17 +30,18 @@ import (
 )
 
 type Server struct {
-	store   *store.Store
-	catalog *catalog.Catalog
-	life    *lifecycle.Manager
-	bus     *events.Bus
-	auth    *auth.Manager
-	host    *hostclient.Client
-	auditor *audit.Recorder
-	health  *health.Manager
-	live    *systemlive.Hub
-	streams *streamCap
-	jobs    *Jobs
+	store    *store.Store
+	catalog  *catalog.Catalog
+	life     *lifecycle.Manager
+	bus      *events.Bus
+	auth     *auth.Manager
+	throttle *auth.LoginThrottle
+	host     *hostclient.Client
+	auditor  *audit.Recorder
+	health   *health.Manager
+	live     *systemlive.Hub
+	streams  *streamCap
+	jobs     *Jobs
 }
 
 func NewServer(
@@ -56,7 +57,7 @@ func NewServer(
 ) *Server {
 	return &Server{
 		store: st, catalog: cat, life: life, bus: bus,
-		auth: authMgr, host: host, auditor: auditor,
+		auth: authMgr, throttle: auth.NewLoginThrottle(), host: host, auditor: auditor,
 		health: healthMgr, live: live,
 		streams: newStreamCap(maxStreamsPerSession),
 		jobs:    newJobs(),
