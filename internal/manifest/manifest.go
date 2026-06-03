@@ -142,6 +142,14 @@ type Folder struct {
 	Mode    string `yaml:"mode"`              // read|write (default read)
 	Scope   string `yaml:"scope"`             // whole|pick-subfolder (default whole)
 	Default string `yaml:"default,omitempty"` // default subpath for pick-subfolder
+
+	// Target is the explicit in-container destination path, set ONLY by Door-2
+	// synthetic manifests (DASHBOARD.md # Folder grants carry an explicit
+	// destination path). A pasted third-party compose has no author to map
+	// MALMO_FOLDER_<NAME>, so the admin types where the app reads its data and
+	// the brain binds the elected source straight there. Store manifests omit it
+	// and keep the fixed `/malmo/<folder>` + env-var convention.
+	Target string `yaml:"target,omitempty"`
 }
 
 // folderTaxonomy is the fixed v1 use-case folder set (APP_ISOLATION.md # User
@@ -199,7 +207,7 @@ func (m *Manifest) validate() error {
 	if err := m.validateHealthProbe(); err != nil {
 		return err
 	}
-	return m.validatePermissions()
+	return ValidatePermissions(&m.Permissions)
 }
 
 // validateHealthProbe checks the optional probe block and normalizes its
@@ -228,13 +236,16 @@ func (m *Manifest) validateHealthProbe() error {
 	return nil
 }
 
-// validatePermissions normalizes folder defaults (mode=read, scope=whole) in
-// place and rejects unknown folder names, modes, or scopes. It deliberately
-// validates nothing about *source* — personal vs shared is resolved by the
-// installer at install time, not declared here (APP_MANIFEST.md # folders).
-func (m *Manifest) validatePermissions() error {
-	for i := range m.Permissions.Folders {
-		f := &m.Permissions.Folders[i]
+// ValidatePermissions normalizes folder defaults (mode=read, scope=whole) in
+// place and rejects unknown folder names, modes, scopes, or malformed Door-2
+// targets. It deliberately validates nothing about *source* — personal vs shared
+// is resolved by the installer at install time, not declared here (APP_MANIFEST.md
+// # folders). Exported because the Door-2 "Edit as YAML" overlay parses an
+// admin-authored permissions block through the same gate (DASHBOARD.md # Form is
+// a projection of the synthetic manifest).
+func ValidatePermissions(p *Permissions) error {
+	for i := range p.Folders {
+		f := &p.Folders[i]
 		if !folderTaxonomy[f.Folder] {
 			return fmt.Errorf("permissions.folders: unknown folder %q (allowed: photos, documents, movies, music, notes, downloads)", f.Folder)
 		}
@@ -257,6 +268,12 @@ func (m *Manifest) validatePermissions() error {
 			if strings.HasPrefix(f.Default, "/") || strings.Contains(f.Default, "..") {
 				return fmt.Errorf("permissions.folders[%s]: default must be a relative subpath under the folder", f.Folder)
 			}
+		}
+		// Door-2-only: the explicit in-container destination must be an absolute
+		// path with no traversal (it's a container path the admin typed, not a
+		// host path — host binds are an admission concern). Store grants omit it.
+		if f.Target != "" && (!strings.HasPrefix(f.Target, "/") || strings.Contains(f.Target, "..")) {
+			return fmt.Errorf("permissions.folders[%s]: target must be an absolute in-container path with no '..', got %q", f.Folder, f.Target)
 		}
 	}
 	return nil

@@ -102,7 +102,7 @@ services:
   only:
     image: nginx
 `)
-	m, _, err := Synthesize("My App", compose, "", 8080)
+	m, _, err := Synthesize("My App", compose, "", 8080, Permissions{Internet: true})
 	if err != nil {
 		t.Fatalf("synthesize: %v", err)
 	}
@@ -126,7 +126,7 @@ services:
   a: {image: x}
   b: {image: y}
 `)
-	_, _, err := Synthesize("App", compose, "", 80)
+	_, _, err := Synthesize("App", compose, "", 80, Permissions{Internet: true})
 	if err == nil || !strings.Contains(err.Error(), "main service") {
 		t.Fatalf("want ambiguity error, got %v", err)
 	}
@@ -137,37 +137,243 @@ func TestSynthesizeBadMainServiceRejected(t *testing.T) {
 services:
   a: {image: x}
 `)
-	_, _, err := Synthesize("App", compose, "ghost", 80)
+	_, _, err := Synthesize("App", compose, "ghost", 80, Permissions{Internet: true})
 	if err == nil || !strings.Contains(err.Error(), "ghost") {
 		t.Fatalf("want missing-service error, got %v", err)
 	}
 }
 
 func TestSynthesizeEmptyName(t *testing.T) {
-	_, _, err := Synthesize("   ", []byte(`services: {a: {image: x}}`), "", 80)
+	_, _, err := Synthesize("   ", []byte(`services: {a: {image: x}}`), "", 80, Permissions{Internet: true})
 	if err == nil || !strings.Contains(err.Error(), "name") {
 		t.Fatalf("want name error, got %v", err)
 	}
 }
 
 func TestSynthesizeMissingPort(t *testing.T) {
-	_, _, err := Synthesize("App", []byte(`services: {a: {image: x}}`), "", 0)
+	_, _, err := Synthesize("App", []byte(`services: {a: {image: x}}`), "", 0, Permissions{Internet: true})
 	if err == nil || !strings.Contains(err.Error(), "port") {
 		t.Fatalf("want port error, got %v", err)
 	}
 }
 
 func TestSynthesizeUnusableSlugName(t *testing.T) {
-	_, _, err := Synthesize("!!!", []byte(`services: {a: {image: x}}`), "", 80)
+	_, _, err := Synthesize("!!!", []byte(`services: {a: {image: x}}`), "", 80, Permissions{Internet: true})
 	if err == nil || !strings.Contains(err.Error(), "slug") {
 		t.Fatalf("want slug error, got %v", err)
 	}
 }
 
 func TestSynthesizeNoServicesInCompose(t *testing.T) {
-	_, _, err := Synthesize("App", []byte(`services: {}`), "", 80)
+	_, _, err := Synthesize("App", []byte(`services: {}`), "", 80, Permissions{Internet: true})
 	if err == nil {
 		t.Fatalf("want error, got nil")
+	}
+}
+
+func TestInferMainPort(t *testing.T) {
+	cases := []struct {
+		name    string
+		compose string
+		main    string
+		want    int
+	}{
+		{
+			name: "single expose as string",
+			compose: `
+services:
+  web:
+    image: nginx
+    expose: ["8080"]
+`,
+			main: "web", want: 8080,
+		},
+		{
+			name: "single expose as int",
+			compose: `
+services:
+  web:
+    image: nginx
+    expose:
+      - 3000
+`,
+			main: "web", want: 3000,
+		},
+		{
+			name: "reads only the named main service",
+			compose: `
+services:
+  web:
+    image: nginx
+    expose: ["80"]
+  db:
+    image: postgres
+    expose: ["5432"]
+`,
+			main: "db", want: 5432,
+		},
+		{
+			name: "no expose declared → ask",
+			compose: `
+services:
+  web:
+    image: nginx
+`,
+			main: "web", want: 0,
+		},
+		{
+			name: "several exposed ports are ambiguous → ask",
+			compose: `
+services:
+  web:
+    image: nginx
+    expose: ["80", "443"]
+`,
+			main: "web", want: 0,
+		},
+		{
+			name: "non-numeric expose (range) → ask",
+			compose: `
+services:
+  web:
+    image: nginx
+    expose: ["8000-8005"]
+`,
+			main: "web", want: 0,
+		},
+		{
+			name: "out-of-range port → ask",
+			compose: `
+services:
+  web:
+    image: nginx
+    expose: ["70000"]
+`,
+			main: "web", want: 0,
+		},
+		{
+			name:    "unknown main service → 0",
+			compose: `services: {web: {image: nginx, expose: ["80"]}}`,
+			main:    "ghost", want: 0,
+		},
+		{
+			name:    "invalid YAML → 0, never panics",
+			compose: `:::not yaml`,
+			main:    "web", want: 0,
+		},
+		// ports: container-side mining (the mapping itself is admission-rejected;
+		// we read its container side for the prefill only — DASHBOARD.md # Main port).
+		{
+			name:    "ports host:container → container side",
+			compose: `services: {web: {image: nginx, ports: ["8080:80"]}}`,
+			main:    "web", want: 80,
+		},
+		{
+			name:    "ports with bind ip → container side",
+			compose: `services: {web: {image: nginx, ports: ["127.0.0.1:8080:80"]}}`,
+			main:    "web", want: 80,
+		},
+		{
+			name:    "ports container-only → that port",
+			compose: `services: {web: {image: nginx, ports: ["80"]}}`,
+			main:    "web", want: 80,
+		},
+		{
+			name:    "ports with proto suffix → stripped",
+			compose: `services: {web: {image: nginx, ports: ["8080:80/tcp"]}}`,
+			main:    "web", want: 80,
+		},
+		{
+			name: "ports long syntax → target",
+			compose: `
+services:
+  web:
+    image: nginx
+    ports:
+      - target: 80
+        published: 8080
+`,
+			main: "web", want: 80,
+		},
+		{
+			name:    "expose preferred over ports",
+			compose: `services: {web: {image: nginx, expose: ["80"], ports: ["9000:443"]}}`,
+			main:    "web", want: 80,
+		},
+		{
+			name:    "ports range → ask",
+			compose: `services: {web: {image: nginx, ports: ["3000-3005:3000-3005"]}}`,
+			main:    "web", want: 0,
+		},
+		{
+			name:    "several ports are ambiguous → ask",
+			compose: `services: {web: {image: nginx, ports: ["80:80", "443:443"]}}`,
+			main:    "web", want: 0,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := InferMainPort([]byte(c.compose), c.main); got != c.want {
+				t.Fatalf("InferMainPort = %d, want %d", got, c.want)
+			}
+		})
+	}
+}
+
+func TestParseFoldersTargetValidation(t *testing.T) {
+	// A Door-2 grant's explicit in-container destination must be an absolute path
+	// with no traversal; store grants omit it (DASHBOARD.md # Folder grants).
+	if _, err := Parse(withPerms("  folders:\n    - { folder: photos, target: /photoprism/originals }\n")); err != nil {
+		t.Fatalf("absolute target rejected: %v", err)
+	}
+	if _, err := Parse(withPerms("  folders:\n    - { folder: photos, target: data/photos }\n")); err == nil || !strings.Contains(err.Error(), "target") {
+		t.Fatalf("want relative-target error, got %v", err)
+	}
+	if _, err := Parse(withPerms("  folders:\n    - { folder: photos, target: /data/../etc }\n")); err == nil || !strings.Contains(err.Error(), "target") {
+		t.Fatalf("want traversal-target error, got %v", err)
+	}
+}
+
+func TestPermissionsOverlayRoundTrip(t *testing.T) {
+	in := Permissions{
+		Internet: true,
+		GPU:      true,
+		Devices:  []string{"/dev/dri"},
+		Folders:  []Folder{{Folder: "photos", Mode: "write", Scope: "whole", Target: "/photoprism/originals"}},
+	}
+	y, err := RenderPermissionsOverlay(in)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	got, err := ParsePermissionsOverlay(y)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !got.Internet || !got.GPU || len(got.Devices) != 1 || len(got.Folders) != 1 {
+		t.Fatalf("round-trip lost fields: %+v", got)
+	}
+	if f := got.Folders[0]; f.Folder != "photos" || f.Mode != "write" || f.Target != "/photoprism/originals" {
+		t.Fatalf("folder round-trip wrong: %+v", f)
+	}
+}
+
+func TestParsePermissionsOverlayValidatesAndCoaches(t *testing.T) {
+	// Empty overlay → empty (all-off) permission set, no error.
+	if p, err := ParsePermissionsOverlay([]byte("   ")); err != nil || p.Internet {
+		t.Fatalf("empty overlay = (%+v, %v), want zero perms, no error", p, err)
+	}
+	// Same validation gate as the form path: a relative folder target is rejected.
+	bad := []byte("permissions:\n  folders:\n    - { folder: photos, target: rel/path }\n")
+	if _, err := ParsePermissionsOverlay(bad); err == nil || !strings.Contains(err.Error(), "target") {
+		t.Fatalf("want target error, got %v", err)
+	}
+	// An unknown key surfaces instead of silently reading as false (typo coaching).
+	if _, err := ParsePermissionsOverlay([]byte("permissions:\n  interent: true\n")); err == nil {
+		t.Fatalf("want unknown-field error for typo'd key, got nil")
+	}
+	// Not valid YAML → a clear parse error.
+	if _, err := ParsePermissionsOverlay([]byte(":::not yaml")); err == nil {
+		t.Fatalf("want YAML error, got nil")
 	}
 }
 
