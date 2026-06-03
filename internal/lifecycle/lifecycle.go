@@ -158,6 +158,7 @@ type CustomSpec struct {
 	Compose     string
 	MainService string // optional if the compose has exactly one service
 	MainPort    int
+	Internet    bool // elected internet access (DASHBOARD.md # Permissions; default on)
 }
 
 // InstallCustom synthesizes a manifest from a pasted compose (APP_MANIFEST.md #
@@ -168,6 +169,10 @@ func (m *Manager) InstallCustom(ctx context.Context, spec CustomSpec, owner Owne
 	if err != nil {
 		return store.Instance{}, err
 	}
+	// The Door-2 form elects internet access (DASHBOARD.md # Permissions);
+	// Synthesize defaults it on, so honor an admin who turned it off. LAN/GPU
+	// and folder election are layered onto the synthetic manifest separately.
+	man.Permissions.Internet = spec.Internet
 	// Door-2 synthesized manifests declare no folders, so a custom install
 	// elects no mounts (the user owns their own compose, including any user:).
 	return m.install(ctx, man, composeBytes, owner, scope, nil, progress)

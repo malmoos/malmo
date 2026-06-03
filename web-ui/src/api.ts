@@ -133,6 +133,26 @@ export interface InstallRequest {
   config: { folders: FolderElection[] };
 }
 
+// Door-2 custom-container install (DASHBOARD.md # Door-2). `inspect` is a
+// read-only, admin-only parse of a pasted compose that drives the form's service
+// dropdown and main-port prefill (main_port 0 = could not infer; the form asks).
+export interface CustomInspectResult {
+  services: string[];
+  main_port: number;
+}
+
+// CustomInstallRequest is the POST /api/v1/apps/custom body. internet defaults
+// on server-side when omitted; scope follows the store convention (household for
+// admins by choice, forced/silent personal otherwise).
+export interface CustomInstallRequest {
+  name: string;
+  compose: string;
+  main_service?: string;
+  main_port: number;
+  internet?: boolean;
+  scope?: Scope;
+}
+
 // InstallPlan is the response shape for GET /api/v1/catalog/:id/install-plan
 // (Pattern A sync). The brain returns structured fields; the UI owns all wording.
 // Advisory only — slice 4 (POST /api/v1/apps with config) is the authoritative path.
