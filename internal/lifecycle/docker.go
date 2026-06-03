@@ -1,12 +1,14 @@
 package lifecycle
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/malmo/malmo/internal/protocol"
 )
@@ -31,10 +33,27 @@ type DockerDriver interface {
 	// sample restart deltas over a window (HEALTH.md # Detector catalog, locus
 	// D). Read-only; needs only the proxy's CONTAINERS endpoint family.
 	RestartCounts(ctx context.Context) (map[string]int, error)
+	// ManagedContainers reports every managed container's owning instance_id,
+	// compose service, running state, and StartedAt. Used by the brain's
+	// app-unresponsive probe to gate on the main service's steady-running state
+	// and start-period grace (HEALTH.md # Detector catalog, locus C). Read-only;
+	// needs only the proxy's CONTAINERS endpoint family.
+	ManagedContainers(ctx context.Context) ([]ManagedContainer, error)
 	// RemoveContainersByInstance is the orphan-teardown escape hatch: when the
 	// instance dir is gone, compose can't drive the cleanup, so we kill all
 	// containers labeled malmo.instance_id=<id> directly.
 	RemoveContainersByInstance(ctx context.Context, instanceID string) error
+}
+
+// ManagedContainer is one managed container's identity and liveness, as read
+// from `docker inspect`. Service is the compose service name
+// (com.docker.compose.service label); StartedAt is zero for a never-started
+// container.
+type ManagedContainer struct {
+	InstanceID string
+	Service    string
+	Running    bool
+	StartedAt  time.Time
 }
 
 // RepoDigests is the `RepoDigests` field of `docker image inspect`: a list of
@@ -206,6 +225,50 @@ func (cliDocker) RestartCounts(ctx context.Context) (map[string]int, error) {
 		if n > res[parts[0]] {
 			res[parts[0]] = n
 		}
+	}
+	return res, nil
+}
+
+func (cliDocker) ManagedContainers(ctx context.Context) ([]ManagedContainer, error) {
+	ids, err := exec.CommandContext(ctx, "docker", "ps", "-aq",
+		"--filter", "label=malmo.managed=true").Output()
+	if err != nil {
+		return nil, err
+	}
+	idList := strings.Fields(string(ids))
+	if len(idList) == 0 {
+		return nil, nil
+	}
+	// One `docker inspect` over all managed containers: instance_id, compose
+	// service, running flag, and StartedAt (RFC3339) per line.
+	args := append([]string{"inspect", "--format",
+		`{{index .Config.Labels "malmo.instance_id"}} {{index .Config.Labels "com.docker.compose.service"}} {{.State.Running}} {{.State.StartedAt}}`}, idList...)
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil && stdout.Len() == 0 {
+		// Docker daemon unreachable (not a TOCTOU race — that produces partial
+		// stdout). Return the error so the caller can skip this tick.
+		return nil, err
+	}
+	// TOCTOU: a container removed between the `docker ps` above and this inspect
+	// causes Docker to exit non-zero but still outputs the containers it inspected.
+	// Parse partial output — the missing containers simply won't appear.
+	var res []ManagedContainer
+	for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
+		parts := strings.Fields(line)
+		if len(parts) != 4 {
+			continue
+		}
+		// Zero time on a parse failure (never-started container) — the caller's
+		// start-period gate treats it as not-yet-eligible, which is correct.
+		started, _ := time.Parse(time.RFC3339Nano, parts[3])
+		res = append(res, ManagedContainer{
+			InstanceID: parts[0],
+			Service:    parts[1],
+			Running:    parts[2] == "true",
+			StartedAt:  started,
+		})
 	}
 	return res, nil
 }
