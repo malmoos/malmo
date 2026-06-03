@@ -202,7 +202,7 @@ If step 7 or 8 fails: stop new container, **restore the snapshot from step 4** (
 - **Stop:** `docker compose -p malmo-<id> stop`. Caddy route stays registered; it serves a malmo-styled "this app is stopped" page. State: `stopped`.
 - **Start:** `docker compose -p malmo-<id> start`. State: `running`.
 - **Uninstall:** confirm dialog with a "keep data" checkbox (default: delete).
-  - **Delete:** `compose down -v`, remove route + mDNS, `rm -rf` instance dir.
+  - **Delete:** `compose down -v`, remove route + mDNS, `rm -rf` instance dir, then **reclaim images** — `docker rmi` each `repo@sha256:…` the instance ran, skipping any image another installed instance still references (cross-checked against the `instance_images` table *after* the SQLite row is deleted, so "still referenced" is just every remaining row). Best-effort: an image docker refuses to drop (held by another tag or a stopped container) is logged, never fatal — images stay pinned-and-tagged, so a plain `docker image prune` would not reclaim them, which is why the targeted `rmi`-by-digest is needed. Scope is the *uninstall* case only; a recurring sweep for **update**-orphaned images (the previous image kept 7 days under # update + rollback, `UPDATES.md`) needs a scheduler seam the brain lacks and stays deferred (`NEXT.md` # Container image cleanup).
   - **Keep:** same, but move instance dir to `/var/lib/malmo/archive/<id>-<timestamp>/` first. SQLite retains a tombstone row. Re-import path is a follow-up.
 
 ## Locked: crash detection

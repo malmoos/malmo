@@ -35,6 +35,11 @@ type DockerDriver interface {
 	// instance dir is gone, compose can't drive the cleanup, so we kill all
 	// containers labeled malmo.instance_id=<id> directly.
 	RemoveContainersByInstance(ctx context.Context, instanceID string) error
+	// RemoveImage removes one locally-stored image by its pinned `repo@sha256:…`
+	// reference (APP_LIFECYCLE.md # stop, start, uninstall — uninstall-time image
+	// reclaim). Un-forced: if the image is still referenced (another tag, a
+	// stopped container), docker refuses and the caller treats it as best-effort.
+	RemoveImage(ctx context.Context, ref string) error
 }
 
 // RepoDigests is the `RepoDigests` field of `docker image inspect`: a list of
@@ -169,6 +174,13 @@ func (cliDocker) RemoveContainersByInstance(ctx context.Context, instanceID stri
 	}
 	for _, cid := range strings.Fields(string(ids)) {
 		_ = exec.CommandContext(ctx, "docker", "rm", "-f", cid).Run()
+	}
+	return nil
+}
+
+func (cliDocker) RemoveImage(ctx context.Context, ref string) error {
+	if out, err := exec.CommandContext(ctx, "docker", "rmi", ref).CombinedOutput(); err != nil {
+		return fmt.Errorf("rmi %s: %w\n%s", ref, err, out)
 	}
 	return nil
 }

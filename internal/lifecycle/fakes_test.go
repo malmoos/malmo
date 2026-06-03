@@ -170,6 +170,11 @@ func (f *fakeDocker) RemoveContainersByInstance(_ context.Context, id string) er
 	return nil
 }
 
+func (f *fakeDocker) RemoveImage(_ context.Context, ref string) error {
+	f.record("RemoveImage", ref)
+	return nil
+}
+
 // --- caddy fake ----------------------------------------------------------
 
 type fakeCaddy struct {
