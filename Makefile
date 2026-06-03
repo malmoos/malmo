@@ -196,7 +196,7 @@ openapi:
 # isn't regenerated can't merge silently.
 openapi-check:
 	@tmp=$$(mktemp -d); \
-	  go run ./cmd/openapi-gen -o $$tmp; \
+	  go run ./cmd/openapi-gen -o $$tmp || { rm -rf $$tmp; exit 1; }; \
 	  if ! diff -q api/openapi.json $$tmp/openapi.json >/dev/null || ! diff -q api/openapi.yaml $$tmp/openapi.yaml >/dev/null; then \
 	    echo "api/openapi.{json,yaml} is stale — regenerate with: make openapi"; \
 	    diff -u api/openapi.json $$tmp/openapi.json || true; \

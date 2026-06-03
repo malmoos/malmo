@@ -178,7 +178,7 @@ function handleSubmit() {
         <div v-if="folders.length > 0" class="space-y-3">
           <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Folder sources</p>
           <div
-            v-for="f in plan.permissions.folders"
+            v-for="f in folders"
             :key="f.folder"
             class="space-y-1.5 rounded-xl border border-border px-3 py-2.5"
           >
