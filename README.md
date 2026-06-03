@@ -1,5 +1,7 @@
 # malmo
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+
 A home-server OS in the same category as Umbrel / ZimaOS / CasaOS. North star: **simplicity for non-technical users**. Install it on an old laptop or PC, leave it running in the pantry, and run the apps you use daily — photos, notes, files, a shared grocery list — on hardware you own, with data you own. If the original app developer disappears, your app keeps working.
 
 - **Files are first-class, apps are windows.** User content lives in
@@ -50,3 +52,7 @@ Then open <http://localhost:5173> and install **Whoami** from the catalog.
 ## Contributing
 
 New contributor (or pointing a coding agent at the repo)? Start with [`docs/dev/contributing.md`](docs/dev/contributing.md) — the end-to-end loop (orient → pick a task → branch → build → test → document → PR). Open implementation tasks live in [GitHub Issues](https://github.com/onel/malmo/issues) (`gh issue list --label P1`). All work happens on a branch and lands via a PR into `main`, with `Closes #<N>` to link the issue.
+
+## License
+
+malmo is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only). By contributing, you agree to the [Contributor License Agreement](CLA.md).
