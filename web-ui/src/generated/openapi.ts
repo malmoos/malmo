@@ -39,6 +39,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/apps/custom/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Inspect a pasted (Door-2) compose: service names + best-effort main port (admin-only, read-only) */
+        post: operations["inspect-custom-app"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/apps/custom/overlay/parse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Parse + validate an Edit-as-YAML Door-2 permissions overlay back to form fields (admin-only) */
+        post: operations["parse-custom-overlay"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/apps/custom/overlay/render": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Render elected Door-2 permissions as the Edit-as-YAML overlay (admin-only) */
+        post: operations["render-custom-overlay"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/apps/{id}": {
         parameters: {
             query?: never;
@@ -100,6 +151,23 @@ export interface paths {
         };
         /** Probe whether the box has any users yet (public) */
         get: operations["auth-state"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List users for the login picker (public) */
+        get: operations["auth-users"];
         put?: never;
         post?: never;
         delete?: never;
@@ -461,6 +529,15 @@ export interface components {
             readonly $schema?: string;
             has_users: boolean;
         };
+        "Auth-usersResponse": {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/Auth-usersResponse.json
+             */
+            readonly $schema?: string;
+            users: components["schemas"]["LoginPickerUser"][] | null;
+        };
         "Change-my-passwordRequest": {
             /**
              * Format: uri
@@ -484,6 +561,25 @@ export interface components {
             password: string;
             role?: string;
             username: string;
+        };
+        CustomFolderDTO: {
+            folder: string;
+            mode?: string;
+            target?: string;
+        };
+        CustomPermsInput: {
+            devices?: string[] | null;
+            folders?: components["schemas"]["CustomFolderDTO"][] | null;
+            gpu?: boolean;
+            internet?: boolean;
+            lan?: boolean;
+        };
+        CustomPermsOutput: {
+            devices: string[] | null;
+            folders: components["schemas"]["CustomFolderDTO"][] | null;
+            gpu: boolean;
+            internet: boolean;
+            lan: boolean;
         };
         ElevateRequest: {
             /**
@@ -565,6 +661,27 @@ export interface components {
             household: components["schemas"]["SourceMenu"];
             personal: components["schemas"]["SourceMenu"];
         };
+        "Inspect-custom-appRequest": {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/Inspect-custom-appRequest.json
+             */
+            readonly $schema?: string;
+            compose: string;
+            main_service?: string;
+        };
+        "Inspect-custom-appResponse": {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/Inspect-custom-appResponse.json
+             */
+            readonly $schema?: string;
+            /** Format: int64 */
+            main_port: number;
+            services: string[] | null;
+        };
         "Install-appRequest": {
             /**
              * Format: uri
@@ -589,6 +706,8 @@ export interface components {
             main_port: number;
             main_service?: string;
             name: string;
+            overlay?: string;
+            permissions?: components["schemas"]["CustomPermsInput"];
             scope?: string;
         };
         InstallPlanDTO: {
@@ -715,6 +834,10 @@ export interface components {
             readonly $schema?: string;
             users: components["schemas"]["UserDTO"][] | null;
         };
+        LoginPickerUser: {
+            id: string;
+            username: string;
+        };
         LoginRequest: {
             /**
              * Format: uri
@@ -749,6 +872,24 @@ export interface components {
             /** Format: int64 */
             ts: number;
         };
+        "Parse-custom-overlayRequest": {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/Parse-custom-overlayRequest.json
+             */
+            readonly $schema?: string;
+            overlay: string;
+        };
+        "Parse-custom-overlayResponse": {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/Parse-custom-overlayResponse.json
+             */
+            readonly $schema?: string;
+            permissions: components["schemas"]["CustomPermsOutput"];
+        };
         RecoverRequest: {
             /**
              * Format: uri
@@ -768,6 +909,24 @@ export interface components {
              */
             readonly $schema?: string;
             new_recovery_code: string;
+        };
+        "Render-custom-overlayRequest": {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/Render-custom-overlayRequest.json
+             */
+            readonly $schema?: string;
+            permissions: components["schemas"]["CustomPermsInput"];
+        };
+        "Render-custom-overlayResponse": {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/Render-custom-overlayResponse.json
+             */
+            readonly $schema?: string;
+            overlay: string;
         };
         "Reset-user-passwordRequest": {
             /**
@@ -939,6 +1098,105 @@ export interface operations {
             };
         };
     };
+    "inspect-custom-app": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Inspect-custom-appRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Inspect-custom-appResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "parse-custom-overlay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Parse-custom-overlayRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Parse-custom-overlayResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "render-custom-overlay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Render-custom-overlayRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Render-custom-overlayResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     "get-app": {
         parameters: {
             query?: never;
@@ -1082,6 +1340,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Auth-stateResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "auth-users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Auth-usersResponse"];
                 };
             };
             /** @description Error */

@@ -67,6 +67,33 @@
         ],
         "type": "object"
       },
+      "Auth-usersResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/Auth-usersResponse.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "users": {
+            "items": {
+              "$ref": "#/components/schemas/LoginPickerUser"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "users"
+        ],
+        "type": "object"
+      },
       "Change-my-passwordRequest": {
         "additionalProperties": false,
         "properties": {
@@ -132,6 +159,97 @@
         "required": [
           "username",
           "password"
+        ],
+        "type": "object"
+      },
+      "CustomFolderDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "folder": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "folder"
+        ],
+        "type": "object"
+      },
+      "CustomPermsInput": {
+        "additionalProperties": false,
+        "properties": {
+          "devices": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "folders": {
+            "items": {
+              "$ref": "#/components/schemas/CustomFolderDTO"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "gpu": {
+            "type": "boolean"
+          },
+          "internet": {
+            "type": "boolean"
+          },
+          "lan": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "CustomPermsOutput": {
+        "additionalProperties": false,
+        "properties": {
+          "devices": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "folders": {
+            "items": {
+              "$ref": "#/components/schemas/CustomFolderDTO"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "gpu": {
+            "type": "boolean"
+          },
+          "internet": {
+            "type": "boolean"
+          },
+          "lan": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "internet",
+          "lan",
+          "gpu",
+          "folders",
+          "devices"
         ],
         "type": "object"
       },
@@ -313,6 +431,62 @@
         ],
         "type": "object"
       },
+      "Inspect-custom-appRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/Inspect-custom-appRequest.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "compose": {
+            "type": "string"
+          },
+          "main_service": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "compose"
+        ],
+        "type": "object"
+      },
+      "Inspect-custom-appResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/Inspect-custom-appResponse.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "main_port": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "services": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "services",
+          "main_port"
+        ],
+        "type": "object"
+      },
       "Install-appRequest": {
         "additionalProperties": false,
         "properties": {
@@ -367,6 +541,12 @@
           },
           "name": {
             "type": "string"
+          },
+          "overlay": {
+            "type": "string"
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/CustomPermsInput"
           },
           "scope": {
             "type": "string"
@@ -777,6 +957,22 @@
         ],
         "type": "object"
       },
+      "LoginPickerUser": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username"
+        ],
+        "type": "object"
+      },
       "LoginRequest": {
         "additionalProperties": false,
         "properties": {
@@ -870,6 +1066,48 @@
         ],
         "type": "object"
       },
+      "Parse-custom-overlayRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/Parse-custom-overlayRequest.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "overlay": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "overlay"
+        ],
+        "type": "object"
+      },
+      "Parse-custom-overlayResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/Parse-custom-overlayResponse.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/CustomPermsOutput"
+          }
+        },
+        "required": [
+          "permissions"
+        ],
+        "type": "object"
+      },
       "RecoverRequest": {
         "additionalProperties": false,
         "properties": {
@@ -917,6 +1155,48 @@
         },
         "required": [
           "new_recovery_code"
+        ],
+        "type": "object"
+      },
+      "Render-custom-overlayRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/Render-custom-overlayRequest.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/CustomPermsInput"
+          }
+        },
+        "required": [
+          "permissions"
+        ],
+        "type": "object"
+      },
+      "Render-custom-overlayResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/Render-custom-overlayResponse.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "overlay": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "overlay"
         ],
         "type": "object"
       },
@@ -1203,6 +1483,120 @@
         "summary": "Install a user-pasted (Door-2) compose (job)"
       }
     },
+    "/api/v1/apps/custom/inspect": {
+      "post": {
+        "operationId": "inspect-custom-app",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Inspect-custom-appRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Inspect-custom-appResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Inspect a pasted (Door-2) compose: service names + best-effort main port (admin-only, read-only)"
+      }
+    },
+    "/api/v1/apps/custom/overlay/parse": {
+      "post": {
+        "operationId": "parse-custom-overlay",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Parse-custom-overlayRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Parse-custom-overlayResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Parse + validate an Edit-as-YAML Door-2 permissions overlay back to form fields (admin-only)"
+      }
+    },
+    "/api/v1/apps/custom/overlay/render": {
+      "post": {
+        "operationId": "render-custom-overlay",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Render-custom-overlayRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Render-custom-overlayResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Render elected Door-2 permissions as the Edit-as-YAML overlay (admin-only)"
+      }
+    },
     "/api/v1/apps/{id}": {
       "delete": {
         "operationId": "uninstall-app",
@@ -1390,6 +1784,34 @@
           }
         },
         "summary": "Probe whether the box has any users yet (public)"
+      }
+    },
+    "/api/v1/auth/users": {
+      "get": {
+        "operationId": "auth-users",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Auth-usersResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List users for the login picker (public)"
       }
     },
     "/api/v1/catalog": {

@@ -245,6 +245,55 @@ func TestProtectedRoutesRequireSession(t *testing.T) {
 	}
 }
 
+// TestAuthUsersPublicPicker covers GET /api/v1/auth/users — the public login
+// picker source (AUTH.md # Login screen UX). It must be reachable with no
+// session and expose only {id, username}: leaking role/hash here would hand an
+// unauthenticated visitor the admin roster.
+func TestAuthUsersPublicPicker(t *testing.T) {
+	h := newHarness(t)
+	h.do("POST", "/api/v1/setup", map[string]string{
+		"username": "alice", "password": "hunter2",
+	}).Body.Close()
+	h.addMember("u_bob", "bob", "bobpass")
+
+	// Drop the session minted by setup — the picker is consumed pre-login.
+	jar, _ := newJar()
+	h.jar = jar
+
+	resp := h.do("GET", "/api/v1/auth/users", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("auth/users unauthenticated = %d; want 200 (public)", resp.StatusCode)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	var body struct {
+		Users []struct {
+			ID       string `json:"id"`
+			Username string `json:"username"`
+			Role     string `json:"role"` // must stay empty — not serialized
+		} `json:"users"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Users) != 2 {
+		t.Fatalf("picker users = %d; want 2", len(body.Users))
+	}
+	for _, u := range body.Users {
+		if u.ID == "" || u.Username == "" {
+			t.Fatalf("picker user missing id/username: %+v", u)
+		}
+		if u.Role != "" {
+			t.Fatalf("picker leaked role %q for %s", u.Role, u.Username)
+		}
+	}
+	// Belt and suspenders: the raw payload must not carry a role key at all.
+	if bytes.Contains(raw, []byte("\"role\"")) {
+		t.Fatalf("auth/users payload leaked a role field: %s", raw)
+	}
+}
+
 func TestLoginLogoutFlow(t *testing.T) {
 	h := newHarness(t)
 	// Bootstrap admin so we have credentials to log in with.

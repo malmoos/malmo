@@ -10,6 +10,7 @@
 // moves there and this section goes away. Uninstall authorization is enforced
 // by the brain (members may only uninstall their own personal instances).
 import { computed } from "vue";
+import { RouterLink } from "vue-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/vue-query";
 import { SwitchRoot, SwitchThumb } from "reka-ui";
 import { api, waitForJob, type Instance, type Job } from "../api";
@@ -53,6 +54,18 @@ const uninstall = useMutation({
 
 <template>
   <div class="space-y-8 pt-2">
+    <!-- Admin-only management routes (USERS_AND_GROUPS.md, DASHBOARD.md # global navigation). -->
+    <section v-if="currentUser?.role === 'admin'" class="space-y-3">
+      <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Administration</h2>
+      <RouterLink
+        to="/settings/users"
+        class="flex items-center justify-between rounded-xl border border-border bg-card px-4 py-3 hover:bg-muted"
+      >
+        <span class="text-sm font-medium">Users</span>
+        <span class="text-xs text-muted-foreground">→</span>
+      </RouterLink>
+    </section>
+
     <section class="space-y-3">
       <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Account</h2>
       <div class="rounded-xl border border-border bg-card px-4 py-3">
