@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
@@ -40,6 +41,7 @@ type Server struct {
 	health  *health.Manager
 	live    *systemlive.Hub
 	streams *streamCap
+	limiter *rateLimiter
 	jobs    *Jobs
 }
 
@@ -59,13 +61,16 @@ func NewServer(
 		auth: authMgr, host: host, auditor: auditor,
 		health: healthMgr, live: live,
 		streams: newStreamCap(maxStreamsPerSession),
+		limiter: newRateLimiter(time.Now),
 		jobs:    newJobs(),
 	}
 }
 
 // Handler builds the mux: huma-registered REST routes + the raw SSE endpoint.
-// The chain is CORS → auth → mux. CORS handles OPTIONS preflight (no auth
-// needed); auth gates everything else except the small public allowlist.
+// The chain is CORS → auth → rate-limit → mux. CORS handles OPTIONS preflight
+// (no auth needed); auth gates everything else except the small public
+// allowlist; the limiter then throttles per resolved session (or per IP on the
+// allowlist) before the mux dispatches (BRAIN_UI_PROTOCOL.md # Rate limiting).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	api := humago.New(mux, huma.DefaultConfig("malmo brain", "0.0.1"))
@@ -81,7 +86,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/events", s.events)
 	mux.HandleFunc("GET /api/v1/system/live", s.systemLive)
 
-	return withCORS(s.authMiddleware(mux))
+	return withCORS(s.authMiddleware(s.rateLimit(mux)))
 }
 
 func (s *Server) register(api huma.API) {
