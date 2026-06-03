@@ -167,6 +167,106 @@ func TestSynthesizeNoServicesInCompose(t *testing.T) {
 	}
 }
 
+func TestInferMainPort(t *testing.T) {
+	cases := []struct {
+		name    string
+		compose string
+		main    string
+		want    int
+	}{
+		{
+			name: "single expose as string",
+			compose: `
+services:
+  web:
+    image: nginx
+    expose: ["8080"]
+`,
+			main: "web", want: 8080,
+		},
+		{
+			name: "single expose as int",
+			compose: `
+services:
+  web:
+    image: nginx
+    expose:
+      - 3000
+`,
+			main: "web", want: 3000,
+		},
+		{
+			name: "reads only the named main service",
+			compose: `
+services:
+  web:
+    image: nginx
+    expose: ["80"]
+  db:
+    image: postgres
+    expose: ["5432"]
+`,
+			main: "db", want: 5432,
+		},
+		{
+			name: "no expose declared → ask",
+			compose: `
+services:
+  web:
+    image: nginx
+`,
+			main: "web", want: 0,
+		},
+		{
+			name: "several exposed ports are ambiguous → ask",
+			compose: `
+services:
+  web:
+    image: nginx
+    expose: ["80", "443"]
+`,
+			main: "web", want: 0,
+		},
+		{
+			name: "non-numeric expose (range) → ask",
+			compose: `
+services:
+  web:
+    image: nginx
+    expose: ["8000-8005"]
+`,
+			main: "web", want: 0,
+		},
+		{
+			name: "out-of-range port → ask",
+			compose: `
+services:
+  web:
+    image: nginx
+    expose: ["70000"]
+`,
+			main: "web", want: 0,
+		},
+		{
+			name:    "unknown main service → 0",
+			compose: `services: {web: {image: nginx, expose: ["80"]}}`,
+			main:    "ghost", want: 0,
+		},
+		{
+			name:    "invalid YAML → 0, never panics",
+			compose: `:::not yaml`,
+			main:    "web", want: 0,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := InferMainPort([]byte(c.compose), c.main); got != c.want {
+				t.Fatalf("InferMainPort = %d, want %d", got, c.want)
+			}
+		})
+	}
+}
+
 // withPerms wraps a permissions block in an otherwise-valid manifest so the
 // folder tests exercise Parse end-to-end.
 func withPerms(perms string) []byte {

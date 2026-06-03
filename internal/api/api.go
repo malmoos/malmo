@@ -106,6 +106,11 @@ func (s *Server) register(api huma.API) {
 	}, s.installApp)
 
 	huma.Register(api, huma.Operation{
+		OperationID: "inspect-custom-app", Method: "POST", Path: "/api/v1/apps/custom/inspect",
+		Summary: "Inspect a pasted (Door-2) compose: service names + best-effort main port (admin-only, read-only)",
+	}, s.inspectCustomApp)
+
+	huma.Register(api, huma.Operation{
 		OperationID: "install-custom-app", Method: "POST", Path: "/api/v1/apps/custom",
 		Summary: "Install a user-pasted (Door-2) compose (job)", DefaultStatus: http.StatusAccepted,
 	}, s.installCustomApp)
@@ -388,13 +393,54 @@ func (s *Server) checkDuplicate(ctx context.Context, manifestID string, confirm 
 	return huma.Error409Conflict("duplicate-install", summaries...)
 }
 
+// inspectCustomApp is the read-only companion to installCustomApp: it parses a
+// pasted compose so the Door-2 form can drive its service dropdown and prefill
+// the main port (DASHBOARD.md # The form). Admin-only (Door 2 is admin-only) and
+// host-call-free; admission is deliberately NOT run here — it gates on submit,
+// where its field-named rejections are coached inline.
+func (s *Server) inspectCustomApp(ctx context.Context, in *struct {
+	Body struct {
+		Compose     string `json:"compose"`
+		MainService string `json:"main_service,omitempty"` // optional; lets the form re-infer the port after picking a service
+	}
+}) (*struct {
+	Body struct {
+		Services []string `json:"services"`
+		MainPort int      `json:"main_port"` // 0 = could not infer; the form asks
+	}
+}, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	services, err := manifest.ComposeServiceNames([]byte(in.Body.Compose))
+	if err != nil {
+		return nil, huma.Error422UnprocessableEntity(err.Error())
+	}
+	// Resolve which service's expose: to read for the port prefill: the one the
+	// form already picked, or the sole service when there's exactly one.
+	main := in.Body.MainService
+	if main == "" && len(services) == 1 {
+		main = services[0]
+	}
+	out := &struct {
+		Body struct {
+			Services []string `json:"services"`
+			MainPort int      `json:"main_port"`
+		}
+	}{}
+	out.Body.Services = services
+	out.Body.MainPort = manifest.InferMainPort([]byte(in.Body.Compose), main)
+	return out, nil
+}
+
 func (s *Server) installCustomApp(ctx context.Context, in *struct {
 	Body struct {
 		Name        string `json:"name"`
 		Compose     string `json:"compose"`
 		MainService string `json:"main_service,omitempty"`
 		MainPort    int    `json:"main_port"`
-		Scope       string `json:"scope,omitempty"` // "household" | "personal"; default household for admins, forced personal for members
+		Internet    *bool  `json:"internet,omitempty"` // elected internet access; default on (DASHBOARD.md # Permissions)
+		Scope       string `json:"scope,omitempty"`    // "household" | "personal"; default household for admins, forced personal for members
 	}
 }) (*struct{ Body Job }, error) {
 	// Admin-only gate: elevation-class rejection audits before synthesize/admission (APP_ISOLATION.md, DECISIONS.md 2026-06-02).
@@ -409,6 +455,7 @@ func (s *Server) installCustomApp(ctx context.Context, in *struct {
 		Compose:     in.Body.Compose,
 		MainService: in.Body.MainService,
 		MainPort:    in.Body.MainPort,
+		Internet:    in.Body.Internet == nil || *in.Body.Internet,
 	}
 	owner, scope, err := s.resolveOwnerScope(ctx, in.Body.Scope, audit.ActionAppCustomCreate, map[string]any{"name": spec.Name})
 	if err != nil {
