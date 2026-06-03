@@ -21,10 +21,6 @@ import (
 // pure-Go synthesize pre-check, and the shared admission policy rejects the
 // forbidden primitives.
 
-// A member cannot install a custom app: requireAdmin rejects before synthesize
-// or admission runs, and the rejection is audited success=false with the member
-// as actor (mirrors login.failure). The member, being the actor, sees the row
-// in their own audit view.
 func TestInstallCustomMemberForbiddenAndAudits(t *testing.T) {
 	h := newHarness(t)
 	h.setupAdmin("admin", "hunter2")
@@ -57,11 +53,6 @@ func TestInstallCustomMemberForbiddenAndAudits(t *testing.T) {
 	}
 }
 
-// An admin clears the admin gate: the request proceeds past requireAdmin to the
-// synthesize pre-check, which (with main_port omitted → 0) returns 422 "a main
-// port is required" — not the 403 a member gets. This proves the gate
-// discriminates by role, without reaching the install job (life=nil in the
-// harness) or admission's docker shell-out.
 func TestInstallCustomAdminPassesAdminGate(t *testing.T) {
 	h := newHarness(t)
 	h.setupAdmin("admin", "hunter2")
@@ -80,9 +71,6 @@ func TestInstallCustomAdminPassesAdminGate(t *testing.T) {
 	}
 }
 
-// The store door (POST /api/v1/apps) is unaffected by the Door-2 gate: a member
-// can still install personally. A bogus manifest_id reaches catalog load and
-// returns 404 (not 403), proving no admin gate leaked onto the store path.
 func TestInstallStoreStillMemberAllowed(t *testing.T) {
 	h := newHarness(t)
 	h.setupAdmin("admin", "hunter2")
@@ -102,13 +90,6 @@ func TestInstallStoreStillMemberAllowed(t *testing.T) {
 	}
 }
 
-// Door-symmetry lock: admission rejects the same primitives regardless of which
-// door installs. Both doors funnel through one function — lifecycle.install
-// calls m.admit (= admission.Check) for catalog AND custom installs, and
-// installCustomApp runs admission.Check as a synchronous pre-check.
-// CheckStructure is admission.Check minus the docker `compose config -q` syntax
-// pass, so this stays hermetic. If a future change relaxes one door's
-// primitives, the shared policy it leans on must change too — and this fails.
 func TestCustomCatalogAdmissionDoorSymmetry(t *testing.T) {
 	primitives := map[string]string{
 		"privileged":    "services:\n  web:\n    image: nginx\n    privileged: true\n",

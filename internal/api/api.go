@@ -397,15 +397,7 @@ func (s *Server) installCustomApp(ctx context.Context, in *struct {
 		Scope       string `json:"scope,omitempty"` // "household" | "personal"; default household for admins, forced personal for members
 	}
 }) (*struct{ Body Job }, error) {
-	// Door 2 (custom compose) is admin-only: pasting an arbitrary compose is a
-	// privileged operation (APP_ISOLATION.md # Trust tiers, DECISIONS.md
-	// 2026-06-02). This gate governs *who may reach* Door 2; admission below
-	// still runs identically for both doors (door-symmetric — it governs *what
-	// the sandbox allows*, not who may paste), and the store path (POST
-	// /api/v1/apps) stays member-allowed. A member's rejection is an
-	// elevation-class mutation failure, so it audits success=false with the
-	// acting member as actor (CLAUDE.md # Go discipline; mirrors login.failure),
-	// before any synthesize or admission runs.
+	// Admin-only gate: elevation-class rejection audits before synthesize/admission (APP_ISOLATION.md, DECISIONS.md 2026-06-02).
 	if err := requireAdmin(ctx); err != nil {
 		s.auditor.Record(ctx, audit.ActionAppCustomCreate, audit.Target{Kind: "app"},
 			map[string]any{"name": in.Body.Name}, false)
