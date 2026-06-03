@@ -430,6 +430,12 @@ func (m *Manager) Uninstall(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	// Capture the pinned images before Delete cascades the instance_images rows
+	// away; the reclaim runs after the row is gone (best-effort, never fatal).
+	images, err := m.store.GetInstanceImages(id)
+	if err != nil {
+		slog.Warn("uninstall: read pinned images for reclaim", "instance_id", id, "err", err)
+	}
 	_ = m.store.SetState(id, "uninstalling")
 	m.emitState(inst, inst.State)
 	if err := m.teardown(ctx, inst, true); err != nil {
@@ -438,9 +444,61 @@ func (m *Manager) Uninstall(ctx context.Context, id string) error {
 	if err := m.store.Delete(id); err != nil {
 		return err
 	}
+	m.reclaimImages(ctx, id, images)
 	m.bus.Publish(events.AppUninstalled, map[string]any{"instance_id": id})
 	slog.Info("app uninstalled", "instance_id", id, "name", inst.Name)
 	return nil
+}
+
+// reclaimImages removes the just-uninstalled instance's pinned images from the
+// local Docker store, skipping any image another installed instance still
+// references (APP_LIFECYCLE.md # stop, start, uninstall). Call AFTER the
+// instance row is deleted, so "still referenced" is simply every remaining
+// instance_images row. Best-effort: a held image (rmi refused) is logged, never
+// fatal. Periodic / update-orphaned image GC is out of scope (NEXT.md #
+// Container image cleanup).
+func (m *Manager) reclaimImages(ctx context.Context, instanceID string, images []store.InstanceImage) {
+	if len(images) == 0 {
+		return
+	}
+	inUse, err := m.inUseImageRefs()
+	if err != nil {
+		slog.Warn("reclaim images: list in-use refs", "instance_id", instanceID, "err", err)
+		return
+	}
+	done := map[string]bool{}
+	for _, img := range images {
+		ref := repoOf(img.Image) + "@" + img.Digest
+		if inUse[ref] || done[ref] {
+			continue
+		}
+		done[ref] = true
+		if err := m.docker.RemoveImage(ctx, ref); err != nil {
+			slog.Warn("reclaim images: rmi", "instance_id", instanceID, "image", ref, "err", err)
+			continue
+		}
+		slog.Info("reclaimed image", "instance_id", instanceID, "image", ref)
+	}
+}
+
+// inUseImageRefs is the set of pinned `repo@sha256:…` references held by all
+// currently-installed instances — the "don't remove" guard for reclaimImages.
+func (m *Manager) inUseImageRefs() (map[string]bool, error) {
+	insts, err := m.store.List()
+	if err != nil {
+		return nil, err
+	}
+	refs := map[string]bool{}
+	for _, inst := range insts {
+		imgs, err := m.store.GetInstanceImages(inst.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, img := range imgs {
+			refs[repoOf(img.Image)+"@"+img.Digest] = true
+		}
+	}
+	return refs, nil
 }
 
 // teardown reverses the resources install creates. Each step is best-effort so

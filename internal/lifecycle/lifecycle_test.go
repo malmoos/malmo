@@ -364,6 +364,80 @@ func TestUninstallTearsDownEvenIfStepsFail(t *testing.T) {
 	}
 }
 
+// --- 8b. Uninstall-time image reclaim -----------------------------------
+
+func TestUninstallReclaimsUnreferencedImage(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeCatalogApp(t, "whoami", whoamiCompose, whoamiManifest(testDigest))
+	e.docker.digests[testImage] = testDigest
+	inst, err := e.m.Install(context.Background(), "whoami", Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, nil)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	e.docker.calls = nil // focus assertions on the uninstall phase
+	if err := e.m.Uninstall(context.Background(), inst.ID); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+
+	wantRef := repoOf(testImage) + "@" + testDigest
+	if !methodsContainArg(e.docker.Calls(), "RemoveImage", wantRef) {
+		t.Fatalf("RemoveImage(%s) not called: %v", wantRef, e.docker.methods())
+	}
+}
+
+func TestUninstallKeepsImageReferencedByAnotherInstance(t *testing.T) {
+	e := newTestEnv(t)
+	e.docker.digests[testImage] = testDigest
+
+	// Two distinct catalog apps that happen to share one image.
+	e.writeCatalogApp(t, "whoami", whoamiCompose, whoamiManifest(testDigest))
+	e.writeCatalogApp(t, "sharer", whoamiCompose, `
+id: sharer
+manifest_version: 1
+name: Sharer
+version: "1.0"
+compose_file: compose.yml
+main_service: whoami
+main_port: 80
+preferred_slugs: [sharer]
+permissions:
+  internet: false
+  lan: false
+images:
+  `+testImage+`: `+testDigest+`
+`)
+
+	owner := Owner{UserID: "u_admin", Username: "admin"}
+	a, err := e.m.Install(context.Background(), "whoami", owner, store.ScopeHousehold, nil, nil)
+	if err != nil {
+		t.Fatalf("install a: %v", err)
+	}
+	b, err := e.m.Install(context.Background(), "sharer", owner, store.ScopeHousehold, nil, nil)
+	if err != nil {
+		t.Fatalf("install b: %v", err)
+	}
+	wantRef := repoOf(testImage) + "@" + testDigest
+
+	// Uninstalling the first must NOT reclaim the still-shared image.
+	e.docker.calls = nil
+	if err := e.m.Uninstall(context.Background(), a.ID); err != nil {
+		t.Fatalf("uninstall a: %v", err)
+	}
+	if methodsContainArg(e.docker.Calls(), "RemoveImage", wantRef) {
+		t.Fatalf("RemoveImage(%s) called while another instance still uses it: %v", wantRef, e.docker.methods())
+	}
+
+	// Uninstalling the last referent reclaims it.
+	e.docker.calls = nil
+	if err := e.m.Uninstall(context.Background(), b.ID); err != nil {
+		t.Fatalf("uninstall b: %v", err)
+	}
+	if !methodsContainArg(e.docker.Calls(), "RemoveImage", wantRef) {
+		t.Fatalf("RemoveImage(%s) not called after last referent removed: %v", wantRef, e.docker.methods())
+	}
+}
+
 // --- 9. Reconcile drift -------------------------------------------------
 
 func TestReconcileBringsRunningInstanceBackUp(t *testing.T) {
