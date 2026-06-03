@@ -454,6 +454,12 @@ func (s *Server) installCustomApp(ctx context.Context, in *struct {
 		Overlay     string            `json:"overlay,omitempty"` // Edit-as-YAML escape hatch; wins over permissions when set (DASHBOARD.md # Form is a projection)
 	}
 }) (*struct{ Body Job }, error) {
+	// Admin-only gate: elevation-class rejection audits before synthesize/admission (APP_ISOLATION.md, DECISIONS.md 2026-06-02).
+	if err := requireAdmin(ctx); err != nil {
+		s.auditor.Record(ctx, audit.ActionAppCustomCreate, audit.Target{Kind: "app"},
+			map[string]any{"name": in.Body.Name}, false)
+		return nil, err
+	}
 	// The form sends structured permissions; the Edit-as-YAML toggle sends a raw
 	// overlay instead, parsed + validated through the same gate (DASHBOARD.md #
 	// Permissions). A malformed overlay surfaces inline as a 422.
