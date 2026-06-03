@@ -228,6 +228,7 @@ func loadConfig() config {
 func probeBaseURL(caddyListen string) string {
 	host, port, err := net.SplitHostPort(caddyListen)
 	if err != nil {
+		slog.Warn("caddy listen address unparseable; probe base defaults to :80", "caddy_listen", caddyListen, "err", err)
 		return "http://127.0.0.1"
 	}
 	if host == "" {

@@ -1097,6 +1097,49 @@ func TestProbeHealthy(t *testing.T) {
 	}
 }
 
+// When MDNSName is not set the probe Host falls back to slug + ".local".
+func TestAppProbe_MDNSFallback(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	lister := &fakeInstanceLister{instances: []store.Instance{
+		{ID: "app", Slug: "myapp", MDNSName: "", State: "running"},
+	}}
+	loader := &fakeManifestLoader{m: map[string]*manifest.Manifest{
+		"app": probeManifest("web", "/healthz", nil, manifest.DefaultStartPeriod),
+	}}
+	reader := &fakeContainerReader{containers: []lifecycle.ManagedContainer{
+		{InstanceID: "app", Service: "web", Running: true, StartedAt: clk.now().Add(-5 * time.Minute)},
+	}}
+	rt := &stubRoundTripper{status: map[string]int{"myapp.local": 200}}
+	d, _, _, _ := newTestProbeDetector(lister, loader, reader, rt, clk)
+
+	d.check(context.Background())
+	if rt.last == nil {
+		t.Fatal("expected a probe request")
+	}
+	if rt.last.Host != "myapp.local" {
+		t.Errorf("probe Host = %q, want myapp.local (slug fallback)", rt.last.Host)
+	}
+}
+
+// app-unresponsive must not emit a bell notification (not in the notify
+// allowlist in v1 — same as container-restart-loop). The health issue is still
+// raised; only the bell is suppressed.
+func TestAppProbe_RaiseEmitsNoBellNotification(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	lister, loader, reader := probeScenario(clk, "/healthz", nil, manifest.DefaultStartPeriod, 5*time.Minute)
+	rt := &stubRoundTripper{status: map[string]int{"app.local": 503}}
+	d, mgr, _, ns := newTestProbeDetector(lister, loader, reader, rt, clk)
+
+	d.check(context.Background())
+	d.check(context.Background())
+	if len(unresponsiveIssues(mgr)) != 1 {
+		t.Fatalf("expected raise, got %v", mgr.List())
+	}
+	if len(ns.raised) != 0 {
+		t.Errorf("app-unresponsive must not emit a notification (not allowlisted), got %v", ns.raised)
+	}
+}
+
 func TestProbeBaseURL(t *testing.T) {
 	cases := []struct {
 		listen string
