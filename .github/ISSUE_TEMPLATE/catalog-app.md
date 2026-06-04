@@ -14,7 +14,7 @@ assignees: ''
 
 ---
 
-**How to do this:** follow [Authoring catalog apps with an agent](/docs/dev/authoring-apps-with-an-agent.md#the-prompt). Paste the prompt, append the inputs above, run it inside the molma repo.
+**How to do this:** follow [Authoring catalog apps with an agent](/molmaos/molma/blob/main/docs/dev/authoring-apps-with-an-agent.md#the-prompt). Paste the prompt, append the inputs above, run it inside the molma repo.
 
 **Done when:**
 
