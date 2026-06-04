@@ -15,6 +15,11 @@ const routes: RouteRecordRaw[] = [
   // Admin-only sub-routes under Settings (DASHBOARD.md # global navigation,
   // AUTH.md # Roles). The views guard the role directly (CustomInstallView pattern).
   { path: "/settings/users", name: "settings-users", component: () => import("@/views/UsersView.vue") },
+  // Recovery is reachable while logged OUT (AUTH.md # Using the recovery code).
+  // It's registered here so the catch-all below doesn't redirect the path away;
+  // App.vue renders RecoverView directly in its logged-out branch, since the
+  // router-view this route would feed only mounts inside AppShell once signed in.
+  { path: "/recover", name: "recover", component: () => import("@/RecoverView.vue") },
   // Unknown paths fall back to Home — the SPA never 404s its own chrome.
   { path: "/:pathMatch(.*)*", redirect: "/" },
 ];
