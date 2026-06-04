@@ -112,11 +112,15 @@ func (s *Server) registerAll(api huma.API) {
 // and returns the resulting OpenAPI 3 document. No server is started and no
 // handler runs — huma.Register reflects the typed request/response structs to
 // produce the schema, so a zero-value Server (no live dependencies) suffices.
+// The one exception is health, whose registration is guarded on a non-nil
+// manager (so test servers can opt out); we hand it a store-less manager here —
+// never invoked, only reflected — so GET /api/v1/health and its Issue schema
+// land in the committed spec and the dashboard's wire types generate from it.
 // This is the build-time spec emitter behind `make openapi` and the CI
 // freshness check (BRAIN_UI_PROTOCOL.md # Codegen / # CI enforcement); cmd/openapi-gen
 // serializes it to api/openapi.{json,yaml}.
 func OpenAPIDocument() *huma.OpenAPI {
-	s := &Server{}
+	s := &Server{health: health.NewManager(nil)}
 	api := humago.New(http.NewServeMux(), huma.DefaultConfig(openAPITitle, openAPIVersion))
 	s.registerAll(api)
 	return api.OpenAPI()

@@ -57,8 +57,8 @@
 
 The brain may be running in *degraded mode* — one or more health issues active that block specific operations (see `HEALTH.md`). The dashboard surfaces this consistently:
 
-- **`useHealth()` composable** wraps `useQuery(['health/issues'])` and reacts to `health.issue_raised` / `health.issue_cleared` / `health.issue_updated` events on the global SSE stream. Active issues live in a Pinia store; the rest of the app reads from it.
-- **Global banner** in the dashboard chrome whenever any `critical` or `error` issue is active. Click → dedicated Issues view.
+- **`useHealth()` composable** wraps `useQuery(['health/issues'])` and reacts to `health.issue_raised` / `health.issue_cleared` / `health.issue_updated` events on the global SSE stream. Active issues are *server state*, so they live in the Query cache, **not** a Pinia store (per *Server state lives in Query* below — the locked rule); the one cached query is the shared store, and `useHealth()` derives `activeIssues` / `blocksApps` / `blocksWrites` / `blocksUsers` from it for every component. (Issue #12.)
+- **Global banner** in the dashboard chrome whenever any `critical` or `error` issue is active. Click → the inline active-issues list on Home (`#health-issues`); a dedicated Issues route is a follow-up if that list grows unwieldy.
 - **Inline cards** in the relevant section (Storage page for storage issues, Updates page for version issues, per-app card for `app-image-partial`, etc.). Each card carries the issue's primary action button.
 - **Disabled action affordances.** Components that perform potentially-blocked operations consult the health store and render disabled with an explanatory tooltip ("Disabled because: data drive isn't connected"). A `<HealthGated :blocks="'apps'">` wrapper component standardizes this.
 - **Toast on clear.** When an issue transitions to cleared, a brief toast confirms it. No modal, no interrupt — but the user *sees* the transition rather than the box silently auto-healing.
