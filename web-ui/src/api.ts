@@ -67,6 +67,7 @@ export type SetupResult = Schemas["SetupResponse"];
 export type CatalogEntry = Schemas["Entry"];
 export type Instance = Schemas["InstanceDTO"];
 export type Notification = Schemas["NotificationDTO"];
+export type AuditEvent = Schemas["AuditEventDTO"];
 export type Job = Schemas["Job"];
 export type FolderElection = Schemas["FolderElection"];
 export type InstallRequest = Schemas["Install-appRequest"];

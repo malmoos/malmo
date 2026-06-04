@@ -54,10 +54,20 @@ const uninstall = useMutation({
 
 <template>
   <div class="space-y-8 pt-2">
-    <!-- Admin-only management routes (USERS_AND_GROUPS.md, DASHBOARD.md # global navigation). -->
-    <section v-if="currentUser?.role === 'admin'" class="space-y-3">
+    <!-- Management routes (DASHBOARD.md # global navigation). Activity is open to
+         all users — members see only their own events (LOGGING.md # Visibility
+         rules); Users is admin-only. -->
+    <section class="space-y-2">
       <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Administration</h2>
       <RouterLink
+        to="/settings/activity"
+        class="flex items-center justify-between rounded-xl border border-border bg-card px-4 py-3 hover:bg-muted"
+      >
+        <span class="text-sm font-medium">Activity</span>
+        <span class="text-xs text-muted-foreground">→</span>
+      </RouterLink>
+      <RouterLink
+        v-if="currentUser?.role === 'admin'"
         to="/settings/users"
         class="flex items-center justify-between rounded-xl border border-border bg-card px-4 py-3 hover:bg-muted"
       >
