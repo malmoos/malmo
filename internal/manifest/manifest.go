@@ -18,6 +18,7 @@ type Manifest struct {
 	ManifestVersion int         `yaml:"manifest_version"`
 	Name            string      `yaml:"name"`
 	Version         string      `yaml:"version"`
+	Description     Description `yaml:"description,omitempty"`
 	ComposeFile     string      `yaml:"compose_file"`
 	MainService     string      `yaml:"main_service"`
 	MainPort        int         `yaml:"main_port"`
@@ -37,6 +38,16 @@ type Manifest struct {
 	// app-unresponsive health issue is never raised for it. Door-2 synthetic
 	// manifests omit it.
 	HealthProbe *HealthProbe `yaml:"health_probe,omitempty"`
+}
+
+// Description holds the app's catalog-facing text (APP_MANIFEST.md # A).
+// Both fields are optional; the store surfaces Short as the one-liner and Long
+// as the markdown body on the app detail page.
+type Description struct {
+	Short string `yaml:"short,omitempty"`
+	// Long is a markdown string rendered on the app-store detail page. Multi-line
+	// literal blocks (`|`) are idiomatic in manifests.
+	Long string `yaml:"long,omitempty"`
 }
 
 // HealthProbe declares the HTTP probe that backs the app-unresponsive detector

@@ -302,6 +302,8 @@ name: PhotoPrism
 version: 2.4.1
 description:
   short: "Self-hosted photo library with AI tagging"
+  long: |
+    PhotoPrism is an AI-powered app for browsing, organizing, and sharing your photo collection without giving up control. It indexes your existing files, generates thumbnails, and uses TensorFlow to tag people, places, and subjects automatically. Works great alongside the Files app — your originals stay in your Photos folder and are never locked inside PhotoPrism.
 icon: ./icon.png
 categories: [media, photos]
 author: { name: "PhotoPrism Labs", url: "https://photoprism.app" }
