@@ -37,6 +37,19 @@ You run inside the molma repo. Read these on-disk sources; don't rely on this pr
 
 INPUTS (appended below): app name; a pasted compose OR a GitHub repo URL; optionally a docs URL.
 
+ADAPT, DON'T FORCE (read first — this governs every step below). Your job is to adapt apps that *can* run as a molma Tier-3 Door-1 app, not to make every app pass at any cost. The admission rules in `admission.go` exist because molma's architecture genuinely cannot run what they reject — stripping a directive the app actually depends on produces a manifest that lints green and then fails or misbehaves at install. That is worse than no manifest. So:
+- The legal adaptations are ONLY the ones documented in steps 3-6 (drop host port mappings, named volumes -> binds, content paths -> folder grants, credentials -> managed services). Anything beyond that is forcing.
+- If making the app pass would require removing or faking something the app genuinely needs to function, STOP. Do not invent flags, do not strip a required capability and hope, do not downgrade the app to a broken subset. Write no files.
+- When you bail, say so plainly in the report: name the exact blocker (the directive, capability, or assumption), point to the rule in `admission.go` or the spec that forbids it, explain why molma's architecture can't satisfy it, and state whether it's a Tier-2 candidate (needs capabilities/host access) or simply unsupportable in v1. A clear "can't, because X" is a successful run — a fabricated pass is a failed one.
+
+Concrete bail triggers (non-exhaustive — when unsure whether an adaptation is legal or forcing, treat it as forcing and bail):
+- Needs `privileged`, `cap_add`, `network_mode: host`, `pid/ipc/userns_mode: host`, or device/kernel access beyond a declarable `devices:`/`gpu:` grant -> Tier-2 candidate, not Door-1.
+- Needs a fixed *host* port (not just an internal listen port molma can route to) — e.g. a VPN/DHCP/mDNS app that must own a specific host port or the host network.
+- Ships only a `build:` with no published image, or requires `extends:` of a file you don't have.
+- Requires multiple replicas, swarm/k8s constructs, or an orchestrator molma's single-node `docker compose` driver doesn't run.
+- Insists on owning content in a way incompatible with the folder model AND can't fall back to `app_managed_user_content` cleanly.
+- Depends on a host-level service molma doesn't provide and won't add for one app.
+
 STEPS
 
 1. GATHER. Given a repo URL, do NOT clone — read just the files you need via `gh`:
@@ -45,6 +58,7 @@ STEPS
    Extract: image + version tag; the port the app listens on *inside* the container; the env-var names for its data dir, content/library path, and DB/cache credentials; which volumes are real data vs regenerable cache; whether the app supports pointing its library at an external path (if not, note it for step 6's app_managed_user_content fallback). Given only a pasted compose, use it (+ docs URL if provided).
    - **Icon**: Search the repo tree for common icon filenames (`icon.svg`, `icon.png`, `logo.svg`, `logo.png`, `app-icon.svg`, `app-icon.png`) anywhere under `assets/`, `docs/`, `public/`, or root. Download the first match: `gh api repos/<owner>/<repo>/contents/<path> -H "Accept: application/vnd.github.raw" --output catalog/<id>/icon.<ext>`. If nothing found in the repo, skip — do not fall back to external sources.
    - **Screenshots**: Parse the README for embedded images (`![...](...)` markdown). Download any image whose URL ends in a recognized extension (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`): repo-relative paths via `gh api repos/<owner>/<repo>/contents/<path> -H "Accept: application/vnd.github.raw" --output ...`, external direct-image URLs (CDN, GitHub issue attachments, raw.githubusercontent.com, etc.) via `curl -sL`. Skip anything that requires crawling — page URLs, YouTube/Loom embeds, badge URLs, or URLs with no image extension. Number the downloaded files `01`, `02`, etc., preserving the source extension.
+   - **GO / NO-GO GATE (do this before any rewriting).** With the compose and docs in hand, run the bail triggers from ADAPT, DON'T FORCE against what you found. If any apply, STOP NOW — do not start step 2, do not write files. Skip straight to step 11 and report the blocker. This gate exists so you discover a dealbreaker before investing in the rewrite, not after.
 
 2. IDENTITY & RUNTIME. Set `id`, `name`, `version` (the app's real version — never `custom`, which is the Door-2 marker), `main_service` (the service that is "the app"), `main_port` (its *internal* listen port, NOT a host-side mapping), `preferred_slugs`. Write `description.short`: a single punchy sentence that captures what the app *does for the user* — written fresh, not lifted from the README. Optionally write `description.long`: a short markdown paragraph (3–5 sentences) that expands on the value proposition — what problems it solves, what makes it worth running. Read the README for facts, but write both fields in your own words; do not copy README prose, badges, install steps, or Docker-specific context. Do NOT add a `multi_user` field — household-vs-personal is the installer's runtime choice, not a manifest property (APP_MANIFEST.md # G).
 
@@ -52,7 +66,7 @@ STEPS
    - Drop every `ports:` mapping. From a mapping like `8080:80`, mine the container side (`80`) for `main_port`.
    - Convert named volumes to relative binds under `./data/` (e.g. `db_data:/var/lib/postgresql/data` -> `./data/db:/var/lib/postgresql/data`).
    - Drop absolute host bind paths. If one was *user content* (a media library), don't bind it — grant it via `permissions.folders` (step 5) and point the app at `${MOLMA_FOLDER_<NAME>}`.
-   - Drop `privileged`, `cap_add`, `build:`, `extends:`, `network_mode`, `pid/ipc/userns_mode: host`. If the app genuinely needs any of these, STOP — it's not Tier-3 (such apps go through Tier 2); report it and don't fabricate a passing compose.
+   - Drop `privileged`, `cap_add`, `build:`, `extends:`, `network_mode`, `pid/ipc/userns_mode: host`. These are not adaptable: if the app genuinely needs any of them it is not a Tier-3 Door-1 app, so STOP per ADAPT, DON'T FORCE — report the blocker and write no files; do not fabricate a passing compose by stripping a directive the app depends on.
    - Keep `image:` as readable version tags; digests go in the manifest `images:` map, not the compose.
    - Prefer the app listen on a non-privileged port (>=1024). Tier-3 apps run as a non-root elected UID under `cap_drop: ALL`, so an app that only listens on :80 may need a flag/env to move (see files-demo's `--port=8080`).
 
@@ -75,7 +89,7 @@ STEPS
    (a) `go run ./cmd/molma manifest lint catalog/<id>/manifest.yml` — schema, slugs, permissions, health_probe shape, compose-exists/parses, `main_service` present. Ground truth for the schema; iterate on its messages. Remember it is non-strict, so it will NOT flag a malformed `storage:`/`services:` block — those you verify against the spec by eye.
    (b) Admission + runtime (lint does NOT cover these; there is no admission CLI): run `docker compose -f catalog/<id>/compose.yml config -q`, then re-confirm against `admission.go` that none of step 3's rejections slipped in, that `main_port` is the internal port, that every `${MOLMA_SERVICE_*}` has a matching declared-and-used `services:` entry, and that every folder the app touches has a `permissions.folders` entry.
 
-11. REPORT: what you changed and why; env vars rewired; permissions + reasoning; data-vs-cache split; digest status; health-probe choice; whether it's files-first-class or app_managed_user_content; icon found or skipped; screenshot count or skipped; anything that needed judgment or blocks Door-1 (e.g. needs a capability -> Tier 2).
+11. REPORT: what you changed and why; env vars rewired; permissions + reasoning; data-vs-cache split; digest status; health-probe choice; whether it's files-first-class or app_managed_user_content; icon found or skipped; screenshot count or skipped; anything that needed judgment or blocks Door-1 (e.g. needs a capability -> Tier 2). If you bailed under ADAPT, DON'T FORCE, this report (naming the blocker, the forbidding rule, and the tier verdict) IS the deliverable — there are no files.
 
 REFERENCE (verify against the on-disk sources — these are reminders, not the schema):
 - Required fields: id, manifest_version, name, version, compose_file, main_service, main_port. Rest optional.
@@ -84,7 +98,7 @@ REFERENCE (verify against the on-disk sources — these are reminders, not the s
 - Slug rule: `^[a-z0-9]+(-[a-z0-9]+)*$` — single internal hyphens, no leading/trailing hyphen, no `--` run (which also rules out the reserved `xn--` prefix).
 - `version: custom` is the Door-2 marker — never use it for a catalog app.
 
-DO NOT: honor `ports:`; use named volumes; emit absolute host binds; set `version: custom`; add Linux capabilities; emit the MALMO_ prefix; add a `multi_user` field; set a Door-2 folder `target:`; auto-rewrite beyond the documented adaptations; fabricate digests; trust a green lint as proof admission passes.
+DO NOT: honor `ports:`; use named volumes; emit absolute host binds; set `version: custom`; add Linux capabilities; emit the MALMO_ prefix; add a `multi_user` field; set a Door-2 folder `target:`; auto-rewrite beyond the documented adaptations; fabricate digests; trust a green lint as proof admission passes; force an app through by stripping or faking something it genuinely needs — bail and explain instead (see ADAPT, DON'T FORCE).
 ```
 
 ## After the run
