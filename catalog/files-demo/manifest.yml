@@ -23,7 +23,11 @@ permissions:
     - folder: documents
       mode: read
 
-# Catalog-promised image digest (APP_STORE.md # Trust model), shared with the
-# whoami sample since it's the same image.
+# Catalog-promised image metadata (APP_STORE.md # Catalog schema), shared with
+# the whoami sample since it's the same image. digest gates the pull;
+# download_bytes / disk_bytes are advisory footprint data for the UI.
 images:
-  traefik/whoami:v1.10.3: sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c
+  traefik/whoami:v1.10.3:
+    digest: sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c
+    download_bytes: 2850040
+    disk_bytes: 6581646

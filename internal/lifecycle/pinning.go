@@ -55,9 +55,9 @@ func resolveImages(ctx context.Context, docker DockerDriver, man *manifest.Manif
 		if !ok {
 			continue
 		}
-		if promised != gotDigest {
+		if promised.Digest != gotDigest {
 			return nil, fmt.Errorf("catalog digest mismatch for %s: catalog promised %s, registry served %s",
-				img, promised, gotDigest)
+				img, promised.Digest, gotDigest)
 		}
 	}
 
