@@ -15,7 +15,7 @@ export MOLMA_AGENT_SOCK := $(AGENT_SOCK)
 export MOLMA_STATE_DIR := $(STATE_DIR)
 export MOLMA_CATALOG_DIR := ./catalog
 
-.PHONY: build host-agent brain host-agent-real check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev openapi openapi-check clean help
+.PHONY: build host-agent brain host-agent-real check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev stop openapi openapi-check clean help
 
 # msteinert/pam v2.1.0 uses RTLD_NEXT, a GNU extension that requires
 # _GNU_SOURCE at C compile time. Apply globally; harmless to non-cgo builds.
@@ -204,7 +204,30 @@ openapi-check:
 	  fi; \
 	  rm -rf $$tmp; echo "openapi spec is fresh"
 
-clean: caddy-down
+# Stop the native dev stack (`make dev` runs brain/host-agent/vite outside
+# Docker). Without this, `clean` leaves the brain running with the deleted
+# molma.db still open (deleted-but-open inode), so it keeps serving the old
+# state and the wiped DB silently comes back — `clean` looks like a no-op.
+# Best-effort: pkill exits non-zero when nothing matches, hence the `-` prefix.
+# The supervisor is matched by its MOLMA_DEV_AVAHI env prefix; the binaries by
+# their $(DEV_DIR) path; vite by this repo's absolute path so we don't reap an
+# unrelated Vite on the box.
+stop:
+	-@pkill -f 'MOLMA_DEV_AVAHI=1' 2>/dev/null
+	-@pkill -f '$(DEV_DIR)/brain' 2>/dev/null
+	-@pkill -f '$(DEV_DIR)/host-agent' 2>/dev/null
+	-@pkill -f '$(CURDIR)/web-ui/node_modules/.bin/vite' 2>/dev/null
+	@echo "stopped native dev stack (brain/host-agent/vite)"
+
+# clean = back to a blank slate: stop the native stack (stop) and the Caddy
+# container (caddy-down), remove app containers/networks, then wipe dev state.
+# stop must run before the rm or the live brain keeps the DB inode alive.
+clean: stop caddy-down
 	-@docker ps -aq --filter "label=com.docker.compose.project" --filter "name=molma-" | xargs -r docker rm -f
 	-@docker network ls -q --filter "name=molma-app-" | xargs -r docker network rm
+	@# App containers (Postgres et al.) write their data as root inside bind
+	@# mounts, so instances/<id>/data is root-owned on the host — same as prod,
+	@# where the privileged uninstall path removes it. A plain `rm` as the dev
+	@# user can't, so reclaim it via a throwaway root container first. No sudo.
+	-@docker run --rm -v $(abspath $(DEV_DIR)/state):/state alpine:3 rm -rf /state/instances 2>/dev/null || true
 	rm -rf $(DEV_DIR)/state
