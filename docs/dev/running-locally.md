@@ -32,7 +32,7 @@ compiles clean; Docker Desktop covers Caddy and app containers.
 - **The brain** — all of `internal/`: `api`, `lifecycle`, `catalog`,
   `manifest`, `store`, `caddy`, `hostclient`, `events`, `protocol`, `auth`,
   `audit`, `admission`. This is where ~90% of development happens.
-- **The dashboard** — all of `web-ui/` (Vue 3 + Vite + npm). Fully OS-agnostic.
+- **The dashboard** — all of `web-ui/` (Vue 3 + Vite + npm). Fully OS-agnostic. For its internal code architecture (folders, state model, composables, codegen), see [`web-ui.md`](web-ui.md).
 - **The fake host-agent** (`cmd/host-agent`) — speaks the real
   `../specs/BRAIN_HOST_PROTOCOL.md` wire format over a real UNIX socket, with
   host ops stubbed. Lets the entire control-plane spine run on a Mac.

@@ -15,7 +15,7 @@ one is JavaScript, one is a container we don't write.
 | **`molma-brain`** | `cmd/brain/`, `internal/` | The control-plane daemon. Owns SQLite state, the REST+SSE API, the app lifecycle, and the Caddy config. One Go binary. | Real |
 | **`host-agent`** | `cmd/host-agent/` | Privileged side. Speaks the real `BRAIN_HOST_PROTOCOL.md` wire format over a UNIX socket; the host operations themselves (Avahi, LUKS, PAM, apt) are stubbed in memory. | **Fake** (real wire, canned ops) |
 | **Caddy** | `dev/caddy.json`, `dev/docker-compose.yml` | Reverse proxy. Terminates `*.molma.local` and routes to app containers + the brain. Configured live by the brain via Caddy's admin API. | Real (container) |
-| **`web-ui`** | `web-ui/` | Vue 3 + Vite + TanStack Query dashboard. Talks only to the brain. Tailwind/shadcn-vue deferred. | Real |
+| **`web-ui`** | `web-ui/` | Vue 3 + Vite + TanStack Query dashboard. Talks only to the brain. Tailwind 4 landed; shadcn-vue scaffolding present, components not yet copied in. Internal code architecture: [`dev/web-ui.md`](dev/web-ui.md). | Real |
 | **SQLite** | `$STATE_DIR/molma.db` | The brain's only persistent store. Schema + queries in `internal/store/`. | Real |
 
 Plus the **Docker daemon** on the host, which the brain drives with the

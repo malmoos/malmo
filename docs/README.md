@@ -48,6 +48,7 @@ doesn't duplicate the list.
   off `main`, build, test, document, PR into `main`. Read this first if you're new.
 - [`dev/running-locally.md`](dev/running-locally.md) — run the whole stack
   natively (no VM), and the two-loop dev model.
+- [`dev/web-ui.md`](dev/web-ui.md) — code-level architecture of the `web-ui/` dashboard: folder layout, the three-tier state model (Query / module-singleton / local), the cross-cutting modules (`api`, `auth`, `useEvents`, `elevate`, `toasts`), routing, styling tokens, the OpenAPI codegen workflow, and add-a-view/query/type recipes. The internal companion to `specs/WEB_UI.md` (design) and `architecture.md` (external contract).
 - [`dev/testing-brain.md`](dev/testing-brain.md) — six-layer test plan for
   `molma-brain` (unit → store → lifecycle-with-fakes → API → integration
   → e2e). Companion to `specs/TESTING.md`, which covers boot-level lanes.
