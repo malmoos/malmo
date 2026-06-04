@@ -84,6 +84,8 @@ Uninstall does the inverse. Slug rename touches both. If either step fails, the 
 
 **Install latency note.** Avahi announcement takes <1 second on a healthy LAN, but it's a real step — other devices need to multicast-cache the answer before resolution succeeds. The dashboard should not mark an app `ready` until the announcement has been emitted (Avahi's DBus `EntryGroup.StateChanged` → `ESTABLISHED`). Spec'd in `APP_LIFECYCLE.md`'s install-transaction section.
 
+**Caddy upstream Host-header note.** Subdomain routing depends on the original client `Host` (`photos.local`) reaching the app — that's what lets an app distinguish itself from its neighbors. Today this is automatic: the brain builds routes as JSON via the Caddy admin API (`internal/caddy/caddy.go`) and dials plain-HTTP `host:port` upstreams, so Caddy forwards the client `Host` unchanged. Caddy 2.11 (Feb 2026) changed the *default* so that **HTTPS** upstreams instead get the upstream's own `host:port` as the `Host` header. We don't proxy to HTTPS upstreams today, so the change doesn't touch us. If a future app forces an in-container TLS upstream, the route's `reverse_proxy` handler must explicitly set the `Host` header back to `{http.request.host}`, or that app will see the wrong hostname and subdomain routing will break for it.
+
 ## Interface scoping
 
 By default Avahi advertises on every interface. We restrict it to **LAN interfaces only** — ethernet and WiFi managed by NetworkManager, not the Headscale mesh interface (where MagicDNS handles naming) and not Docker bridge networks.
