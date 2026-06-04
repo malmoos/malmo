@@ -24,43 +24,19 @@ type Manifest struct {
 	PreferredSlugs  []string    `yaml:"preferred_slugs"`
 	Permissions     Permissions `yaml:"permissions"`
 
-	// Images is the optional catalog-promised per-image metadata
-	// (APP_STORE.md # Catalog schema). Keyed by the exact `image:` reference
-	// used in the compose (e.g. `traefik/whoami:v1.10.3`). CI resolves all three
-	// fields at catalog-build time; the brain verifies Digest at install time
-	// and uses DownloadBytes / DiskBytes for the on-disk footprint display.
+	// Images is the optional catalog-promised image→sha256 map
+	// (APP_STORE.md # Trust model — catalog's `images` map). Keyed by the exact
+	// `image:` reference used in the compose (e.g. `traefik/whoami:v1.10.3`),
+	// value is the `sha256:…` digest CI resolved at catalog-build time.
 	// Absent ⇒ TOFU at install (Door-2 always, Door-1 until the catalog
-	// publishes a digest). Accepts both the legacy bare-digest string and the
-	// full object form (see ImageEntry.UnmarshalYAML).
-	Images map[string]ImageEntry `yaml:"images,omitempty"`
+	// publishes a digest).
+	Images map[string]string `yaml:"images,omitempty"`
 
 	// HealthProbe is the optional "up but not responding" probe config
 	// (APP_MANIFEST.md # B). nil ⇒ the app is never probed and the
 	// app-unresponsive health issue is never raised for it. Door-2 synthetic
 	// manifests omit it.
 	HealthProbe *HealthProbe `yaml:"health_probe,omitempty"`
-}
-
-// ImageEntry is the catalog-promised metadata for one container image
-// (APP_STORE.md # Catalog schema). All three fields are CI-resolved at
-// catalog-build time; only Digest gates the pull (Trust model); the byte counts
-// are display-only and advisory — a drifted size is cosmetic, not an integrity
-// failure.
-type ImageEntry struct {
-	Digest        string `yaml:"digest"`
-	DownloadBytes int64  `yaml:"download_bytes,omitempty"` // compressed layer sum (bandwidth cost)
-	DiskBytes     int64  `yaml:"disk_bytes,omitempty"`     // uncompressed layer sum (on-disk cost)
-}
-
-// UnmarshalYAML accepts the legacy bare-digest string ("sha256:…") as well as
-// the full object form, so old manifests and test fixtures keep working.
-func (e *ImageEntry) UnmarshalYAML(node *yaml.Node) error {
-	if node.Kind == yaml.ScalarNode {
-		e.Digest = node.Value
-		return nil
-	}
-	type wire ImageEntry
-	return node.Decode((*wire)(e))
 }
 
 // HealthProbe declares the HTTP probe that backs the app-unresponsive detector
