@@ -113,7 +113,7 @@ The brain-generated `compose.override.yml` applies isolation and appliance behav
 - Networks: attach to `molma-app-<instance-id>` (per-app bridge). `main_service` additionally attaches to `molma-ingress` so Caddy can reach it.
 - `cap_drop: [ALL]`. No `cap_add` for Tier-3 apps, ever.
 - `security_opt: [no-new-privileges:true]`.
-- `restart: unless-stopped` (forced, overrides whatever the author wrote — this is a home appliance, apps must survive reboots).
+- `restart: unless-stopped` (forced — this is a home appliance, apps must survive reboots), **except for author-declared terminating jobs**, whose `restart:` is preserved verbatim. A "terminating job" is detected from the union of two signals: (a) the author set `restart: "no"` or `restart: "on-failure"` on the service, or (b) the service is the target of another service's `depends_on: {condition: service_completed_successfully}` — which catches the common case where the author omitted `restart:` entirely (Compose's default is `no`) and signal (a) alone would miss. Forcing `unless-stopped` on a one-shot init/migrate/seed job is catastrophic: the job exits 0, Docker restarts it, it never reaches the "completed" terminal state, and a completion-gate `depends_on` blocks `docker compose up -d` forever (`DECISIONS.md` 2026-06-05). **`main_service` is always forced long-running** regardless of these signals — a paranoid or buggy author can't accidentally exempt the actual app. Every service not detected as a job still gets forced `unless-stopped`.
 - `devices:` mirroring `permissions.devices` from the manifest. Empty if not declared.
 - The `molma-app-<id>` network is created with `internal: true` if `permissions.internet: false`.
 
@@ -169,7 +169,7 @@ Updates re-resolve (catalog for Door-1, fresh inspect for Door-2). The previous 
 6.  Pull images, resolve digests, rewrite override
 7.  Create per-app network
 8.  Register Caddy route (splash) + publish mDNS
-9.  docker compose up -d
+9.  docker compose up -d                      (bounded by the health-wait budget)
 10. Wait for main_service healthy             (default 120s; manifest may override)
 11. Flip Caddy upstream from splash to main_service
 12. Mark state: running
@@ -177,7 +177,7 @@ Updates re-resolve (catalog for Door-1, fresh inspect for Door-2). The previous 
 
 Failure handling:
 - **Steps 1–2:** clean fail, no state written.
-- **Steps 3–9:** full rollback — unpublish mDNS, drop Caddy route, `compose down -v`, drop network, remove instance dir, delete SQLite row.
+- **Steps 3–9:** full rollback — unpublish mDNS, drop Caddy route, `compose down -v`, drop network, remove instance dir, delete SQLite row. Step 9's `compose up -d` runs under a context bounded by the health-wait budget (the same default 120s as step 10), so a pathological app whose completion gate never completes **fails the install cleanly** instead of wedging the brain indefinitely — a containment backstop independent of the terminating-job detection above.
 - **Steps 10–11:** keep the instance dir (so the user can inspect logs). Caddy route stays registered but in "failed" splash mode. State: `failed`. The UI surfaces the failing step and last 50 lines of logs.
 
 ## Locked: update + rollback

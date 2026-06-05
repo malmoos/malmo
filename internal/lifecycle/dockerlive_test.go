@@ -127,13 +127,11 @@ services:
 //
 //	go test ./internal/lifecycle/ -tags dockerlive -run TestLiveKanBoot -v -timeout 600s
 //
-// Skipped: kan can't boot end-to-end yet. The override force-restarts its
-// one-shot `migrate` job, so the `web` service's `service_completed_successfully`
-// gate never fires and `compose up -d` hangs. Tracked in #92 (one-shot-job
-// restart override); un-skip when that lands. The managed-Postgres path this
-// slice owns is covered by TestLivePostgresProvisioning above.
+// Un-skipped by #92: the override no longer force-restarts kan's one-shot
+// `migrate` job, so the `web` service's service_completed_successfully gate
+// fires and `compose up -d` returns. The managed-Postgres path this slice owns
+// is covered by TestLivePostgresProvisioning above.
 func TestLiveKanBoot(t *testing.T) {
-	t.Skip("blocked on #92: override force-restarts kan's one-shot migrate job; compose up hangs on the completion gate")
 	ctx := context.Background()
 	stateDir := t.TempDir()
 	s, err := store.Open(filepath.Join(stateDir, "molma.db"))
