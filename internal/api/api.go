@@ -17,6 +17,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
 	"github.com/molmaos/molma/internal/admission"
+	"github.com/molmaos/molma/internal/applog"
 	"github.com/molmaos/molma/internal/audit"
 	"github.com/molmaos/molma/internal/auth"
 	"github.com/molmaos/molma/internal/catalog"
@@ -41,6 +42,7 @@ type Server struct {
 	auditor  *audit.Recorder
 	health   *health.Manager
 	live     *systemlive.Hub
+	applogs  *applog.Registry
 	streams  *streamCap
 	limiter  *rateLimiter
 	jobs     *Jobs
@@ -56,11 +58,12 @@ func NewServer(
 	auditor *audit.Recorder,
 	healthMgr *health.Manager,
 	live *systemlive.Hub,
+	applogs *applog.Registry,
 ) *Server {
 	return &Server{
 		store: st, catalog: cat, life: life, bus: bus,
 		auth: authMgr, throttle: auth.NewLoginThrottle(), host: host, auditor: auditor,
-		health: healthMgr, live: live,
+		health: healthMgr, live: live, applogs: applogs,
 		streams: newStreamCap(maxStreamsPerSession),
 		limiter: newRateLimiter(time.Now),
 		jobs:    newJobs(),
@@ -88,6 +91,7 @@ func (s *Server) Handler() http.Handler {
 	// handler keeps the wire format curl-debuggable per BRAIN_UI_PROTOCOL.md).
 	mux.HandleFunc("GET /api/v1/events", s.events)
 	mux.HandleFunc("GET /api/v1/system/live", s.systemLive)
+	mux.HandleFunc("GET /api/v1/apps/{id}/log", s.appLog)
 
 	return withCORS(s.authMiddleware(s.rateLimit(mux)))
 }
