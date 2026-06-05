@@ -97,6 +97,21 @@ type LogSource interface {
 	Follow(ctx context.Context, container string) (<-chan protocol.JournalLine, error)
 }
 
+// RAMReporter is a consumer-side interface for the locus-B ram-pressure
+// detector: it reads the kernel's PSI memory file (/proc/pressure/memory, the
+// `some avg60` field) and emits a ram-pressure finding when memory-stall
+// pressure is sustained above threshold. It backs the resources category of GET
+// /v1/health/system. Provider packages return concrete types:
+// rampressure.Reporter (real /proc) for cmd/host-agent-real, FakeRAMReporter for
+// the fake binary and tests.
+//
+// Read always returns a usable slice (nil = pressure below threshold) and never
+// errors — like ServiceReporter, a PSI reading is data, not a failure; a missing
+// PSI file fails open to nil.
+type RAMReporter interface {
+	Read() []protocol.Finding
+}
+
 // UserManager is a consumer-side interface for the system-level user account
 // operations behind /v1/auth/set-password (and, later, /set-role and
 // /delete-user). Provider packages (usermgr.LinuxUserManager) export concrete
@@ -170,6 +185,14 @@ type Agent struct {
 	// cmd/host-agent-real vs FakeLogSource (synthetic ticker) for the fake
 	// binary and tests. When nil, GET /v1/journal/follow returns 501.
 	Logs LogSource
+
+	// Resources, when non-nil, backs the resources category of GET
+	// /v1/health/system (the ram-pressure detector). Swapped per binary:
+	// rampressure.Reporter (real /proc/pressure/memory) vs FakeRAMReporter. When
+	// nil, the report omits the resources category entirely — the brain then
+	// leaves resource issues alone rather than treating "no pressure measured"
+	// as "pressure healthy".
+	Resources RAMReporter
 
 	// UserMgr, when non-nil, takes over POST /v1/auth/set-password,
 	// /v1/auth/set-role, and /v1/auth/delete-user: handlers delegate to the
@@ -351,6 +374,15 @@ func (a *Agent) systemHealth(w http.ResponseWriter, r *http.Request) {
 			clk = []protocol.Finding{}
 		}
 		cats[protocol.HealthCategoryTime] = clk
+	}
+
+	// Resources category (locus B): only when a RAM reporter is wired.
+	if a.Resources != nil {
+		res := a.Resources.Read()
+		if res == nil {
+			res = []protocol.Finding{}
+		}
+		cats[protocol.HealthCategoryResources] = res
 	}
 
 	writeJSON(w, http.StatusOK, protocol.SystemHealth{

@@ -604,5 +604,20 @@ func builtinDefinitions() []Definition {
 			Summary:        "The box's clock isn't being kept accurate. Some features (HTTPS certificates, scheduled backups) may stop working.",
 			ReportCategory: protocol.HealthCategoryTime, Debounce: true,
 		},
+		// Capacity & informational (HEALTH.md # Capacity & informational).
+		// ram-pressure is locus B — host-agent samples /proc/pressure/memory (PSI
+		// `some avg60`) and reports it under the system report's *resources*
+		// category; the issue itself is display Category capacity. Box-wide (no
+		// instance_key). Warning, no block flags — it's informational, pointing the
+		// user at the per-container monitor rather than gating anything. The
+		// host-agent reporter owns the (conservative, tune-at-soak) threshold.
+		// Debounces (locus B).
+		{
+			ID: "ram-pressure", Category: CategoryCapacity,
+			Severity: SeverityWarning, Tier: 1,
+			BlocksWrites: false, BlocksApps: false, BlocksUsers: false,
+			Summary:        "The box is low on memory and is slowing down. Check which app is using the most.",
+			ReportCategory: protocol.HealthCategoryResources, Debounce: true,
+		},
 	}
 }

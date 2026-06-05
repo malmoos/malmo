@@ -489,6 +489,42 @@ func TestApplyFindings_ClockNotSyncedDebounces(t *testing.T) {
 	}
 }
 
+// TestApplyFindings_RAMPressureDebounces is the locus-B reconcile for the
+// ram-pressure detector (issue #38): a finding under the resources category
+// debounces (raise on the 2nd consecutive bad sample), surfaces as a
+// capacity-category warning, and clears on one good sample (HEALTH.md
+// # Capacity & informational). Mirrors the host-agent reporter producing both a
+// high-pressure and a below-threshold state.
+func TestApplyFindings_RAMPressureDebounces(t *testing.T) {
+	m := NewManager(nil)
+	bad := []protocol.Finding{{ID: "ram-pressure", Details: "memory stall 34% over the last 60s"}}
+
+	// First bad sample: counted, not raised (debounce).
+	if raised, _ := m.ApplyFindings(protocol.HealthCategoryResources, bad); len(raised) != 0 {
+		t.Fatalf("first bad sample: want no transition (debounced), got %v", raised)
+	}
+	if len(m.List()) != 0 {
+		t.Fatalf("debounced ram-pressure must not be active after one sample, got %v", m.List())
+	}
+
+	// Second consecutive bad sample: raises a capacity-category warning, box-wide.
+	raised, _ := m.ApplyFindings(protocol.HealthCategoryResources, bad)
+	if len(raised) != 1 || raised[0].ID != "ram-pressure" || raised[0].InstanceKey != "" {
+		t.Fatalf("second bad sample: want box-wide ram-pressure raised, got %v", raised)
+	}
+	if l := m.List(); len(l) != 1 || l[0].Category != CategoryCapacity || l[0].Severity != SeverityWarning {
+		t.Fatalf("want one active capacity/warning issue, got %v", l)
+	}
+
+	// One good sample (pressure dropped below threshold): clears.
+	if _, cleared := m.ApplyFindings(protocol.HealthCategoryResources, nil); len(cleared) != 1 {
+		t.Fatalf("good sample: want ram-pressure cleared, got cleared=%d", len(cleared))
+	}
+	if len(m.List()) != 0 {
+		t.Fatalf("want 0 active after pressure subsides, got %v", m.List())
+	}
+}
+
 // TestApplyFindings_StoragePollLeavesServiceDownAlone is the locked
 // cross-category isolation property (issue #34): reconciling one report
 // category must never clear an active issue belonging to another. A storage

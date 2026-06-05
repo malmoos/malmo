@@ -32,6 +32,7 @@ import (
 	"github.com/molmaos/molma/internal/hostagent/healthsource"
 	"github.com/molmaos/molma/internal/hostagent/journalsource"
 	"github.com/molmaos/molma/internal/hostagent/pamverifier"
+	"github.com/molmaos/molma/internal/hostagent/rampressure"
 	"github.com/molmaos/molma/internal/hostagent/servicehealth"
 	"github.com/molmaos/molma/internal/hostagent/usermgr"
 	"github.com/molmaos/molma/internal/protocol"
@@ -72,6 +73,7 @@ func main() {
 	a.Services = servicehealth.New()
 	a.Time = clockhealth.New()
 	a.Logs = journalsource.New()
+	a.Resources = rampressure.New()
 
 	mux := http.NewServeMux()
 	a.Mount(mux)

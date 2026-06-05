@@ -163,6 +163,35 @@ func (f *FakeClockReporter) Read() []protocol.Finding {
 	return out
 }
 
+// FakeRAMReporter implements RAMReporter with a settable findings list, used by
+// brain integration tests that need to seed a ram-pressure finding and assert
+// the brain raises the matching capacity-category issue. cmd/host-agent (the
+// fake binary) does not wire one by default — dev has no PSI to sample.
+type FakeRAMReporter struct {
+	mu       sync.Mutex
+	findings []protocol.Finding
+}
+
+// NewFakeRAMReporter returns an empty reporter (pressure below threshold).
+func NewFakeRAMReporter() *FakeRAMReporter {
+	return &FakeRAMReporter{}
+}
+
+// Set replaces the current findings list. Pass nil to clear (pressure healthy).
+func (f *FakeRAMReporter) Set(findings []protocol.Finding) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.findings = append(f.findings[:0:0], findings...)
+}
+
+func (f *FakeRAMReporter) Read() []protocol.Finding {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]protocol.Finding, len(f.findings))
+	copy(out, f.findings)
+	return out
+}
+
 // FakeLogSource implements LogSource with a synthetic line generator: it emits
 // one plausible stdout line per tick (default ~1s), tagged with the container
 // name, until the follow context is cancelled. cmd/host-agent (the fake binary)
