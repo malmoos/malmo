@@ -134,6 +134,35 @@ func (f *FakeServiceReporter) Read() []protocol.Finding {
 	return out
 }
 
+// FakeClockReporter implements ClockReporter with a settable findings list, used
+// by brain integration tests that need to seed a clock-not-synced finding and
+// assert the brain raises the matching network-category issue. cmd/host-agent
+// (the fake binary) does not wire one by default — dev has no chrony to query.
+type FakeClockReporter struct {
+	mu       sync.Mutex
+	findings []protocol.Finding
+}
+
+// NewFakeClockReporter returns an empty reporter (clock healthy).
+func NewFakeClockReporter() *FakeClockReporter {
+	return &FakeClockReporter{}
+}
+
+// Set replaces the current findings list. Pass nil to clear (clock synced).
+func (f *FakeClockReporter) Set(findings []protocol.Finding) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.findings = append(f.findings[:0:0], findings...)
+}
+
+func (f *FakeClockReporter) Read() []protocol.Finding {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]protocol.Finding, len(f.findings))
+	copy(out, f.findings)
+	return out
+}
+
 // FakeLogSource implements LogSource with a synthetic line generator: it emits
 // one plausible stdout line per tick (default ~1s), tagged with the container
 // name, until the follow context is cancelled. cmd/host-agent (the fake binary)

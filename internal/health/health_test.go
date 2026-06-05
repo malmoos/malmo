@@ -453,6 +453,42 @@ func TestApplyFindings_DebounceResetsOnGoodSample(t *testing.T) {
 	}
 }
 
+// TestApplyFindings_ClockNotSyncedDebounces is the locus-B reconcile for the
+// clock-not-synced detector (issue #39): a finding under the time category
+// debounces (raise on the 2nd consecutive bad sample), surfaces as a
+// network-category warning, and clears on one good sample (TIME.md # Drift
+// monitoring, HEALTH.md # Network). Mirrors the fake reporter producing both a
+// bad and a good state.
+func TestApplyFindings_ClockNotSyncedDebounces(t *testing.T) {
+	m := NewManager(nil)
+	bad := []protocol.Finding{{ID: "clock-not-synced", Details: "last synced 7h0m0s ago"}}
+
+	// First bad sample: counted, not raised (debounce).
+	if raised, _ := m.ApplyFindings(protocol.HealthCategoryTime, bad); len(raised) != 0 {
+		t.Fatalf("first bad sample: want no transition (debounced), got %v", raised)
+	}
+	if len(m.List()) != 0 {
+		t.Fatalf("debounced clock issue must not be active after one sample, got %v", m.List())
+	}
+
+	// Second consecutive bad sample: raises a network-category warning.
+	raised, _ := m.ApplyFindings(protocol.HealthCategoryTime, bad)
+	if len(raised) != 1 || raised[0].ID != "clock-not-synced" || raised[0].InstanceKey != "" {
+		t.Fatalf("second bad sample: want box-wide clock-not-synced raised, got %v", raised)
+	}
+	if l := m.List(); len(l) != 1 || l[0].Category != CategoryNetwork || l[0].Severity != SeverityWarning {
+		t.Fatalf("want one active network/warning issue, got %v", l)
+	}
+
+	// One good sample (clock synced): clears.
+	if _, cleared := m.ApplyFindings(protocol.HealthCategoryTime, nil); len(cleared) != 1 {
+		t.Fatalf("good sample: want clock-not-synced cleared, got cleared=%d", len(cleared))
+	}
+	if len(m.List()) != 0 {
+		t.Fatalf("want 0 active after the clock resyncs, got %v", m.List())
+	}
+}
+
 // TestApplyFindings_StoragePollLeavesServiceDownAlone is the locked
 // cross-category isolation property (issue #34): reconciling one report
 // category must never clear an active issue belonging to another. A storage
