@@ -72,6 +72,33 @@ links:
 changelog_url: https://github.com/photoprism/photoprism/releases  # optional; used by the "What's new" panel after an update
 ```
 
+### A2. Upstream version tracking (catalog-maintenance metadata)
+
+**Authoring-only. Not consumed by the brain, never written into the signed catalog.** This block exists for one job: telling molma's catalog-repo version-watcher *where the app's upstream version lives* and *how to read it*, so the watcher can open a bump PR when upstream moves (`APP_STORE.md` # Upstream version tracking). It rides in the manifest because that's where it stays colocated, version-controlled, and authored once — by the import agent, at first import (`docs/dev/authoring-apps-with-an-agent.md`). The brain ignores it like any unknown field; catalog build drops it.
+
+```yaml
+upstream:
+  source: dockerhub                       # dockerhub | ghcr | quay | github-releases | manual
+  repo: traefik/whoami                    # namespace/name to query on that source
+  tracks: [traefik/whoami]                # compose image(s) this version drives; a bump rewrites each one's tag
+  version_pattern: '^v(\d+\.\d+\.\d+)$'   # filter + capture against candidate tags/release names
+```
+
+- **`source`** — where the version *truth* lives. Often the same registry the image is pulled from (`dockerhub`, `ghcr`, `quay`); use `github-releases` when the project tags releases on GitHub but publishes the image elsewhere (common — the semver discipline is in Releases, the registry only carries `:latest` + dated tags). `manual` opts the app out of automated tracking (see below).
+- **`repo`** — the `owner/name` (or registry namespace) the watcher queries. For `github-releases` it's the GitHub repo; for the registries it's the image repository.
+- **`tracks`** — the compose `image:` reference(s) whose tag a bump rewrites. All listed images share this one upstream version (e.g. a gateway + worker published on the same tag). **Managed-service images are never listed** — Postgres/Redis/MariaDB versions are molma-owned and move on their own track (`UPDATES.md` # 5), not with the app.
+- **`version_pattern`** — a regex that does two things against each candidate (a registry tag, or a GitHub release `tag_name`): (1) **filters** — only matches count as releases, which is how RC/nightly/`sha-…`/`latest`/dated-debug tags get excluded; (2) **captures** — capture group 1 is the comparable version string and the new manifest `version`; the full match is the new compose tag. So `^v(\d+\.\d+\.\d+)$` on `v1.10.4` yields compose tag `v1.10.4`, manifest `version: 1.10.4`. The pattern must narrow candidates to **one** versioning scheme so a generic dotted-numeric "highest wins" comparison is valid — this is what lets the same machinery handle both semver (`1.10.4`) and calendar versions (`2026.5.29.2`) without a per-app comparator.
+
+**`source: manual`** is the honest escape hatch for apps with no machine-readable version discipline (publishes only `:latest`, versions announced in a blog post, etc.). The watcher skips them and lists them in its "watch by hand" report. Pair it with a `note`:
+
+```yaml
+upstream:
+  source: manual
+  note: "Only publishes :latest; check the release notes at https://example.com/releases"
+```
+
+Omitting the `upstream` block entirely is treated as `manual` with no note — valid, but the import agent should always write at least the `source`/`repo`/`tracks`/`version_pattern` quartet when a real source exists, so the app is auto-tracked rather than silently falling off the watcher.
+
 ### B. Runtime
 
 The minimum to actually launch the thing.
@@ -397,6 +424,7 @@ permissions:
 - **No inter-app dependencies in v1.** Apps are self-contained. If they need multiple services, they go in the same compose. Cross-app sharing only via shared use-case folders (two of the same user's apps both binding the same `folders` entry; the installer points each at the same personal or shared source).
 - **Manifest can live in-repo or in molma's catalog repo.** Both patterns supported indefinitely. Schema is identical in both cases. We bootstrap by writing manifests for popular apps; over time, upstreams ship their own.
 - **Image references use version tags; the store catalog resolves digests.** Authors write `image: foo/bar:1.2.3`; molma's CI pins the bytes via a `sha256:` digest in the signed catalog (`APP_STORE.md`). Door-2 custom apps fall back to TOFU digest pinning in the brain.
+- **`upstream` is authoring-only metadata for the catalog version-watcher.** Declares `source` / `repo` / `tracks` / `version_pattern` (or `source: manual` to opt out) so molma's catalog repo can detect a new upstream version and open a bump PR (`APP_STORE.md` # Upstream version tracking). Written once by the import agent at first import; the brain ignores it and catalog build drops it. The `version_pattern` both filters out non-release tags and captures the comparable version; it must narrow to one versioning scheme so a dotted-numeric "highest wins" comparison serves both semver and calendar versions.
 
 ## Open questions
 

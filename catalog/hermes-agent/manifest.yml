@@ -15,6 +15,15 @@ links:
   homepage: https://hermes-agent.nousresearch.com/docs/
   source: https://github.com/NousResearch/hermes-agent
 
+# Authoring-only: catalog version-watcher metadata (APP_MANIFEST.md # A2).
+# Calendar versioning (year.month.day.build); both compose services run the same
+# image off this one tag, so a bump rewrites both. The brain ignores this block.
+upstream:
+  source: dockerhub
+  repo: nousresearch/hermes-agent
+  tracks: [nousresearch/hermes-agent]
+  version_pattern: '^v(\d{4}\.\d+\.\d+\.\d+)$'
+
 compose_file: compose.yml
 main_service: dashboard
 main_port: 9119

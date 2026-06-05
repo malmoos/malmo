@@ -4,6 +4,14 @@ name: Files Demo
 version: "1.10"
 description:
   short: "whoami wired to a use-case folder — proves the folder-enforcement override path."
+
+# Authoring-only (APP_MANIFEST.md # A2). This is a molma test fixture, not a
+# tracked third-party app — it borrows the whoami image deliberately and should
+# not auto-bump, so it opts out of the version-watcher.
+upstream:
+  source: manual
+  note: "molma demo fixture; pinned to the whoami image on purpose, not upstream-tracked."
+
 compose_file: compose.yml
 main_service: files-demo
 main_port: 8080
