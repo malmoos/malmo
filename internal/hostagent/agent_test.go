@@ -674,6 +674,9 @@ func TestSystemHealth_NoSourcesReportsStorageOnly(t *testing.T) {
 	if _, present := sh.Categories[protocol.HealthCategoryTime]; present {
 		t.Error("time category must be absent when no reporter is wired")
 	}
+	if _, present := sh.Categories[protocol.HealthCategoryResources]; present {
+		t.Error("resources category must be absent when no reporter is wired")
+	}
 	if sh.CheckedAt == "" {
 		t.Error("checked_at must be set even with no sources")
 	}
@@ -747,6 +750,31 @@ func TestSystemHealth_TimeFromReporter(t *testing.T) {
 	}
 	if len(tm) != 1 || tm[0].ID != "clock-not-synced" {
 		t.Fatalf("time category: want clock-not-synced, got %v", tm)
+	}
+}
+
+// TestSystemHealth_ResourcesFromReporter verifies the resources category appears
+// once a RAMReporter is wired and carries the ram-pressure finding verbatim (the
+// ram-pressure detector, locus B).
+func TestSystemHealth_ResourcesFromReporter(t *testing.T) {
+	a, mux := newTestAgent(&stubVerifier{})
+	ram := NewFakeRAMReporter()
+	ram.Set([]protocol.Finding{
+		{ID: "ram-pressure", Details: "memory stall 34% over the last 60s"},
+	})
+	a.Resources = ram
+
+	w := get(t, mux, "/v1/health/system")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d", w.Code)
+	}
+	sh := decodeBody[protocol.SystemHealth](t, w)
+	resources, ok := sh.Categories[protocol.HealthCategoryResources]
+	if !ok {
+		t.Fatal("resources category must be present when a reporter is wired")
+	}
+	if len(resources) != 1 || resources[0].ID != "ram-pressure" {
+		t.Fatalf("resources category: want ram-pressure, got %v", resources)
 	}
 }
 
