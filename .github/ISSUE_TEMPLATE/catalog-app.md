@@ -19,7 +19,7 @@ assignees: ''
 **Done when:**
 
 - [ ] `catalog/<id>/manifest.yml` and `catalog/<id>/compose.yml` exist
-- [ ] `go run ./cmd/molma manifest lint catalog/<id>/manifest.yml` passes (run it yourself — don't trust the agent's claim)
+- [ ] `go run ./cmd/molma manifest check catalog/<id>/manifest.yml` passes — schema + admission in one (run it yourself, don't trust the agent's claim)
 - [ ] `docker compose -f catalog/<id>/compose.yml config -q` passes
-- [ ] Compose eyeballed against `internal/admission/admission.go` — no ports, named volumes, absolute binds, privileged, cap_add, build:, host namespaces
+- [ ] `go run ./cmd/molma manifest resolve catalog/<id>/manifest.yml` run to fill image digests/sizes — or `images:` omitted with a note if the registry was unreachable
 - [ ] PR body includes `Closes #<N>`
