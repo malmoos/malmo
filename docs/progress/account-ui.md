@@ -50,6 +50,14 @@ Three account-facing surfaces, all UI:
 - **A logged-in user navigating to `/recover`** renders `RecoverView` inside the shell chrome (the route exists; AppShell wins the auth gate). Harmless and unreachable in normal use; not guarded to avoid scope creep.
 - **No frontend test framework** exists in `web-ui/` (no vitest). Verified via the type-checked build (`vue-tsc --noEmit && vite build`) and manual flow reasoning; component tests are out of scope until a harness lands.
 
+## Review fixes (PR #80)
+
+Applied during code review, before merge:
+
+- **Blocker — wrong current password no longer logs the user out.** `api.ts`'s global 401 handler fired `onUnauthenticated()` on *every* 401, clearing `currentUser`. But `POST /me/password` returns 401 when the *current* password is wrong while the caller is still authenticated, so a typo unmounted the Settings form (App.vue → Login) before the inline "Incorrect password." could render — the opposite of the specced behavior. Fix: `request`/`api.post` take a `RequestOpts.suppressAuthHandler` flag; `changeMyPassword` sets it, so a 401 here surfaces as an inline error and we drop to login only on success via the explicit `logout()`. The public `/recover` 401 was unaffected (RecoverView renders off `route.path`, not `currentUser`).
+- **Spec reconciled (resolves the format + opt-out deviations above and the "reconcile" what's-next item).** `AUTH.md # The recovery code` / `# Using the recovery code` updated to match the shipped backend+UI: the recovery code is **24 hex chars shown raw** (no `XXXX-XXXX` mask), reissue on the recovery path is **mandatory** (no opt-out toggle — `POST /api/v1/recover` always returns a fresh code, and "recovery stays on" is the safer default for the target audience), and the inaccurate `argon2id` claim was dropped (the brain hashes the recovery code with bcrypt — `newRecoveryCode`). Spec moved to the backend, not vice versa.
+- **Test harness tracked, not built.** `web-ui/` still has no JS test runner; the 401 regression that this PR fixed lived in an untested path. Standing up a Vue unit/component harness (and backfilling the `suppressAuthHandler` + recovery error-surface regressions) is recorded as a Tier-4 design topic in `NEXT.md` # Testing, gated on the repo's supply-chain / dependency-closure posture.
+
 ## What's next
 
 - **Forced password change on first login** (AUTH.md # Setting a password: a new member with an admin-set temp password "is forced to change it before they can do anything else"). The self-service form exists now; the *forced* gate on first login is a separate, unbuilt flow.

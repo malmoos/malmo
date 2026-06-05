@@ -24,7 +24,18 @@ export function setUnauthenticatedHandler(fn: () => void) {
   onUnauthenticated = fn;
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+// RequestOpts.suppressAuthHandler skips the global drop-to-login on a 401 for
+// this one call. Needed where a 401 means "bad input" rather than "session
+// expired": POST /me/password returns 401 when the *current* password is wrong
+// (the caller is still authenticated), so firing onUnauthenticated would clear
+// currentUser and bounce the user to the login screen instead of showing the
+// inline "Incorrect password." error. The rare genuinely-expired-session 401
+// here self-corrects on the next API call, which still drops to login.
+export interface RequestOpts {
+  suppressAuthHandler?: boolean;
+}
+
+async function request<T>(method: string, path: string, body?: unknown, opts?: RequestOpts): Promise<T> {
   const res = await fetch(`/api/v1${path}`, {
     method,
     credentials: "include",
@@ -33,7 +44,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    if (res.status === 401 && onUnauthenticated) onUnauthenticated();
+    if (res.status === 401 && onUnauthenticated && !opts?.suppressAuthHandler) onUnauthenticated();
     // The brain uses huma's default error model: { detail, title, errors:[{message}] }.
     // Some endpoints (jobs) carry an explicit { code, message }. Accept both, and
     // surface the first per-field message (e.g. the duplicate-install summary).
@@ -47,7 +58,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 export const api = {
   get: <T>(p: string) => request<T>("GET", p),
-  post: <T>(p: string, b?: unknown) => request<T>("POST", p, b),
+  post: <T>(p: string, b?: unknown, opts?: RequestOpts) => request<T>("POST", p, b, opts),
   put: <T>(p: string, b?: unknown) => request<T>("PUT", p, b),
   patch: <T>(p: string, b?: unknown) => request<T>("PATCH", p, b),
   del: <T>(p: string) => request<T>("DELETE", p),

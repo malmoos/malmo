@@ -74,8 +74,18 @@ export async function logout() {
 // (401 on mismatch) and revokes all of the user's sessions on success, so we
 // force a local logout — re-auth is required, and App.vue drops to the login
 // screen the moment currentUser clears.
+//
+// suppressAuthHandler is load-bearing here: a wrong current password returns
+// 401, but the caller is still authenticated. Without suppression the global
+// 401 handler would clear currentUser and unmount the Settings form before it
+// could show "Incorrect password." — bouncing the user to login on a typo. We
+// drop to login only on success, via the explicit logout() below.
 export async function changeMyPassword(currentPassword: string, newPassword: string) {
-  await api.post("/me/password", { current_password: currentPassword, new_password: newPassword });
+  await api.post(
+    "/me/password",
+    { current_password: currentPassword, new_password: newPassword },
+    { suppressAuthHandler: true },
+  );
   await logout();
 }
 
