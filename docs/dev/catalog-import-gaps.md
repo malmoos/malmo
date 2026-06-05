@@ -1,0 +1,67 @@
+# Catalog import gaps
+
+An **append-only ledger** of platform gaps surfaced while importing apps with [`authoring-apps-with-an-agent.md`](authoring-apps-with-an-agent.md). When an app *can* be adapted to a Door-1 catalog app but something didn't fully translate — an env var molma can't inject, a URL it can't supply, an auth secret it can't generate — the import agent records it here instead of losing it in a session transcript.
+
+**This is capture, not the design backlog.** Entries here are raw findings. The curated, prioritized design backlog is [`../specs/NEXT.md`](../specs/NEXT.md); a human triages this ledger and *promotes* recurring or real gaps into NEXT.md (deduped and shaped), then back-references the promotion here. Do **not** write NEXT.md from an import run, and do **not** treat an entry here as a decision — it's a "we hit this, capture it" note.
+
+Unlike `docs/progress/` entries (frozen ADR snapshots), this file is **mutable by design**: append new entries, and edit existing ones to advance their `Status:` (`open` → `planned` → `implemented`, or `won't-do`) as each gap is triaged and eventually resolved.
+
+## How to use it
+
+- **Import agents:** append one entry per distinct gap you hit, using the format below. Newest entries at the bottom. Don't edit NEXT.md.
+- **Human reviewer (triage):** after an import, scan new entries (`grep "Status: open"` is the worklist — there's deliberately no standing "go check the ledger" task; the `open` entries *are* the to-do list). If a `gap-class` now recurs across apps, or a single gap is severe (`blocks-start`), promote it to a NEXT.md entry (its own design topic, or fold into an existing one) and the catalog-curation conversation, then move the entry's `Status:` to `planned`. When the mechanism ships, flip it to `implemented` so the next person can grep this ledger for every app that was waiting on that gap and revisit them.
+
+**The ledger tracks resolution status; it does not make the decision.** The *design shape* of a `planned`/`implemented` fix lives in NEXT.md and the specs — `Status:` just points there. Keep that boundary: this file says *what gaps exist and where each one stands*; NEXT.md says *what we decided to do about the open ones*.
+
+## Entry format
+
+```
+### <gap-class> — <app-id> (<YYYY-MM-DD>)
+
+- **Severity:** cosmetic | degraded | blocks-start
+- **Trigger:** the exact env var / directive / assumption that didn't translate
+- **What breaks:** one line on the user-visible effect
+- **Why molma can't satisfy it (v1):** the missing mechanism
+- **Status:** open
+```
+
+**Fields:**
+
+- **gap-class** — a short, stable tag so recurrence is greppable. Reuse an existing tag when the gap is the same mechanism (`secret-injection`, `app-url-injection`, …); coin a new one only for a genuinely new mechanism. Same tag across apps is the signal that it's worth promoting.
+- **Severity** — the load-bearing field for triage:
+  - `cosmetic` — a nicety is off; app fully usable.
+  - `degraded` — a real feature is broken (OAuth, email links), but the app runs and core use works.
+  - `blocks-start` — the app will not boot until a human sets something the platform should have supplied. This is also a **curation** signal (`NEXT.md` # Store catalog curation policy): a `blocks-start` app may not be shippable as-is.
+- **Status** — where the gap stands. New entries start `open`; only a human moves them on (always with the pointer that justifies the move):
+  - `open` — captured, not yet triaged. This is the worklist (`grep "Status: open"`).
+  - `planned (<NEXT.md anchor / issue #>)` — promoted; the design topic or issue is the link. The shape is decided *there*, not here.
+  - `implemented (<spec section / commit / PR>)` — the mechanism shipped. Leave the entry in place — it's now the record of which apps to revisit and re-import against the new mechanism.
+  - `won't-do (<reason>)` — decided against for v1. The reason (or a `DECISIONS.md` pointer) lives on the line.
+
+---
+
+## Entries
+
+### secret-injection — kan (2026-06-05)
+
+- **Severity:** blocks-start
+- **Trigger:** `BETTER_AUTH_SECRET` — the Better Auth library requires a 32+ char random secret to sign auth tokens and throws on startup without it.
+- **What breaks:** the app will not start until the secret is set in the instance environment.
+- **Why molma can't satisfy it (v1):** no per-app secret-generation/injection mechanism exists — there is no `MOLMA_SERVICE_*`-style or manifest field for an app-specific random secret. Affects any app needing a JWT/HMAC signing secret.
+- **Status:** open (triage candidate: new NEXT.md design topic — per-app generated secret injection)
+
+### app-url-injection — kan (2026-06-05)
+
+- **Severity:** degraded
+- **Trigger:** `NEXT_PUBLIC_BASE_URL` — Next.js needs its own public URL for auth redirects (OAuth callbacks, password-reset email links).
+- **What breaks:** OAuth providers and email links break; credential login (`NEXT_PUBLIC_ALLOW_CREDENTIALS: "true"`) works without it, so basic use is fine. Left empty.
+- **Why molma can't satisfy it (v1):** no URL-injection mechanism (a `MOLMA_APP_URL` or similar) — the brain knows the app's routed subdomain but does not inject it into the app environment.
+- **Status:** open (triage candidate: same family as a URL/identity injection design topic; fold with secret-injection if a single "app self-config injection" topic is opened. Now recurs across kan + docuseal.)
+
+### app-url-injection — docuseal (2026-06-05)
+
+- **Severity:** degraded
+- **Trigger:** `FORCE_SSL=${HOST}` — DocuSeal uses the `HOST` env var (the app's public domain) to configure its own base URL for generating links in outbound emails (signature requests, completion notifications, document download links).
+- **What breaks:** signature-request emails sent to recipients carry wrong or empty URLs if DocuSeal's Rails stack doesn't infer the public host from Caddy's forwarded headers (`X-Forwarded-Host`). Core app UI is fully reachable; the signing workflow via email links may be broken.
+- **Why molma can't satisfy it (v1):** same missing mechanism as `kan` — no `MOLMA_APP_URL` (or equivalent) injection. The brain knows the app's routed subdomain at install time but does not expose it to the app's environment. Caddy does forward `X-Forwarded-Host`; whether DocuSeal's Rails config trusts it without explicit `HOST` is app-specific and unverified.
+- **Status:** open (second occurrence of `app-url-injection` — recurrence signal; triage with the kan entry)

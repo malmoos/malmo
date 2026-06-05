@@ -91,6 +91,8 @@ STEPS
 
 11. REPORT: what you changed and why; env vars rewired; permissions + reasoning; data-vs-cache split; digest status; health-probe choice; whether it's files-first-class or app_managed_user_content; icon found or skipped; screenshot count or skipped; anything that needed judgment or blocks Door-1 (e.g. needs a capability -> Tier 2). If you bailed under ADAPT, DON'T FORCE, this report (naming the blocker, the forbidding rule, and the tier verdict) IS the deliverable — there are no files.
 
+12. CAPTURE PLATFORM GAPS. If the app *was* adaptable but something didn't fully translate because molma lacks a mechanism — an env var it can't inject, a public URL it can't supply, an auth secret it can't generate — append one entry per distinct gap to `docs/dev/catalog-import-gaps.md`, using the entry format at the top of that file (gap-class, severity, trigger, what breaks, why molma can't satisfy it). Reuse an existing `gap-class` tag when it's the same mechanism. Do NOT edit `NEXT.md` — that's the human's triage step, not yours. This is for platform gaps only; per-app judgment calls stay in the step-11 report.
+
 REFERENCE (verify against the on-disk sources — these are reminders, not the schema):
 - Required fields: id, manifest_version, name, version, compose_file, main_service, main_port. Rest optional.
 - Injection (MOLMA_ prefix): folders mount at `/molma/<folder>`, injected as `MOLMA_FOLDER_<NAME>`; managed services as `MOLMA_SERVICE_<NAME>_{HOST,USER,PASSWORD,NAME,DSN}`; app data dir as `MOLMA_DATA_DIR`.
@@ -106,3 +108,4 @@ DO NOT: honor `ports:`; use named volumes; emit absolute host binds; set `versio
 - Eyeball both files against `catalog/files-demo/` (the closest worked example that exercises a folder grant) and the PhotoPrism sample in `APP_MANIFEST.md`.
 - Re-run `manifest check` yourself — don't take the agent's word. (Then `manifest resolve` to fill digests, if it didn't error out.)
 - One PR per app (or a small, clearly-scoped batch), each `Closes #<N>` per the [contributing guide](contributing.md). Catalog additions are not implementation slices, so they don't need a `docs/progress/` entry — but if an app surfaces a spec gap or a new admission edge case, fix the spec in the same PR.
+- **Triage any new platform gaps.** If the run appended entries to [`catalog-import-gaps.md`](catalog-import-gaps.md), read them: a gap that now recurs across apps, or any `blocks-start` gap, is a candidate to promote into [`../specs/NEXT.md`](../specs/NEXT.md) (deduped and shaped) and the catalog-curation conversation. Promote it there, then move the ledger entry's `Status:` from `open` to `planned` with the link. The ledger is capture; NEXT.md is the decision — keep that boundary.
