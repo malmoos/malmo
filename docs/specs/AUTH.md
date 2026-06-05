@@ -186,7 +186,7 @@ After the admin sets their password, the wizard shows:
 >
 > *If you forget your dashboard password, this code is the only way back in. Without it, you'd need to reinstall and restore from backup. Take a photo of the code with your phone — it'll back up automatically to your photos, and you'll have it when you need it.*
 
-If the user proceeds, the brain generates a recovery code (16 random characters, formatted as `XXXX-XXXX-XXXX-XXXX` for readability), shows it once full-screen with a copy button and explicit "I have saved this" checkbox. Hash (argon2id) stored in the brain's SQLite, on the user row. Plaintext is **never persisted** — show-once is the floor.
+If the user proceeds, the brain generates a recovery code (24 hexadecimal characters — 12 random bytes, shown raw with no separator mask) and displays it once full-screen with a copy button and explicit "I have saved this" checkbox. The UI shows the code verbatim rather than a `XXXX-XXXX`-style mask: the real code is a continuous hex string, so a mask would reject a pasted code. Hash stored in the brain's SQLite, on the user row. Plaintext is **never persisted** — show-once is the floor.
 
 If the user toggles it off, an explicit confirmation: *"You won't be able to recover your account if you forget your password. Continue without a recovery code?"* Forces acknowledgment of the tradeoff.
 
@@ -194,9 +194,9 @@ If the user toggles it off, an explicit confirmation: *"You won't be able to rec
 
 ### Using the recovery code
 
-Login screen has a "Forgot password" link. It asks for the recovery code; the brain validates the argon2id hash in SQLite. On match, the brain serves a **forced** "set new password" screen — no skip, no "I'll do this later." The new password is sent to host-agent → `passwd <user>` + `smbpasswd -a` sync → PAM accepts the new password for dashboard, SSH, and SMB. The brain then invalidates all existing sessions for that user and consumes the old recovery code.
+Login screen has a "Forgot password" link. It asks for the recovery code; the brain validates it against the stored hash in SQLite. On match, the brain serves a **forced** "set new password" screen — no skip, no "I'll do this later." The new password is sent to host-agent → `passwd <user>` + `smbpasswd -a` sync → PAM accepts the new password for dashboard, SSH, and SMB. The brain then invalidates all existing sessions for that user and consumes the old recovery code.
 
-Because the user now has no recovery code (single-use semantics), the next screen **generates and displays a fresh recovery code once**, with the same "I have saved this" checkbox as first-run. The toggle to opt out is available but defaults to keeping recovery on; opting out triggers the same "you won't be able to recover your account" confirmation as first-run.
+Because the user now has no recovery code (single-use semantics), the next screen **generates and displays a fresh recovery code once**, with the same "I have saved this" checkbox as first-run. Reissue is **mandatory on the recovery path** — unlike first-run, there is no opt-out toggle here: `POST /api/v1/recover` always returns a fresh code, and for the non-technical target audience "recovery stays on" is the safer default (a user can never exit the recovery flow with no way back in). A user who genuinely wants no recovery code declines at first-run, not here.
 
 **Order-of-operations rule:** the brain checks host-agent reachability *before* consuming the recovery code. If host-agent is unreachable (rare — both run on the same box), the password change can't be applied, so the recovery code must survive. Otherwise a single-use code burns without effect.
 
@@ -275,7 +275,7 @@ The brain's session middleware reaches host-agent for *credential verification* 
 - **Roles enforced server-side in the brain.** UI hiding is defense in depth.
 - **Tier-2 admin surface lives in the dashboard at `/settings/<service>/*`.** Same origin, same session, no forward-auth.
 - **SSH and SMB are off-by-account-by-default.** Services run; per-user allowlists are empty until the user opts in via Settings.
-- **Admin recovery code: opt-in toggle, default on.** Shown once, hashed with argon2id (stored in brain SQLite), single-use, no physical-access reset path. Validating the code triggers a password change through host-agent → PAM.
+- **Admin recovery code: opt-in toggle, default on.** Shown once, hashed (stored in brain SQLite), single-use, no physical-access reset path. Validating the code triggers a password change through host-agent → PAM.
 - **No SSO into Tier-3 apps.** Locked already in `SPEC.md`; reiterated here.
 - **Cross-origin re-auth on toggle flip is accepted.** No session handoff in v1.
 

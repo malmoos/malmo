@@ -1,0 +1,115 @@
+<script setup lang="ts">
+// Recovery-code redemption (AUTH.md # Using the recovery code). A public screen,
+// reached while logged out from the login screen's "Forgot password?" link —
+// App.vue renders it directly when the path is /recover and there's no session.
+//
+// One form (username + recovery code + new password) maps to the brain's single
+// POST /api/v1/recover call. The real code is 24 hex chars (what Setup.vue shows
+// at first-run), so the field is plain text — no XXXX-XXXX mask. On success the
+// brain resets the password, consumes the old code, and returns a fresh one,
+// which we show exactly once before sending the user back to sign in.
+import { ref } from "vue";
+import { RouterLink, useRouter } from "vue-router";
+import { redeemRecoveryCode } from "./auth";
+import type { ApiError } from "./api";
+
+const router = useRouter();
+
+const username = ref("");
+const code = ref("");
+const newPassword = ref("");
+const submitting = ref(false);
+const error = ref("");
+
+// Set once recovery succeeds — flips the view to the show-once code screen.
+const newCode = ref<string | null>(null);
+const saved = ref(false);
+const copied = ref(false);
+
+async function submit() {
+  error.value = "";
+  submitting.value = true;
+  try {
+    newCode.value = await redeemRecoveryCode(username.value.trim(), code.value.trim(), newPassword.value);
+  } catch (e) {
+    // 401 covers both an unknown username and a wrong code — stay generic so we
+    // never confirm whether the username exists. Surface anything else (e.g. a
+    // 502 if host-agent is unreachable) so the user knows to retry.
+    const ae = e as ApiError;
+    error.value = ae.status === 401 ? "Recovery code incorrect." : ae.message || "Recovery failed.";
+  } finally {
+    submitting.value = false;
+  }
+}
+
+async function copyCode() {
+  if (!newCode.value) return;
+  try {
+    await navigator.clipboard.writeText(newCode.value);
+    copied.value = true;
+  } catch {
+    // Clipboard can be unavailable on an insecure context (.local is HTTP-only);
+    // the code is on screen to copy by hand.
+  }
+}
+
+function done() {
+  // Recovery terminates at the login screen — the user signs in with the new
+  // password. While logged out, "/" renders Login (App.vue's auth gate).
+  router.push("/");
+}
+</script>
+
+<template>
+  <main class="auth">
+    <h1>molma</h1>
+
+    <!-- Phase 1: redeem the recovery code -->
+    <form v-if="!newCode" class="card" @submit.prevent="submit">
+      <h2>Recover your account</h2>
+      <p class="hint">Enter your recovery code to set a new password.</p>
+      <label>
+        Username
+        <input v-model="username" autocomplete="username" required autofocus />
+      </label>
+      <label>
+        Recovery code
+        <input v-model="code" autocomplete="off" spellcheck="false" required />
+      </label>
+      <label>
+        New password
+        <input v-model="newPassword" type="password" autocomplete="new-password" required />
+      </label>
+      <button type="submit" :disabled="submitting">
+        {{ submitting ? "Resetting…" : "Reset password" }}
+      </button>
+      <p v-if="error" class="error">{{ error }}</p>
+      <RouterLink to="/" class="back-link">← Back to sign in</RouterLink>
+    </form>
+
+    <!-- Phase 2: show the fresh recovery code exactly once -->
+    <form v-else class="card" @submit.prevent="done">
+      <h2>Save your new recovery code</h2>
+      <p class="hint">
+        Your password is reset. Write this new code down — your old one no longer works, and we
+        don't store the code itself, just a hash.
+      </p>
+      <div class="recovery">{{ newCode }}</div>
+      <button type="button" class="copy" @click="copyCode">{{ copied ? "Copied" : "Copy" }}</button>
+      <label class="ack">
+        <input type="checkbox" v-model="saved" />
+        I've saved this recovery code
+      </label>
+      <button type="submit" :disabled="!saved">Continue to sign in</button>
+    </form>
+  </main>
+</template>
+
+<style>
+/* Recovery-specific styles (auth base styles live in style.css). */
+.auth .back-link { align-self: center; color: #666; font-size: 0.85rem; text-decoration: none; margin-top: 0.25rem; }
+.auth .back-link:hover { color: #222; }
+.auth .copy { align-self: flex-start; border: 1px solid #ddd; background: #fff; border-radius: 8px; padding: 0.35rem 0.7rem; font-size: 0.85rem; cursor: pointer; }
+.auth .copy:hover { background: #f4f4f6; }
+.auth .ack { flex-direction: row; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #444; }
+</style>

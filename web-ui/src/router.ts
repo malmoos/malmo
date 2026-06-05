@@ -18,6 +18,11 @@ const routes: RouteRecordRaw[] = [
   // events, enforced server-side (LOGGING.md # Visibility rules).
   { path: "/settings/users", name: "settings-users", component: () => import("@/views/UsersView.vue") },
   { path: "/settings/activity", name: "settings-activity", component: () => import("@/views/ActivityView.vue") },
+  // Recovery is reachable while logged OUT (AUTH.md # Using the recovery code).
+  // It's registered here so the catch-all below doesn't redirect the path away;
+  // App.vue renders RecoverView directly in its logged-out branch, since the
+  // router-view this route would feed only mounts inside AppShell once signed in.
+  { path: "/recover", name: "recover", component: () => import("@/RecoverView.vue") },
   // Unknown paths fall back to Home — the SPA never 404s its own chrome.
   { path: "/:pathMatch(.*)*", redirect: "/" },
 ];
