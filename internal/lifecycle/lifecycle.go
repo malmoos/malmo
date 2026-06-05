@@ -6,6 +6,8 @@ package lifecycle
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -253,6 +255,12 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 		slog.Warn("install failed, rolling back",
 			"instance_id", id, "manifest_id", man.ID, "err", cause)
 		_ = m.teardown(context.Background(), inst, true)
+		// Drop any managed-service db/role provisioned before the failure, while
+		// the grant rows still exist (Delete cascades them away). Empty for a
+		// rollback that fires before step 5c.
+		if grants, err := m.store.GetServiceGrants(id); err == nil && len(grants) > 0 {
+			m.dropServiceGrants(context.Background(), id, grants)
+		}
 		_ = m.store.Delete(id)
 		return store.Instance{}, cause
 	}
@@ -274,6 +282,36 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	}
 	if err := m.store.SetInstanceImages(id, toInstanceImages(pins)); err != nil {
 		return rollback(fmt.Errorf("persist digests: %w", err))
+	}
+
+	// 5b. Generate the manifest's declared per-app secrets once and persist them
+	// (SERVICE_PROVISIONING.md # Env-var injection). Generated before the .env is
+	// written so writeEnv can re-emit them from the store; persisting (not just
+	// writing .env) is what keeps a token-signing secret stable if the instance
+	// dir is later regenerated. Folderless/Door-2 manifests declare none.
+	step("generating_secrets")
+	secrets, err := generateSecrets(man.Secrets)
+	if err != nil {
+		return rollback(fmt.Errorf("generate secrets: %w", err))
+	}
+	if err := m.store.SetInstanceSecrets(id, secrets); err != nil {
+		return rollback(fmt.Errorf("persist secrets: %w", err))
+	}
+
+	// 5c. Provision the manifest's declared managed services (Postgres in v1):
+	// ensure the shared instance is running and create a per-app database+role in
+	// it (SERVICE_PROVISIONING.md # Provisioning protocol). Persisted before the
+	// override+env so writeOverride can attach the app to the service network and
+	// writeEnv can re-emit the credentials as MOLMA_SERVICE_<NAME>_*. On a later
+	// rollback the created db/role is dropped (rollback reads grants from store).
+	step("provisioning_services")
+	grants, err := m.provisionServices(ctx, id, man.ID, man.Services)
+	if err != nil {
+		return rollback(fmt.Errorf("provision services: %w", err))
+	}
+	if err := m.store.SetServiceGrants(id, grants); err != nil {
+		m.dropServiceGrants(context.Background(), id, grants)
+		return rollback(fmt.Errorf("persist service grants: %w", err))
 	}
 
 	// 6. Resolve the per-instance isolation (container identity + folder binds)
@@ -436,6 +474,14 @@ func (m *Manager) Uninstall(ctx context.Context, id string) error {
 	if err != nil {
 		slog.Warn("uninstall: read pinned images for reclaim", "instance_id", id, "err", err)
 	}
+	// Same for managed-service grants: capture before the cascade so the per-app
+	// database+role can be dropped after the app's containers are down
+	// (SERVICE_PROVISIONING.md # At app uninstall). The shared service instance is
+	// left running — grace-shutdown is deferred (NEXT.md).
+	grants, err := m.store.GetServiceGrants(id)
+	if err != nil {
+		slog.Warn("uninstall: read service grants for drop", "instance_id", id, "err", err)
+	}
 	_ = m.store.SetState(id, "uninstalling")
 	m.emitState(inst, inst.State)
 	if err := m.teardown(ctx, inst, true); err != nil {
@@ -444,6 +490,7 @@ func (m *Manager) Uninstall(ctx context.Context, id string) error {
 	if err := m.store.Delete(id); err != nil {
 		return err
 	}
+	m.dropServiceGrants(ctx, id, grants)
 	m.bus.Publish(events.AppUninstalled, map[string]any{"instance_id": id})
 	slog.Info("app uninstalled", "instance_id", id, "name", inst.Name)
 	m.reclaimImages(ctx, id, images)
@@ -538,6 +585,10 @@ func (m *Manager) teardown(ctx context.Context, inst store.Instance, removeDir b
 // states (crash mid-transaction) are left for the install-transaction rollback
 // and a future dangerous-op-aware pass.
 func (m *Manager) Reconcile(ctx context.Context) error {
+	// Re-assert the shared managed-service instances first, so an app drifted to
+	// "no containers" comes back up against a live database.
+	m.reconcileServices(ctx)
+
 	desired, err := m.store.List()
 	if err != nil {
 		return fmt.Errorf("reconcile: list desired: %w", err)
@@ -767,9 +818,17 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 		modeByFolder[f.Folder] = f.Mode
 	}
 	appNet := "molma-app-" + id
+	// Managed-service networks the app's declared services must reach
+	// (SERVICE_PROVISIONING.md # Network architecture). Every service in the app's
+	// compose joins them — kan's `migrate` job and `web` both need the DSN — so
+	// membership, not a software allowlist, is what gates reachability.
+	svcNets := serviceNetworkNames(man.Services)
 	services := map[string]any{}
 	for _, svc := range svcNames {
 		nets := map[string]any{appNet: nil}
+		for _, sn := range svcNets {
+			nets[sn] = nil
+		}
 		if svc == man.MainService {
 			nets[ingressNetwork] = map[string]any{
 				"aliases": []string{fmt.Sprintf("molma-%s-%s", id, man.MainService)},
@@ -828,12 +887,16 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 		}
 		services[svc] = entry
 	}
+	networks := map[string]any{
+		appNet:         map[string]any{"external": true},
+		ingressNetwork: map[string]any{"external": true},
+	}
+	for _, sn := range svcNets {
+		networks[sn] = map[string]any{"external": true}
+	}
 	override := map[string]any{
 		"services": services,
-		"networks": map[string]any{
-			appNet:         map[string]any{"external": true},
-			ingressNetwork: map[string]any{"external": true},
-		},
+		"networks": networks,
 	}
 	out, err := yaml.Marshal(override)
 	if err != nil {
@@ -858,8 +921,59 @@ func (m *Manager) writeEnv(id, slug string, iso *isolation) error {
 			lines = append(lines, "MOLMA_FOLDER_"+strings.ToUpper(mt.Folder)+"="+containerDest(mt))
 		}
 	}
+	// Re-emit the instance's generated secrets as MOLMA_SECRET_<NAME>
+	// (SERVICE_PROVISIONING.md # Env-var injection). Read from the store rather
+	// than regenerated, so the value is stable across every .env rewrite — a
+	// token-signing secret that changed here would invalidate all live sessions.
+	secrets, err := m.store.GetInstanceSecrets(id)
+	if err != nil {
+		return fmt.Errorf("load secrets: %w", err)
+	}
+	for _, sec := range secrets {
+		lines = append(lines, "MOLMA_SECRET_"+strings.ToUpper(sec.Name)+"="+sec.Value)
+	}
+	// Re-emit provisioned managed-service credentials as MOLMA_SERVICE_<NAME>_*
+	// (SERVICE_PROVISIONING.md # Env-var injection). HOST is the in-network DNS
+	// alias; the app maps these (or the all-in-one DSN) to whatever it expects.
+	grants, err := m.store.GetServiceGrants(id)
+	if err != nil {
+		return fmt.Errorf("load service grants: %w", err)
+	}
+	for _, g := range grants {
+		prefix := "MOLMA_SERVICE_" + strings.ToUpper(g.LogicalName) + "_"
+		host := serviceDNSAlias(g.Kind, g.Version)
+		port := servicePort[g.Kind]
+		dsn := fmt.Sprintf("%s://%s:%s@%s:%d/%s", g.Kind, g.RoleName, g.Password, host, port, g.DBName)
+		lines = append(lines,
+			prefix+"HOST="+host,
+			prefix+"PORT="+strconv.Itoa(port),
+			prefix+"NAME="+g.DBName,
+			prefix+"USER="+g.RoleName,
+			prefix+"PASSWORD="+g.Password,
+			prefix+"DSN="+dsn,
+		)
+	}
 	env := strings.Join(append(lines, ""), "\n")
 	return os.WriteFile(filepath.Join(m.instanceDir(id), ".env"), []byte(env), 0o644)
+}
+
+// generateSecrets draws a fresh CSPRNG value for each declared secret and
+// base64url-encodes it (SERVICE_PROVISIONING.md # Env-var injection). Called
+// once per install; the result is persisted and thereafter re-emitted verbatim.
+// manifest validation has already normalized each Bytes to a safe floor.
+func generateSecrets(decls []manifest.Secret) ([]store.InstanceSecret, error) {
+	out := make([]store.InstanceSecret, 0, len(decls))
+	for _, d := range decls {
+		buf := make([]byte, d.Bytes)
+		if _, err := rand.Read(buf); err != nil {
+			return nil, fmt.Errorf("secret %q: %w", d.Name, err)
+		}
+		out = append(out, store.InstanceSecret{
+			Name:  d.Name,
+			Value: base64.RawURLEncoding.EncodeToString(buf),
+		})
+	}
+	return out, nil
 }
 
 func composeServices(composeBytes []byte) ([]string, error) {

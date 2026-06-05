@@ -193,6 +193,27 @@ This means the app is the one doing the wiring. The app remains portable (still 
 
 Apps that don't trust managed services can simply ship their own database in their own compose file. **Both paths work**; the manifest path is encouraged but not enforced.
 
+### D2. Generated secrets
+
+Many apps require a random, app-specific secret to sign auth tokens, sessions, or cookies — `BETTER_AUTH_SECRET` (Better Auth), `SECRET_KEY_BASE` (Rails), a JWT/HMAC signing key. The author can't ship a value (a public catalog secret signs nothing securely), and the non-technical user can't be asked to generate one. So the manifest *declares* the need and the brain generates the value.
+
+```yaml
+secrets:
+  - name: auth          # → injected as MOLMA_SECRET_AUTH
+  - name: session_key
+    bytes: 64           # entropy drawn before encoding; default 32, floor 16
+```
+
+At install the brain draws each secret from a CSPRNG, base64url-encodes it (32 bytes → a 43-char string, past the "32+ char" bar most libraries want), and injects it as `MOLMA_SECRET_<NAME>` (uppercased). The app's compose maps that to whatever variable the app actually expects — the same app-defined wiring as `MOLMA_SERVICE_*` and `MOLMA_FOLDER_*`:
+
+```yaml
+# inside the app's docker-compose.yml
+environment:
+  BETTER_AUTH_SECRET: ${MOLMA_SECRET_AUTH}
+```
+
+**The value is generated once and stays stable** for the life of the instance — it is persisted and re-emitted on every restart, never re-rolled, because a token-signing secret that changed underneath the app would invalidate every live session. `name` is lowercase snake_case (so the uppercased env-var suffix is unambiguous); names are unique within a manifest. See `SERVICE_PROVISIONING.md` # Env-var injection.
+
 ### E. Permissions and capabilities
 
 What the app is allowed to touch. Default is "very little"; manifest opts in to specific things.
@@ -392,6 +413,7 @@ permissions:
 - **`needs_secure_context` is an install-time warning, not a routing override or install block.** Apps declare it honestly; the brain warns the user if the current URL scheme is HTTP. The URL each app uses is determined by the global toggle in Settings, not the manifest.
 - **Public, versioned spec.** Third-party stores depend on it.
 - **Env-var injection: app-defined naming.** App's compose maps molma's stable `MOLMA_SERVICE_*` variables to whatever names the app expects. No auto-rewrite. Authors adapt; we document.
+- **Generated secrets are declared, brain-generated, and stable.** A manifest declares `secrets: [{name, bytes?}]`; the brain draws each from a CSPRNG once at install, persists it, and injects it as `MOLMA_SECRET_<NAME>` — re-emitted verbatim on every restart so token-signing secrets don't rotate underneath live sessions. Same app-defined wiring as `MOLMA_SERVICE_*` (# D2). Security hardening (delivery surface, at-rest, rotation) is tracked open in `NEXT.md` # App-secret injection hardening.
 - **Permissions granularity: medium for v1.** Internet, LAN, shared storage, devices, privileged, network isolation. Not coarse-only, not fine-grained Kubernetes-style.
 - **Custom apps can request managed services.** Allowed, not encouraged.
 - **No inter-app dependencies in v1.** Apps are self-contained. If they need multiple services, they go in the same compose. Cross-app sharing only via shared use-case folders (two of the same user's apps both binding the same `folders` entry; the installer points each at the same personal or shared source).

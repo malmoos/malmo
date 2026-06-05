@@ -60,6 +60,8 @@ Plausible v2+ additions: MariaDB (some apps require it specifically — Nextclou
 
 ### Provisioning protocol — end to end
 
+> **Implementation status (v1, 2026-06-05 — `docs/progress/managed-services-postgres.md`).** Built: Postgres provisioning end-to-end (lazy spinup, per-app DB+role, `MOLMA_SERVICE_<NAME>_*` injection, drop-on-uninstall). The brain provisions via **`docker exec <svc-container> psql`** — not a SQL connection of its own — so the control plane never joins the service network (`DECISIONS.md` 2026-06-02, 2026-06-05). Each service is a brain-owned compose project with a fixed `container_name` (`molma-svc-postgres-15`, the exec handle) and an in-network DNS alias (`postgres-15.molma.internal`, the DSN host). **Deferred:** Redis provisioning (schema-valid, not yet provisioned), the grace-shutdown timer (services stay running after the last consumer uninstalls), backup/restore + cross-version migration (gated on the backup design), and at-rest encryption of the stored superuser + per-app passwords (plaintext today — folds into `NEXT.md` # App-secret injection hardening). See `NEXT.md` for each.
+
 #### At app install
 
 1. Brain reads the manifest, sees `services.database: { type: postgres, version: "15" }`.
@@ -80,6 +82,19 @@ Plausible v2+ additions: MariaDB (some apps require it specifically — Nextclou
    MOLMA_SERVICE_DATABASE_DSN=postgres://photoprism_a4f7:...@postgres-15.molma.internal:5432/photoprism_a4f7
    ```
 6. The app's compose maps these to whatever variables the app actually expects (per `APP_MANIFEST.md` — naming convention is **app-defined**).
+
+### Env-var injection — the full family
+
+Managed-service credentials are one of four `MOLMA_*` injection mechanisms the brain stamps into an app's environment, all sharing the same contract: **the brain owns a stable variable name; the app's compose maps it to whatever it expects.** The app never hardcodes a molma-specific value and stays portable.
+
+| Variable | Source | Stability |
+|---|---|---|
+| `MOLMA_SERVICE_*` | Managed-service credentials (this doc) | Per provisioning; rotates only on re-provision |
+| `MOLMA_FOLDER_<NAME>` | In-container path of a bound use-case folder (`APP_MANIFEST.md` # folders) | Fixed (`/molma/<folder>`) |
+| `MOLMA_DATA_DIR`, `MOLMA_APP_URL`, `MOLMA_INSTANCE_ID` | Per-instance facts the brain knows (data root, routed URL, id) | Fixed for the instance |
+| `MOLMA_SECRET_<NAME>` | A per-app random secret the brain **generates** from a manifest `secrets:` declaration | **Generated once at install, persisted, re-emitted verbatim** — never re-rolled |
+
+The secret case is the only one the brain *creates* rather than *reflects*: for each `secrets: [{name, bytes?}]` entry (`APP_MANIFEST.md` # D2) it draws `bytes` (default 32, floor 16) from a CSPRNG, base64url-encodes them, and persists the value alongside the instance. Stability is load-bearing: a token-signing secret (e.g. `BETTER_AUTH_SECRET`) that changed on restart would invalidate every live session, so the value is read back from storage on every `.env` rewrite, not regenerated. Security hardening of this path (env-var delivery surface, at-rest encryption, rotation) is open — `NEXT.md` # App-secret injection hardening.
 
 #### At app uninstall
 
@@ -250,10 +265,12 @@ Locked now: **the molma mesh is the intended transport for future cross-box serv
 - **v1 Tier-1 catalog:** Postgres (15, 16) and Redis (7). Add types only when 3+ store apps justify it.
 - **v1 Tier-2 list:** Tailscale, Samba/SMB, DLNA/UPnP (DLNA possibly deprioritized).
 - **Shared instances for Tier 1.** One Postgres-15 instance serves many apps; isolation via Postgres roles/DBs.
-- **Lazy spinup.** Tier-1 instances start when first needed, shut down with a grace period after the last app using them is uninstalled.
+- **Lazy spinup.** Tier-1 instances start when first needed, shut down with a grace period after the last app using them is uninstalled. *(v1: lazy spinup built; grace-shutdown deferred — services stay running.)*
+- **Provisioning via `docker exec`, not a brain SQL client.** The brain runs the service's own client (`psql`) inside the shared container to create per-app databases/roles, so it never joins the service's Docker network — same principle as probing through Caddy (`DECISIONS.md` 2026-06-05). The container has a fixed `container_name` (the exec handle) and an in-network DNS alias (the DSN host).
 - **Cross-version migration: auto-migrate** with an automatic pre-migration backup as the rollback safety net. No prompts.
 - **Network isolation:** apps reach Tier-1 services only via dedicated Docker networks; no manifest declaration → no network membership → no reachability.
-- **Env-var injection:** stable `MOLMA_SERVICE_*` names; app maps them in its compose to whatever it actually expects (per `APP_MANIFEST.md`).
+- **Env-var injection:** stable `MOLMA_SERVICE_*` names; app maps them in its compose to whatever it actually expects (per `APP_MANIFEST.md`). Same contract for the rest of the `MOLMA_*` family (`MOLMA_FOLDER_*`, `MOLMA_APP_URL`, `MOLMA_SECRET_*`).
+- **Generated secrets (`MOLMA_SECRET_*`):** a manifest `secrets:` declaration makes the brain generate a CSPRNG value once at install, persist it, and re-emit it stably across restarts. The only injected variable molma creates rather than reflects. Security hardening is open (`NEXT.md` # App-secret injection hardening).
 - **Tier 2 is curated, not open.** No third-party Tier-2 in v1.
 - **Tier 2 runs as native Debian packages under systemd**, not as Docker containers. The admin UI lives in the molma dashboard at `/settings/<service>/*` — no upstream admin UI is exposed at its own subdomain. Tier 2 updates ride apt.
 

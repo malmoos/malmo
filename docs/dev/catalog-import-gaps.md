@@ -48,20 +48,28 @@ Unlike `docs/progress/` entries (frozen ADR snapshots), this file is **mutable b
 - **Trigger:** `BETTER_AUTH_SECRET` — the Better Auth library requires a 32+ char random secret to sign auth tokens and throws on startup without it.
 - **What breaks:** the app will not start until the secret is set in the instance environment.
 - **Why molma can't satisfy it (v1):** no per-app secret-generation/injection mechanism exists — there is no `MOLMA_SERVICE_*`-style or manifest field for an app-specific random secret. Affects any app needing a JWT/HMAC signing secret.
-- **Status:** open (triage candidate: new NEXT.md design topic — per-app generated secret injection)
+- **Status:** implemented (`DECISIONS.md` 2026-06-05; `APP_MANIFEST.md` # D2). Manifest `secrets: [{name}]` → brain generates a CSPRNG value and injects `MOLMA_SECRET_<NAME>`; kan's compose now maps `BETTER_AUTH_SECRET: ${MOLMA_SECRET_AUTH}`. Security hardening tracked open in `NEXT.md` # App-secret injection hardening.
 
 ### app-url-injection — kan (2026-06-05)
 
 - **Severity:** degraded
 - **Trigger:** `NEXT_PUBLIC_BASE_URL` — Next.js needs its own public URL for auth redirects (OAuth callbacks, password-reset email links).
 - **What breaks:** OAuth providers and email links break; credential login (`NEXT_PUBLIC_ALLOW_CREDENTIALS: "true"`) works without it, so basic use is fine. Left empty.
-- **Why molma can't satisfy it (v1):** no URL-injection mechanism (a `MOLMA_APP_URL` or similar) — the brain knows the app's routed subdomain but does not inject it into the app environment.
-- **Status:** open (triage candidate: same family as a URL/identity injection design topic; fold with secret-injection if a single "app self-config injection" topic is opened. Now recurs across kan + docuseal.)
+- **Why molma can't satisfy it (v1):** ~~no URL-injection mechanism~~ — **correction:** the brain *does* inject the routed URL as `MOLMA_APP_URL` (`internal/lifecycle` writeEnv; e.g. `http://kan.local`). The original finding was wrong: this is a manifest-mapping fix, not a missing mechanism.
+- **Status:** implemented (no platform change needed). kan's compose now maps `NEXT_PUBLIC_BASE_URL: ${MOLMA_APP_URL}`.
 
 ### app-url-injection — docuseal (2026-06-05)
 
 - **Severity:** degraded
 - **Trigger:** `FORCE_SSL=${HOST}` — DocuSeal uses the `HOST` env var (the app's public domain) to configure its own base URL for generating links in outbound emails (signature requests, completion notifications, document download links).
 - **What breaks:** signature-request emails sent to recipients carry wrong or empty URLs if DocuSeal's Rails stack doesn't infer the public host from Caddy's forwarded headers (`X-Forwarded-Host`). Core app UI is fully reachable; the signing workflow via email links may be broken.
-- **Why molma can't satisfy it (v1):** same missing mechanism as `kan` — no `MOLMA_APP_URL` (or equivalent) injection. The brain knows the app's routed subdomain at install time but does not expose it to the app's environment. Caddy does forward `X-Forwarded-Host`; whether DocuSeal's Rails config trusts it without explicit `HOST` is app-specific and unverified.
-- **Status:** open (second occurrence of `app-url-injection` — recurrence signal; triage with the kan entry)
+- **Why molma can't satisfy it (v1):** ~~same missing mechanism as `kan`~~ — **correction:** `MOLMA_APP_URL` is injected by the brain (see the kan entry). DocuSeal's compose can map `HOST: ${MOLMA_APP_URL}` (or `FORCE_SSL`) directly. Caddy does forward `X-Forwarded-Host`; whether DocuSeal's Rails config trusts it without explicit `HOST` is app-specific and unverified.
+- **Status:** open (manifest-mapping fix, no platform gap — docuseal's compose not yet rewritten to map `MOLMA_APP_URL`; revisit on next docuseal touch)
+
+### oneshot-job-restart — kan (2026-06-05)
+
+- **Severity:** blocks-start
+- **Trigger:** `migrate` service with `restart: "no"`, gated by `web`'s `depends_on: {migrate: {condition: service_completed_successfully}}` — the common "run migrations as a one-shot job, then serve" Compose shape.
+- **What breaks:** the brain's `compose.override.yml` force-stamps `restart: unless-stopped` onto *every* service (`APP_LIFECYCLE.md` # Locked: override file contents). The migrate job exits 0, Docker restarts it, it never reaches the "completed" terminal state, so `web`'s completion gate never fires and `docker compose up -d` hangs indefinitely — the install transaction wedges (observed: live kan boot hung past a 600s timeout). Surfaced *after* managed-Postgres unblocked kan's database dependency.
+- **Why molma can't satisfy it (v1):** the forced-restart rule doesn't distinguish long-running services from one-shot jobs. Fix = honor author-declared terminating policies + completion-gate targets, and bound `compose up -d` so a never-completing gate fails the install instead of hanging.
+- **Status:** planned (#92)

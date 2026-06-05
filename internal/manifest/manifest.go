@@ -44,6 +44,24 @@ type Manifest struct {
 	// app-unresponsive health issue is never raised for it. Door-2 synthetic
 	// manifests omit it.
 	HealthProbe *HealthProbe `yaml:"health_probe,omitempty"`
+
+	// Secrets declares per-app random secrets the brain generates once at install
+	// and injects as `MOLMA_SECRET_<NAME>` env vars (APP_MANIFEST.md # secrets,
+	// SERVICE_PROVISIONING.md # Env-var injection). Each name maps in the compose
+	// to whatever the app actually expects (e.g. BETTER_AUTH_SECRET) — same
+	// app-defined mapping convention as MOLMA_SERVICE_*. The value is generated
+	// from a CSPRNG, persisted, and re-emitted stably across restarts so
+	// token-signing secrets don't rotate underneath live sessions.
+	Secrets []Secret `yaml:"secrets,omitempty"`
+
+	// Services declares the managed data services the app consumes (APP_MANIFEST.md
+	// # D, SERVICE_PROVISIONING.md # Tier 1). The map key is the app's logical name
+	// for the dependency (`database`, `cache`); the brain provisions a per-app
+	// database+role in the shared instance of that type+version and injects the
+	// credentials as `MOLMA_SERVICE_<KEY>_*` (uppercased key). The app's compose
+	// maps those to whatever it expects — same app-defined convention as
+	// MOLMA_SECRET_*. Absent ⇒ the app brings its own datastore in its compose.
+	Services map[string]ServiceDep `yaml:"services,omitempty"`
 }
 
 // Description holds the app's catalog-facing text (APP_MANIFEST.md # A).
@@ -230,6 +248,51 @@ type Folder struct {
 	Target string `yaml:"target,omitempty"`
 }
 
+// Secret is one declared per-app generated secret (APP_MANIFEST.md # secrets).
+// Name is lowercase snake_case; the injected env var is `MOLMA_SECRET_` + the
+// uppercased name (so `auth` → `MOLMA_SECRET_AUTH`). Bytes is the entropy drawn
+// from the CSPRNG before base64url encoding; it defaults to DefaultSecretBytes
+// and is floored at MinSecretBytes so a manifest can't request a weak secret.
+type Secret struct {
+	Name  string `yaml:"name"`
+	Bytes int    `yaml:"bytes,omitempty"`
+}
+
+// ServiceDep is one managed-service dependency (APP_MANIFEST.md # D). Type is
+// the service kind (`postgres`, `redis`); Version is the major-version pin the
+// brain runs a shared instance of. Name is the author's advisory logical name
+// for the resource; v1 ignores it (the brain generates the real database name)
+// — parsed for forward-compat, not used.
+type ServiceDep struct {
+	Type    string `yaml:"type"`
+	Version string `yaml:"version"`
+	Name    string `yaml:"name,omitempty"`
+}
+
+// serviceVersions is the allowlist of major versions per managed-service type
+// (SERVICE_PROVISIONING.md # Catalog (v1)). A manifest declaring a type/version
+// outside this set is rejected at parse time. Note: schema-valid is not the
+// same as provisioned — v1 only provisions postgres; a redis declaration parses
+// but install fails until Redis provisioning lands (NEXT.md).
+var serviceVersions = map[string]map[string]bool{
+	"postgres": {"15": true, "16": true},
+	"redis":    {"7": true},
+}
+
+// DefaultSecretBytes is the entropy drawn for a declared secret when `bytes` is
+// omitted: 32 raw bytes → 43 base64url chars, comfortably past the "32+ char"
+// floor most token-signing libraries (Better Auth, Rails secret_key_base) want.
+const DefaultSecretBytes = 32
+
+// MinSecretBytes is the floor on a declared secret's entropy. 16 bytes (128
+// bits) is the minimum we'll generate even if a manifest asks for less.
+const MinSecretBytes = 16
+
+// secretName matches lowercase snake_case so the uppercased form is a valid,
+// unambiguous environment-variable suffix: `auth`, `session_key` ok; `Auth`,
+// `2fa`, `a-b` rejected.
+var secretName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
 // folderTaxonomy is the fixed v1 use-case folder set (APP_ISOLATION.md # User
 // content). User-defined folders are deferred.
 var folderTaxonomy = map[string]bool{
@@ -285,7 +348,61 @@ func (m *Manifest) validate() error {
 	if err := m.validateHealthProbe(); err != nil {
 		return err
 	}
+	if err := m.validateSecrets(); err != nil {
+		return err
+	}
+	if err := m.validateServices(); err != nil {
+		return err
+	}
 	return ValidatePermissions(&m.Permissions)
+}
+
+// validateSecrets checks declared secret names and normalizes the byte length
+// in place (APP_MANIFEST.md # secrets). Names must be snake_case and unique; a
+// requested length below MinSecretBytes is raised to it, and an omitted length
+// defaults to DefaultSecretBytes. Absent ⇒ no-op.
+func (m *Manifest) validateSecrets() error {
+	seen := make(map[string]bool, len(m.Secrets))
+	for i := range m.Secrets {
+		s := &m.Secrets[i]
+		if !secretName.MatchString(s.Name) {
+			return fmt.Errorf("secrets: name %q must be snake_case (lowercase, starting with a letter)", s.Name)
+		}
+		if seen[s.Name] {
+			return fmt.Errorf("secrets: duplicate name %q", s.Name)
+		}
+		seen[s.Name] = true
+		if s.Bytes == 0 {
+			s.Bytes = DefaultSecretBytes
+		} else if s.Bytes < MinSecretBytes {
+			s.Bytes = MinSecretBytes
+		}
+	}
+	return nil
+}
+
+// validateServices checks each managed-service declaration (APP_MANIFEST.md #
+// D). The map key must be snake_case (it becomes the uppercased env-var suffix
+// `MOLMA_SERVICE_<KEY>_*`, so the same rule as a secret name); the type must be
+// a known managed kind and the version one this build runs for that kind. Absent
+// ⇒ no-op.
+func (m *Manifest) validateServices() error {
+	for key, dep := range m.Services {
+		if !secretName.MatchString(key) {
+			return fmt.Errorf("services: key %q must be snake_case (lowercase, starting with a letter)", key)
+		}
+		versions, ok := serviceVersions[dep.Type]
+		if !ok {
+			return fmt.Errorf("services[%s]: unknown type %q (allowed: postgres, redis)", key, dep.Type)
+		}
+		if dep.Version == "" {
+			return fmt.Errorf("services[%s]: version is required", key)
+		}
+		if !versions[dep.Version] {
+			return fmt.Errorf("services[%s]: unsupported %s version %q", key, dep.Type, dep.Version)
+		}
+	}
+	return nil
 }
 
 // validateHealthProbe checks the optional probe block and normalizes its

@@ -117,6 +117,44 @@ func (s *Store) migrate() error {
 			PRIMARY KEY (instance_id, service),
 			FOREIGN KEY (instance_id) REFERENCES instances(id) ON DELETE CASCADE
 		);
+		CREATE TABLE IF NOT EXISTS instance_secrets (
+			instance_id TEXT NOT NULL,
+			name        TEXT NOT NULL,
+			value       TEXT NOT NULL,
+			PRIMARY KEY (instance_id, name),
+			FOREIGN KEY (instance_id) REFERENCES instances(id) ON DELETE CASCADE
+		);
+		-- service_instances: one shared managed-service container per type+version
+		-- (SERVICE_PROVISIONING.md # Tier 1). The brain spins these up lazily and
+		-- owns the superuser credential it provisions per-app databases with. Not
+		-- an app instance: no slug, owner, route, or mDNS. superuser_password is
+		-- plaintext at rest (same trust model as instance_secrets; hardening
+		-- deferred, NEXT.md # App-secret injection hardening).
+		CREATE TABLE IF NOT EXISTS service_instances (
+			kind               TEXT    NOT NULL,
+			version            TEXT    NOT NULL,
+			superuser_password TEXT    NOT NULL,
+			state              TEXT    NOT NULL,
+			created_at         INTEGER NOT NULL,
+			PRIMARY KEY (kind, version)
+		);
+		-- service_grants: the per-app database+role the brain provisioned inside a
+		-- service_instance (SERVICE_PROVISIONING.md # Provisioning protocol). One
+		-- row per (app instance, logical service name); injected back as
+		-- MOLMA_SERVICE_<NAME>_*. Cascades with the app instance so uninstall
+		-- reclaims the bookkeeping (the DB/role drop is a separate docker-exec
+		-- step in lifecycle). password is plaintext at rest, as above.
+		CREATE TABLE IF NOT EXISTS service_grants (
+			instance_id  TEXT NOT NULL,
+			logical_name TEXT NOT NULL,
+			kind         TEXT NOT NULL,
+			version      TEXT NOT NULL,
+			db_name      TEXT NOT NULL,
+			role_name    TEXT NOT NULL,
+			password     TEXT NOT NULL,
+			PRIMARY KEY (instance_id, logical_name),
+			FOREIGN KEY (instance_id) REFERENCES instances(id) ON DELETE CASCADE
+		);
 		CREATE TABLE IF NOT EXISTS users (
 			id            TEXT PRIMARY KEY,
 			username      TEXT NOT NULL UNIQUE,
@@ -342,6 +380,182 @@ func (s *Store) GetInstanceImages(instanceID string) ([]InstanceImage, error) {
 			return nil, err
 		}
 		out = append(out, i)
+	}
+	return out, rows.Err()
+}
+
+// InstanceSecret is one generated per-app secret (SERVICE_PROVISIONING.md #
+// Env-var injection). Name is the manifest-declared snake_case key; Value is
+// the generated, encoded secret the brain re-emits as MOLMA_SECRET_<NAME>.
+type InstanceSecret struct {
+	Name  string
+	Value string
+}
+
+// SetInstanceSecrets persists an instance's generated secrets in one
+// transaction. Called once per install, after the rows are generated. The
+// values are written verbatim (plaintext at rest — the .env on disk holds the
+// same value; row-level encryption is deferred, NEXT.md # App-secret injection
+// hardening).
+func (s *Store) SetInstanceSecrets(instanceID string, secrets []InstanceSecret) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM instance_secrets WHERE instance_id=?`, instanceID); err != nil {
+		return err
+	}
+	for _, sec := range secrets {
+		if _, err := tx.Exec(
+			`INSERT INTO instance_secrets (instance_id, name, value) VALUES (?,?,?)`,
+			instanceID, sec.Name, sec.Value); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetInstanceSecrets returns an instance's generated secrets, ordered by name.
+func (s *Store) GetInstanceSecrets(instanceID string) ([]InstanceSecret, error) {
+	rows, err := s.db.Query(
+		`SELECT name, value FROM instance_secrets
+		 WHERE instance_id=? ORDER BY name`, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []InstanceSecret
+	for rows.Next() {
+		var sec InstanceSecret
+		if err := rows.Scan(&sec.Name, &sec.Value); err != nil {
+			return nil, err
+		}
+		out = append(out, sec)
+	}
+	return out, rows.Err()
+}
+
+// ServiceInstance is one shared managed-service container the brain runs
+// (SERVICE_PROVISIONING.md # Tier 1). Kind+Version identify it (e.g.
+// postgres/15); SuperuserPassword is the credential the brain provisions per-app
+// databases with via docker exec.
+type ServiceInstance struct {
+	Kind              string
+	Version           string
+	SuperuserPassword string
+	State             string // running
+	CreatedAt         time.Time
+}
+
+// GetServiceInstance returns the service instance of a given kind+version, or
+// ErrNotFound when none has been spun up yet (the lazy-spinup trigger).
+func (s *Store) GetServiceInstance(kind, version string) (ServiceInstance, error) {
+	var si ServiceInstance
+	var created int64
+	err := s.db.QueryRow(
+		`SELECT kind, version, superuser_password, state, created_at
+		 FROM service_instances WHERE kind=? AND version=?`, kind, version,
+	).Scan(&si.Kind, &si.Version, &si.SuperuserPassword, &si.State, &created)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ServiceInstance{}, ErrNotFound
+	}
+	if err != nil {
+		return ServiceInstance{}, fmt.Errorf("scan service_instance: %w", err)
+	}
+	si.CreatedAt = time.Unix(created, 0)
+	return si, nil
+}
+
+// CreateServiceInstance records a freshly spun-up service instance. Caller
+// generates the superuser password.
+func (s *Store) CreateServiceInstance(si ServiceInstance) error {
+	_, err := s.db.Exec(
+		`INSERT INTO service_instances (kind, version, superuser_password, state, created_at)
+		 VALUES (?,?,?,?,?)`,
+		si.Kind, si.Version, si.SuperuserPassword, si.State, si.CreatedAt.Unix())
+	if err != nil && isUniqueErr(err) {
+		return ErrConflict
+	}
+	return err
+}
+
+// ListServiceInstances returns every recorded service instance, used by the
+// startup reconcile pass to re-assert each is running.
+func (s *Store) ListServiceInstances() ([]ServiceInstance, error) {
+	rows, err := s.db.Query(
+		`SELECT kind, version, superuser_password, state, created_at
+		 FROM service_instances ORDER BY kind, version`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ServiceInstance
+	for rows.Next() {
+		var si ServiceInstance
+		var created int64
+		if err := rows.Scan(&si.Kind, &si.Version, &si.SuperuserPassword, &si.State, &created); err != nil {
+			return nil, err
+		}
+		si.CreatedAt = time.Unix(created, 0)
+		out = append(out, si)
+	}
+	return out, rows.Err()
+}
+
+// ServiceGrant is one per-app database+role provisioned inside a service
+// instance (SERVICE_PROVISIONING.md # Per-app isolation). LogicalName is the
+// manifest's `services:` map key; the brain re-emits the credentials as
+// MOLMA_SERVICE_<LogicalName>_*.
+type ServiceGrant struct {
+	LogicalName string
+	Kind        string
+	Version     string
+	DBName      string
+	RoleName    string
+	Password    string
+}
+
+// SetServiceGrants replaces an instance's service grants in one transaction.
+// Called once per install after the databases+roles are provisioned. Mirrors
+// SetInstanceSecrets.
+func (s *Store) SetServiceGrants(instanceID string, grants []ServiceGrant) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM service_grants WHERE instance_id=?`, instanceID); err != nil {
+		return err
+	}
+	for _, g := range grants {
+		if _, err := tx.Exec(
+			`INSERT INTO service_grants
+			 (instance_id, logical_name, kind, version, db_name, role_name, password)
+			 VALUES (?,?,?,?,?,?,?)`,
+			instanceID, g.LogicalName, g.Kind, g.Version, g.DBName, g.RoleName, g.Password); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetServiceGrants returns an instance's service grants, ordered by logical name.
+func (s *Store) GetServiceGrants(instanceID string) ([]ServiceGrant, error) {
+	rows, err := s.db.Query(
+		`SELECT logical_name, kind, version, db_name, role_name, password
+		 FROM service_grants WHERE instance_id=? ORDER BY logical_name`, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ServiceGrant
+	for rows.Next() {
+		var g ServiceGrant
+		if err := rows.Scan(&g.LogicalName, &g.Kind, &g.Version, &g.DBName, &g.RoleName, &g.Password); err != nil {
+			return nil, err
+		}
+		out = append(out, g)
 	}
 	return out, rows.Err()
 }

@@ -9,13 +9,13 @@ services:
     image: ghcr.io/kanbn/kan:0.5.6
     environment:
       POSTGRES_URL: ${MOLMA_SERVICE_DATABASE_DSN}
-      # Required: a 32+ char random string used to sign auth tokens.
-      # molma v1 has no secrets-generation injection; set BETTER_AUTH_SECRET
-      # in the instance env before first start.
-      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
-      # Required for auth redirects to resolve correctly. Set to the app's
-      # molma URL (e.g. http://kan.molma.local) before first start.
-      NEXT_PUBLIC_BASE_URL: ${NEXT_PUBLIC_BASE_URL:-}
+      # A 32+ char random string used to sign auth tokens. Generated per-instance
+      # by the brain (manifest `secrets: [{name: auth}]`) and injected as
+      # MOLMA_SECRET_AUTH; stable across restarts so sessions survive.
+      BETTER_AUTH_SECRET: ${MOLMA_SECRET_AUTH}
+      # The app's own public URL, used for auth redirects. The brain injects the
+      # instance's routed URL as MOLMA_APP_URL (e.g. http://kan.local).
+      NEXT_PUBLIC_BASE_URL: ${MOLMA_APP_URL}
       # Required for cookie-based credential login on self-hosted installs.
       NEXT_PUBLIC_ALLOW_CREDENTIALS: "true"
       # Optional: Redis DSN for rate limiting (in-memory fallback if unset).

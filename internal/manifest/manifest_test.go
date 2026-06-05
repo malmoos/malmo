@@ -28,6 +28,116 @@ main_port: 80
 	}
 }
 
+func TestParseSecretsNormalizesBytes(t *testing.T) {
+	src := []byte(`
+id: kan
+manifest_version: 1
+name: Kan
+version: "1.0"
+compose_file: compose.yml
+main_service: web
+main_port: 3000
+secrets:
+  - name: auth
+  - name: weak_key
+    bytes: 4
+  - name: big
+    bytes: 64
+`)
+	m, err := Parse(src)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	want := map[string]int{"auth": DefaultSecretBytes, "weak_key": MinSecretBytes, "big": 64}
+	for _, s := range m.Secrets {
+		if want[s.Name] != s.Bytes {
+			t.Errorf("secret %q: bytes = %d, want %d", s.Name, s.Bytes, want[s.Name])
+		}
+	}
+}
+
+func TestParseRejectsBadSecrets(t *testing.T) {
+	cases := map[string]string{
+		"bad name":      "- name: Auth",
+		"dup names":     "- name: auth\n  - name: auth",
+		"leading digit": "- name: 2fa",
+		"hyphen":        "- name: auth-key",
+	}
+	for label, block := range cases {
+		src := []byte(`
+id: kan
+manifest_version: 1
+name: Kan
+version: "1.0"
+compose_file: compose.yml
+main_service: web
+main_port: 3000
+secrets:
+  ` + block + `
+`)
+		if _, err := Parse(src); err == nil {
+			t.Errorf("%s: Parse accepted invalid secrets, want error", label)
+		}
+	}
+}
+
+func TestParseServicesHappy(t *testing.T) {
+	src := []byte(`
+id: kan
+manifest_version: 1
+name: Kan
+version: "1.0"
+compose_file: compose.yml
+main_service: web
+main_port: 3000
+services:
+  database:
+    type: postgres
+    version: "15"
+  cache:
+    type: redis
+    version: "7"
+    name: kan_cache
+`)
+	m, err := Parse(src)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := m.Services["database"]; got.Type != "postgres" || got.Version != "15" {
+		t.Errorf("database = %+v", got)
+	}
+	// Redis parses (schema-valid) even though v1 doesn't provision it yet.
+	if got := m.Services["cache"]; got.Type != "redis" || got.Version != "7" {
+		t.Errorf("cache = %+v", got)
+	}
+}
+
+func TestParseRejectsBadServices(t *testing.T) {
+	cases := map[string]string{
+		"unknown type":    "database:\n    type: mysql\n    version: \"8\"",
+		"bad pg version":  "database:\n    type: postgres\n    version: \"13\"",
+		"bad redis ver":   "cache:\n    type: redis\n    version: \"6\"",
+		"missing version": "database:\n    type: postgres",
+		"bad key":         "My_DB:\n    type: postgres\n    version: \"15\"",
+	}
+	for label, block := range cases {
+		src := []byte(`
+id: kan
+manifest_version: 1
+name: Kan
+version: "1.0"
+compose_file: compose.yml
+main_service: web
+main_port: 3000
+services:
+  ` + block + `
+`)
+		if _, err := Parse(src); err == nil {
+			t.Errorf("%s: Parse accepted invalid services, want error", label)
+		}
+	}
+}
+
 func TestParseRejectsNonKebabSlugs(t *testing.T) {
 	// Each slug must stay parseable in the `<slug>--<user>` scheme
 	// (DASHBOARD.md # instance naming).
