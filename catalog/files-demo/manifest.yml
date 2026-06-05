@@ -29,4 +29,4 @@ images:
   traefik/whoami:v1.10.3:
     digest: sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c
     download_bytes: 2850040
-    disk_bytes: 2853860
+    disk_bytes: 6581646

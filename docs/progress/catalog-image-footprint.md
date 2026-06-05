@@ -24,7 +24,7 @@ Closes issue #69 (part of #68, "on-disk footprint before install"). The catalog 
 ### Install-time consumer + samples
 
 - `internal/lifecycle/pinning.go` — the catalog-digest verification reads `man.Images[img].Digest` (was the bare string). Behaviour identical; the mismatch error still names the promised vs. served digest.
-- `catalog/{whoami,files-demo,hermes-agent}/manifest.yml` — migrated to the object form by running the new subcommand. Real resolved sizes: whoami/files-demo (`traefik/whoami:v1.10.3`) 2.85 MB download / 2.85 MB disk; hermes-agent 1.13 GB / 1.13 GB. The resolved index digests match the values that were hand-curated, confirming the resolver agrees with the prior pins.
+- `catalog/{whoami,files-demo,hermes-agent}/manifest.yml` — migrated to the object form by running the new subcommand. Real resolved sizes: whoami/files-demo (`traefik/whoami:v1.10.3`) 2.85 MB download / 6.58 MB disk; hermes-agent 1.13 GB download / 3.20 GB disk. Download is the compressed registry total; disk is the larger uncompressed `docker image inspect .Size`, the two diverging by the layers' compression ratio. The resolved index digests match the values that were hand-curated, confirming the resolver agrees with the prior pins.
 
 ## How it maps to the specs
 
