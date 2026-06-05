@@ -219,6 +219,36 @@ func (f *FakeDiskReporter) DataDisk() (int64, int64) {
 	return f.free, f.total
 }
 
+// FakeRebootReporter implements RebootReporter with a settable findings list,
+// used by brain integration tests that need to seed a reboot-required finding
+// and assert the brain raises the matching system-category issue.
+// cmd/host-agent (the fake binary) does not wire one by default — dev has no
+// /var/run/reboot-required flag to stat.
+type FakeRebootReporter struct {
+	mu       sync.Mutex
+	findings []protocol.Finding
+}
+
+// NewFakeRebootReporter returns an empty reporter (no reboot pending).
+func NewFakeRebootReporter() *FakeRebootReporter {
+	return &FakeRebootReporter{}
+}
+
+// Set replaces the current findings list. Pass nil to clear (no reboot pending).
+func (f *FakeRebootReporter) Set(findings []protocol.Finding) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.findings = append(f.findings[:0:0], findings...)
+}
+
+func (f *FakeRebootReporter) Read() []protocol.Finding {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]protocol.Finding, len(f.findings))
+	copy(out, f.findings)
+	return out
+}
+
 // FakeLogSource implements LogSource with a synthetic line generator: it emits
 // one plausible stdout line per tick (default ~1s), tagged with the container
 // name, until the follow context is cancelled. cmd/host-agent (the fake binary)
