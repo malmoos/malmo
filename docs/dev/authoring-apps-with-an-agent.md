@@ -6,21 +6,22 @@ A reusable agent prompt that turns an upstream `docker-compose.yml` (or a GitHub
 
 1. Open a fresh agent session **inside the molma repo** (the prompt reads on-disk sources — it does not rely on its own text being correct).
 2. Paste the prompt block below, then append the **inputs**: the app name, a pasted compose **or** a GitHub repo URL, and optionally a docs URL.
-3. Let it work, then **read its report and re-run the two validators yourself** before committing. The agent's job ends at a passing `manifest lint` plus a clean admission re-check; the PR (`Closes #<N>`, progress entry if it's a slice) is yours.
+3. Let it work, then **read its report and re-run `manifest check` yourself** before committing. The agent's job ends at a passing `manifest check` (schema + admission in one); the PR (`Closes #<N>`, progress entry if it's a slice) is yours.
 
 One app per run. For a batch, run it once per app and review each `catalog/<id>/` pair on its own.
 
-## What the validators actually cover (read before trusting "it passed")
+## What the validator actually covers (read before trusting "it passed")
 
-Two **separate** checks, and the agent must satisfy both — they do not overlap:
+**`go run ./cmd/molma manifest check <path>`** runs both checks in one pass — schema lint AND the compose admission policy — so a single green `check` is the bar:
 
-- **`go run ./cmd/molma manifest lint <path>`** — schema only. Required fields, `manifest_version == 1`, kebab-case slugs, the `permissions` block (folder names / `mode` / `scope` / `default` / `target`), `health_probe` shape, that `compose_file` resolves + parses, and that `main_service` is one of the compose's services. That's the whole list (`cmd/molma/main.go`, `internal/manifest/manifest.go`).
-- **Admission** (`internal/admission/admission.go`) — the structural compose rejections (ports, named volumes, absolute binds, `privileged`, `cap_add`, `build:`, `extends:`, host namespaces). **`manifest lint` does NOT run admission.** There is no admission CLI yet, so the agent re-checks it by hand: `docker compose -f catalog/<id>/compose.yml config -q` for syntax, then eyeballing the compose against the rules in `admission.go`.
+- **Schema** (`internal/manifest/manifest.go`): required fields, `manifest_version == 1`, kebab-case slugs, the `permissions` block (folder names / `mode` / `scope` / `default` / `target`), `health_probe` shape, that `compose_file` resolves + parses, and that `main_service` is one of the compose's services.
+- **Admission** (`internal/admission/admission.go`): syntax via `docker compose config -q`, then the structural compose rejections (ports, named volumes, absolute binds, `privileged`, `cap_add`, `build:`, `extends:`, host namespaces). The agent no longer hand-eyeballs these or reads `admission.go` — `check` enforces them and names the offending service + field.
 
-Two consequences worth internalizing:
+(`manifest lint` still exists for the catalog CI schema-only step, but authors should run `check` — `lint` does NOT run admission.)
 
-- **Unknown manifest fields are silently accepted.** `manifest.Parse` uses non-strict YAML, so `storage:` (except `estimated_size`, now read into the app footprint), `services:`, `resources:`, `categories:`, `author:`, `license:` are not in the Go struct yet and are ignored by lint — they neither fail nor get validated. Write them anyway: the manifest is the durable, author-grade artifact and `APP_MANIFEST.md` is the source of truth. Following the full spec schema is forward-compatible; skipping it loses information the catalog will eventually consume.
-- **A green `manifest lint` is necessary, not sufficient.** It can pass on a compose that admission would reject. Always run the admission re-check too.
+One consequence worth internalizing:
+
+- **Unknown manifest fields are silently accepted.** `manifest.Parse` uses non-strict YAML, so `storage:` (except `estimated_size`, now read into the app footprint), `services:`, `resources:`, `categories:`, `author:`, `license:` are not in the Go struct yet and are ignored by `check` — they neither fail nor get validated. Write them anyway: the manifest is the durable, author-grade artifact and `APP_MANIFEST.md` is the source of truth. Following the full spec schema is forward-compatible; skipping it loses information the catalog will eventually consume. A green `check` therefore proves the fields it knows, not the storage/services blocks — those you still verify against the spec by eye.
 
 The on-disk examples (`catalog/whoami/`, `catalog/files-demo/`) are intentionally minimal skeletons. For the full author-grade schema (storage split, managed services, resources, description), the worked reference is the **"Complete sample manifest"** (PhotoPrism) in `APP_MANIFEST.md`.
 
@@ -31,9 +32,8 @@ Adapt an upstream app into a molma Door-1 catalog app (molma = home-server OS, U
 
 You run inside the molma repo. Read these on-disk sources; don't rely on this prompt alone — if it disagrees with the code, the code wins:
 - `docs/specs/APP_MANIFEST.md` — manifest schema (fields, injection conventions, folder model). The "Complete sample manifest" section is the full author-grade shape.
-- `internal/admission/admission.go` — the compose rejection rules; ground truth for what installs.
-- `internal/manifest/manifest.go` — the schema validator your manifest.yml must pass (note: non-strict — it ignores fields it doesn't know, so a clean lint does NOT prove the storage/services blocks are right; it only proves the fields it knows are right).
 - `catalog/whoami/`, `catalog/files-demo/` — worked examples of the target output (minimal skeletons; the full schema lives in the spec).
+Do NOT pre-read `internal/admission/admission.go` or `internal/manifest/manifest.go` to learn the rules — `go run ./cmd/molma manifest check` enforces both the schema and the admission policy and names the exact field at fault. Draft, then run `check` and iterate on its messages (note: `check` is non-strict on unknown manifest fields — a green run does NOT prove the storage/services blocks are right, only the fields it knows). Consult `manifest.go` only if a `check` message is unclear.
 
 INPUTS (appended below): app name; a pasted compose OR a GitHub repo URL; optionally a docs URL.
 
@@ -62,7 +62,7 @@ STEPS
 
 2. IDENTITY & RUNTIME. Set `id`, `name`, `version` (the app's real version — never `custom`, which is the Door-2 marker), `main_service` (the service that is "the app"), `main_port` (its *internal* listen port, NOT a host-side mapping), `preferred_slugs`. Write `description.short`: a single punchy sentence that captures what the app *does for the user* — written fresh, not lifted from the README. Optionally write `description.long`: a short markdown paragraph (3–5 sentences) that expands on the value proposition — what problems it solves, what makes it worth running. Read the README for facts, but write both fields in your own words; do not copy README prose, badges, install steps, or Docker-specific context. Do NOT add a `multi_user` field — household-vs-personal is the installer's runtime choice, not a manifest property (APP_MANIFEST.md # G).
 
-3. REWRITE THE COMPOSE TO PASS ADMISSION (verify each against `admission.go`):
+3. REWRITE THE COMPOSE TO PASS ADMISSION (verify the result with `manifest check`, step 10):
    - Drop every `ports:` mapping. From a mapping like `8080:80`, mine the container side (`80`) for `main_port`.
    - Convert named volumes to relative binds under `./data/` (e.g. `db_data:/var/lib/postgresql/data` -> `./data/db:/var/lib/postgresql/data`).
    - Drop absolute host bind paths. If one was *user content* (a media library), don't bind it — grant it via `permissions.folders` (step 5) and point the app at `${MOLMA_FOLDER_<NAME>}`.
@@ -85,9 +85,9 @@ STEPS
 
 9. WRITE `catalog/<id>/manifest.yml`, `catalog/<id>/compose.yml` (`compose_file: compose.yml`), `catalog/<id>/icon.<ext>` (from step 1), and `catalog/<id>/screenshots/NN.<ext>` (from step 1, if any were downloaded).
 
-10. VALIDATE & ITERATE until BOTH pass — they are separate checks and lint does not cover admission:
-   (a) `go run ./cmd/molma manifest lint catalog/<id>/manifest.yml` — schema, slugs, permissions, health_probe shape, compose-exists/parses, `main_service` present. Ground truth for the schema; iterate on its messages. Remember it is non-strict, so it will NOT flag a malformed `storage:`/`services:` block — those you verify against the spec by eye.
-   (b) Admission + runtime (lint does NOT cover these; there is no admission CLI): run `docker compose -f catalog/<id>/compose.yml config -q`, then re-confirm against `admission.go` that none of step 3's rejections slipped in, that `main_port` is the internal port, that every `${MOLMA_SERVICE_*}` has a matching declared-and-used `services:` entry, and that every folder the app touches has a `permissions.folders` entry.
+10. VALIDATE & ITERATE:
+   (a) `go run ./cmd/molma manifest check catalog/<id>/manifest.yml` — runs the schema lint AND the compose admission policy in one pass (slugs, permissions, health_probe shape, compose-exists/parses, `main_service` present, and the structural rejections: ports, named volumes, absolute binds, privileged, cap_add, build, extends, host namespaces). Iterate until it passes. It is non-strict on unknown fields, so it will NOT flag a malformed `storage:`/`services:` block — those you verify against the spec by eye.
+   (b) Semantic checks `check` can't make — confirm by hand: that `main_port` is the internal listen port (not a host mapping), that every `${MOLMA_SERVICE_*}` has a matching declared-and-used `services:` entry, and that every folder the app touches has a `permissions.folders` entry.
 
 11. REPORT: what you changed and why; env vars rewired; permissions + reasoning; data-vs-cache split; digest status; health-probe choice; whether it's files-first-class or app_managed_user_content; icon found or skipped; screenshot count or skipped; anything that needed judgment or blocks Door-1 (e.g. needs a capability -> Tier 2). If you bailed under ADAPT, DON'T FORCE, this report (naming the blocker, the forbidding rule, and the tier verdict) IS the deliverable — there are no files.
 
@@ -98,11 +98,11 @@ REFERENCE (verify against the on-disk sources — these are reminders, not the s
 - Slug rule: `^[a-z0-9]+(-[a-z0-9]+)*$` — single internal hyphens, no leading/trailing hyphen, no `--` run (which also rules out the reserved `xn--` prefix).
 - `version: custom` is the Door-2 marker — never use it for a catalog app.
 
-DO NOT: honor `ports:`; use named volumes; emit absolute host binds; set `version: custom`; add Linux capabilities; emit the MALMO_ prefix; add a `multi_user` field; set a Door-2 folder `target:`; auto-rewrite beyond the documented adaptations; fabricate digests; trust a green lint as proof admission passes; force an app through by stripping or faking something it genuinely needs — bail and explain instead (see ADAPT, DON'T FORCE).
+DO NOT: honor `ports:`; use named volumes; emit absolute host binds; set `version: custom`; add Linux capabilities; emit the MALMO_ prefix; add a `multi_user` field; set a Door-2 folder `target:`; auto-rewrite beyond the documented adaptations; fabricate digests; treat a green `check` as proof the storage/services blocks are right (it's non-strict on those — verify by eye); force an app through by stripping or faking something it genuinely needs — bail and explain instead (see ADAPT, DON'T FORCE).
 ```
 
 ## After the run
 
 - Eyeball both files against `catalog/files-demo/` (the closest worked example that exercises a folder grant) and the PhotoPrism sample in `APP_MANIFEST.md`.
-- Re-run both validators yourself — don't take the agent's word.
+- Re-run `manifest check` yourself — don't take the agent's word. (Then `manifest resolve` to fill digests, if it didn't error out.)
 - One PR per app (or a small, clearly-scoped batch), each `Closes #<N>` per the [contributing guide](contributing.md). Catalog additions are not implementation slices, so they don't need a `docs/progress/` entry — but if an app surfaces a spec gap or a new admission edge case, fix the spec in the same PR.

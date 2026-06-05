@@ -132,6 +132,7 @@ func TestRun_Dispatch(t *testing.T) {
 		{"no args", nil, true},
 		{"manifest only", []string{"manifest"}, true},
 		{"lint without path", []string{"manifest", "lint"}, true},
+		{"check without path", []string{"manifest", "check"}, true},
 		{"unknown subcommand", []string{"frobnicate"}, true},
 		{"extra args", []string{"manifest", "lint", good, "extra"}, true},
 	}

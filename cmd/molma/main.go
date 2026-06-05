@@ -1,12 +1,17 @@
-// Command molma is the app-author's inner-loop CLI. v1 ships two `manifest`
+// Command molma is the app-author's inner-loop CLI. v1 ships three `manifest`
 // subcommands, runnable on a dev box with no brain:
 //
 //   - `lint` validates a manifest.yml against the schema (APP_MANIFEST.md) and
 //     sanity-checks its sibling compose — the catalog CI schema-lint step
-//     (APP_STORE.md # CI on the repo).
+//     (APP_STORE.md # CI on the repo). Schema only; does NOT run admission.
+//   - `check` runs `lint` AND the compose admission policy (admission.Check,
+//     APP_LIFECYCLE.md) in one pass — the "would this actually install?" gate.
+//     A single green `check` proves both the schema and the structural compose
+//     rules, so authors never hand-eyeball the admission rules.
 //   - `resolve` fills the manifest's `images` block with registry-resolved
 //     digests and download/disk sizes (APP_STORE.md # Catalog schema), driving
 //     the local Docker daemon — the catalog CI digest/size-resolution step.
+//     Unlike lint/check, this MUTATES the manifest in place.
 //
 // Other dev subcommands (`install --local`, …) are deferred (NEXT.md #
 // Developer / app-author surface).
@@ -25,10 +30,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/molmaos/molma/internal/admission"
 	"github.com/molmaos/molma/internal/manifest"
 )
 
-const usage = "usage:\n  molma manifest lint    <path/to/manifest.yml>\n  molma manifest resolve <path/to/manifest.yml>"
+const usage = "usage:\n  molma manifest lint    <path/to/manifest.yml>\n  molma manifest check   <path/to/manifest.yml>\n  molma manifest resolve <path/to/manifest.yml>"
 
 // errUsage signals a malformed invocation (wrong/missing subcommand or args),
 // as opposed to a lint failure. It maps to exit 2 (Unix convention for usage
@@ -59,6 +65,12 @@ func run(args []string) error {
 				return err
 			}
 			fmt.Printf("%s: ok\n", path)
+			return nil
+		case "check":
+			if err := check(context.Background(), admission.Check, path); err != nil {
+				return err
+			}
+			fmt.Printf("%s: ok (schema + admission)\n", path)
 			return nil
 		case "resolve":
 			if err := resolve(context.Background(), dockerSizer{}, path); err != nil {
