@@ -164,7 +164,7 @@ const (
 	HealthCategoryDrives    HealthCategory = "drives"    // SMART / per-device health (reserved)
 	HealthCategoryServices  HealthCategory = "services"  // systemctl is-active (service-down)
 	HealthCategoryResources HealthCategory = "resources" // memory / CPU pressure (reserved)
-	HealthCategoryTime      HealthCategory = "time"      // clock sync (reserved)
+	HealthCategoryTime      HealthCategory = "time"      // chronyc tracking (clock-not-synced)
 )
 
 // SystemHealth is GET /v1/health/system — the single locus-B findings report

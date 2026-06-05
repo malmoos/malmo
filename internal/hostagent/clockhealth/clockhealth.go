@@ -86,11 +86,13 @@ func (r *Reporter) Read() []protocol.Finding {
 
 	t := parseTracking(out)
 	if !t.ok {
-		// Unparseable output should never happen for real chronyc; fail open
-		// (treat as healthy) but advance the timer so a bad parse doesn't hot-loop
-		// chronyc on every poll.
+		// Unparseable output should never happen for real chronyc (chrony answered,
+		// but in a shape we don't understand — almost certainly a format change).
+		// Hold the prior sample rather than asserting "healthy": discarding to nil
+		// is the only path that would silently clear an active clock-not-synced on
+		// one bad sample. Still advance the timer so a persistent bad parse backs
+		// off to the 5-min cadence instead of hot-looping chronyc every poll.
 		slog.Error("clockhealth: could not parse chronyc tracking output")
-		r.cached = nil
 	} else {
 		r.cached = evaluate(t, now)
 	}
@@ -119,22 +121,43 @@ func evaluate(t tracking, now time.Time) []protocol.Finding {
 	}}
 }
 
-// raiseReason builds a short advisory detail for the banner body.
+// raiseReason builds a short, plain-English advisory detail for the banner body
+// (reaches the dashboard via GET /api/v1/health, so no Go-duration formatting).
 func raiseReason(age, offset time.Duration, refTime time.Time) string {
 	var parts []string
 	switch {
 	case refTime.Year() < 2000:
 		parts = append(parts, "clock has never synced")
 	case age > maxSyncAge:
-		parts = append(parts, "last synced "+age.Round(time.Minute).String()+" ago")
+		parts = append(parts, "last synced "+humanizeHoursAgo(age))
 	}
 	if offset > maxOffset {
-		parts = append(parts, "offset "+offset.Round(time.Second).String())
+		parts = append(parts, "off by about "+humanizeSeconds(offset))
 	}
 	if len(parts) == 0 {
 		return "clock not synced"
 	}
 	return strings.Join(parts, "; ")
+}
+
+// humanizeHoursAgo renders an over-threshold sync age as plain English. The age
+// only reaches here above the 6h threshold, so hours is the only unit needed.
+func humanizeHoursAgo(age time.Duration) string {
+	h := int(age.Round(time.Hour) / time.Hour)
+	if h <= 1 {
+		return "over an hour ago"
+	}
+	return fmt.Sprintf("about %d hours ago", h)
+}
+
+// humanizeSeconds renders an offset (always over the 10s threshold here) in whole
+// seconds, e.g. "12 seconds".
+func humanizeSeconds(offset time.Duration) string {
+	s := int(offset.Round(time.Second) / time.Second)
+	if s == 1 {
+		return "1 second"
+	}
+	return fmt.Sprintf("%d seconds", s)
 }
 
 // parseTracking extracts the Ref time and Last offset from `chronyc tracking`

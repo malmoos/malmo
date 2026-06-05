@@ -70,6 +70,31 @@ func TestParseTracking_RealUnsynced(t *testing.T) {
 	}
 }
 
+// TestRaiseReason_PlainEnglish locks the banner detail to plain English — it
+// reaches the dashboard via GET /api/v1/health, so no Go-duration "7h0m0s".
+func TestRaiseReason_PlainEnglish(t *testing.T) {
+	epoch := time.Date(1970, time.January, 1, 0, 0, 0, 0, time.UTC)
+	recent := time.Date(2026, time.June, 5, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name        string
+		age, offset time.Duration
+		refTime     time.Time
+		want        string
+	}{
+		{"never synced", 56 * time.Hour, 0, epoch, "clock has never synced"},
+		{"stale sync", 7 * time.Hour, 0, recent, "last synced about 7 hours ago"},
+		{"large offset", time.Minute, 12 * time.Second, recent, "off by about 12 seconds"},
+		{"both", 7 * time.Hour, 13 * time.Second, recent, "last synced about 7 hours ago; off by about 13 seconds"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := raiseReason(c.age, c.offset, c.refTime); got != c.want {
+				t.Errorf("raiseReason: got %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 func TestParseTracking_Garbage(t *testing.T) {
 	if got := parseTracking("not chrony output at all\n"); got.ok {
 		t.Errorf("want ok=false for unparseable output, got %+v", got)
@@ -186,6 +211,39 @@ func TestRead_FailOpenOnExecError(t *testing.T) {
 	r := reporterAt(now, "", errors.New("chronyc: command not found"))
 	if got := r.Read(); got != nil {
 		t.Errorf("exec error must fail open (nil findings), got %v", got)
+	}
+}
+
+// TestRead_ParseErrorHoldsPriorSample verifies an unparseable sample never
+// clears an active finding (it holds the prior one) but still advances the timer
+// so it backs off to the 5-min cadence rather than hot-looping chronyc.
+func TestRead_ParseErrorHoldsPriorSample(t *testing.T) {
+	cur := time.Date(2026, time.June, 5, 12, 40, 0, 0, time.UTC)
+	out := trackingOutput(cur.Add(-7*time.Hour), 0) // first sample: stale → finding
+	calls := 0
+	r := &Reporter{
+		now:         func() time.Time { return cur },
+		runTracking: func() (string, error) { calls++; return out, nil },
+		interval:    sampleInterval,
+	}
+	if got := r.Read(); len(got) != 1 {
+		t.Fatalf("first sample: want a finding, got %v", got)
+	}
+	cur = cur.Add(6 * time.Minute)        // past the interval → re-query
+	out = "garbage that does not parse\n" // chrony answered but unparseable
+	if got := r.Read(); len(got) != 1 || got[0].ID != "clock-not-synced" {
+		t.Fatalf("parse error must hold the prior finding, got %v", got)
+	}
+	if calls != 2 {
+		t.Errorf("want chronyc re-queried after the interval, got %d calls", calls)
+	}
+	// Timer advanced: a third Read inside the new window must not re-exec.
+	cur = cur.Add(1 * time.Minute)
+	if got := r.Read(); len(got) != 1 {
+		t.Fatalf("cached read after parse error: want held finding, got %v", got)
+	}
+	if calls != 2 {
+		t.Errorf("parse error must advance the timer (no hot-loop), got %d calls", calls)
 	}
 }
 
