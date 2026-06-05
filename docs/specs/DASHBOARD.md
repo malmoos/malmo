@@ -190,7 +190,7 @@ A floating bottom dock with exactly four destinations:
 | **Store** | Browse/install apps. Install respects the authorization table above. |
 | **Settings** | Box + account settings, and the **home for gated routes**. |
 
-**Activity (audit log) and Users live *under Settings* as role-gated routes**, not as top-level dock items — they're admin-surface, not daily-use. Role gating per `AUTH.md`: members see their own account settings and the app-relevant slices; admins see Users, Activity, and the system/storage/network panels.
+**Activity (audit log) and Users live *under Settings* as gated routes**, not as top-level dock items — administrative surface, not daily-use. Role gating per `AUTH.md`: **Users is admin-only.** **Activity is open to every signed-in user but scoped server-side** — a member sees only events where they are the actor or target, an admin sees the full box-wide feed (`LOGGING.md` # Visibility rules; the brain enforces the split, the UI renders whatever it returns). Admins additionally see the system/storage/network panels. (Activity's all-user visibility was settled by issue #11 and `LOGGING.md`; this supersedes an earlier "admin-surface" framing — see `DECISIONS.md` 2026-06-05.)
 
 **Search** is deferred. At v1 app counts the grid is scannable; search earns its place when a household's app + file corpus outgrows the eye. Reserved, not built.
 

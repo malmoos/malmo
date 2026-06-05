@@ -21,6 +21,18 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-05 — Activity (audit log) is a member-reachable view, not admin-only surface
+
+**Previously:** `DASHBOARD.md` # global navigation and `SETTINGS.md` framed Activity as admin-surface — it nested under the admin-only **System** panel, and `SETTINGS.md` # role gating stated "a member's Settings is **My account** and nothing else."
+
+**Now:** Activity is a Settings route **open to every signed-in user**, scoped server-side: a member sees only events where they are the actor (or target), an admin sees the full box-wide feed. The dashboard link is not admin-gated.
+
+**Why:** `LOGGING.md` # Visibility rules (the authoritative spec for audit visibility) always said "members see only events where they are the actor or the target," and the shipped backend (`GET /api/v1/audit`, `internal/api/auth.go#listAudit`) already returns `200` to members with their own rows — it never 403s them. The IA docs simply lagged that. Issue #11 (accepted) made the call explicit ("not admin-gated, members see their own events"). "Did someone access *my* account?" is a member-facing security question, so a member needing an admin to answer it would be the wrong posture. This reconciles the IA docs with LOGGING.md and the implementation; it narrows nothing a member couldn't already query.
+
+**Affected docs:** `DASHBOARD.md` # global navigation, `SETTINGS.md` # panel inventory / role gating. Realized by `docs/progress/activity-view.md`.
+
+---
+
 ## 2026-06-03 — Surface an app's on-disk footprint before install (image + app-state, user content excluded)
 
 **Previously:** the only size signal was `storage.estimated_size` (app state, for small-disk warnings) — never shown to the user. `NEXT.md` parked a narrow `storage.image_size` field for the download alone.

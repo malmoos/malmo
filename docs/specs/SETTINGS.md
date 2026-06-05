@@ -40,13 +40,13 @@ Every panel below is already implied by an existing spec. The **owning doc** col
 | | Remote access | Tailscale / Headscale UI at `/settings/tailscale` | `SERVICE_PROVISIONING.md`, `MOLMA_NETWORK.md` | admin |
 | | Updates | Aggregate app + OS view, check-for-updates, rollback | `UPDATES.md` | admin |
 | | Privacy | Telemetry on/off (single toggle, both streams), last-transmission timestamp | `TELEMETRY.md` # Settings UI | admin |
-| | System | Logs viewer + access-log toggle, download diagnostics, time/region/NTP, system health, restart/shutdown, About, factory-reset; **Activity** (audit log) nests here | `LOGGING.md`, `TIME.md`, `HEALTH.md`, `AUTH.md` | admin |
+| | System | Logs viewer + access-log toggle, download diagnostics, time/region/NTP, system health, restart/shutdown, About, factory-reset. (The **Activity**/audit-log view is reachable from here for admins but is a sibling all-users route — see role gating below.) | `LOGGING.md`, `TIME.md`, `HEALTH.md`, `AUTH.md` | admin |
 
 ---
 
 ## Locked: role gating
 
-A member's Settings is **My account** and nothing else. An admin's Settings is **My account** plus the full **Box settings** tree. This is enforced exactly as `AUTH.md` # Roles specifies: role is checked **server-side in the brain** on every request (`/api/admin/*` requires admin), and the UI hiding box panels from members is defense in depth, not the boundary. A member who hand-crafts a request to an admin panel gets a 403 from the brain regardless of what the UI rendered.
+A member's Settings is **My account** plus the **Activity** view — their own audit events, scoped server-side (`LOGGING.md` # Visibility rules) — and nothing else. An admin's Settings is **My account**, the **Activity** view (the full box-wide feed), plus the full **Box settings** tree. This is enforced exactly as `AUTH.md` # Roles specifies: role is checked **server-side in the brain** on every request (`/api/admin/*` requires admin; `GET /api/v1/audit` is open to all but row-filtered by role), and the UI hiding box panels from members is defense in depth, not the boundary. A member who hand-crafts a request to an admin panel gets a 403 from the brain regardless of what the UI rendered. (Activity being member-reachable was settled by issue #11 — see `DECISIONS.md` 2026-06-05.)
 
 Two consequences of the calm posture worth stating:
 
