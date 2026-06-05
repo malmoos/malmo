@@ -357,7 +357,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Backup verification / restore-test cadence — untested backups aren't backups. `STORAGE.md`.
 
 **Developer / app-author surface**
-- Local dev/test subcommands beyond lint (`molma install --local`, etc.) — let authors run a manifest on their own box before a catalog PR. `molma manifest lint` (schema + sibling-compose validation) shipped in issue #7 and owns the `cmd/molma` skeleton; this remaining item is the heavier "actually install it locally" surface. `APP_MANIFEST.md`, `APP_STORE.md`.
+- Local dev/test subcommands beyond lint/resolve (`molma install --local`, etc.) — let authors run a manifest on their own box before a catalog PR. `molma manifest lint` (schema + sibling-compose validation, issue #7) and `molma manifest resolve` (registry digest + download/disk size resolution into the object-form `images` map, issue #69) shipped and own the `cmd/molma` skeleton; this remaining item is the heavier "actually install it locally" surface. `APP_MANIFEST.md`, `APP_STORE.md`.
 - Catalog PR template + author-facing docs surface (subset of the Tier-3 "Documentation surface" entry). `APP_STORE.md`.
 - Manifest changelog discipline — when schema v1 → v2 ships, how authors find out. Revisit once we have a `v2` candidate. `APP_MANIFEST.md`.
 

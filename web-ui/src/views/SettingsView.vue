@@ -16,6 +16,7 @@ import { SwitchRoot, SwitchThumb } from "reka-ui";
 import { api, waitForJob, type ApiError, type Instance, type Job } from "../api";
 import { changeMyPassword, useAuth } from "../auth";
 import { useNotificationMutes } from "../useNotificationMutes";
+import AppLogs from "../components/AppLogs.vue";
 
 const { currentUser, singleUserMode } = useAuth();
 const qc = useQueryClient();
@@ -48,6 +49,19 @@ function cancelPwChange() {
   currentPw.value = "";
   newPw.value = "";
   pwError.value = "";
+}
+
+// Which app's Logs panel is expanded (one at a time, for a calm list). The Logs
+// toggle is pre-gated to viewers the brain would allow: admins always, plus a
+// member viewing their own personal app. The apps list is already
+// visibility-scoped server-side, so a member only ever sees household apps (logs
+// admins-only → no toggle) and their own personal apps (logs allowed).
+const openLogsId = ref<string | null>(null);
+function canViewLogs(a: Instance): boolean {
+  return currentUser.value?.role === "admin" || a.scope === "personal";
+}
+function toggleLogs(id: string) {
+  openLogsId.value = openLogsId.value === id ? null : id;
 }
 
 const apps = useQuery({
@@ -84,10 +98,20 @@ const uninstall = useMutation({
 
 <template>
   <div class="space-y-8 pt-2">
-    <!-- Admin-only management routes (USERS_AND_GROUPS.md, DASHBOARD.md # global navigation). -->
-    <section v-if="currentUser?.role === 'admin'" class="space-y-3">
+    <!-- Management routes (DASHBOARD.md # global navigation). Activity is open to
+         all users — members see only their own events (LOGGING.md # Visibility
+         rules); Users is admin-only. -->
+    <section class="space-y-2">
       <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Administration</h2>
       <RouterLink
+        to="/settings/activity"
+        class="flex items-center justify-between rounded-xl border border-border bg-card px-4 py-3 hover:bg-muted"
+      >
+        <span class="text-sm font-medium">Activity</span>
+        <span class="text-xs text-muted-foreground">→</span>
+      </RouterLink>
+      <RouterLink
+        v-if="currentUser?.role === 'admin'"
         to="/settings/users"
         class="flex items-center justify-between rounded-xl border border-border bg-card px-4 py-3 hover:bg-muted"
       >
@@ -195,20 +219,33 @@ const uninstall = useMutation({
         <li
           v-for="a in apps.data.value!.apps"
           :key="a.id"
-          class="flex items-center justify-between rounded-xl border border-border bg-card px-4 py-3"
+          class="space-y-3 rounded-xl border border-border bg-card px-4 py-3"
         >
-          <div class="flex items-baseline gap-2">
-            <strong class="text-sm">{{ a.name }}</strong>
-            <span v-if="!singleUserMode" class="text-xs text-muted-foreground">{{ a.scope === "household" ? "Shared" : a.owner_username }}</span>
-            <span class="text-xs text-muted-foreground">· {{ a.state }}</span>
+          <div class="flex items-center justify-between">
+            <div class="flex items-baseline gap-2">
+              <strong class="text-sm">{{ a.name }}</strong>
+              <span v-if="!singleUserMode" class="text-xs text-muted-foreground">{{ a.scope === "household" ? "Shared" : a.owner_username }}</span>
+              <span class="text-xs text-muted-foreground">· {{ a.state }}</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <button
+                v-if="canViewLogs(a)"
+                class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
+                :class="{ 'bg-muted': openLogsId === a.id }"
+                @click="toggleLogs(a.id)"
+              >
+                Logs
+              </button>
+              <button
+                class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+                :disabled="uninstall.isPending.value"
+                @click="uninstall.mutate(a.id)"
+              >
+                Uninstall
+              </button>
+            </div>
           </div>
-          <button
-            class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
-            :disabled="uninstall.isPending.value"
-            @click="uninstall.mutate(a.id)"
-          >
-            Uninstall
-          </button>
+          <AppLogs v-if="openLogsId === a.id" :id="a.id" />
         </li>
       </ul>
     </section>

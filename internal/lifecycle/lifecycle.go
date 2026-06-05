@@ -666,6 +666,24 @@ func (m *Manager) InstanceManifest(id string) (*manifest.Manifest, error) {
 	return m.loadInstanceManifest(id)
 }
 
+// MainContainerName returns the container name of an instance's main service —
+// "molma-<id>-<MainService>", the same project+service stem used for the Caddy
+// upstream alias. The per-app Logs tail keys on it (the brain hands it to
+// host-agent's journal follow, which matches Docker's journald CONTAINER_NAME).
+//
+// Known gap (docs/progress/per-app-logs.md): compose names the *running*
+// container with a replica suffix ("…-<MainService>-1"), and Docker's journald
+// driver tags lines with that suffixed name. The replica-qualified match is a
+// documented follow-up; this returns the unsuffixed stem the rest of the brain
+// already uses.
+func (m *Manager) MainContainerName(id string) (string, error) {
+	man, err := m.loadInstanceManifest(id)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("molma-%s-%s", id, man.MainService), nil
+}
+
 // allocateSlug derives a free, routable slug from the manifest's preferred
 // slugs. The hostname encodes *uniqueness, not ownership* (DASHBOARD.md #
 // instance naming): the bare `<base>` is preferred by every instance regardless

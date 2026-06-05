@@ -25,13 +25,19 @@ type Manifest struct {
 	PreferredSlugs  []string    `yaml:"preferred_slugs"`
 	Permissions     Permissions `yaml:"permissions"`
 
-	// Images is the optional catalog-promised image→sha256 map
-	// (APP_STORE.md # Trust model — catalog's `images` map). Keyed by the exact
-	// `image:` reference used in the compose (e.g. `traefik/whoami:v1.10.3`),
-	// value is the `sha256:…` digest CI resolved at catalog-build time.
-	// Absent ⇒ TOFU at install (Door-2 always, Door-1 until the catalog
-	// publishes a digest).
-	Images map[string]string `yaml:"images,omitempty"`
+	// Images is the optional catalog-promised image map (APP_STORE.md # Catalog
+	// schema — the `images` object). Keyed by the exact `image:` reference used
+	// in the compose (e.g. `traefik/whoami:v1.10.3`); the value carries the
+	// pinned `sha256:…` digest plus the display-only download/disk sizes the
+	// store renders before install. CI (`molma manifest resolve`) resolves all
+	// three from the registry at catalog-build time. Absent ⇒ TOFU at install
+	// (Door-2 always, Door-1 until the catalog publishes a digest).
+	Images map[string]ImageRef `yaml:"images,omitempty"`
+
+	// Storage holds the author's on-disk hints (APP_MANIFEST.md # Storage). v1
+	// reads only estimated_size — hoisted verbatim into Footprint; any other
+	// keys (e.g. data_volumes) live in the compose, not parsed here.
+	Storage Storage `yaml:"storage,omitempty"`
 
 	// HealthProbe is the optional "up but not responding" probe config
 	// (APP_MANIFEST.md # B). nil ⇒ the app is never probed and the
@@ -48,6 +54,67 @@ type Description struct {
 	// Long is a markdown string rendered on the app-store detail page. Multi-line
 	// literal blocks (`|`) are idiomatic in manifests.
 	Long string `yaml:"long,omitempty"`
+}
+
+// ImageRef is one entry in the catalog's `images` map (APP_STORE.md # Catalog
+// schema): the pinned digest plus the display-only on-disk footprint of a
+// single `image:tag`. Digest is the binding the brain enforces at install
+// (# Trust model); DownloadBytes (sum of the image's compressed layer sizes)
+// and DiskBytes (sum of its uncompressed layer sizes, deduped within the app's
+// own image set) are advisory and gate nothing — a size that drifts from
+// reality is a cosmetic bug, not an integrity failure.
+type ImageRef struct {
+	Digest        string `yaml:"digest" json:"digest"`
+	DownloadBytes int64  `yaml:"download_bytes,omitempty" json:"download_bytes,omitempty"`
+	DiskBytes     int64  `yaml:"disk_bytes,omitempty" json:"disk_bytes,omitempty"`
+}
+
+// UnmarshalYAML accepts both the object form ({digest, download_bytes,
+// disk_bytes}) and the legacy scalar shorthand (`image:tag: sha256:…`, digest
+// only) so manifests written before sizes were resolved still parse. Mirrors
+// the HealthProbe string-or-mapping pattern.
+func (r *ImageRef) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		return node.Decode(&r.Digest)
+	}
+	type raw ImageRef // shed the method set to avoid recursing into this func
+	var w raw
+	if err := node.Decode(&w); err != nil {
+		return fmt.Errorf("images: %w", err)
+	}
+	*r = ImageRef(w)
+	return nil
+}
+
+// Storage is the author's on-disk hint block (APP_MANIFEST.md # Storage). v1
+// parses only estimated_size — a human-readable size string ("10GB") hoisted
+// verbatim into the catalog footprint; the brain does no unit math on it here.
+type Storage struct {
+	EstimatedSize string `yaml:"estimated_size,omitempty" json:"estimated_size,omitempty"`
+}
+
+// Footprint is the per-app on-disk summary the store grid renders without
+// fetching the full manifest (APP_STORE.md # Catalog schema — `footprint`). It
+// is a coarse upper bound (nothing assumed cached locally); the install dialog
+// shows a sharper, box-specific figure (BRAIN_UI_PROTOCOL.md #
+// GET /api/v1/catalog/:id/install-plan).
+type Footprint struct {
+	ImageDownloadBytes int64  `json:"image_download_bytes" yaml:"image_download_bytes"`
+	ImageDiskBytes     int64  `json:"image_disk_bytes" yaml:"image_disk_bytes"`
+	EstimatedState     string `json:"estimated_state,omitempty" yaml:"estimated_state,omitempty"`
+}
+
+// Footprint derives the per-app footprint (APP_STORE.md # Catalog schema): it
+// sums the resolved Images entries and hoists storage.estimated_size verbatim.
+// Derived, never hand-authored. Summing per-image DiskBytes trusts the
+// resolver's within-app layer dedup when it filled those numbers.
+func (m *Manifest) Footprint() Footprint {
+	f := Footprint{EstimatedState: m.Storage.EstimatedSize}
+	for _, ref := range m.Images {
+		f.ImageDownloadBytes += ref.DownloadBytes
+		f.ImageDiskBytes += ref.DiskBytes
+	}
+	return f
 }
 
 // HealthProbe declares the HTTP probe that backs the app-unresponsive detector

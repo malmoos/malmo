@@ -29,7 +29,7 @@ GET  /api/v1/apps                          → list installed instances
 GET  /api/v1/apps/:id                      → instance detail
 POST /api/v1/users                         → create user
 GET  /api/v1/settings/network              → current network config
-GET  /api/v1/health/issues                 → active health issues (see HEALTH.md)
+GET  /api/v1/health                        → active health issues (see HEALTH.md; v1 path, in the OpenAPI spec as of issue #12)
 POST /api/v1/health/:id/:act               → invoke a remediation action attached to an issue
 GET  /api/v1/catalog/:id/install-plan      → permission/scope plan for installing a catalog app (see below)
 POST /api/v1/files/list                    → directory listing (see Files below)

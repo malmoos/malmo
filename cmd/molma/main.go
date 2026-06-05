@@ -1,10 +1,15 @@
-// Command molma is the app-author's inner-loop CLI. v1 ships a single
-// subcommand, `manifest lint`, which validates a manifest.yml against the
-// schema (APP_MANIFEST.md) and sanity-checks its sibling compose file — the
-// same checks that back the catalog's CI schema-lint step (APP_STORE.md # CI on
-// the repo), runnable on a dev box with no brain. Other dev subcommands
-// (`install --local`, …) are deliberately deferred (NEXT.md # Developer /
-// app-author surface).
+// Command molma is the app-author's inner-loop CLI. v1 ships two `manifest`
+// subcommands, runnable on a dev box with no brain:
+//
+//   - `lint` validates a manifest.yml against the schema (APP_MANIFEST.md) and
+//     sanity-checks its sibling compose — the catalog CI schema-lint step
+//     (APP_STORE.md # CI on the repo).
+//   - `resolve` fills the manifest's `images` block with registry-resolved
+//     digests and download/disk sizes (APP_STORE.md # Catalog schema), driving
+//     the local Docker daemon — the catalog CI digest/size-resolution step.
+//
+// Other dev subcommands (`install --local`, …) are deferred (NEXT.md #
+// Developer / app-author surface).
 //
 // Output is for a human author: results go to stdout, errors to stderr, and a
 // non-zero exit signals a failed lint — this is a CLI, not the brain daemon, so
@@ -12,6 +17,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -22,7 +28,7 @@ import (
 	"github.com/molmaos/molma/internal/manifest"
 )
 
-const usage = "usage: molma manifest lint <path/to/manifest.yml>"
+const usage = "usage:\n  molma manifest lint    <path/to/manifest.yml>\n  molma manifest resolve <path/to/manifest.yml>"
 
 // errUsage signals a malformed invocation (wrong/missing subcommand or args),
 // as opposed to a lint failure. It maps to exit 2 (Unix convention for usage
@@ -42,16 +48,25 @@ func main() {
 	}
 }
 
-// run dispatches the subcommand. v1 recognizes only `manifest lint <path>`;
-// anything else is a usage error.
+// run dispatches the subcommand: `manifest lint <path>` or `manifest resolve
+// <path>`; anything else is a usage error.
 func run(args []string) error {
-	if len(args) == 3 && args[0] == "manifest" && args[1] == "lint" {
+	if len(args) == 3 && args[0] == "manifest" {
 		path := args[2]
-		if err := lint(path); err != nil {
-			return err
+		switch args[1] {
+		case "lint":
+			if err := lint(path); err != nil {
+				return err
+			}
+			fmt.Printf("%s: ok\n", path)
+			return nil
+		case "resolve":
+			if err := resolve(context.Background(), dockerSizer{}, path); err != nil {
+				return err
+			}
+			fmt.Printf("%s: images resolved\n", path)
+			return nil
 		}
-		fmt.Printf("%s: ok\n", path)
-		return nil
 	}
 	return errUsage
 }

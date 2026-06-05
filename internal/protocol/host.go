@@ -239,6 +239,20 @@ type WellKnownIdentityResponse struct {
 	MolmaSharedGID int `json:"molma_shared_gid"`
 }
 
+// JournalLine is one log line streamed over the per-app log tail
+// (GET /v1/journal/follow, BRAIN_HOST_PROTOCOL.md # Pattern C). It is the
+// `data:` payload of each SSE frame: the journald entry's timestamp, the std
+// stream it came from, and the line text. Lost marks a replay gap — a single
+// {"lost":true} frame the producer emits when a reconnect's Last-Event-ID
+// predates what it can replay; the brain forwards it to the dashboard
+// unchanged. A Lost frame carries no Ts/Stream/Line.
+type JournalLine struct {
+	Ts     string `json:"ts,omitempty"`
+	Stream string `json:"stream,omitempty"` // "stdout" | "stderr"
+	Line   string `json:"line,omitempty"`
+	Lost   bool   `json:"lost,omitempty"`
+}
+
 // Error is the JSON error body shape on non-2xx responses.
 type Error struct {
 	Code    string `json:"code"`
