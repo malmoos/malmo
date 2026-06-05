@@ -8,6 +8,7 @@
 /host-agent-real
 /brain
 /molma-storage-verify
+/molma
 
 # molma dev state (instance dirs, sqlite, generated compose)
 /.dev/

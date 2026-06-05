@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -85,6 +86,39 @@ func ComposeServiceNames(composeBytes []byte) ([]string, error) {
 		names = append(names, n)
 	}
 	return names, nil
+}
+
+// ComposeImages returns the distinct `image:` references declared under
+// `services:`, sorted, for the `molma manifest resolve` size resolver. A
+// service without an `image:` is an error (admission rejects `build:`, so a
+// curated compose always declares one). Distinct because services can share an
+// image (a gateway + dashboard on the same binary) and it's sized once.
+func ComposeImages(composeBytes []byte) ([]string, error) {
+	var doc struct {
+		Services map[string]struct {
+			Image string `yaml:"image"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(composeBytes, &doc); err != nil {
+		return nil, fmt.Errorf("compose is not valid YAML: %w", err)
+	}
+	if len(doc.Services) == 0 {
+		return nil, fmt.Errorf("compose declares no services")
+	}
+	seen := map[string]bool{}
+	var imgs []string
+	for name, svc := range doc.Services {
+		img := strings.TrimSpace(svc.Image)
+		if img == "" {
+			return nil, fmt.Errorf("service %q has no image", name)
+		}
+		if !seen[img] {
+			seen[img] = true
+			imgs = append(imgs, img)
+		}
+	}
+	sort.Strings(imgs)
+	return imgs, nil
 }
 
 // InferMainPort makes a best-effort guess at the container-internal port the
