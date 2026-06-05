@@ -3,6 +3,7 @@
 // pattern). Users are fetched from GET /auth/users (public). Click a name →
 // password field appears → submit. No username text field.
 import { ref } from "vue";
+import { RouterLink } from "vue-router";
 import { useQuery } from "@tanstack/vue-query";
 import { api, type ApiError } from "./api";
 import { login } from "./auth";
@@ -100,6 +101,7 @@ function glyphColor(username: string): string {
         {{ submitting ? "Signing in…" : "Sign in" }}
       </button>
       <p v-if="error" class="error">{{ error }}</p>
+      <RouterLink to="/recover" class="forgot">Forgot password?</RouterLink>
     </form>
   </main>
 </template>
@@ -114,4 +116,6 @@ function glyphColor(username: string): string {
 .auth .selected-user { display: flex; align-items: center; gap: 0.75rem; padding: 0.25rem 0; }
 .auth .back { align-self: flex-start; background: none; border: none; color: #666; font-size: 0.85rem; cursor: pointer; padding: 0; margin-bottom: 0.25rem; }
 .auth .back:hover { color: #222; }
+.auth .forgot { align-self: center; color: #666; font-size: 0.85rem; text-decoration: none; margin-top: 0.25rem; }
+.auth .forgot:hover { color: #222; }
 </style>

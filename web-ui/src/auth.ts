@@ -69,6 +69,44 @@ export async function logout() {
   }
 }
 
+// changeMyPassword changes the signed-in user's own password (AUTH.md # Password
+// lifecycle # Setting a password). The brain verifies current_password via PAM
+// (401 on mismatch) and revokes all of the user's sessions on success, so we
+// force a local logout — re-auth is required, and App.vue drops to the login
+// screen the moment currentUser clears.
+//
+// suppressAuthHandler is load-bearing here: a wrong current password returns
+// 401, but the caller is still authenticated. Without suppression the global
+// 401 handler would clear currentUser and unmount the Settings form before it
+// could show "Incorrect password." — bouncing the user to login on a typo. We
+// drop to login only on success, via the explicit logout() below.
+export async function changeMyPassword(currentPassword: string, newPassword: string) {
+  await api.post(
+    "/me/password",
+    { current_password: currentPassword, new_password: newPassword },
+    { suppressAuthHandler: true },
+  );
+  await logout();
+}
+
+// redeemRecoveryCode runs the public recovery flow (AUTH.md # Using the recovery
+// code) — no session required. On a correct username+code the brain resets the
+// password via host-agent, consumes the old code, and returns a fresh one to
+// show exactly once. We do NOT set currentUser: recovery terminates at the login
+// screen, where the user signs in with the new password.
+export async function redeemRecoveryCode(
+  username: string,
+  recoveryCode: string,
+  newPassword: string,
+): Promise<string> {
+  const res = await api.post<{ new_recovery_code: string }>("/recover", {
+    username,
+    recovery_code: recoveryCode,
+    new_password: newPassword,
+  });
+  return res.new_recovery_code;
+}
+
 // refreshCurrentUser re-fetches /me and updates currentUser. Call this in the
 // onSettled hook of any user-management mutation (create/delete/role-change) so
 // single_user_mode stays accurate without a page reload.

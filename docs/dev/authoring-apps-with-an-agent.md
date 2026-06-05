@@ -19,7 +19,7 @@ Two **separate** checks, and the agent must satisfy both — they do not overlap
 
 Two consequences worth internalizing:
 
-- **Unknown manifest fields are silently accepted.** `manifest.Parse` uses non-strict YAML, so `storage:`, `services:`, `resources:`, `description:`, `categories:`, `author:`, `license:` are not in the Go struct yet and are ignored by lint — they neither fail nor get validated. Write them anyway: the manifest is the durable, author-grade artifact and `APP_MANIFEST.md` is the source of truth. Following the full spec schema is forward-compatible; skipping it loses information the catalog will eventually consume.
+- **Unknown manifest fields are silently accepted.** `manifest.Parse` uses non-strict YAML, so `storage:` (except `estimated_size`, now read into the app footprint), `services:`, `resources:`, `categories:`, `author:`, `license:` are not in the Go struct yet and are ignored by lint — they neither fail nor get validated. Write them anyway: the manifest is the durable, author-grade artifact and `APP_MANIFEST.md` is the source of truth. Following the full spec schema is forward-compatible; skipping it loses information the catalog will eventually consume.
 - **A green `manifest lint` is necessary, not sufficient.** It can pass on a compose that admission would reject. Always run the admission re-check too.
 
 The on-disk examples (`catalog/whoami/`, `catalog/files-demo/`) are intentionally minimal skeletons. For the full author-grade schema (storage split, managed services, resources, description), the worked reference is the **"Complete sample manifest"** (PhotoPrism) in `APP_MANIFEST.md`.
@@ -81,7 +81,7 @@ STEPS
 
 7. HEALTH PROBE (recommended for real web apps). If the app exposes a cheap HTTP health/ready path, declare `health_probe` (e.g. `health_probe: /healthz`, or the full mapping with `healthy_status`/`start_period`). Omit it for apps with no such endpoint — omitting just means the app is never probed.
 
-8. IMAGE DIGESTS. For each `image:tag`, resolve its `sha256:` via `docker manifest inspect <ref>` or `skopeo inspect docker://<ref>` and key it in the `images:` map by the EXACT compose string. Never guess a digest; if the registry is unreachable, omit `images:` (valid — brain does trust-on-first-use) and say so.
+8. IMAGE DIGESTS + SIZES. The `images:` map is object form — each `image:tag` maps to `{digest, download_bytes, disk_bytes}` (`APP_STORE.md` # Catalog schema). Don't hand-write these: once the files exist (step 9), run `go run ./cmd/molma manifest resolve catalog/<id>/manifest.yml`, which pulls each compose image via the Docker daemon and fills the map from the registry — pinned digest plus compressed/uncompressed sizes — keyed by the exact compose string, then prints the per-app footprint. It rewrites the `images:` block in place (preserving your comments) and fails loudly rather than writing a bogus zero. Never guess a digest; if the registry is unreachable the command errors — omit `images:` (valid — brain does trust-on-first-use) and say so.
 
 9. WRITE `catalog/<id>/manifest.yml`, `catalog/<id>/compose.yml` (`compose_file: compose.yml`), `catalog/<id>/icon.<ext>` (from step 1), and `catalog/<id>/screenshots/NN.<ext>` (from step 1, if any were downloaded).
 

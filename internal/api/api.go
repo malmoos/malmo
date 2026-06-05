@@ -17,6 +17,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
 	"github.com/molmaos/molma/internal/admission"
+	"github.com/molmaos/molma/internal/applog"
 	"github.com/molmaos/molma/internal/audit"
 	"github.com/molmaos/molma/internal/auth"
 	"github.com/molmaos/molma/internal/catalog"
@@ -41,6 +42,7 @@ type Server struct {
 	auditor  *audit.Recorder
 	health   *health.Manager
 	live     *systemlive.Hub
+	applogs  *applog.Registry
 	streams  *streamCap
 	limiter  *rateLimiter
 	jobs     *Jobs
@@ -56,11 +58,12 @@ func NewServer(
 	auditor *audit.Recorder,
 	healthMgr *health.Manager,
 	live *systemlive.Hub,
+	applogs *applog.Registry,
 ) *Server {
 	return &Server{
 		store: st, catalog: cat, life: life, bus: bus,
 		auth: authMgr, throttle: auth.NewLoginThrottle(), host: host, auditor: auditor,
-		health: healthMgr, live: live,
+		health: healthMgr, live: live, applogs: applogs,
 		streams: newStreamCap(maxStreamsPerSession),
 		limiter: newRateLimiter(time.Now),
 		jobs:    newJobs(),
@@ -88,6 +91,7 @@ func (s *Server) Handler() http.Handler {
 	// handler keeps the wire format curl-debuggable per BRAIN_UI_PROTOCOL.md).
 	mux.HandleFunc("GET /api/v1/events", s.events)
 	mux.HandleFunc("GET /api/v1/system/live", s.systemLive)
+	mux.HandleFunc("GET /api/v1/apps/{id}/log", s.appLog)
 
 	return withCORS(s.authMiddleware(s.rateLimit(mux)))
 }
@@ -112,11 +116,15 @@ func (s *Server) registerAll(api huma.API) {
 // and returns the resulting OpenAPI 3 document. No server is started and no
 // handler runs — huma.Register reflects the typed request/response structs to
 // produce the schema, so a zero-value Server (no live dependencies) suffices.
+// The one exception is health, whose registration is guarded on a non-nil
+// manager (so test servers can opt out); we hand it a store-less manager here —
+// never invoked, only reflected — so GET /api/v1/health and its Issue schema
+// land in the committed spec and the dashboard's wire types generate from it.
 // This is the build-time spec emitter behind `make openapi` and the CI
 // freshness check (BRAIN_UI_PROTOCOL.md # Codegen / # CI enforcement); cmd/openapi-gen
 // serializes it to api/openapi.{json,yaml}.
 func OpenAPIDocument() *huma.OpenAPI {
-	s := &Server{}
+	s := &Server{health: health.NewManager(nil)}
 	api := humago.New(http.NewServeMux(), huma.DefaultConfig(openAPITitle, openAPIVersion))
 	s.registerAll(api)
 	return api.OpenAPI()

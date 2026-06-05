@@ -13,6 +13,10 @@ export function useEvents() {
   // Surfaces): re-read the caller's audience-scoped list/badge rather than
   // merging payloads off the shared, unfiltered bus.
   const invalidateNotifications = () => qc.invalidateQueries({ queryKey: ["notifications"] });
+  // Health-issue transitions are advisory too (HEALTH.md # Display; issue #12):
+  // the {id, instance_key} payload just says "the set changed," so re-read
+  // GET /api/v1/health and let useHealth derive the banner / blocks_* gates.
+  const invalidateHealth = () => qc.invalidateQueries({ queryKey: ["health/issues"] });
 
   onMounted(() => {
     es = new EventSource("/api/v1/events", { withCredentials: true });
@@ -21,6 +25,9 @@ export function useEvents() {
     }
     for (const kind of ["notification.created", "notification.updated"]) {
       es.addEventListener(kind, invalidateNotifications);
+    }
+    for (const kind of ["health.issue_raised", "health.issue_cleared"]) {
+      es.addEventListener(kind, invalidateHealth);
     }
   });
 
