@@ -210,6 +210,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List active health issues */
+        get: operations["list-health-issues"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/jobs/{id}": {
         parameters: {
             query?: never;
@@ -661,6 +678,15 @@ export interface components {
             household: components["schemas"]["SourceMenu"];
             personal: components["schemas"]["SourceMenu"];
         };
+        HealthListResponseBody: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/HealthListResponseBody.json
+             */
+            readonly $schema?: string;
+            issues: components["schemas"]["Issue"][] | null;
+        };
         "Inspect-custom-appRequest": {
             /**
              * Format: uri
@@ -755,6 +781,23 @@ export interface components {
             state: string;
             url: string;
             version: string;
+        };
+        Issue: {
+            blocks_apps: boolean;
+            blocks_users: boolean;
+            blocks_writes: boolean;
+            category: string;
+            details?: string;
+            id: string;
+            instance_key?: string;
+            /** Format: date-time */
+            last_checked_at: string;
+            /** Format: date-time */
+            raised_at: string;
+            severity: string;
+            summary: string;
+            /** Format: int64 */
+            tier: number;
         };
         Job: {
             /**
@@ -1429,6 +1472,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstallPlanDTO"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "list-health-issues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HealthListResponseBody"];
                 };
             };
             /** @description Error */

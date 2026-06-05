@@ -23,6 +23,14 @@ const (
 	// list rather than merging the event data.
 	NotificationCreated Kind = "notification.created"
 	NotificationUpdated Kind = "notification.updated"
+	// Health-issue transitions (HEALTH.md # Display, BRAIN_UI_PROTOCOL.md Pattern
+	// C). raised = a detector raised an issue; cleared = the condition resolved.
+	// Like notifications, the payload is an advisory refetch trigger ({id,
+	// instance_key}) — the dashboard re-reads GET /api/v1/health rather than
+	// merging the event data. Note the underscore form is the SSE event name,
+	// distinct from the dotted audit action (health.issue.raised, LOGGING.md).
+	HealthIssueRaised  Kind = "health.issue_raised"
+	HealthIssueCleared Kind = "health.issue_cleared"
 )
 
 type Event struct {
