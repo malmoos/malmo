@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/molmaos/molma/internal/api"
+	"github.com/molmaos/molma/internal/applog"
 	"github.com/molmaos/molma/internal/audit"
 	"github.com/molmaos/molma/internal/auth"
 	"github.com/molmaos/molma/internal/caddy"
@@ -96,8 +97,8 @@ func main() {
 	// — the brain runs degraded just like everything else.
 	pollCtx, pollCancel := context.WithCancel(context.Background())
 	defer pollCancel()
-	pullSystemHealth(pollCtx, host, healthMgr, auditor, notifier)
-	go systemHealthPollLoop(pollCtx, host, healthMgr, auditor, notifier, cfg.healthPollPeriod)
+	pullSystemHealth(pollCtx, host, healthMgr, auditor, notifier, bus)
+	go systemHealthPollLoop(pollCtx, host, healthMgr, auditor, notifier, bus, cfg.healthPollPeriod)
 
 	// App-runtime health detectors on the health-poll cadence, both driven from
 	// ONE goroutine (issue #54: reuse the restart-loop timer, no parallel
@@ -112,8 +113,8 @@ func main() {
 	// EVENTS proxy grant). Order matters: the restart-loop check runs first so the
 	// probe can defer to a freshly-raised container-restart-loop and not
 	// double-banner a crash-looping app (HEALTH.md # app-unresponsive anti-flap).
-	rld := newRestartLoopDetector(dock, healthMgr, auditor, notifier)
-	probe := newAppProbeDetector(dock, st, life, cfg.caddyProbeURL, healthMgr, auditor, notifier)
+	rld := newRestartLoopDetector(dock, healthMgr, auditor, notifier, bus)
+	probe := newAppProbeDetector(dock, st, life, cfg.caddyProbeURL, healthMgr, auditor, notifier, bus)
 	go appRuntimeHealthLoop(pollCtx, cfg.healthPollPeriod, rld.check, probe.check)
 
 	// Bound the notifications table (NOTIFICATIONS.md # Locked decisions, the
@@ -128,8 +129,8 @@ func main() {
 	// Locus-C version check (HEALTH.md # Detector catalog): reconcile
 	// version-mismatch against host-agent's reported agent_version, once at
 	// startup (the first handshake) then on the same loose poll cadence.
-	checkAgentVersion(pollCtx, host, healthMgr, auditor, notifier)
-	go versionCheckPollLoop(pollCtx, host, healthMgr, auditor, notifier, cfg.healthPollPeriod)
+	checkAgentVersion(pollCtx, host, healthMgr, auditor, notifier, bus)
+	go versionCheckPollLoop(pollCtx, host, healthMgr, auditor, notifier, bus, cfg.healthPollPeriod)
 
 	// Locus-C brain-DB integrity check (HEALTH.md # Detector catalog): PRAGMA
 	// integrity_check at boot + every 6h, reconciling brain-db-corrupt. Runs
@@ -137,7 +138,7 @@ func main() {
 	// before ListenAndServe — because a corrupt DB must raise a banner, never
 	// gate startup (HEALTH.md # Stance: a brain that can't boot has no UI; that
 	// path is bootstrap-state-mismatch / recovery, not this issue).
-	go brainDBIntegrityLoop(pollCtx, st, healthMgr, auditor, notifier, dbIntegrityCheckPeriod)
+	go brainDBIntegrityLoop(pollCtx, st, healthMgr, auditor, notifier, bus, dbIntegrityCheckPeriod)
 
 	// Live system-resources hub (BRAIN_UI_PROTOCOL.md Pattern C, stream 3): a
 	// ref-counted 1 Hz poller of host-agent's raw counters, fanned out as
@@ -146,7 +147,13 @@ func main() {
 	// to the process lifetime.
 	live := systemlive.New(pollCtx, host, time.Second)
 
-	srv := api.NewServer(st, cat, life, bus, authMgr, host, auditor, healthMgr, live)
+	// applogs owns the per-app log fan-out: one ref-counted host-agent follow per
+	// instance behind the dashboard's many readers, with the ring buffer + replay
+	// the per-app Logs tab needs. Idle when nobody is watching; pollCtx bounds any
+	// active follow to the process lifetime.
+	applogs := applog.NewRegistry(pollCtx, host)
+
+	srv := api.NewServer(st, cat, life, bus, authMgr, host, auditor, healthMgr, live, applogs)
 	httpSrv := &http.Server{Addr: cfg.listen, Handler: srv.Handler()}
 	slog.Info("molma-brain listening",
 		"listen", cfg.listen, "state_dir", cfg.stateDir, "catalog_dir", cfg.catalogDir)
@@ -264,7 +271,7 @@ func env(k, def string) string {
 // Each category the report covers is reconciled independently (clearing any
 // host-reported issue in it that's now absent); categories not in the report are
 // left alone. Sorted iteration keeps the per-issue audit / log order stable.
-func pullSystemHealth(ctx context.Context, host *hostclient.Client, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier) {
+func pullSystemHealth(ctx context.Context, host *hostclient.Client, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier, bus *events.Bus) {
 	c, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	sh, err := host.SystemHealth(c)
@@ -288,23 +295,33 @@ func pullSystemHealth(ctx context.Context, host *hostclient.Client, healthMgr *h
 		slog.Info("system health: reconciled",
 			"raised", len(raised), "cleared", len(cleared), "categories", len(cats))
 	}
-	emitHealthTransitions(ctx, auditor, raised, cleared)
+	emitHealthTransitions(ctx, auditor, bus, raised, cleared)
 	emitHealthNotifications(notifier, healthMgr, raised, cleared)
 }
 
 // emitHealthTransitions writes one audit record per transitioned health issue,
 // targeting {kind: health_issue, id: <id>}, so the Activity view attributes
-// each raise/clear to a specific issue rather than a bulk count. No-op when
-// both slices are empty — the steady-state case, since most polls change
-// nothing.
-func emitHealthTransitions(ctx context.Context, auditor *audit.Recorder, raised, cleared []health.IssueKey) {
+// each raise/clear to a specific issue rather than a bulk count, and publishes
+// the matching SSE event so the dashboard's degraded-mode banner updates live
+// (HEALTH.md # Display; issue #12). The event payload is advisory — {id,
+// instance_key} — and the UI re-fetches GET /api/v1/health on receipt rather
+// than merging it, mirroring the notification pattern. No-op when both slices
+// are empty — the steady-state case, since most polls change nothing. bus is
+// nil only in tests that assert audit/notify alone; the publish is skipped then.
+func emitHealthTransitions(ctx context.Context, auditor *audit.Recorder, bus *events.Bus, raised, cleared []health.IssueKey) {
 	for _, k := range raised {
 		auditor.Record(ctx, audit.ActionHealthIssueRaised,
 			audit.Target{Kind: "health_issue", ID: k.ID}, nil, true)
+		if bus != nil {
+			bus.Publish(events.HealthIssueRaised, map[string]any{"id": k.ID, "instance_key": k.InstanceKey})
+		}
 	}
 	for _, k := range cleared {
 		auditor.Record(ctx, audit.ActionHealthIssueCleared,
 			audit.Target{Kind: "health_issue", ID: k.ID}, nil, true)
+		if bus != nil {
+			bus.Publish(events.HealthIssueCleared, map[string]any{"id": k.ID, "instance_key": k.InstanceKey})
+		}
 	}
 }
 
@@ -332,7 +349,7 @@ func emitHealthNotifications(notifier *notify.Notifier, healthMgr *health.Manage
 // reports. 60s is the loose-by-design cadence — host-measured findings don't
 // change often, and the dashboard's view of "active issues" gets a refresh on
 // every dashboard load via the same registry.
-func systemHealthPollLoop(ctx context.Context, host *hostclient.Client, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier, interval time.Duration) {
+func systemHealthPollLoop(ctx context.Context, host *hostclient.Client, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier, bus *events.Bus, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -340,7 +357,7 @@ func systemHealthPollLoop(ctx context.Context, host *hostclient.Client, healthMg
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			pullSystemHealth(ctx, host, healthMgr, auditor, notifier)
+			pullSystemHealth(ctx, host, healthMgr, auditor, notifier, bus)
 		}
 	}
 }
@@ -396,7 +413,7 @@ type agentStatusReader interface {
 // (like disk-full / brain-db-corrupt — allowlisted in the spec but not yet
 // sourced), so the fan-out is a no-op until that entry lands; see the progress
 // entry for why wiring it is a separate, deferred step.
-func checkAgentVersion(ctx context.Context, host agentStatusReader, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier) {
+func checkAgentVersion(ctx context.Context, host agentStatusReader, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier, bus *events.Bus) {
 	c, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	status, err := host.SystemStatus(c)
@@ -417,7 +434,7 @@ func checkAgentVersion(ctx context.Context, host agentStatusReader, healthMgr *h
 	} else if healthMgr.Clear("version-mismatch", "") {
 		cleared = []health.IssueKey{{ID: "version-mismatch"}}
 	}
-	emitHealthTransitions(ctx, auditor, raised, cleared)
+	emitHealthTransitions(ctx, auditor, bus, raised, cleared)
 	emitHealthNotifications(notifier, healthMgr, raised, cleared)
 }
 
@@ -425,7 +442,7 @@ func checkAgentVersion(ctx context.Context, host agentStatusReader, healthMgr *h
 // cadence as the storage poll — each periodic status read is a "handshake"
 // (HEALTH.md). version-mismatch only changes when a component is upgraded, so
 // the cadence is loose by design.
-func versionCheckPollLoop(ctx context.Context, host agentStatusReader, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier, interval time.Duration) {
+func versionCheckPollLoop(ctx context.Context, host agentStatusReader, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier, bus *events.Bus, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -433,7 +450,7 @@ func versionCheckPollLoop(ctx context.Context, host agentStatusReader, healthMgr
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			checkAgentVersion(ctx, host, healthMgr, auditor, notifier)
+			checkAgentVersion(ctx, host, healthMgr, auditor, notifier, bus)
 		}
 	}
 }
@@ -458,7 +475,7 @@ type integrityChecker interface {
 // logs and leaves the issue state untouched (a transient blip neither raises a
 // false banner nor clears a real one). Transitions are audited per issue and
 // fan out to the notification center, mirroring pullStorageHealth.
-func checkBrainDBIntegrity(ctx context.Context, db integrityChecker, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier) {
+func checkBrainDBIntegrity(ctx context.Context, db integrityChecker, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier, bus *events.Bus) {
 	result, err := db.IntegrityCheck()
 	if err != nil {
 		slog.Warn("integrity check: query failed; leaving brain-db-corrupt unchanged", "err", err)
@@ -475,7 +492,7 @@ func checkBrainDBIntegrity(ctx context.Context, db integrityChecker, healthMgr *
 		cleared = []health.IssueKey{{ID: "brain-db-corrupt"}}
 		slog.Info("integrity check: brain database recovered; cleared brain-db-corrupt")
 	}
-	emitHealthTransitions(ctx, auditor, raised, cleared)
+	emitHealthTransitions(ctx, auditor, bus, raised, cleared)
 	emitHealthNotifications(notifier, healthMgr, raised, cleared)
 }
 
@@ -483,8 +500,8 @@ func checkBrainDBIntegrity(ctx context.Context, db integrityChecker, healthMgr *
 // 6h cadence. The boot run lives *inside* this goroutine (not synchronously in
 // main before serving) on purpose — see the call site: the check must never
 // gate brain startup.
-func brainDBIntegrityLoop(ctx context.Context, db integrityChecker, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier, interval time.Duration) {
-	checkBrainDBIntegrity(ctx, db, healthMgr, auditor, notifier) // boot run
+func brainDBIntegrityLoop(ctx context.Context, db integrityChecker, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier, bus *events.Bus, interval time.Duration) {
+	checkBrainDBIntegrity(ctx, db, healthMgr, auditor, notifier, bus) // boot run
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -492,7 +509,7 @@ func brainDBIntegrityLoop(ctx context.Context, db integrityChecker, healthMgr *h
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			checkBrainDBIntegrity(ctx, db, healthMgr, auditor, notifier)
+			checkBrainDBIntegrity(ctx, db, healthMgr, auditor, notifier, bus)
 		}
 	}
 }
@@ -529,18 +546,20 @@ type restartLoopDetector struct {
 	healthMgr *health.Manager
 	auditor   *audit.Recorder
 	notifier  *notify.Notifier
+	bus       *events.Bus
 	window    time.Duration
 	threshold int
 	now       func() time.Time
 	history   map[string][]restartSample // instance_id -> samples within the window
 }
 
-func newRestartLoopDetector(docker restartCountReader, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier) *restartLoopDetector {
+func newRestartLoopDetector(docker restartCountReader, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier, bus *events.Bus) *restartLoopDetector {
 	return &restartLoopDetector{
 		docker:    docker,
 		healthMgr: healthMgr,
 		auditor:   auditor,
 		notifier:  notifier,
+		bus:       bus,
 		window:    restartLoopWindow,
 		threshold: restartLoopThreshold,
 		now:       func() time.Time { return time.Now().UTC() },
@@ -647,7 +666,7 @@ func (d *restartLoopDetector) check(ctx context.Context) {
 	// tests see a deterministic sequence.
 	sortByInstanceKey(raised)
 	sortByInstanceKey(cleared)
-	emitHealthTransitions(ctx, d.auditor, raised, cleared)
+	emitHealthTransitions(ctx, d.auditor, d.bus, raised, cleared)
 	emitHealthNotifications(d.notifier, d.healthMgr, raised, cleared)
 }
 
@@ -700,13 +719,14 @@ type appProbeDetector struct {
 	healthMgr *health.Manager
 	auditor   *audit.Recorder
 	notifier  *notify.Notifier
+	bus       *events.Bus
 	client    *http.Client
 	baseURL   string // Caddy site-listener base, e.g. http://127.0.0.1:80
 	now       func() time.Time
 	bad       map[string]int // instance_id -> consecutive failed-probe count
 }
 
-func newAppProbeDetector(docker managedContainerReader, instances instanceLister, manifests instanceManifestLoader, baseURL string, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier) *appProbeDetector {
+func newAppProbeDetector(docker managedContainerReader, instances instanceLister, manifests instanceManifestLoader, baseURL string, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier, bus *events.Bus) *appProbeDetector {
 	return &appProbeDetector{
 		docker:    docker,
 		instances: instances,
@@ -714,6 +734,7 @@ func newAppProbeDetector(docker managedContainerReader, instances instanceLister
 		healthMgr: healthMgr,
 		auditor:   auditor,
 		notifier:  notifier,
+		bus:       bus,
 		client:    &http.Client{Timeout: appProbeTimeout},
 		baseURL:   baseURL,
 		now:       func() time.Time { return time.Now().UTC() },
@@ -812,7 +833,7 @@ func (d *appProbeDetector) check(ctx context.Context) {
 
 	sortByInstanceKey(raised)
 	sortByInstanceKey(cleared)
-	emitHealthTransitions(ctx, d.auditor, raised, cleared)
+	emitHealthTransitions(ctx, d.auditor, d.bus, raised, cleared)
 	emitHealthNotifications(d.notifier, d.healthMgr, raised, cleared)
 }
 

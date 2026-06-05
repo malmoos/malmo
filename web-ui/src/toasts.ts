@@ -1,19 +1,22 @@
 // toasts.ts — the app-wide ephemeral toast channel (WEB_UI.md's toast model:
 // ephemeral, in-tab, non-blocking). A module-singleton list plus an imperative
 // push, the same shape as auth.ts's singleton state: any module can call
-// pushErrorToast(message) and <ToastHost> renders the live list once in the
-// signed-in shell. No per-call-site UI (issue #44).
+// pushErrorToast / pushSuccessToast and <ToastHost> renders the live list once
+// in the signed-in shell. No per-call-site UI (issue #44).
 //
-// Error-only for now: the only callers are notification mutations whose
-// optimistic state rolls back silently on failure, and this is their
-// user-visible "something failed" feedback. Confirm/success toasts (WEB_UI.md
-// "toast on clear", the 409 "View" toast) are not built here — they extend this
-// channel when they land.
+// Two variants: error (a mutation rolled back silently and this is the only
+// "something failed" feedback) and success (a confirmation/recovery notice —
+// e.g. a health issue cleared, HEALTH.md # Clear "no silent auto-recovery";
+// issue #12). The 409 "View" toast is still unbuilt — it extends this channel
+// when it lands.
 import { reactive } from "vue";
+
+export type ToastVariant = "error" | "success";
 
 export interface Toast {
   id: number;
   message: string;
+  variant: ToastVariant;
 }
 
 // Live toasts, newest last. Reactive so <ToastHost> re-renders on push/dismiss.
@@ -25,10 +28,20 @@ const TOAST_TTL_MS = 6000;
 
 let seq = 0;
 
-export function pushErrorToast(message: string) {
+function push(message: string, variant: ToastVariant) {
   const id = ++seq;
-  toasts.push({ id, message });
+  toasts.push({ id, message, variant });
   setTimeout(() => dismissToast(id), TOAST_TTL_MS);
+}
+
+export function pushErrorToast(message: string) {
+  push(message, "error");
+}
+
+// pushSuccessToast: a confirmation/recovery notice (a health issue cleared,
+// HEALTH.md # Clear). <ToastHost> styles it green and announces it politely.
+export function pushSuccessToast(message: string) {
+  push(message, "success");
 }
 
 export function dismissToast(id: number) {

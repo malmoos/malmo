@@ -4,8 +4,10 @@
 package hostagent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"hash/fnv"
 	"log/slog"
 	"net/http"
@@ -65,6 +67,21 @@ type HealthSource interface {
 // errors — inactive units are data, not failures.
 type ServiceReporter interface {
 	Read() []protocol.Finding
+}
+
+// LogSource is a consumer-side interface for the per-app log tail behind
+// GET /v1/journal/follow (LOGGING.md # Per-app logs, BRAIN_HOST_PROTOCOL.md
+// # Pattern C). Follow returns a channel of log lines for the given container;
+// the channel is closed when the source ends (the underlying follower exits)
+// and the follow stops when ctx is cancelled (the brain disconnected). Provider
+// packages return concrete types: journalsource.Reader (real
+// `journalctl CONTAINER_NAME=<container> -f`) for cmd/host-agent-real,
+// FakeLogSource (a synthetic ticker) for the fake binary and tests.
+//
+// When nil (no source wired), GET /v1/journal/follow returns 501 so the brain
+// surfaces "logs unavailable" rather than a silently empty stream.
+type LogSource interface {
+	Follow(ctx context.Context, container string) (<-chan protocol.JournalLine, error)
 }
 
 // UserManager is a consumer-side interface for the system-level user account
@@ -128,6 +145,12 @@ type Agent struct {
 	// rather than treating "no services measured" as "all services up".
 	Services ServiceReporter
 
+	// Logs, when non-nil, backs GET /v1/journal/follow (the per-app log tail).
+	// Swapped per binary: journalsource.Reader (real journalctl) for
+	// cmd/host-agent-real vs FakeLogSource (synthetic ticker) for the fake
+	// binary and tests. When nil, GET /v1/journal/follow returns 501.
+	Logs LogSource
+
 	// UserMgr, when non-nil, takes over POST /v1/auth/set-password,
 	// /v1/auth/set-role, and /v1/auth/delete-user: handlers delegate to the
 	// manager instead of writing to the in-memory maps. cmd/host-agent leaves
@@ -163,6 +186,7 @@ func (a *Agent) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/auth/set-role", a.setRole)
 	mux.HandleFunc("POST /v1/auth/delete-user", a.deleteUser)
 	mux.HandleFunc("GET /v1/health/system", a.systemHealth)
+	mux.HandleFunc("GET /v1/journal/follow", a.journalFollow)
 	mux.HandleFunc("GET /v1/users/{username}/home", a.resolveHome)
 	mux.HandleFunc("GET /v1/identity/well-known", a.wellKnownIdentity)
 }
@@ -304,6 +328,75 @@ func (a *Agent) systemHealth(w http.ResponseWriter, r *http.Request) {
 		CheckedAt:  time.Now().UTC().Format(time.RFC3339),
 		Categories: cats,
 	})
+}
+
+// journalFollow streams a container's log lines as SSE (BRAIN_HOST_PROTOCOL.md
+// # Pattern C — the per-app log tail behind the dashboard Logs tab). Each line
+// is one `id: <n>\ndata: {json}\n\n` frame with a per-connection monotonic id;
+// no `event:` field, so the brain (and a curl) read them as default-type
+// messages.
+//
+// Reconnect: the follower here is fresh per connection with no history before
+// "now", so a reconnect carrying Last-Event-ID can't be replayed — the handler
+// emits one {"lost":true} frame and resumes live (the spec's buffer-overflow
+// path). The authoritative rolling-buffer replay lives one hop up, in the
+// brain's per-instance log hub (BRAIN_UI_PROTOCOL.md Pattern C: "the brain
+// re-emits IDs from its own monotonic counter"); a host-side shared-follower
+// buffer is deferred until a second consumer (job / Tier-2 service logs) needs it.
+func (a *Agent) journalFollow(w http.ResponseWriter, r *http.Request) {
+	container := r.URL.Query().Get("container")
+	if container == "" {
+		writeErr(w, http.StatusBadRequest, "bad-request", "container is required")
+		return
+	}
+	if a.Logs == nil {
+		writeErr(w, http.StatusNotImplemented, "logs-unsupported", "this host-agent has no log source")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, http.StatusInternalServerError, "no-flush", "streaming unsupported")
+		return
+	}
+
+	ch, err := a.Logs.Follow(r.Context(), container)
+	if err != nil {
+		slog.Error("journal-follow: source error", "container", container, "err", err)
+		writeErr(w, http.StatusInternalServerError, "journal-follow-failed", "could not follow logs")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	var id uint64
+	// A reconnect carrying Last-Event-ID can't be replayed by a fresh follower —
+	// emit one {"lost":true} so the consumer knows the gap, then resume live.
+	if r.Header.Get("Last-Event-ID") != "" {
+		id++
+		writeJournalFrame(w, flusher, id, protocol.JournalLine{Lost: true})
+	}
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case line, ok := <-ch:
+			if !ok {
+				return
+			}
+			id++
+			writeJournalFrame(w, flusher, id, line)
+		}
+	}
+}
+
+func writeJournalFrame(w http.ResponseWriter, f http.Flusher, id uint64, line protocol.JournalLine) {
+	data, _ := json.Marshal(line)
+	fmt.Fprintf(w, "id: %d\ndata: %s\n\n", id, data)
+	f.Flush()
 }
 
 // verifyPassword delegates to a.Verifier so the verification strategy

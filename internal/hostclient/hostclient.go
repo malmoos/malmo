@@ -3,6 +3,7 @@
 package hostclient
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/molmaos/molma/internal/protocol"
@@ -19,21 +21,25 @@ import (
 
 type Client struct {
 	http *http.Client
+	// stream is a timeout-less client for long-lived SSE follows (JournalFollow).
+	// It shares the request client's transport — and thus its connection pool —
+	// but drops the 30s Timeout, which would otherwise sever a healthy tail. A
+	// follow is bounded by the caller's context, not a wall-clock deadline.
+	stream *http.Client
 }
 
 // New dials the given UNIX socket path. The host part of the URL is ignored
 // by the dialer; we use "http://agent" as a stable placeholder.
 func New(sockPath string) *Client {
-	return &Client{
-		http: &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-					var d net.Dialer
-					return d.DialContext(ctx, "unix", sockPath)
-				},
-			},
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", sockPath)
 		},
+	}
+	return &Client{
+		http:   &http.Client{Timeout: 30 * time.Second, Transport: transport},
+		stream: &http.Client{Transport: transport},
 	}
 }
 
@@ -155,6 +161,70 @@ func (c *Client) SystemHealth(ctx context.Context) (protocol.SystemHealth, error
 	var out protocol.SystemHealth
 	err := c.do(ctx, "GET", "/v1/health/system", nil, &out)
 	return out, err
+}
+
+// JournalFollow opens host-agent's per-app log tail (GET /v1/journal/follow,
+// BRAIN_HOST_PROTOCOL.md # Pattern C) and streams parsed lines until ctx is
+// cancelled or host-agent closes the stream. The returned channel is closed
+// when the stream ends; a non-nil error means the initial connection failed —
+// host unreachable, or a non-200 such as 501 when host-agent has no log source.
+//
+// It uses the timeout-less streaming client deliberately: the shared 30s
+// request client would sever a healthy long-lived tail, so the follow is
+// bounded by ctx instead. host-agent's per-connection event IDs are not
+// forwarded — the brain's log hub re-IDs every line off its own monotonic
+// counter (BRAIN_UI_PROTOCOL.md Pattern C) — so this client reads only the
+// `data:` payloads and ignores `id:` lines.
+func (c *Client) JournalFollow(ctx context.Context, container string) (<-chan protocol.JournalLine, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		"http://agent/v1/journal/follow?container="+url.QueryEscape(container), http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.stream.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("host-agent unreachable: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		var e protocol.Error
+		_ = json.NewDecoder(resp.Body).Decode(&e)
+		if e.Code == "" {
+			e.Code = "host-agent-error"
+			e.Message = resp.Status
+		}
+		return nil, fmt.Errorf("host-agent /v1/journal/follow: %s (%s)", e.Message, e.Code)
+	}
+
+	ch := make(chan protocol.JournalLine)
+	go func() {
+		defer close(ch)
+		defer resp.Body.Close()
+		sc := bufio.NewScanner(resp.Body)
+		// Log lines can exceed bufio's 64 KiB default; raise the cap so a long
+		// line isn't truncated mid-stream.
+		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for sc.Scan() {
+			// One `data:` line per event — the producer never emits multi-line
+			// data (a JournalLine marshals to a single line). Every other SSE
+			// field (id:, blank separators) is ignored; the brain re-IDs.
+			payload, ok := strings.CutPrefix(sc.Text(), "data:")
+			if !ok {
+				continue
+			}
+			payload = strings.TrimPrefix(payload, " ")
+			var jl protocol.JournalLine
+			if err := json.Unmarshal([]byte(payload), &jl); err != nil {
+				continue
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- jl:
+			}
+		}
+	}()
+	return ch, nil
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {

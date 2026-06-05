@@ -26,6 +26,7 @@ import {
 } from "../api";
 import InstallDialog from "../components/InstallDialog.vue";
 import SplitButton from "../components/SplitButton.vue";
+import HealthGated from "../components/HealthGated.vue";
 
 const qc = useQueryClient();
 const { currentUser, singleUserMode } = useAuth();
@@ -215,12 +216,14 @@ const isAdmin = computed(() => currentUser.value?.role === "admin");
               >
                 Open shared app
               </a>
-              <SplitButton
-                :label="installingId === c.id ? 'Installing…' : 'Install'"
-                :disabled="installingId === c.id"
-                :items="householdDropdownItems(c.id)"
-                @click="openInstallDialog(c.id)"
-              />
+              <HealthGated blocks="apps">
+                <SplitButton
+                  :label="installingId === c.id ? 'Installing…' : 'Install'"
+                  :disabled="installingId === c.id"
+                  :items="householdDropdownItems(c.id)"
+                  @click="openInstallDialog(c.id)"
+                />
+              </HealthGated>
             </template>
 
             <!-- Caller's own personal instance exists: "Open" link only -->
@@ -237,12 +240,14 @@ const isAdmin = computed(() => currentUser.value?.role === "admin");
 
             <!-- No visible instance: Install button -->
             <template v-else>
-              <SplitButton
-                :label="installingId === c.id ? 'Installing…' : 'Install'"
-                :disabled="installingId === c.id"
-                :items="householdDropdownItems(c.id)"
-                @click="openInstallDialog(c.id)"
-              />
+              <HealthGated blocks="apps">
+                <SplitButton
+                  :label="installingId === c.id ? 'Installing…' : 'Install'"
+                  :disabled="installingId === c.id"
+                  :items="householdDropdownItems(c.id)"
+                  @click="openInstallDialog(c.id)"
+                />
+              </HealthGated>
             </template>
           </div>
         </li>

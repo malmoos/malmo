@@ -22,4 +22,10 @@ const routes: RouteRecordRaw[] = [
 export const router = createRouter({
   history: createWebHistory(),
   routes,
+  // Scroll to a #hash target when the destination carries one (the degraded-mode
+  // banner links to #health-issues on Home); other navigations keep the default
+  // (no forced scroll), so existing behavior is unchanged.
+  scrollBehavior(to) {
+    if (to.hash) return { el: to.hash, behavior: "smooth" };
+  },
 });

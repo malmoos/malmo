@@ -1,6 +1,7 @@
 package hostagent
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -131,4 +132,52 @@ func (f *FakeServiceReporter) Read() []protocol.Finding {
 	out := make([]protocol.Finding, len(f.findings))
 	copy(out, f.findings)
 	return out
+}
+
+// FakeLogSource implements LogSource with a synthetic line generator: it emits
+// one plausible stdout line per tick (default ~1s), tagged with the container
+// name, until the follow context is cancelled. cmd/host-agent (the fake binary)
+// wires it so the dev-loop Logs tab shows a live, reconnecting stream without a
+// real journald or Docker's journald log driver in place. Tests pass a short
+// interval so frames arrive promptly.
+type FakeLogSource struct {
+	interval time.Duration
+}
+
+// NewFakeLogSource returns a source emitting one synthetic line per interval.
+// A zero or negative interval defaults to one second.
+func NewFakeLogSource(interval time.Duration) *FakeLogSource {
+	if interval <= 0 {
+		interval = time.Second
+	}
+	return &FakeLogSource{interval: interval}
+}
+
+func (f *FakeLogSource) Follow(ctx context.Context, container string) (<-chan protocol.JournalLine, error) {
+	ch := make(chan protocol.JournalLine)
+	go func() {
+		defer close(ch)
+		t := time.NewTicker(f.interval)
+		defer t.Stop()
+		var n int
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				n++
+				line := protocol.JournalLine{
+					Ts:     time.Now().UTC().Format(time.RFC3339),
+					Stream: "stdout",
+					Line:   fmt.Sprintf("%s: synthetic log line %d", container, n),
+				}
+				select {
+				case ch <- line:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return ch, nil
 }

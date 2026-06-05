@@ -70,7 +70,7 @@ func newHealthHarness(t *testing.T) *healthHarness {
 	authMgr := auth.NewManager(st)
 	healthMgr := health.NewManager(nil)
 
-	apiSrv := NewServer(st, cat, nil, bus, authMgr, host, audit.New(st), healthMgr, nil)
+	apiSrv := NewServer(st, cat, nil, bus, authMgr, host, audit.New(st), healthMgr, nil, nil)
 	ts := httptest.NewServer(apiSrv.Handler())
 	t.Cleanup(ts.Close)
 
