@@ -244,9 +244,9 @@ Detection is deliberately conservative: the brain does not raise an issue on tra
 
 ### Display
 
-The brain exposes the live set via `GET /api/v1/health/issues` and streams transitions over the global SSE event channel (`BRAIN_UI_PROTOCOL.md`). The dashboard subscribes once at mount and surfaces:
+The brain exposes the live set via `GET /api/v1/health` and streams transitions over the global SSE event channel (`BRAIN_UI_PROTOCOL.md`). The dashboard subscribes once at mount and surfaces:
 
-- A **global banner** in the dashboard chrome when any `critical` or `error` issue is active. Click → dedicated Issues view.
+- A **global banner** in the dashboard chrome when any `critical` or `error` issue is active. Click → the inline active-issues list on Home (`#health-issues`); a dedicated Issues route is a follow-up if that list grows unwieldy.
 - **Inline cards** in the relevant section (Storage page for storage issues, Updates page for version issues, per-app card for `app-image-partial`, etc.).
 - **Disabled action affordances** with explanatory tooltips wherever a blocked operation lives ("Install app" greyed out → tooltip: "Disabled because: data drive isn't connected").
 
