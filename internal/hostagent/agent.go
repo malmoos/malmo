@@ -67,6 +67,19 @@ type ServiceReporter interface {
 	Read() []protocol.Finding
 }
 
+// ClockReporter is a consumer-side interface for the locus-B clock-not-synced
+// detector: it parses `chronyc tracking` and emits a clock-not-synced finding
+// when the host clock hasn't synced in 6h or its offset exceeds 10s. It backs the
+// time category of GET /v1/health/system. Provider packages return concrete
+// types: clockhealth.Reporter (real chronyc) for cmd/host-agent-real,
+// FakeClockReporter for the fake binary and tests.
+//
+// Read always returns a usable slice (nil = clock healthy) and never errors —
+// like ServiceReporter, an out-of-sync clock is data, not a failure.
+type ClockReporter interface {
+	Read() []protocol.Finding
+}
+
 // UserManager is a consumer-side interface for the system-level user account
 // operations behind /v1/auth/set-password (and, later, /set-role and
 // /delete-user). Provider packages (usermgr.LinuxUserManager) export concrete
@@ -127,6 +140,13 @@ type Agent struct {
 	// services category entirely — the brain then leaves service issues alone
 	// rather than treating "no services measured" as "all services up".
 	Services ServiceReporter
+
+	// Time, when non-nil, backs the time category of GET /v1/health/system (the
+	// clock-not-synced detector). Swapped per binary: clockhealth.Reporter (real
+	// chronyc) vs FakeClockReporter. When nil, the report omits the time category
+	// entirely — the brain then leaves clock issues alone rather than treating
+	// "no clock measured" as "clock healthy".
+	Time ClockReporter
 
 	// UserMgr, when non-nil, takes over POST /v1/auth/set-password,
 	// /v1/auth/set-role, and /v1/auth/delete-user: handlers delegate to the
@@ -298,6 +318,15 @@ func (a *Agent) systemHealth(w http.ResponseWriter, r *http.Request) {
 			svc = []protocol.Finding{}
 		}
 		cats[protocol.HealthCategoryServices] = svc
+	}
+
+	// Time category (locus B): only when a clock reporter is wired.
+	if a.Time != nil {
+		clk := a.Time.Read()
+		if clk == nil {
+			clk = []protocol.Finding{}
+		}
+		cats[protocol.HealthCategoryTime] = clk
 	}
 
 	writeJSON(w, http.StatusOK, protocol.SystemHealth{

@@ -590,5 +590,19 @@ func builtinDefinitions() []Definition {
 			BlocksWrites: false, BlocksApps: false, BlocksUsers: false,
 			Summary: "An app is running but not responding.",
 		},
+		// Network (HEALTH.md # Network, TIME.md # Drift monitoring). clock-not-synced
+		// is locus B — host-agent runs `chronyc tracking` and reports last-sync age
+		// + offset under the system report's *time* category, while the issue itself
+		// is display Category network. Box-wide (no instance_key). Warning, no block
+		// flags — the box stays usable; it gates only Let's Encrypt renewal near
+		// expiry (TIME.md). The host-agent reporter owns the 6h/10s thresholds.
+		// Debounces (locus B).
+		{
+			ID: "clock-not-synced", Category: CategoryNetwork,
+			Severity: SeverityWarning, Tier: 2,
+			BlocksWrites: false, BlocksApps: false, BlocksUsers: false,
+			Summary:        "The box's clock isn't being kept accurate. Some features (HTTPS certificates, scheduled backups) may stop working.",
+			ReportCategory: protocol.HealthCategoryTime, Debounce: true,
+		},
 	}
 }

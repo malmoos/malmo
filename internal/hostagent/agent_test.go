@@ -671,6 +671,9 @@ func TestSystemHealth_NoSourcesReportsStorageOnly(t *testing.T) {
 	if _, present := sh.Categories[protocol.HealthCategoryServices]; present {
 		t.Error("services category must be absent when no reporter is wired")
 	}
+	if _, present := sh.Categories[protocol.HealthCategoryTime]; present {
+		t.Error("time category must be absent when no reporter is wired")
+	}
 	if sh.CheckedAt == "" {
 		t.Error("checked_at must be set even with no sources")
 	}
@@ -719,6 +722,31 @@ func TestSystemHealth_ServicesFromReporter(t *testing.T) {
 	}
 	if len(services) != 1 || services[0].ID != "service-down" || services[0].InstanceKey != "docker.service" {
 		t.Fatalf("services category: want service-down/docker.service, got %v", services)
+	}
+}
+
+// TestSystemHealth_TimeFromReporter verifies the time category appears once a
+// ClockReporter is wired and carries the clock-not-synced finding verbatim (the
+// clock-not-synced detector, locus B).
+func TestSystemHealth_TimeFromReporter(t *testing.T) {
+	a, mux := newTestAgent(&stubVerifier{})
+	clk := NewFakeClockReporter()
+	clk.Set([]protocol.Finding{
+		{ID: "clock-not-synced", Details: "last synced 7h0m0s ago"},
+	})
+	a.Time = clk
+
+	w := get(t, mux, "/v1/health/system")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d", w.Code)
+	}
+	sh := decodeBody[protocol.SystemHealth](t, w)
+	tm, ok := sh.Categories[protocol.HealthCategoryTime]
+	if !ok {
+		t.Fatal("time category must be present when a reporter is wired")
+	}
+	if len(tm) != 1 || tm[0].ID != "clock-not-synced" {
+		t.Fatalf("time category: want clock-not-synced, got %v", tm)
 	}
 }
 

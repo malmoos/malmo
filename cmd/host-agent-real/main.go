@@ -28,6 +28,7 @@ import (
 
 	"github.com/molmaos/molma/internal/hostagent"
 	"github.com/molmaos/molma/internal/hostagent/avahipublisher"
+	"github.com/molmaos/molma/internal/hostagent/clockhealth"
 	"github.com/molmaos/molma/internal/hostagent/healthsource"
 	"github.com/molmaos/molma/internal/hostagent/pamverifier"
 	"github.com/molmaos/molma/internal/hostagent/servicehealth"
@@ -68,6 +69,7 @@ func main() {
 	a.UserMgr = &usermgr.LinuxUserManager{}
 	a.Health = healthsource.New(healthsource.DefaultPath)
 	a.Services = servicehealth.New()
+	a.Time = clockhealth.New()
 
 	mux := http.NewServeMux()
 	a.Mount(mux)
