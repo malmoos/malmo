@@ -42,7 +42,7 @@ type fakeDocker struct {
 
 	digests       map[string]string // image → digest returned by ImageInspect
 	pullErr       map[string]error  // per-image Pull error (nil = success)
-	composeUp     func(dir, project string) (string, error)
+	composeUp     func(ctx context.Context, dir, project string) (string, error)
 	inspect       func(id, mainService string) (running bool, health string, err error)
 	psManaged     map[string]bool    // returned by PSManaged
 	restartCounts map[string]int     // returned by RestartCounts
@@ -117,10 +117,10 @@ func (f *fakeDocker) ImageInspect(_ context.Context, image string) (RepoDigests,
 	return RepoDigests{repoOf(image) + "@" + d}, nil
 }
 
-func (f *fakeDocker) ComposeUp(_ context.Context, dir, project string) (string, error) {
+func (f *fakeDocker) ComposeUp(ctx context.Context, dir, project string) (string, error) {
 	f.record("ComposeUp", dir, project)
 	if f.composeUp != nil {
-		return f.composeUp(dir, project)
+		return f.composeUp(ctx, dir, project)
 	}
 	if f.composeUpErr != nil {
 		return "boom", f.composeUpErr
