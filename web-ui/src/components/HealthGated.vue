@@ -14,24 +14,17 @@ import { useHealth } from "../useHealth";
 
 const props = defineProps<{ blocks: "apps" | "writes" | "users" }>();
 
-const { activeIssues, blocksApps, blocksWrites, blocksUsers } = useHealth();
+const { activeIssues } = useHealth();
 
-const blocked = computed(() =>
-  props.blocks === "apps"
-    ? blocksApps.value
-    : props.blocks === "writes"
-      ? blocksWrites.value
-      : blocksUsers.value,
-);
-
-// The reason is the summary of the first active issue setting this gate — the
-// same plain-language line the banner shows.
-const reason = computed(() => {
-  const issue = activeIssues.value.find((i) =>
+const blockingIssue = computed(() =>
+  activeIssues.value.find((i) =>
     props.blocks === "apps" ? i.blocks_apps : props.blocks === "writes" ? i.blocks_writes : i.blocks_users,
-  );
-  return issue ? `Disabled because: ${issue.summary}` : "";
-});
+  ),
+);
+const blocked = computed(() => blockingIssue.value !== undefined);
+const reason = computed(() =>
+  blockingIssue.value ? `Disabled because: ${blockingIssue.value.summary}` : "",
+);
 </script>
 
 <template>
