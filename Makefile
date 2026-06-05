@@ -15,7 +15,7 @@ export MOLMA_AGENT_SOCK := $(AGENT_SOCK)
 export MOLMA_STATE_DIR := $(STATE_DIR)
 export MOLMA_CATALOG_DIR := ./catalog
 
-.PHONY: build host-agent brain host-agent-real check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev stop openapi openapi-check clean help
+.PHONY: build host-agent brain host-agent-real check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev stop openapi openapi-check clean check-state-owner help
 
 # msteinert/pam v2.1.0 uses RTLD_NEXT, a GNU extension that requires
 # _GNU_SOURCE at C compile time. Apply globally; harmless to non-cgo builds.
@@ -170,11 +170,26 @@ run-brain: brain net
 ui:
 	cd web-ui && npm install && npm run dev
 
+# Guard against a root-owned dev state dir. App containers run as root in the
+# skeleton and write root-owned files into instances/<id>/; a privileged run or
+# a half-finished manual `rm` (which can't remove that root-owned data) can leave
+# instances/ itself root-owned. The brain then fails an install mid-transaction
+# with a cryptic `mkdir … permission denied` (after a SQLite row already exists).
+# Catch it up front with an actionable message. The supported reset is `make
+# clean` (reclaims root-owned data via a throwaway root container), never a hand `rm`.
+check-state-owner:
+	@if [ -d "$(STATE_DIR)/instances" ] && [ "$$(stat -c %u "$(STATE_DIR)/instances")" != "$$(id -u)" ]; then \
+	  echo "error: $(STATE_DIR)/instances is owned by uid $$(stat -c %u "$(STATE_DIR)/instances"), not you (uid $$(id -u))."; \
+	  echo "       App installs will fail with 'mkdir … permission denied'."; \
+	  echo "       Reset with:  make clean      (or: sudo chown -R $$(id -un) $(STATE_DIR))"; \
+	  exit 1; \
+	fi
+
 # One-terminal dev loop. Pure bash: backgrounds the three foreground procs,
 # prefixes their output with [agent]/[brain]/[ui], and the trap kills the
 # whole process group on Ctrl-C. Caddy is started detached because it's
 # already a long-running container — no point supervising it here.
-dev: build caddy
+dev: check-state-owner build caddy
 	@mkdir -p $(STATE_DIR)
 	@cd web-ui && [ -d node_modules ] || npm install
 	@trap 'kill 0' INT TERM EXIT; \

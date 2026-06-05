@@ -21,6 +21,16 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-05 — Override forces `restart: unless-stopped` *except* for terminating jobs; `compose up` is time-bounded
+
+**Previously:** `APP_LIFECYCLE.md` # Locked: override file contents force-stamped `restart: unless-stopped` onto **every** service ("forced, overrides whatever the author wrote"). And `Manager.install` ran `compose up -d` on an unbounded context.
+
+**Now:** the forced restart is preserved for long-running services but **skipped for author-declared terminating jobs**, whose `restart:` is kept verbatim. A job is detected from the union of two signals: (a) the author set `restart: "no"` / `"on-failure"`, or (b) the service is the target of another service's `depends_on: {condition: service_completed_successfully}` (catches an omitted `restart:`, whose Compose default is `no`). `main_service` is **always** forced long-running regardless. Independently, `compose up -d` now runs under a context bounded by the health-wait budget (default 120s).
+
+**Why:** forcing restart on a one-shot init/migrate/seed job is catastrophic — the job exits 0, Docker restarts it, it never reaches the "completed" terminal state, and a completion-gate `depends_on` blocks `compose up -d` forever. This wedged the install transaction (`kan`'s `migrate`-then-`web` shape, a very common Compose pattern, hung past a 600s test timeout). Layer 1 (job detection) fixes the known shape; layer 2 (bounded `compose up`) is a containment backstop that turns any future never-completing gate into a clean install failure + rollback instead of a hung brain. Verified end-to-end: `kan` now installs, its `migrate` job completes, `web` boots against managed Postgres (`TestLiveKanBoot`).
+
+**Affected docs:** `APP_LIFECYCLE.md` (# Locked: override file contents, # Locked: install transaction). Implementation: `internal/lifecycle` (`writeOverride` restart/`depends_on` parsing in `lifecycle.go`, bounded `ComposeUp` context), realized by `docs/progress/one-shot-job-restart.md`.
+
 ## 2026-06-05 — Managed-service provisioning runs through `docker exec psql`, not a Go SQL client
 
 **Previously:** `SERVICE_PROVISIONING.md` # Provisioning protocol specced *what* the brain does ("connects to that Postgres-15 instance as superuser and creates a database … a role … grants") but not *how* it connects. The implicit reading was a network SQL connection from the brain to the service.

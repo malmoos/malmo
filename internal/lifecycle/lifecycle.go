@@ -386,10 +386,16 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 			"instance_id", id, "host", host, "err", err)
 	}
 
-	// 10. docker compose up -d.
+	// 10. docker compose up -d, bounded by the health-wait budget. A buggy app
+	// whose completion gate never completes makes `compose up -d` block forever
+	// (#92); the timeout turns that into a clean install failure + rollback
+	// instead of a wedged brain, independent of the layer-1 job detection.
 	step("compose_up")
-	if out, err := m.docker.ComposeUp(ctx, m.instanceDir(id), "molma-"+id); err != nil {
-		return rollback(fmt.Errorf("compose up: %w\n%s", err, out))
+	upCtx, cancelUp := context.WithTimeout(ctx, m.healthWait)
+	out, upErr := m.docker.ComposeUp(upCtx, m.instanceDir(id), "molma-"+id)
+	cancelUp()
+	if upErr != nil {
+		return rollback(fmt.Errorf("compose up: %w\n%s", upErr, out))
 	}
 
 	// 11. Wait for main_service healthy. Failures here do NOT roll back: the
@@ -803,10 +809,16 @@ func (m *Manager) writeInstanceDir(id string, man *manifest.Manifest, composeByt
 // — APP_LIFECYCLE.md). main_service additionally joins the ingress network
 // with a per-instance alias so Caddy can reach exactly this instance.
 func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes []byte, pins []servicePin, iso *isolation) error {
-	svcNames, err := composeServices(composeBytes)
+	svcs, err := parseComposeServices(composeBytes)
 	if err != nil {
 		return err
 	}
+	// Services the author designed to terminate must NOT be force-restarted: a
+	// one-shot job that Docker restarts never reaches the "completed" state, so a
+	// `service_completed_successfully` gate waiting on it hangs `compose up -d`
+	// forever (#92). A job is detected from the union of two signals — see
+	// isTerminatingJob. main_service is always forced long-running.
+	gateTargets := completionGateTargets(svcs)
 	pinBySvc := make(map[string]string, len(pins))
 	for _, p := range pins {
 		pinBySvc[p.Service] = p.PinnedRef()
@@ -824,7 +836,7 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 	// membership, not a software allowlist, is what gates reachability.
 	svcNets := serviceNetworkNames(man.Services)
 	services := map[string]any{}
-	for _, svc := range svcNames {
+	for svc := range svcs {
 		nets := map[string]any{appNet: nil}
 		for _, sn := range svcNets {
 			nets[sn] = nil
@@ -837,7 +849,6 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 		entry := map[string]any{
 			"cap_drop":     []string{"ALL"},
 			"security_opt": []string{"no-new-privileges:true"},
-			"restart":      "unless-stopped",
 			"networks":     nets,
 			// Labels let the reconciler find managed containers and map them
 			// back to instances (APP_LIFECYCLE.md # an app instance is a
@@ -847,6 +858,14 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 				"molma.instance_id": id,
 				"molma.manifest_id": man.ID,
 			},
+		}
+		// Forced restart, EXCEPT for author-declared terminating jobs and
+		// completion-gate targets (#92). main_service is always forced — a paranoid
+		// or buggy author can't accidentally exempt the actual app. For a real job
+		// we omit `restart` from the override so the author's compose.yml value wins
+		// verbatim (including the Compose default of "no" when they wrote none).
+		if svc == man.MainService || !isTerminatingJob(svcs[svc], gateTargets[svc]) {
+			entry["restart"] = "unless-stopped"
 		}
 		if ref, ok := pinBySvc[svc]; ok {
 			entry["image"] = ref
@@ -976,7 +995,21 @@ func generateSecrets(decls []manifest.Secret) ([]store.InstanceSecret, error) {
 	return out, nil
 }
 
-func composeServices(composeBytes []byte) ([]string, error) {
+// composeService is the subset of an author compose service the override
+// generator needs: its declared restart policy (to decide whether the forced
+// `unless-stopped` is safe) and its depends_on conditions (to find which
+// services are completion-gate targets — #92).
+type composeService struct {
+	Restart   string
+	DependsOn map[string]string // dep service name → condition (long-form only)
+}
+
+// parseComposeServices extracts each author service's restart policy and
+// depends_on conditions. depends_on has two shapes in Compose: the short list
+// form (`[a, b]`, no conditions) and the long map form
+// (`{a: {condition: …}}`). Only the long form can carry
+// service_completed_successfully, so the short form is parsed to nothing.
+func parseComposeServices(composeBytes []byte) (map[string]composeService, error) {
 	var doc struct {
 		Services map[string]yaml.Node `yaml:"services"`
 	}
@@ -986,11 +1019,58 @@ func composeServices(composeBytes []byte) ([]string, error) {
 	if len(doc.Services) == 0 {
 		return nil, fmt.Errorf("compose has no services")
 	}
-	names := make([]string, 0, len(doc.Services))
-	for n := range doc.Services {
-		names = append(names, n)
+	out := make(map[string]composeService, len(doc.Services))
+	for name, node := range doc.Services {
+		var raw struct {
+			Restart   string    `yaml:"restart"`
+			DependsOn yaml.Node `yaml:"depends_on"`
+		}
+		if err := node.Decode(&raw); err != nil {
+			return nil, fmt.Errorf("parse service %q: %w", name, err)
+		}
+		svc := composeService{Restart: raw.Restart}
+		if raw.DependsOn.Kind == yaml.MappingNode {
+			var deps map[string]struct {
+				Condition string `yaml:"condition"`
+			}
+			if err := raw.DependsOn.Decode(&deps); err != nil {
+				return nil, fmt.Errorf("parse service %q depends_on: %w", name, err)
+			}
+			svc.DependsOn = make(map[string]string, len(deps))
+			for dep, d := range deps {
+				svc.DependsOn[dep] = d.Condition
+			}
+		}
+		out[name] = svc
 	}
-	return names, nil
+	return out, nil
+}
+
+// isTerminatingJob reports whether a service was designed to run to completion
+// rather than stay up, from the union of two signals (#92): (a) the author set a
+// terminating restart policy ("no" or "on-failure"), or (b) the service is the
+// target of another service's service_completed_successfully gate — which
+// catches an author who omitted restart entirely (Compose default is "no"),
+// the case signal (a) alone misses.
+func isTerminatingJob(svc composeService, isGateTarget bool) bool {
+	// "on-failure" may carry a retry count ("on-failure:5"); match the prefix.
+	return svc.Restart == "no" || strings.HasPrefix(svc.Restart, "on-failure") || isGateTarget
+}
+
+// completionGateTargets is the set of services that some other service waits on
+// with `depends_on: {condition: service_completed_successfully}` — i.e. jobs the
+// author designed to run to completion, not stay up. Forcing restart on these
+// wedges `compose up -d` forever on the gate (#92).
+func completionGateTargets(svcs map[string]composeService) map[string]bool {
+	targets := map[string]bool{}
+	for _, svc := range svcs {
+		for dep, cond := range svc.DependsOn {
+			if cond == "service_completed_successfully" {
+				targets[dep] = true
+			}
+		}
+	}
+	return targets
 }
 
 func newInstanceID(manifestID string) string {
