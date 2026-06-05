@@ -170,13 +170,16 @@ Everything dev-generated is under `.dev/` (git-ignored):
 ├── agent.sock                    # host-agent UNIX socket
 ├── brain  host-agent             # compiled binaries
 └── state/
-    ├── molma.db                  # brain SQLite
+    ├── molma.db                  # brain SQLite (users, sessions, instances)
+    ├── fake-shadow.json          # fake host-agent's passwords + roles (stands in for /etc/shadow)
     └── instances/<id>/           # per-app: manifest, compose, override, .env, data/
 ```
 
 Override defaults with env vars: `MOLMA_LISTEN`, `MOLMA_STATE_DIR`,
 `MOLMA_CATALOG_DIR`, `MOLMA_AGENT_SOCK`, `MOLMA_CADDY_ADMIN`,
 `MOLMA_CADDY_LISTEN`.
+
+**Why `fake-shadow.json` exists.** The password lives on the host-agent side, never in the brain (`AUTH.md` # Password storage — the brain calls `verify_password` on every login). The *real* host-agent persists it in `/etc/shadow`; the *fake* one used by `make dev` would otherwise keep it in an in-memory map that dies with the process. Because the brain's SQLite persists the user **and** session rows across a restart, that asymmetry produced a confusing bug: restart the stack, clear cookies, log in again, and the password was rejected even though the account still existed (the session cookie had masked it — a kept cookie skips the password re-check). Backing the fake maps with `fake-shadow.json` under `MOLMA_STATE_DIR` makes dev accounts survive a restart, matching the real agent. Set `MOLMA_STATE_DIR` and the fake agent picks it up automatically (the dev stack exports it); leave it unset and the fake stays purely in-memory.
 
 ## Reset
 

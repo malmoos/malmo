@@ -7,6 +7,12 @@
 // Env vars:
 //
 //	MOLMA_AGENT_SOCK  — UNIX socket path (default protocol.SocketPath)
+//	MOLMA_STATE_DIR   — when set, persist the fake user maps (passwords +
+//	                    roles) to <dir>/fake-shadow.json so accounts survive a
+//	                    restart, standing in for /etc/shadow. When unset, the
+//	                    maps are in-memory only and a restart forgets every
+//	                    account. The dev stack exports this (same dir as the
+//	                    brain's molma.db).
 //	MOLMA_HEALTH_PATH — when set, back the storage category of GET
 //	                    /v1/health/system from this file (read via the same
 //	                    FilesystemHealthSource the real binary uses). When
@@ -25,6 +31,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/molmaos/molma/internal/hostagent"
@@ -65,6 +72,19 @@ func main() {
 
 	a := hostagent.New(nil, pub) // verifier wired after construction
 	a.Verifier = hostagent.NewFakeVerifier(a)
+	// The fake agent stands in for /etc/shadow, which the real binary persists
+	// for free. Without a backing file, a `make dev` restart wipes every
+	// account's password while the brain's SQLite keeps the user + session
+	// rows, so a fresh login after clearing cookies fails. Persist into the
+	// same MOLMA_STATE_DIR the brain uses (the dev stack exports it).
+	if dir := os.Getenv("MOLMA_STATE_DIR"); dir != "" {
+		statePath := filepath.Join(dir, "fake-shadow.json")
+		if err := a.EnablePersistence(statePath); err != nil {
+			slog.Error("host-agent (fake) load persisted user state", "path", statePath, "err", err)
+			os.Exit(1)
+		}
+		slog.Info("host-agent (fake) persisting user state", "path", statePath)
+	}
 	if healthPath := os.Getenv("MOLMA_HEALTH_PATH"); healthPath != "" {
 		a.Health = healthsource.New(healthPath)
 		slog.Info("host-agent (fake) wired to storage health file", "path", healthPath)

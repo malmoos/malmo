@@ -149,6 +149,11 @@ type Agent struct {
 	// the map entirely — /etc/shadow is the source of truth there.
 	passwords map[string][]byte
 	roles     map[string]string
+	// statePath, when non-empty, backs passwords+roles with a JSON file so the
+	// fake binary's accounts survive a restart (a dev stand-in for /etc/shadow,
+	// which the real agent persists for free). Empty by default — tests and the
+	// real binary keep the maps purely in memory. Set via EnablePersistence.
+	statePath string
 	startedAt time.Time
 
 	// Verifier handles POST /v1/auth/verify-password.
@@ -521,6 +526,7 @@ func (a *Agent) setPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	a.passwords[req.User] = hash
+	a.persistLocked()
 	a.mu.Unlock()
 	slog.Info("set-password", "user", req.User)
 	writeJSON(w, http.StatusOK, struct{}{})
@@ -559,6 +565,7 @@ func (a *Agent) setRole(w http.ResponseWriter, r *http.Request) {
 
 	a.mu.Lock()
 	a.roles[req.User] = req.Role
+	a.persistLocked()
 	a.mu.Unlock()
 	slog.Info("set-role", "user", req.User, "role", req.Role)
 	writeJSON(w, http.StatusOK, struct{}{})
@@ -592,6 +599,7 @@ func (a *Agent) deleteUser(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	delete(a.passwords, req.User)
 	delete(a.roles, req.User)
+	a.persistLocked()
 	a.mu.Unlock()
 	slog.Info("delete-user", "user", req.User)
 	writeJSON(w, http.StatusOK, struct{}{})
