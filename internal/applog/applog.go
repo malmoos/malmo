@@ -247,6 +247,14 @@ func (h *hub) unsubscribe(id int) {
 
 // maybeStop is the linger callback: tear down only if still idle (a reader may
 // have rejoined during the linger).
+//
+// Timing note: subscribe() stops the linger timer before adding a subscriber,
+// but time.Timer.Stop() returns false when the callback is already running —
+// meaning maybeStop may read idle=false only after cancel() and before a fresh
+// subscriber's channel is closed by teardown(). That subscriber sees its channel
+// close, the SSE handler returns, and EventSource reconnects (getting a fresh hub
+// from the retry loop in Registry.Subscribe). It's a brief reconnect cycle, not
+// data loss — the {lost} replay on reconnect handles the gap.
 func (h *hub) maybeStop() {
 	h.mu.Lock()
 	idle := len(h.subs) == 0

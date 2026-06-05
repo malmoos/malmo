@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/molmaos/molma/internal/applog"
 	"github.com/molmaos/molma/internal/auth"
@@ -41,6 +42,11 @@ func (s *Server) appLog(w http.ResponseWriter, r *http.Request) {
 	}
 	if status := logVisibility(id, inst); status != http.StatusOK {
 		writeStreamError(w, status, http.StatusText(status))
+		return
+	}
+
+	if s.applogs == nil {
+		writeStreamError(w, http.StatusServiceUnavailable, "Log streaming not configured")
 		return
 	}
 
@@ -80,10 +86,15 @@ func (s *Server) appLog(w http.ResponseWriter, r *http.Request) {
 		writeLogFrame(w, flusher, ln)
 	}
 
+	ping := time.NewTicker(30 * time.Second)
+	defer ping.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-ping.C:
+			fmt.Fprintf(w, ": ping\n\n")
+			flusher.Flush()
 		case ln, ok := <-live:
 			if !ok {
 				return
@@ -143,5 +154,9 @@ func parseLastEventID(r *http.Request) uint64 {
 func writeStreamError(w http.ResponseWriter, status int, title string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = fmt.Fprintf(w, `{"status":%d,"title":%q}`, status, title)
+	data, _ := json.Marshal(struct {
+		Status int    `json:"status"`
+		Title  string `json:"title"`
+	}{status, title})
+	_, _ = w.Write(data)
 }
