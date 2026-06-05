@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/molmaos/molma/internal/api"
+	"github.com/molmaos/molma/internal/applog"
 	"github.com/molmaos/molma/internal/audit"
 	"github.com/molmaos/molma/internal/auth"
 	"github.com/molmaos/molma/internal/caddy"
@@ -146,7 +147,13 @@ func main() {
 	// to the process lifetime.
 	live := systemlive.New(pollCtx, host, time.Second)
 
-	srv := api.NewServer(st, cat, life, bus, authMgr, host, auditor, healthMgr, live)
+	// applogs owns the per-app log fan-out: one ref-counted host-agent follow per
+	// instance behind the dashboard's many readers, with the ring buffer + replay
+	// the per-app Logs tab needs. Idle when nobody is watching; pollCtx bounds any
+	// active follow to the process lifetime.
+	applogs := applog.NewRegistry(pollCtx, host)
+
+	srv := api.NewServer(st, cat, life, bus, authMgr, host, auditor, healthMgr, live, applogs)
 	httpSrv := &http.Server{Addr: cfg.listen, Handler: srv.Handler()}
 	slog.Info("molma-brain listening",
 		"listen", cfg.listen, "state_dir", cfg.stateDir, "catalog_dir", cfg.catalogDir)
