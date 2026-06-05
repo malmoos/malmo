@@ -36,7 +36,7 @@ Closes issue #11. A Settings → Activity view over the **already-built** `GET /
 
 ## Known gaps & deviations
 
-- **Members see actor-only, not target, events.** `LOGGING.md` # Visibility rules says members see events where they are actor **or target**; the shipped `listAudit` filters by actor only (`f.ActorUserID = id.User.ID`). So "admin reset *my* password" (member is target, admin is actor) doesn't reach a member today. This is a pre-existing **backend** limitation, not introduced here — the UI renders whatever the API returns. Flagged for a brain-side follow-up (widen the member filter to actor-or-target).
+- **Member actor-name resolution is best-effort.** A member can't call the admin-only `GET /users`, but the backend correctly returns events where the member is the *target* of an admin action (`store.ListAuditEvents` filters actor-or-target: `WHERE actor_user_id = ? OR (target_kind = 'user' AND target_id = ?)`). For those rows the acting admin's id can't be resolved to a username on the client, so the UI degrades it to a role label ("An administrator") rather than showing a raw UUID. Surfacing the actor's username to members would need an `actor_username` field on `AuditEventDTO` (a backend change, out of scope here).
 - **Structured filtering (by actor / action / date range) is not built.** The issue's Done-when lists pagination + export, not filters; `LOGGING.md` lists structured filtering as part of the eventual view but free-text search is already deferred there. Left as a follow-up — the table + Load-more + export satisfy the issue.
 - **Export scope is the loaded rows, not the entire history.** Export serialises what's on screen (including pages opened via Load more), per the issue's "serialises the current page or fetches all pages" — the lighter of the two. A full-history export (fetch-all-then-download) is a follow-up if it's wanted.
 - **Relative-time helper duplicated** from `NotificationBell.vue` (7 lines). Kept local rather than extracting a shared util — extraction + rewiring the bell is scope creep for this issue; promote when a third consumer appears.
@@ -44,7 +44,7 @@ Closes issue #11. A Settings → Activity view over the **already-built** `GET /
 
 ## What's next
 
-- **Widen the member audit filter to actor-or-target** in the brain (`listAudit` / `store.AuditFilter`) so members see "admin acted on me" events, closing the gap above.
+- **`actor_username` on `AuditEventDTO`** so a member can see *who* acted on them by name, not just "An administrator" (the row already reaches them; only the name is unresolvable client-side).
 - **Structured filters** (actor / action type / date range) on the Activity view.
 - **Full-history export** (fetch all pages) if the loaded-rows export proves too narrow.
 - **SSH/SMB/sudo ingestion** rows will appear here automatically once that audit path lands (`LOGGING.md` # External auth ingestion) — they're just more `action` strings; add labels for them then.

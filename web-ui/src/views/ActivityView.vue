@@ -1,10 +1,11 @@
 <script setup lang="ts">
 // Settings → Activity — the audit-log browser (LOGGING.md # Activity (audit log),
 // issue #11). Consumes the already-built GET /api/v1/audit: admins see the full
-// box-wide feed, members see only their own events. The brain enforces that split
-// server-side (LOGGING.md # Visibility rules) — this view renders whatever the
-// API returns and does no client-side row filtering. Open to all authenticated
-// users (not admin-gated), unlike the sibling Users view.
+// box-wide feed, members see only events where they are the actor or the target.
+// The brain enforces that split server-side (LOGGING.md # Visibility rules) —
+// this view renders whatever the API returns and does no client-side row
+// filtering. Open to all authenticated users (not admin-gated), unlike the
+// sibling Users view.
 import { computed } from "vue";
 import { RouterLink } from "vue-router";
 import { useQuery, useInfiniteQuery } from "@tanstack/vue-query";
@@ -31,8 +32,10 @@ const audit = useInfiniteQuery({
 const events = computed<AuditEvent[]>(() => audit.data.value?.pages.flatMap((p) => p.events) ?? []);
 
 // Admin name resolution: actor_user_id → username via the admin-only user list.
-// Members only ever receive their own events, so currentUser covers every row
-// they see and this fetch stays disabled for them.
+// Members can't call /users, so for them this stays empty. A member can still
+// receive events where an admin acted on them (LOGGING.md # Visibility rules:
+// actor-or-target) — currentUser names the self rows, and any id we can't
+// resolve degrades to a role label rather than leaking a raw UUID.
 const usersQuery = useQuery({
   queryKey: ["users"],
   queryFn: () => api.get<{ users: User[] }>("/users"),
@@ -44,21 +47,24 @@ const nameById = computed(() => {
   return m;
 });
 
-function userName(id: string): string {
+// Resolve a user id to a display name, or null when we can't — never the raw
+// UUID. currentUser always names the signed-in user; the /users map names the
+// rest for an admin; a member viewing another user's id falls through to null.
+function userName(id: string): string | null {
   if (id === currentUser.value?.id) return currentUser.value!.username;
-  return nameById.value.get(id) ?? id;
+  return nameById.value.get(id) ?? null;
 }
 
 function actorName(e: AuditEvent): string {
   if (e.actor_role === "system" || !e.actor_user_id) return "System";
-  return userName(e.actor_user_id);
+  return userName(e.actor_user_id) ?? (e.actor_role === "admin" ? "An administrator" : "Another user");
 }
 
 // Target: app slug / username / health-issue key, by target_kind. A user target
-// resolves to a username when we can name it.
+// resolves to a username when we can name it, else a generic label.
 function targetText(e: AuditEvent): string {
   if (!e.target_kind || !e.target_id) return "—";
-  if (e.target_kind === "user") return userName(e.target_id);
+  if (e.target_kind === "user") return userName(e.target_id) ?? "A user";
   return e.target_id;
 }
 
