@@ -1,0 +1,7 @@
+services:
+  app:
+    image: docuseal/docuseal:3.0.2
+    volumes:
+      - ./data/app:/data/docuseal
+    environment:
+      DATABASE_URL: ${MOLMA_SERVICE_DATABASE_DSN}

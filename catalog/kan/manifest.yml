@@ -1,0 +1,35 @@
+id: kan
+manifest_version: 1
+name: Kan
+version: "0.5.6"
+description:
+  short: "Self-hosted Kanban boards for managing projects and tasks with your team."
+  long: |
+    Kan is an open-source alternative to Trello — a visual project management board that runs entirely on your own hardware. Organize work into boards, lists, and cards; invite household members to collaborate; track every change with a detailed activity log; and import your existing Trello boards with one click. All project data stays in your home server's database, not a third-party cloud.
+icon: ./icon.png
+categories: [productivity]
+author:
+  name: Kan
+  url: https://kan.bn
+license: AGPL-3.0
+links:
+  homepage: https://kan.bn
+  source: https://github.com/kanbn/kan
+  support: https://docs.kan.bn
+
+compose_file: compose.yml
+main_service: web
+main_port: 3000
+preferred_slugs: [kan, kanban]
+
+resources:
+  recommended: { memory: 512M, cpu: 0.5 }
+
+services:
+  database:
+    type: postgres
+    version: "15"
+
+permissions:
+  internet: true
+  lan: false
