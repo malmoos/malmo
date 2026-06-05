@@ -25,6 +25,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/molmaos/molma/internal/hostagent"
 	"github.com/molmaos/molma/internal/hostagent/avahipublisher"
@@ -68,6 +69,11 @@ func main() {
 		a.Health = healthsource.New(healthPath)
 		slog.Info("host-agent (fake) wired to storage health file", "path", healthPath)
 	}
+	// No real journald or Docker journald log driver in the dev loop, so the
+	// per-app Logs tab is fed a synthetic ticker — one plausible line per second
+	// per followed container — so the brain→UI streaming path is exercisable
+	// end-to-end natively (BRAIN_HOST_PROTOCOL.md # Pattern C).
+	a.Logs = hostagent.NewFakeLogSource(time.Second)
 
 	mux := http.NewServeMux()
 	a.Mount(mux)

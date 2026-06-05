@@ -6,6 +6,7 @@
 // (wired in Dashboard.vue), which invalidates the queries this composable owns.
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useNotifications } from "./useNotifications";
+import { relativeTime } from "./utils";
 import type { Notification } from "./api";
 
 const { list, unreadCount, markRead, markAllRead, dismiss } = useNotifications();
@@ -42,15 +43,6 @@ function onDocClick(e: MouseEvent) {
 onMounted(() => document.addEventListener("click", onDocClick));
 onUnmounted(() => document.removeEventListener("click", onDocClick));
 
-function relativeTime(ms: number): string {
-  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
-  if (s < 60) return "just now";
-  const m = Math.round(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.round(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.round(h / 24)}d ago`;
-}
 </script>
 
 <template>

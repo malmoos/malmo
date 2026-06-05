@@ -68,6 +68,10 @@ export type CatalogEntry = Schemas["Entry"];
 export type Instance = Schemas["InstanceDTO"];
 export type Notification = Schemas["NotificationDTO"];
 export type AuditEvent = Schemas["AuditEventDTO"];
+// HealthIssue mirrors health.Issue (HEALTH.md # Issue shape) — the degraded-mode
+// banner's source of truth (issue #12). severity/category are free strings in the
+// schema (same as scope/status); the UI compares them against the known values.
+export type HealthIssue = Schemas["Issue"];
 export type Job = Schemas["Job"];
 export type FolderElection = Schemas["FolderElection"];
 export type InstallRequest = Schemas["Install-appRequest"];

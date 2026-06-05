@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/molmaos/molma/internal/audit"
+	"github.com/molmaos/molma/internal/events"
 	"github.com/molmaos/molma/internal/health"
 	"github.com/molmaos/molma/internal/lifecycle"
 	"github.com/molmaos/molma/internal/manifest"
@@ -41,7 +42,7 @@ func TestEmitHealthTransitions_OneRecordPerIssue(t *testing.T) {
 	raised := []health.IssueKey{{ID: "data-drive-missing"}, {ID: "canary-mismatch"}}
 	cleared := []health.IssueKey{{ID: "mergerfs-assembly-failed"}}
 
-	emitHealthTransitions(context.Background(), auditor, raised, cleared)
+	emitHealthTransitions(context.Background(), auditor, nil, raised, cleared)
 
 	if len(fs.events) != 3 {
 		t.Fatalf("want 3 audit records (2 raised + 1 cleared), got %d", len(fs.events))
@@ -77,9 +78,49 @@ func TestEmitHealthTransitions_OneRecordPerIssue(t *testing.T) {
 // a poll that changes nothing must not write any audit rows.
 func TestEmitHealthTransitions_NoTransitionsNoRecords(t *testing.T) {
 	fs := &fakeEventStore{}
-	emitHealthTransitions(context.Background(), audit.New(fs), nil, nil)
+	emitHealthTransitions(context.Background(), audit.New(fs), nil, nil, nil)
 	if len(fs.events) != 0 {
 		t.Fatalf("want 0 records for no transitions, got %d", len(fs.events))
+	}
+}
+
+// TestEmitHealthTransitions_PublishesToBus pins the issue #12 seam: each raised
+// and cleared issue publishes the matching SSE event (advisory {id,
+// instance_key}) so the dashboard's degraded-mode banner updates live. Audit
+// and notify are covered above; here we assert only the event fan-out.
+func TestEmitHealthTransitions_PublishesToBus(t *testing.T) {
+	bus := events.NewBus()
+	ch, unsub := bus.Subscribe()
+	defer unsub()
+
+	raised := []health.IssueKey{{ID: "service-down", InstanceKey: "avahi-daemon"}}
+	cleared := []health.IssueKey{{ID: "version-mismatch"}}
+	emitHealthTransitions(context.Background(), audit.New(&fakeEventStore{}), bus, raised, cleared)
+
+	first := recvEvent(t, ch)
+	if first.Kind != events.HealthIssueRaised ||
+		first.Data["id"] != "service-down" || first.Data["instance_key"] != "avahi-daemon" {
+		t.Errorf("raised event = {%s, %v}, want {%s, service-down/avahi-daemon}",
+			first.Kind, first.Data, events.HealthIssueRaised)
+	}
+	second := recvEvent(t, ch)
+	if second.Kind != events.HealthIssueCleared || second.Data["id"] != "version-mismatch" {
+		t.Errorf("cleared event = {%s, %v}, want {%s, version-mismatch}",
+			second.Kind, second.Data, events.HealthIssueCleared)
+	}
+}
+
+// recvEvent reads one event from the bus subscription, failing the test if none
+// arrives promptly (Publish delivers synchronously into the buffered channel, so
+// this never actually blocks on a correct implementation).
+func recvEvent(t *testing.T, ch <-chan events.Event) events.Event {
+	t.Helper()
+	select {
+	case ev := <-ch:
+		return ev
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for a published event")
+		return events.Event{}
 	}
 }
 
@@ -187,7 +228,7 @@ func TestCheckAgentVersion_MismatchRaises(t *testing.T) {
 	fs := &fakeEventStore{}
 
 	checkAgentVersion(context.Background(), fakeStatusReader{version: "9.9.9-other"},
-		mgr, audit.New(fs), notify.New(&fakeNotifStore{}, nil))
+		mgr, audit.New(fs), notify.New(&fakeNotifStore{}, nil), nil)
 
 	if !versionActive(mgr) {
 		t.Fatal("want version-mismatch active after a mismatched agent version")
@@ -207,11 +248,11 @@ func TestCheckAgentVersion_MatchClears(t *testing.T) {
 	auditor := audit.New(fs)
 	notifier := notify.New(&fakeNotifStore{}, nil)
 
-	checkAgentVersion(context.Background(), fakeStatusReader{version: "9.9.9-other"}, mgr, auditor, notifier)
+	checkAgentVersion(context.Background(), fakeStatusReader{version: "9.9.9-other"}, mgr, auditor, notifier, nil)
 	if !versionActive(mgr) {
 		t.Fatal("setup: want version-mismatch active after a mismatch")
 	}
-	checkAgentVersion(context.Background(), fakeStatusReader{version: expectedAgentVersion}, mgr, auditor, notifier)
+	checkAgentVersion(context.Background(), fakeStatusReader{version: expectedAgentVersion}, mgr, auditor, notifier, nil)
 	if versionActive(mgr) {
 		t.Fatal("want version-mismatch cleared after a matching version")
 	}
@@ -229,7 +270,7 @@ func TestCheckAgentVersion_MatchNoIssueIsNoop(t *testing.T) {
 	fs := &fakeEventStore{}
 
 	checkAgentVersion(context.Background(), fakeStatusReader{version: expectedAgentVersion},
-		mgr, audit.New(fs), notify.New(&fakeNotifStore{}, nil))
+		mgr, audit.New(fs), notify.New(&fakeNotifStore{}, nil), nil)
 
 	if versionActive(mgr) {
 		t.Error("want no version-mismatch for a matching version")
@@ -252,11 +293,11 @@ func TestCheckAgentVersion_SteadyMismatchRefreshesWithoutReaudit(t *testing.T) {
 	notifier := notify.New(&fakeNotifStore{}, nil)
 	reader := fakeStatusReader{version: "9.9.9-other"}
 
-	checkAgentVersion(context.Background(), reader, mgr, auditor, notifier)
+	checkAgentVersion(context.Background(), reader, mgr, auditor, notifier, nil)
 	first, _ := mgr.Get("version-mismatch", "")
 
 	clock = clock.Add(60 * time.Second)
-	checkAgentVersion(context.Background(), reader, mgr, auditor, notifier)
+	checkAgentVersion(context.Background(), reader, mgr, auditor, notifier, nil)
 	second, ok := mgr.Get("version-mismatch", "")
 	if !ok {
 		t.Fatal("want version-mismatch still active on the second poll")
@@ -282,14 +323,14 @@ func TestCheckAgentVersion_UnreachableLeavesStateUnchanged(t *testing.T) {
 	notifier := notify.New(&fakeNotifStore{}, nil)
 
 	checkAgentVersion(context.Background(), fakeStatusReader{version: "9.9.9-other"},
-		mgr, audit.New(&fakeEventStore{}), notifier)
+		mgr, audit.New(&fakeEventStore{}), notifier, nil)
 	if !versionActive(mgr) {
 		t.Fatal("setup: want version-mismatch active")
 	}
 
 	fs := &fakeEventStore{}
 	checkAgentVersion(context.Background(), fakeStatusReader{err: errors.New("dial unix: connection refused")},
-		mgr, audit.New(fs), notifier)
+		mgr, audit.New(fs), notifier, nil)
 	if !versionActive(mgr) {
 		t.Error("an unreachable host-agent must not clear version-mismatch")
 	}
@@ -336,7 +377,7 @@ func TestCheckBrainDBIntegrity_CorruptRaises(t *testing.T) {
 	fns := &fakeNotifStore{}
 	checker := fakeIntegrityChecker{result: "*** in database main ***\nrow 5 missing from index idx_x"}
 
-	checkBrainDBIntegrity(context.Background(), checker, mgr, audit.New(fs), notify.New(fns, nil))
+	checkBrainDBIntegrity(context.Background(), checker, mgr, audit.New(fs), notify.New(fns, nil), nil)
 
 	if !dbCorruptActive(mgr) {
 		t.Fatal("want brain-db-corrupt active after a non-ok integrity check")
@@ -367,7 +408,7 @@ func TestCheckBrainDBIntegrity_OkClears(t *testing.T) {
 	fs := &fakeEventStore{}
 	fns := &fakeNotifStore{}
 
-	checkBrainDBIntegrity(context.Background(), fakeIntegrityChecker{result: "ok"}, mgr, audit.New(fs), notify.New(fns, nil))
+	checkBrainDBIntegrity(context.Background(), fakeIntegrityChecker{result: "ok"}, mgr, audit.New(fs), notify.New(fns, nil), nil)
 
 	if dbCorruptActive(mgr) {
 		t.Fatal("want brain-db-corrupt cleared after an ok integrity check")
@@ -384,7 +425,7 @@ func TestCheckBrainDBIntegrity_OkNoIssueIsNoop(t *testing.T) {
 	fs := &fakeEventStore{}
 	fns := &fakeNotifStore{}
 
-	checkBrainDBIntegrity(context.Background(), fakeIntegrityChecker{result: "ok"}, mgr, audit.New(fs), notify.New(fns, nil))
+	checkBrainDBIntegrity(context.Background(), fakeIntegrityChecker{result: "ok"}, mgr, audit.New(fs), notify.New(fns, nil), nil)
 
 	if dbCorruptActive(mgr) {
 		t.Error("ok on a clean registry must not raise anything")
@@ -413,11 +454,11 @@ func TestCheckBrainDBIntegrity_SteadyCorruptRefreshesWithoutReaudit(t *testing.T
 	notifier := notify.New(&fakeNotifStore{}, nil)
 	checker := fakeIntegrityChecker{result: "row 5 missing from index idx_x"}
 
-	checkBrainDBIntegrity(context.Background(), checker, mgr, auditor, notifier)
+	checkBrainDBIntegrity(context.Background(), checker, mgr, auditor, notifier, nil)
 	first, _ := mgr.Get("brain-db-corrupt", "")
 
 	clock = clock.Add(6 * time.Hour)
-	checkBrainDBIntegrity(context.Background(), checker, mgr, auditor, notifier)
+	checkBrainDBIntegrity(context.Background(), checker, mgr, auditor, notifier, nil)
 	second, _ := mgr.Get("brain-db-corrupt", "")
 
 	if len(fs.events) != 1 {
@@ -440,7 +481,7 @@ func TestCheckBrainDBIntegrity_QueryErrorLeavesStateUnchanged(t *testing.T) {
 	fs := &fakeEventStore{}
 	fns := &fakeNotifStore{}
 
-	checkBrainDBIntegrity(context.Background(), fakeIntegrityChecker{err: errors.New("disk I/O error")}, mgr, audit.New(fs), notify.New(fns, nil))
+	checkBrainDBIntegrity(context.Background(), fakeIntegrityChecker{err: errors.New("disk I/O error")}, mgr, audit.New(fs), notify.New(fns, nil), nil)
 
 	if !dbCorruptActive(mgr) {
 		t.Error("a query error must not clear an active brain-db-corrupt")
