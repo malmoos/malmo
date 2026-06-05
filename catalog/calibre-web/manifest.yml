@@ -1,0 +1,47 @@
+id: calibre-web
+manifest_version: 1
+name: Calibre-Web
+version: "0.6.26"
+description:
+  short: "Browse, read, and download your eBook library from any browser."
+  long: |
+    Calibre-Web gives you a clean browser-based interface to your Calibre ebook library — search by title, author, series, or tag, read books in the built-in reader, and download files in multiple formats. It connects directly to the Calibre database in your Documents folder, so your library stays portable and works alongside the desktop Calibre app without duplicating files.
+categories: [books, media]
+author:
+  name: LinuxServer.io
+  url: https://linuxserver.io
+license: GPL-3.0
+links:
+  homepage: https://github.com/janeczku/calibre-web
+  source: https://github.com/linuxserver/docker-calibre-web
+
+compose_file: compose.yml
+main_service: calibre-web
+main_port: 8083
+preferred_slugs: [calibre-web, books]
+
+resources:
+  recommended:
+    memory: 256M
+    cpu: 0.5
+
+storage:
+  data_volumes:
+    - ./data/config
+  estimated_size: 50MB
+
+permissions:
+  internet: true
+  folders:
+    - folder: documents
+      mode: write
+      scope: pick-subfolder
+      default: Books
+
+health_probe: /
+
+images:
+  lscr.io/linuxserver/calibre-web:0.6.26-ls385:
+    digest: sha256:4711cc328bf2bb16cfcd5a98f06a0ea51a0f05b75353667aa3a8e93480454efa
+    download_bytes: 262612383
+    disk_bytes: 790907893
