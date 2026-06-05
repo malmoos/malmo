@@ -31,6 +31,13 @@ type Entry struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
 	Version string `json:"version"`
+
+	// Footprint is the coarse on-disk summary the store grid renders without a
+	// second fetch (APP_STORE.md # Catalog schema). It is an upper bound derived
+	// straight from the manifest — nothing is assumed cached locally; the install
+	// dialog shows a sharper, box-specific figure (BRAIN_UI_PROTOCOL.md #
+	// install-plan).
+	Footprint manifest.Footprint `json:"footprint"`
 }
 
 func (c *Catalog) List() ([]Entry, error) {
@@ -47,7 +54,7 @@ func (c *Catalog) List() ([]Entry, error) {
 		if err != nil {
 			continue // skip malformed entries
 		}
-		out = append(out, Entry{ID: man.ID, Name: man.Name, Version: man.Version})
+		out = append(out, Entry{ID: man.ID, Name: man.Name, Version: man.Version, Footprint: man.Footprint()})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil

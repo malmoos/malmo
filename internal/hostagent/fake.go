@@ -192,6 +192,33 @@ func (f *FakeRAMReporter) Read() []protocol.Finding {
 	return out
 }
 
+// FakeDiskReporter implements DiskReporter with settable free/total levels. The
+// fake binary wires one with a plausible canned figure so the dev-loop install
+// plan shows a non-zero free_bytes; brain integration tests set specific levels
+// to assert the figure flows through to the install plan.
+type FakeDiskReporter struct {
+	mu          sync.Mutex
+	free, total int64
+}
+
+// NewFakeDiskReporter returns a reporter with the given free/total byte levels.
+func NewFakeDiskReporter(free, total int64) *FakeDiskReporter {
+	return &FakeDiskReporter{free: free, total: total}
+}
+
+// Set replaces the reported free/total levels.
+func (f *FakeDiskReporter) Set(free, total int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.free, f.total = free, total
+}
+
+func (f *FakeDiskReporter) DataDisk() (int64, int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.free, f.total
+}
+
 // FakeLogSource implements LogSource with a synthetic line generator: it emits
 // one plausible stdout line per tick (default ~1s), tagged with the container
 // name, until the follow context is cancelled. cmd/host-agent (the fake binary)
