@@ -21,6 +21,26 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-05 — Managed-service provisioning runs through `docker exec psql`, not a Go SQL client
+
+**Previously:** `SERVICE_PROVISIONING.md` # Provisioning protocol specced *what* the brain does ("connects to that Postgres-15 instance as superuser and creates a database … a role … grants") but not *how* it connects. The implicit reading was a network SQL connection from the brain to the service.
+
+**Now:** the brain provisions per-app databases and roles by running `docker exec <svc-container> psql` (a new `DockerDriver.Exec`), inside the shared service container, rather than opening a SQL connection of its own. Each service kind+version is a brain-owned compose project under `<stateDir>/services/<kind>-<version>/` with a fixed `container_name` (the exec handle) and an in-network DNS alias `<kind>-<version>.molma.internal` (what apps put in their DSN). The service network is created `--internal`. Provisioning needs no superuser password because the official postgres image trusts the local socket for the `postgres` superuser.
+
+**Why:** a Go SQL client would (a) add a driver dependency and (b) put the control plane on the `molma-svc-postgres-*` network — which directly contradicts the 2026-06-02 call to keep the brain off app-reachable networks (the same reason health probes go through Caddy instead of dialing the container). `docker exec` keeps the brain talking only to the Docker socket it already owns, and the network stays app-only. Trade-off accepted: provisioning is shell-string SQL (mitigated — db/role names are sanitized `[a-z0-9_]`, passwords are base64url, both quote-safe), and it's Postgres-shaped (Redis ACL provisioning will be its own path). Scope this slice: **Postgres only** (Redis schema-valid but unprovisioned), **lazy spinup** built, **grace-shutdown / backup-restore / cross-version migration deferred**.
+
+**Affected docs:** `SERVICE_PROVISIONING.md` (# Provisioning protocol, # Network architecture, + locked decisions), `NEXT.md` (Redis provisioning, grace-shutdown, at-rest encryption), `docs/dev/catalog-import-gaps.md` (kan managed-Postgres blocker resolved). Implementation: `internal/manifest`, `internal/store`, `internal/lifecycle` (`services.go`), realized by `docs/progress/managed-services-postgres.md`.
+
+## 2026-06-05 — Apps declare random secrets; the brain generates and injects them as `MOLMA_SECRET_*`
+
+**Previously:** there was no mechanism for an app to obtain an app-specific random secret (a JWT/HMAC signing key, `BETTER_AUTH_SECRET`, Rails `SECRET_KEY_BASE`). An app that needed one couldn't boot — the catalog-import ledger captured `kan` as a `blocks-start` gap, and its compose carried a "set this by hand before first start" comment, which is exactly the sysadmin step the long-term audience can't take.
+
+**Now:** a manifest declares `secrets: [{name, bytes?}]`. At install the brain draws each secret from a CSPRNG (`bytes` default 32, floor 16), base64url-encodes it, persists it in SQLite, and injects it as `MOLMA_SECRET_<NAME>` — re-emitted verbatim into the instance `.env` on every restart, never re-rolled. The app's compose maps it to whatever variable it expects, the same app-defined wiring as `MOLMA_SERVICE_*` and `MOLMA_FOLDER_*`.
+
+**Why:** the author can't ship a value (a public-catalog secret signs nothing securely) and the non-technical user can't be asked to generate one — so the platform must. **Generate-once-and-persist** (rather than regenerate per `.env` write) is the load-bearing detail: a token-signing secret that changed on restart would invalidate every live session, so the value is read back from storage, not re-derived. This is the only `MOLMA_*` variable the brain *creates* rather than *reflects*. Security hardening (`.env` perms, env-var-vs-`_FILE` delivery, at-rest encryption, backup, rotation) was reviewed and deliberately deferred — parked in `NEXT.md` # App-secret injection hardening rather than folded in, so the mechanism ships correct-but-unhardened under the household trust model.
+
+**Affected docs:** `APP_MANIFEST.md` (# D2 Generated secrets, + locked decision), `SERVICE_PROVISIONING.md` (# Env-var injection — the full family, + locked decisions), `NEXT.md` (# App-secret injection hardening), `docs/dev/catalog-import-gaps.md` (kan `secret-injection` → implemented). Implementation: `internal/manifest`, `internal/store`, `internal/lifecycle`, `catalog/kan`.
+
 ## 2026-06-05 — Activity (audit log) is a member-reachable view, not admin-only surface
 
 **Previously:** `DASHBOARD.md` # global navigation and `SETTINGS.md` framed Activity as admin-surface — it nested under the admin-only **System** panel, and `SETTINGS.md` # role gating stated "a member's Settings is **My account** and nothing else."

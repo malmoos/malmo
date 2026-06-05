@@ -30,6 +30,12 @@ services:
     type: postgres
     version: "15"
 
+# Better Auth requires a 32+ char random secret to sign auth tokens. The brain
+# generates it once at install and injects it as MOLMA_SECRET_AUTH; the compose
+# maps that to BETTER_AUTH_SECRET (SERVICE_PROVISIONING.md # Env-var injection).
+secrets:
+  - name: auth
+
 permissions:
   internet: true
   lan: false

@@ -23,6 +23,17 @@ type DockerDriver interface {
 	ComposeUp(ctx context.Context, dir, project string) (string, error)
 	ComposeDown(ctx context.Context, dir, project string) (string, error)
 	ComposeStop(ctx context.Context, dir, project string) (string, error)
+	// ServiceUp brings up a managed-service compose project
+	// (SERVICE_PROVISIONING.md # Tier 1). Unlike ComposeUp it uses only the
+	// generated compose.yml + .env (no per-app override): a service instance is a
+	// brain-owned container, not a user app.
+	ServiceUp(ctx context.Context, dir, project string) (string, error)
+	// Exec runs a command inside a named container (`docker exec <name> <args…>`)
+	// and returns combined output. The brain uses it to provision per-app
+	// databases/roles via the service container's own client (e.g. psql), so it
+	// never has to join the service's Docker network (DECISIONS.md 2026-06-02 —
+	// control plane off app-reachable networks).
+	Exec(ctx context.Context, container string, args []string) (string, error)
 	Inspect(ctx context.Context, instanceID, mainService string) (running bool, health string, err error)
 	NetworkCreate(ctx context.Context, name string, internal bool) error
 	NetworkRemove(ctx context.Context, name string) error
@@ -141,6 +152,21 @@ func composeRun(ctx context.Context, dir, project string, args ...string) (strin
 	cmd := exec.CommandContext(ctx, "docker", append(base, args...)...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func (cliDocker) ServiceUp(ctx context.Context, dir, project string) (string, error) {
+	// A service project has a single generated compose.yml + .env — no override.
+	base := []string{"compose", "-f", "compose.yml", "--env-file", ".env", "-p", project, "up", "-d"}
+	cmd := exec.CommandContext(ctx, "docker", base...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func (cliDocker) Exec(ctx context.Context, container string, args []string) (string, error) {
+	full := append([]string{"exec", container}, args...)
+	out, err := exec.CommandContext(ctx, "docker", full...).CombinedOutput()
 	return string(out), err
 }
 

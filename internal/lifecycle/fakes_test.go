@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/molmaos/molma/internal/protocol"
@@ -51,6 +52,12 @@ type fakeDocker struct {
 	composeDownErr error
 	composeStopErr error
 	removeImageErr error
+	serviceUpErr   error
+
+	// exec drives Exec: it returns scripted output/error per invocation. Default
+	// (nil) returns ("", nil) — used by readiness polls (pg_isready) and psql
+	// provisioning, both of which only care about the error.
+	exec func(container string, args []string) (string, error)
 
 	calls []call
 }
@@ -117,6 +124,22 @@ func (f *fakeDocker) ComposeUp(_ context.Context, dir, project string) (string, 
 	}
 	if f.composeUpErr != nil {
 		return "boom", f.composeUpErr
+	}
+	return "", nil
+}
+
+func (f *fakeDocker) ServiceUp(_ context.Context, dir, project string) (string, error) {
+	f.record("ServiceUp", dir, project)
+	if f.serviceUpErr != nil {
+		return "boom", f.serviceUpErr
+	}
+	return "", nil
+}
+
+func (f *fakeDocker) Exec(_ context.Context, container string, args []string) (string, error) {
+	f.record("Exec", container, strings.Join(args, " "))
+	if f.exec != nil {
+		return f.exec(container, args)
 	}
 	return "", nil
 }

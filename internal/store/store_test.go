@@ -27,6 +27,87 @@ func sample(id, slug string) Instance {
 	}
 }
 
+func TestInstanceSecretsRoundtripAndCascade(t *testing.T) {
+	s := open(t)
+	if err := s.Create(sample("a", "alpha")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	want := []InstanceSecret{{Name: "auth", Value: "abc123"}, {Name: "session", Value: "def456"}}
+	if err := s.SetInstanceSecrets("a", want); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	got, err := s.GetInstanceSecrets("a")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("roundtrip: got %v, want %v", got, want)
+	}
+	// Deleting the instance cascades the secrets away.
+	if err := s.Delete("a"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if got, _ := s.GetInstanceSecrets("a"); len(got) != 0 {
+		t.Fatalf("secrets survived instance delete: %v", got)
+	}
+}
+
+func TestServiceInstanceCRUD(t *testing.T) {
+	s := open(t)
+	if _, err := s.GetServiceInstance("postgres", "15"); err != ErrNotFound {
+		t.Fatalf("empty get: err = %v, want ErrNotFound", err)
+	}
+	si := ServiceInstance{
+		Kind: "postgres", Version: "15", SuperuserPassword: "su-pw",
+		State: "running", CreatedAt: time.Unix(1_700_000_000, 0),
+	}
+	if err := s.CreateServiceInstance(si); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := s.CreateServiceInstance(si); err != ErrConflict {
+		t.Fatalf("duplicate create: err = %v, want ErrConflict", err)
+	}
+	got, err := s.GetServiceInstance("postgres", "15")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.SuperuserPassword != "su-pw" || got.State != "running" {
+		t.Fatalf("get = %+v", got)
+	}
+	list, err := s.ListServiceInstances()
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list = %v, err %v", list, err)
+	}
+}
+
+func TestServiceGrantsRoundtripAndCascade(t *testing.T) {
+	s := open(t)
+	if err := s.Create(sample("a", "alpha")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	want := []ServiceGrant{{
+		LogicalName: "database", Kind: "postgres", Version: "15",
+		DBName: "kan_a1b2", RoleName: "kan_a1b2", Password: "pw",
+	}}
+	if err := s.SetServiceGrants("a", want); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	got, err := s.GetServiceGrants("a")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("roundtrip: got %v, want %v", got, want)
+	}
+	// Deleting the instance cascades the grants away.
+	if err := s.Delete("a"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if got, _ := s.GetServiceGrants("a"); len(got) != 0 {
+		t.Fatalf("grants survived instance delete: %v", got)
+	}
+}
+
 func TestCreateRejectsInvalidScope(t *testing.T) {
 	s := open(t)
 	i := sample("a", "alpha")

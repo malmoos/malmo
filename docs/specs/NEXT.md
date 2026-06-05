@@ -76,6 +76,19 @@ Required for password recovery, product comms, and any future cloud-account link
 **Context:** `FIRST_RUN.md`.
 **Why Tier 2:** decided now or it becomes a forced retrofit later. Likely answer: optional field at user creation, used for recovery only.
 
+### App-secret injection hardening (`SERVICE_PROVISIONING.md` # Env-var injection)
+
+The *mechanism* — a manifest `secrets:` declaration → brain generates a CSPRNG value once, persists it, injects `MOLMA_SECRET_<NAME>`, re-emits it stably — is **shipped and specced** (`APP_MANIFEST.md` # D2, `DECISIONS.md` 2026-06-05). What's deliberately deferred is the security hardening around it; the v1 implementation is correct but not yet hardened, and these were reviewed and parked, not missed:
+
+- **`.env` file permissions.** The instance `.env` is written world-readable (`0o644`). Now that it holds a signing secret, a non-admin local account can read every app's secret. Decide `0o600` + root-owned, and whether that's the answer for *all* injected vars or just secrets.
+- **Env-var delivery surface.** A value in the container environment is visible via `docker inspect`, `/proc/<pid>/environ`, and child-process inheritance — the classic leak is an app's own crash reporter shipping `process.env` off-box (and these apps tend to declare `internet: true`). The safer shape is the Docker-secret / `_FILE` convention (mount the value as a file, app reads `*_FILE`), but it needs per-app support. Decide whether env-var is the accepted v1 trade-off and where `_FILE` is offered.
+- **At-rest encryption.** The value is stored plaintext in SQLite and on disk in `.env`. `SERVICE_PROVISIONING.md` promises managed-service creds "encrypted at rest" — unbuilt, and the same decision covers secrets. Relationship to LUKS (covers a powered-off stolen drive) vs. row-level encryption (covers a live box / a leaked DB) needs to be drawn explicitly.
+- **Backups.** A signing secret must travel in the app's backup archive (a restored app has to keep validating old tokens), which makes backup-archive encryption load-bearing the moment secrets exist. Gate with the backup design (# Backup architecture shape).
+- **Rotation + log hygiene.** Env-injected secrets can't rotate without restarting the container and invalidating live tokens — no recovery story beyond reset. And molma's own logs/audit/compose-output must never surface the value (one watch point: `ComposeUp` returns `CombinedOutput()` into install errors).
+
+**Context:** `SERVICE_PROVISIONING.md`, `APP_MANIFEST.md` # D2, `THREAT_MODEL.md` (adversaries: compromised app at runtime, stolen drive), `STORAGE.md` # LUKS, the backup entry below.
+**Why Tier 2:** the leak surface compounds — every app installed before `.env` is locked down ships an exposed secret on disk, so the longer it waits the larger the retrofit. Not strictly blocking (household trust + skeleton status make the current shape tolerable), but it shouldn't ride to v1 unhardened.
+
 ---
 
 ## Tier 3 — Defer-able, but pin the shape
@@ -149,6 +162,18 @@ Where do user docs and app-author docs live? In-product help drawer, `docs.molma
 
 **Context:** `WEB_UI.md`, `APP_STORE.md`, `SPEC.md`.
 **Why Tier 3:** can ship v1 with a thin docs site and add in-product help later, but the *split* between the two needs deciding before either is written at scale.
+
+### Managed-service lifecycle gaps (Tier-1, post-Postgres-slice)
+
+Postgres provisioning shipped (`docs/progress/managed-services-postgres.md`, `DECISIONS.md` 2026-06-05). Four pieces of the `SERVICE_PROVISIONING.md` # Tier 1 spec were **deliberately deferred** out of that slice, each its own follow-up:
+
+- **Redis provisioning.** The manifest schema accepts `type: redis` (forward-valid) but the brain doesn't provision it yet — a redis declaration fails at install. Needs the isolation model decided: a per-app ACL user + password (full keyspace) vs. a logical-DB-number split. No catalog app *requires* redis today (kan's is optional with an in-memory fallback), so it waited.
+- **Grace-shutdown.** Lazy spinup is built; the symmetric "stop a service version 12h after its last consumer uninstalls" (`SERVICE_PROVISIONING.md` # At app uninstall, # Versioning) is not — services stay running. Needs a timer/GC and reconcile integration that checks remaining `service_grants` for the kind+version.
+- **Cross-version migration.** Auto-migrate on a major-version bump (`pg_dump` old → `pg_restore` new, pre-migration backup as rollback) is unbuilt; gated on the backup design below.
+- **At-rest encryption of service credentials.** The superuser password (`service_instances`) and per-app passwords (`service_grants`) are plaintext in SQLite + the service `.env`, exactly the gap tracked for `MOLMA_SECRET_*` — folds into **App-secret injection hardening** above; the decision should cover both.
+
+**Context:** `SERVICE_PROVISIONING.md` # Tier 1, the App-secret injection hardening entry above, the Backup architecture entry below.
+**Why deferred, not dropped:** the Postgres slice was scoped to unblock kan; these extend the same spec without changing its shape. Pin them so the next managed-service touch picks the right one off the top.
 
 ### Backup architecture shape
 
