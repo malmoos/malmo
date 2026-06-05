@@ -145,6 +145,42 @@ This shapes the v1 trust model intentionally:
 
 The data model below already accommodates additional catalogs from day one, so the transition is additive when it happens.
 
+## Upstream version tracking
+
+The catalog pins each app to a specific image tag (in the compose) and a specific digest (in `catalog.json`). That immutability is the whole trust model — but it means a published app **does not move on its own**. When the upstream project ships a new release, someone has to notice and open the bump PR. This section is how that "someone" is automated.
+
+`UPDATES.md` covers the *box's* side — how a running box consumes a catalog version bump. This is the *maintainer's* side — how a version bump gets authored in the first place. It is the trigger that produces the "a new release is a CI run + a PR that bumps `version` + `images`" PR named in # Trust model.
+
+### Where the version lives is declared once, at import
+
+Every app's manifest carries an authoring-only `upstream:` block (`APP_MANIFEST.md` # A2) that names the version source, the compose image(s) a bump rewrites, and a `version_pattern` regex that both filters candidate tags down to real releases and captures the comparable version. **The import agent writes this block when it first adapts the app** — it has just read the upstream repo, the registry, and the release conventions, so it is the right place to decide *how this particular project's version should be read* (semver tags on Docker Hub, GitHub Releases, calendar tags, etc.). The watcher doesn't guess per app; it executes the rule the agent recorded. Apps with no machine-readable version discipline are marked `source: manual` and tracked by hand.
+
+### The watcher
+
+A **scheduled CI job in the `molma/store` repo** (nightly is ample — app releases are not minute-sensitive) walks every app directory and, for each manifest with a non-`manual` `upstream` block:
+
+1. Queries the declared `source` for candidate versions — Docker Hub / GHCR / quay tags list, or the GitHub Releases API.
+2. Filters and captures with `version_pattern`, then picks the highest by dotted-numeric comparison.
+3. Compares that to the tag the app currently ships (read from the `tracks` image in the compose).
+4. If upstream is higher, **opens a bump PR** that: rewrites each `tracks` image's tag in the compose, re-runs the existing digest-resolution step (# Submission and promotion) to repin `images` in `catalog.json`, and bumps the manifest `version` to the captured string. One PR per app.
+
+That PR then flows through the **normal PR validation** unchanged — schema lint, admission rules, image pullability, digest resolution, hash + signature. Nothing about the auto-opened PR bypasses review; it is exactly the PR a human would have hand-authored, just pre-filled.
+
+### The human gate is the point
+
+The watcher opens PRs; it never merges them. Two reasons this stays human-reviewed even at v1's single-maintainer scale:
+
+- **Permission expansion is a trust event.** A bump whose new version widens the manifest `permissions:` block is precisely the case `UPDATES.md` # 4 prompts the box owner for. The reviewer must see it *before* it reaches a box. The bump PR should surface a permissions diff prominently (a CI annotation when the `permissions:` block changed across the bump), so it can't be rubber-stamped.
+- **Upstream breaking changes** — a config-format or schema change the watcher can't judge — are caught only by a human reading the upstream changelog. The watcher proves a new version *exists*; it cannot prove it's *safe*.
+
+### Manually-tracked apps
+
+`source: manual` apps (and any with no `upstream` block) are skipped by the automated path. The watcher emits them in its run summary as a "watch by hand" list — naming the app and its `note` — so they surface in the maintainer's regular review rather than silently rotting at an old version. Keeping this list short is a curation goal: prefer apps and version sources that *can* be tracked automatically.
+
+### Build vs. buy
+
+The detection layer — registry tag enumeration, auth, rate limits, version filtering, PR authoring — is a solved problem, and the rot lives exactly there. The recommended base is **Renovate** with a custom regex manager driven by each app's `upstream` block (it natively understands Docker tags in compose files and handles registry auth/rate limits), wrapped with molma's bump-shaping step (digest repin + manifest `version` bump + permissions-diff annotation). A small bespoke Go tool in the store repo is the alternative if Renovate's PR shape fights the compose-tag + digest + manifest-version triple. Start with Renovate; the `upstream` block schema is tool-agnostic either way.
+
 ## Multiple catalogs — data model only in v1
 
 `SPEC.md` and `APP_MANIFEST.md` both commit to third-party stores as a long-term shape. v1 does **not** ship UI for adding them, but the brain's data model treats "the catalog" as one entry in a list:
@@ -189,6 +225,7 @@ For v1, end-to-end:
 
 1. **Git repo `molma/store`** (free on GitHub).
 2. **CI on the repo** — schema lint, admission check, image-pullability check, digest resolution, catalog regeneration. GitHub Actions is sufficient.
+   - Plus a **scheduled version-watcher** (nightly) that reads each app's `upstream` block and opens bump PRs when upstream moves (# Upstream version tracking). Same GitHub Actions; Renovate is the recommended base.
 3. **CDN at `store.molma.network`** — same provider class as `releases.molma.network`. Cloudflare R2 / Pages, or whatever the release-manifest CDN ends up on. The two CDNs can share infra; they don't have to.
 4. **One signing keypair** for the store catalog — offline, hardware-token-protected. Separate from the release-manifest key.
 5. **Store pubkey baked into the brain image** at brain build time.
@@ -207,6 +244,7 @@ No application server. No backend service. Static files, signed, served from a C
 - **Data model supports multiple catalogs from day one** (catalog id, URL, pubkey list). v1 ships UI for one catalog only.
 - **Single `catalog.json` file in v1.** Sharding is additive when the file crosses ~1 MB or fetch latency becomes user-visible.
 - **Promotion is a PR against `molma/store`** with regenerated catalog + signature. CI validates schema, admission rules, image reachability, hashes, signature. Merge to `main` is the publish action.
+- **Upstream versions are tracked by a scheduled watcher that opens bump PRs, never auto-merges.** Each app's authoring-only `upstream` block (`APP_MANIFEST.md` # A2), written once by the import agent, tells the watcher where the version lives and how to read it. A bump PR rewrites the tracked compose tag(s), repins the digest, and bumps `version`, then flows through normal PR validation; a human reviews — especially the permissions diff, the trust event `UPDATES.md` # 4 gates on. `source: manual` apps are watched by hand. Recommended base is Renovate; the schema is tool-agnostic.
 
 ## Open questions
 

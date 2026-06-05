@@ -4,6 +4,15 @@ name: Whoami
 version: "1.10"
 description:
   short: "Tiny HTTP server that echoes request info — a routing smoke test."
+
+# Authoring-only: tells the catalog version-watcher where the upstream version
+# lives and how to read it (APP_MANIFEST.md # A2). The brain ignores this block.
+upstream:
+  source: dockerhub
+  repo: traefik/whoami
+  tracks: [traefik/whoami]
+  version_pattern: '^v(\d+\.\d+\.\d+)$'
+
 compose_file: compose.yml
 main_service: whoami
 main_port: 80
