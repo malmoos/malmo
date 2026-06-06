@@ -1,0 +1,60 @@
+id: jotty
+manifest_version: 1
+name: Jotty
+version: "1.24.0"
+description:
+  short: "Fast, file-based notes and checklists with a Markdown editor."
+  long: |
+    Jotty (jotty·page) is a lightweight notes and checklist app for your home server. Write in a rich-text or Markdown editor, organize notes into folders, and keep simple task lists and checklists alongside them. Everything is stored as plain files in your own data directory — there is no database to manage — behind a clean, mobile-friendly interface with an installable PWA for your phone, optional per-note PGP encryption, and share links when you want them. Local accounts work out of the box; OIDC single sign-on is available if you run your own identity provider.
+icon: ./icon.png
+screenshots: [./screenshots/01.png, ./screenshots/02.png, ./screenshots/03.png]
+categories: [productivity]
+author:
+  name: fccview
+  url: https://github.com/fccview
+license: AGPL-3.0
+links:
+  homepage: https://jotty.page
+  source: https://github.com/fccview/jotty
+  support: https://github.com/fccview/jotty/tree/main/howto
+changelog_url: https://github.com/fccview/jotty/releases
+
+compose_file: compose.yml
+main_service: jotty
+main_port: 3000
+preferred_slugs: [jotty, notes]
+
+# /api/health is the app's own endpoint and serves 200 {status:"healthy"} without
+# auth. Next.js boots fast, but the first run creates its data subdirs, so allow
+# a small start period.
+health_probe:
+  path: /api/health
+  start_period: 45s
+
+# A single Next.js standalone server; modest footprint for a personal notes app.
+resources:
+  recommended: { memory: 512M, cpu: 0.5 }
+
+# Jotty keeps notes, checklists, and accounts as plain files under /app/data and
+# its runtime settings under /app/config — both are backed up. The Next.js build
+# cache (/app/.next/cache) is mounted writable but regenerable, so it is left out
+# of data_volumes. Content lives in Jotty's own store rather than as files in a
+# use-case folder and there is no external-library option, so it manages its own
+# content (forfeits the files-first-class badge) instead of taking a folder grant.
+storage:
+  data_volumes: [./data, ./config]
+  estimated_size: 500MB
+  app_managed_user_content: true
+
+# A self-contained notes app: no outbound internet (update check disabled in the
+# compose) and no inbound LAN discovery.
+permissions:
+  internet: false
+  lan: false
+
+# Filled by `go run ./cmd/molma manifest resolve catalog/jotty/manifest.yml`.
+images:
+  ghcr.io/fccview/jotty:1.24.0:
+    digest: sha256:ddbb42ce61c8558c8178104ab12a99d40fbc8a0ab652b4087b28f03a9d8d011a
+    download_bytes: 159782991
+    disk_bytes: 159800500
