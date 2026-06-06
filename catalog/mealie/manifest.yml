@@ -1,0 +1,60 @@
+id: mealie
+manifest_version: 1
+name: Mealie
+version: "3.19.2"
+description:
+  short: "Self-hosted recipe manager with a meal planner and auto-generated shopping lists."
+  long: |
+    Mealie is a personal recipe keeper, meal planner, and shopping-list builder for your home server. Paste a recipe URL and it scrapes the ingredients and steps into a clean, ad-free page; from there you can scale servings, plan the week on a calendar, and roll that plan into a categorized shopping list. Your recipes, photos, and notes all live in your own database, with a mobile-friendly interface for cooking from your phone in the kitchen and a full REST API to build on.
+icon: ./icon.png
+screenshots: [./screenshots/01.png, ./screenshots/02.png]
+categories: [productivity, food]
+author:
+  name: Mealie
+  url: https://mealie.io
+license: AGPL-3.0
+links:
+  homepage: https://mealie.io
+  source: https://github.com/mealie-recipes/mealie
+  support: https://docs.mealie.io
+changelog_url: https://github.com/mealie-recipes/mealie/releases
+
+compose_file: compose.yml
+main_service: mealie
+main_port: 9000
+preferred_slugs: [mealie, recipes]
+
+# /api/app/about is the image's own healthcheck endpoint and serves 200 without
+# auth. Mealie runs first-boot migrations, so allow a generous start period.
+health_probe:
+  path: /api/app/about
+  start_period: 60s
+
+# Upstream recommends capping memory because Python can pre-allocate aggressively
+# on high-RAM hosts and idle hot otherwise.
+resources:
+  recommended: { memory: 1G, cpu: 1.0 }
+
+# Mealie owns everything it stores — the SQLite database, recipe images, and
+# uploaded assets — under /app/data, with no separable regenerable cache, so the
+# whole data bind is backed up. It keeps recipes in its own database rather than
+# as files in a use-case folder and has no external-library option, so it manages
+# its own content (forfeits the files-first-class badge) instead of taking a
+# folder grant.
+storage:
+  data_volumes: [./data]
+  estimated_size: 1GB
+  app_managed_user_content: true
+
+# internet: Mealie's headline feature imports recipes by scraping a URL, so it
+# needs outbound internet. No inbound LAN discovery is required.
+permissions:
+  internet: true
+  lan: false
+
+# Filled by `go run ./cmd/molma manifest resolve catalog/mealie/manifest.yml`.
+images:
+  ghcr.io/mealie-recipes/mealie:v3.19.2:
+    digest: sha256:f68e959bf66f4f458893ea58facac71690fe6f2ac7a31466b5cecb41b4e99c02
+    download_bytes: 432916006
+    disk_bytes: 432932679
