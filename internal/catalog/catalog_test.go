@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -199,6 +200,47 @@ func TestDetailNotFound(t *testing.T) {
 	}
 }
 
+// TestDetailOmitsAbsentAuthorLinks: a manifest with no author/links block leaves
+// those pointers nil so the JSON omits the keys (rather than emitting `{}`, which
+// would hand the UI an empty-but-present block).
+func TestDetailOmitsAbsentAuthorLinks(t *testing.T) {
+	root := t.TempDir()
+	writeApp(t, root, "bare", `id: bare
+manifest_version: 1
+name: Bare
+version: "1.0"
+description:
+  short: "no author here"
+compose_file: compose.yml
+main_service: web
+main_port: 80
+`)
+	d, err := New(root).Detail("bare")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Author != nil {
+		t.Errorf("want nil author, got %+v", d.Author)
+	}
+	if d.Links != nil {
+		t.Errorf("want nil links, got %+v", d.Links)
+	}
+	b, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m["author"]; ok {
+		t.Errorf("author key not omitted: %s", b)
+	}
+	if _, ok := m["links"]; ok {
+		t.Errorf("links key not omitted: %s", b)
+	}
+}
+
 // TestIconAndScreenshotPath: the asset resolvers return the on-disk path when
 // the file exists.
 func TestIconAndScreenshotPath(t *testing.T) {
@@ -276,5 +318,23 @@ main_port: 80
 `)
 	if _, err := c.IconPath("evil"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("traversal not blocked: %v", err)
+	}
+
+	// A manifest whose icon points at a directory must not resolve — os.Stat
+	// succeeds on a dir and http.ServeFile would serve a listing.
+	writeApp(t, root, "dir-icon", `id: dir-icon
+manifest_version: 1
+name: Dir Icon
+version: "1.0"
+icon: ./assets
+compose_file: compose.yml
+main_service: web
+main_port: 80
+`)
+	if err := os.MkdirAll(filepath.Join(root, "dir-icon", "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.IconPath("dir-icon"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("directory icon not blocked: %v", err)
 	}
 }

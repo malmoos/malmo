@@ -66,10 +66,14 @@ type Detail struct {
 	// order. Empty ⇒ no gallery.
 	ScreenshotURLs []string `json:"screenshot_urls,omitempty"`
 
-	Author       manifest.Author `json:"author,omitempty"`
-	License      string          `json:"license,omitempty"`
-	Links        manifest.Links  `json:"links,omitempty"`
-	ChangelogURL string          `json:"changelog_url,omitempty"`
+	// Author and Links are pointers so a manifest that declares neither omits the
+	// keys entirely rather than serializing `{}` — `omitempty` is a no-op on a
+	// struct value (only pointers/slices/maps/scalars count as empty), which
+	// would otherwise hand the UI an empty-but-present block to render.
+	Author       *manifest.Author `json:"author,omitempty"`
+	License      string           `json:"license,omitempty"`
+	Links        *manifest.Links  `json:"links,omitempty"`
+	ChangelogURL string           `json:"changelog_url,omitempty"`
 }
 
 // entryFor builds the grid Entry from a parsed manifest.
@@ -127,10 +131,14 @@ func (c *Catalog) Detail(manifestID string) (Detail, error) {
 	d := Detail{
 		Entry:           entryFor(man),
 		LongDescription: man.Description.Long,
-		Author:          man.Author,
 		License:         man.License,
-		Links:           man.Links,
 		ChangelogURL:    man.ChangelogURL,
+	}
+	if man.Author != (manifest.Author{}) {
+		d.Author = &man.Author
+	}
+	if man.Links != (manifest.Links{}) {
+		d.Links = &man.Links
 	}
 	for i := range man.Screenshots {
 		d.ScreenshotURLs = append(d.ScreenshotURLs, screenshotURL(man.ID, i))
@@ -178,11 +186,17 @@ func (c *Catalog) assetPath(manifestID, rel string) (string, error) {
 	if full != dir && !strings.HasPrefix(full, dir+string(os.PathSeparator)) {
 		return "", fmt.Errorf("%w: %q asset escapes catalog dir", ErrNotFound, manifestID)
 	}
-	if _, err := os.Stat(full); err != nil {
+	info, err := os.Stat(full)
+	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return "", fmt.Errorf("%w: %q asset %q", ErrNotFound, manifestID, rel)
 		}
 		return "", fmt.Errorf("catalog: stat asset %q for %q: %w", rel, manifestID, err)
+	}
+	// Regular files only: os.Stat succeeds on a directory too, and http.ServeFile
+	// would then serve a listing — leaking the catalog dir structure.
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("%w: %q asset %q is not a regular file", ErrNotFound, manifestID, rel)
 	}
 	return full, nil
 }
