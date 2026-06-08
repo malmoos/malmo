@@ -99,6 +99,34 @@ func TestGetCatalogApp_RequiresAuth(t *testing.T) {
 	resp.Body.Close()
 }
 
+func TestCatalogIcon_RequiresAuth(t *testing.T) {
+	h := newHarness(t)
+	writeManifestFixture(t, h.catalogDir, "rich", richManifestYML)
+	writeAssetFixture(t, h.catalogDir, "rich", "icon.png", []byte("x"))
+	jar, _ := newJar()
+	h.jar = jar
+
+	resp := h.do("GET", "/api/v1/catalog/rich/icon", nil)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+func TestCatalogScreenshot_RequiresAuth(t *testing.T) {
+	h := newHarness(t)
+	writeManifestFixture(t, h.catalogDir, "rich", richManifestYML)
+	writeAssetFixture(t, h.catalogDir, "rich", "screenshots/01.png", []byte("x"))
+	jar, _ := newJar()
+	h.jar = jar
+
+	resp := h.do("GET", "/api/v1/catalog/rich/screenshots/0", nil)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
 // TestCatalogIcon: the icon route serves the on-disk bytes.
 func TestCatalogIcon(t *testing.T) {
 	h := newHarness(t)
