@@ -57,4 +57,4 @@ images:
   ghcr.io/mealie-recipes/mealie:v3.19.2:
     digest: sha256:f68e959bf66f4f458893ea58facac71690fe6f2ac7a31466b5cecb41b4e99c02
     download_bytes: 432916006
-    disk_bytes: 432932679
+    disk_bytes: 1186142237
