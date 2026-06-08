@@ -165,18 +165,20 @@ type SetRoleRequest struct {
 // (health.Category: storage | state | network | version | capacity, which
 // drives display + the blocks_* nature of an issue): HealthCategory partitions
 // the locus-B report so the brain can reconcile each domain independently. The
-// full enum is pinned here (DECISIONS.md 2026-05-29 + issue #34 clarification
-// 2026-05-31) so downstream detectors land as pure follow-ups: ram-pressure
-// (#38) emits into resources, clock-not-synced (#39) into time, disk-smart
-// into drives. Today host-agent only populates storage and services.
+// enum is broad so downstream detectors land as pure follow-ups: ram-pressure
+// (#38) emits into resources, clock-not-synced (#39) into time, disk-smart into
+// drives. system (reboot-required, #40) was added after the #34 pin when that
+// detector was reclassified to locus B (DECISIONS.md 2026-05-31) — no existing
+// physical-measurement domain fits an OS-state flag.
 type HealthCategory string
 
 const (
 	HealthCategoryStorage   HealthCategory = "storage"   // filesystem / mount / canary / mergerfs
 	HealthCategoryDrives    HealthCategory = "drives"    // SMART / per-device health (reserved)
 	HealthCategoryServices  HealthCategory = "services"  // systemctl is-active (service-down)
-	HealthCategoryResources HealthCategory = "resources" // memory / CPU pressure (reserved)
+	HealthCategoryResources HealthCategory = "resources" // memory / CPU pressure (ram-pressure)
 	HealthCategoryTime      HealthCategory = "time"      // chronyc tracking (clock-not-synced)
+	HealthCategorySystem    HealthCategory = "system"    // OS/box state — reboot-required pending-reboot flag
 )
 
 // SystemHealth is GET /v1/health/system — the single locus-B findings report

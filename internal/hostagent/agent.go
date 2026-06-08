@@ -126,6 +126,19 @@ type DiskReporter interface {
 	DataDisk() (free, total int64)
 }
 
+// RebootReporter is a consumer-side interface for the locus-B reboot-required
+// detector: it stats Debian's /var/run/reboot-required flag (+ .pkgs for the
+// package list) and emits a reboot-required finding when a pending reboot is
+// flagged. It backs the system category of GET /v1/health/system. Provider
+// packages return concrete types: rebootrequired.Reporter (real /var/run) for
+// cmd/host-agent-real, FakeRebootReporter for tests.
+//
+// Read always returns a usable slice (nil = no reboot pending) and never errors —
+// a pending reboot is data, not a failure; an unexpected stat error fails open.
+type RebootReporter interface {
+	Read() []protocol.Finding
+}
+
 // UserManager is a consumer-side interface for the system-level user account
 // operations behind /v1/auth/set-password (and, later, /set-role and
 // /delete-user). Provider packages (usermgr.LinuxUserManager) export concrete
@@ -219,6 +232,14 @@ type Agent struct {
 	// measured"), which the brain surfaces as "free space unknown" in the
 	// install plan rather than a misleading empty disk.
 	Disk DiskReporter
+
+	// Reboot, when non-nil, backs the system category of GET /v1/health/system
+	// (the reboot-required detector). Swapped per binary: rebootrequired.Reporter
+	// (real /var/run/reboot-required) vs FakeRebootReporter. When nil, the report
+	// omits the system category entirely — the brain then leaves the
+	// reboot-required issue alone rather than treating "not measured" as "no
+	// reboot pending".
+	Reboot RebootReporter
 
 	// UserMgr, when non-nil, takes over POST /v1/auth/set-password,
 	// /v1/auth/set-role, and /v1/auth/delete-user: handlers delegate to the
@@ -418,6 +439,15 @@ func (a *Agent) systemHealth(w http.ResponseWriter, r *http.Request) {
 			res = []protocol.Finding{}
 		}
 		cats[protocol.HealthCategoryResources] = res
+	}
+
+	// System category (locus B): only when a reboot reporter is wired.
+	if a.Reboot != nil {
+		rb := a.Reboot.Read()
+		if rb == nil {
+			rb = []protocol.Finding{}
+		}
+		cats[protocol.HealthCategorySystem] = rb
 	}
 
 	writeJSON(w, http.StatusOK, protocol.SystemHealth{
