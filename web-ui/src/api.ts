@@ -76,6 +76,7 @@ export type User = Schemas["UserDTO"];
 export type AuthState = Schemas["Auth-stateResponse"];
 export type SetupResult = Schemas["SetupResponse"];
 export type CatalogEntry = Schemas["Entry"];
+export type CatalogDetail = Schemas["Detail"];
 export type Instance = Schemas["InstanceDTO"];
 export type Notification = Schemas["NotificationDTO"];
 export type AuditEvent = Schemas["AuditEventDTO"];
