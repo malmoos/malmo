@@ -15,6 +15,22 @@ export function formatSize(bytes: number): string {
   return `${bytes} B`;
 }
 
+// safeExternalUrl returns url only when it's an http(s) absolute URL, else
+// undefined. App-provided links (author.url, links.*, changelog_url) are bound
+// straight to :href; a `javascript:`/`data:` URL in a manifest would otherwise
+// execute on click. Manifests are curated today, but this is the cheap last line
+// before the DOM and also covers any future untrusted source (e.g. Door-2).
+// Bind both `:href` and `v-if`/`v-show` to it so a rejected URL renders nothing.
+export function safeExternalUrl(url: string | undefined | null): string | undefined {
+  if (!url) return undefined;
+  try {
+    const scheme = new URL(url).protocol;
+    return scheme === "http:" || scheme === "https:" ? url : undefined;
+  } catch {
+    return undefined; // not an absolute URL we can vet — drop it
+  }
+}
+
 export function relativeTime(ms: number): string {
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
   if (s < 60) return "just now";
