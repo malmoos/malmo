@@ -72,7 +72,7 @@ func (m *Manager) InstallFootprint(ctx context.Context, man *manifest.Manifest) 
 // catalog entry) counts as absent: without the digest we can't prove presence,
 // so we assume a download is needed — the safe over-estimate.
 func (m *Manager) imagePresent(ctx context.Context, imageRef, digest string) bool {
-	if digest == "" {
+	if digest == "" || m.docker == nil {
 		return false
 	}
 	pinned := repoOf(imageRef) + "@" + digest

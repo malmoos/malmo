@@ -55,5 +55,5 @@ The transaction owner computes the box-specific estimate (it owns both the Docke
 
 ## What's next
 
-1. **#71 — the UI.** Render the coarse footprint on the store grid and the sharp install-plan footprint in the consent dialog (wording, unit rounding, the "won't fit" warning when `download_bytes + image_disk_bytes + estimated_state_bytes > free_bytes`). The generated TS types are already in place.
+1. **#71 — done in PR #95** (`install-footprint-ui.md`). The store-card `~size` and the consent-dialog Storage block (download line, space line, not-enough-space warning) landed on this branch before this PR merged.
 2. **Real `diskusage` exercise** — once the VM host-agent + `/srv/molma` assembly exist, confirm the `statfs` reporter against a real data drive.
