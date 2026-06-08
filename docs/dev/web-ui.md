@@ -53,9 +53,14 @@ web-ui/
     ├── lib/
     │   └── utils.ts        # cn() class-merge helper (shadcn convention)
     │
+    ├── useInstall.ts       # catalog-app install flow (plan fetch, consent dialog,
+    │                       #   duplicate/job errors, per-app button state) — shared
+    │                       #   by AppDetailView; see "Install flow" below
+    │
     ├── views/              # one component per route (lazy-loaded)
     │   ├── HomeView.vue        # installed-app grid
-    │   ├── StoreView.vue       # catalog + install
+    │   ├── StoreView.vue       # catalog browse grid (cards → detail page)
+    │   ├── AppDetailView.vue   # /store/:id — app detail page; Install lives here
     │   ├── CustomInstallView.vue  # Door-2 custom-container form (admin-only)
     │   ├── FilesView.vue
     │   ├── SettingsView.vue
@@ -64,7 +69,9 @@ web-ui/
     └── components/         # reusable chrome + dialogs
         ├── AppShell.vue        # signed-in chrome; mounts useEvents() once
         ├── TopBar.vue, Dock.vue
-        ├── AppTile.vue, SplitButton.vue
+        ├── AppTile.vue         # dashboard launcher tile (opens the app)
+        ├── StoreAppCard.vue    # store browse card (links to the detail page)
+        ├── SplitButton.vue
         ├── InstallDialog.vue, ElevateDialog.vue
         └── ToastHost.vue
 ```
@@ -91,6 +98,12 @@ A handful of top-level `.vue` files (`Login.vue`, `Setup.vue`, `NotificationBell
 ## Routing
 
 `router.ts` is a flat lazy-imported table (history mode). Four primary destinations mirror the dock (`DASHBOARD.md` # global navigation): Home, Files, Store, Settings. Admin-only screens (`/store/custom`, `/settings/users`) **guard the role inside the view component** rather than via a router guard — follow the `CustomInstallView` pattern when adding another admin-only screen. Unknown paths redirect to `/` so the SPA never 404s its own chrome (production Caddy also serves `index.html` for unmatched routes).
+
+The Store is a **browse → detail** pair: `/store` (`StoreView`) is a flat grid of `StoreAppCard`s (logo + name) that link to `/store/:id` (`AppDetailView`), the app-store-style detail page where the description, screenshots, and the Install flow live. `/store/custom` is declared before `/store/:id` (and Vue Router ranks the static segment higher anyway, so `custom` never matches the `:id` param).
+
+## Install flow
+
+`useInstall(manifestId)` (`src/useInstall.ts`) owns the catalog-app install flow so the detail page renders it without re-implementing it: the advisory install-plan fetch (enabled only while the consent dialog is open), the install mutation with its three error branches (409 duplicate → warn-don't-block banner, 422 election → inline dialog error, mid-job failure → standalone banner), and the per-app button state (does the caller already have a household / own-personal instance?). The view supplies wording and renders `InstallDialog` from the returned `activePlan`. It reads/writes the shared `["apps"]` query cache, so an install elsewhere reflects here and vice versa.
 
 ## Styling
 

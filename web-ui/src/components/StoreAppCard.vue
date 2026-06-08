@@ -1,0 +1,45 @@
+<script setup lang="ts">
+// A single store browse-grid card (DASHBOARD.md # global navigation, APP_STORE.md
+// # Catalog schema). Visually a sibling of the dashboard's AppTile — square,
+// bordered, rounded — but it's a navigation target, not an app launcher: the
+// whole card is a RouterLink to /store/:id, the detail page where Install lives.
+// Renders the catalog icon when the manifest declares one, falling back to a
+// generic glyph (icon_url is omitted by the brain when absent, and we also guard
+// against a load error).
+import { ref } from "vue";
+import { RouterLink } from "vue-router";
+import { AppWindow } from "lucide-vue-next";
+import type { CatalogEntry } from "../api";
+
+defineProps<{ app: CatalogEntry }>();
+
+// brokenIcon flips if the <img> fails to load (e.g. asset 404) so we fall back to
+// the glyph rather than show a broken-image chrome.
+const brokenIcon = ref(false);
+</script>
+
+<template>
+  <RouterLink
+    :to="`/store/${app.id}`"
+    class="group flex flex-col items-center gap-3 text-center"
+    :title="`View ${app.name}`"
+  >
+    <!-- The big square button: parchment fill, bordered, the app icon (or glyph).
+         Mirrors AppTile's tile so the store reads as the same family. -->
+    <div
+      class="grid aspect-square w-full place-items-center overflow-hidden rounded-3xl border border-border bg-card text-muted-foreground transition group-hover:shadow-md"
+    >
+      <img
+        v-if="app.icon_url && !brokenIcon"
+        :src="app.icon_url"
+        :alt="`${app.name} icon`"
+        class="size-full object-cover"
+        @error="brokenIcon = true"
+      />
+      <AppWindow v-else class="size-9" />
+    </div>
+    <div class="min-w-0">
+      <div class="truncate text-base font-medium">{{ app.name }}</div>
+    </div>
+  </RouterLink>
+</template>
