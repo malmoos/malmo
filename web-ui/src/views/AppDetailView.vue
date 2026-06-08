@@ -15,7 +15,7 @@ import DOMPurify from "dompurify";
 import { AppWindow } from "lucide-vue-next";
 import { api, type CatalogDetail } from "../api";
 import { useInstall } from "../useInstall";
-import { formatSize } from "../utils";
+import { formatSize, safeExternalUrl } from "../utils";
 import InstallDialog from "../components/InstallDialog.vue";
 import SplitButton from "../components/SplitButton.vue";
 import HealthGated from "../components/HealthGated.vue";
@@ -68,6 +68,18 @@ const sizeLabel = computed(() => {
   const b = app.value?.footprint.image_disk_bytes ?? 0;
   return b > 0 ? formatSize(b) : null;
 });
+
+// External links are app-provided; pass them through safeExternalUrl so a
+// non-http(s) value (e.g. a javascript: URL) is dropped rather than bound to an
+// :href. The template renders a link only when the vetted URL is present.
+const authorUrl = computed(() => safeExternalUrl(app.value?.author?.url));
+const homepageUrl = computed(() => safeExternalUrl(app.value?.links?.homepage));
+const sourceUrl = computed(() => safeExternalUrl(app.value?.links?.source));
+const supportUrl = computed(() => safeExternalUrl(app.value?.links?.support));
+const changelogUrl = computed(() => safeExternalUrl(app.value?.changelog_url));
+const hasLinks = computed(
+  () => !!(homepageUrl.value || sourceUrl.value || supportUrl.value || changelogUrl.value),
+);
 </script>
 
 <template>
@@ -105,10 +117,10 @@ const sizeLabel = computed(() => {
           <p v-if="app.author?.name" class="mt-1 text-xs text-muted-foreground">
             by
             <a
-              v-if="app.author.url"
-              :href="app.author.url"
+              v-if="authorUrl"
+              :href="authorUrl"
               target="_blank"
-              rel="noopener"
+              rel="noopener noreferrer"
               class="hover:text-foreground hover:underline"
             >{{ app.author.name }}</a>
             <span v-else>{{ app.author.name }}</span>
@@ -189,11 +201,11 @@ const sizeLabel = computed(() => {
             </div>
           </dl>
 
-          <div v-if="app.links?.homepage || app.links?.source || app.links?.support || app.changelog_url" class="space-y-1.5 border-t border-border pt-3">
-            <a v-if="app.links?.homepage" :href="app.links.homepage" target="_blank" rel="noopener" class="block text-accent hover:underline">Website</a>
-            <a v-if="app.links?.source" :href="app.links.source" target="_blank" rel="noopener" class="block text-accent hover:underline">Source code</a>
-            <a v-if="app.links?.support" :href="app.links.support" target="_blank" rel="noopener" class="block text-accent hover:underline">Support</a>
-            <a v-if="app.changelog_url" :href="app.changelog_url" target="_blank" rel="noopener" class="block text-accent hover:underline">Changelog</a>
+          <div v-if="hasLinks" class="space-y-1.5 border-t border-border pt-3">
+            <a v-if="homepageUrl" :href="homepageUrl" target="_blank" rel="noopener noreferrer" class="block text-accent hover:underline">Website</a>
+            <a v-if="sourceUrl" :href="sourceUrl" target="_blank" rel="noopener noreferrer" class="block text-accent hover:underline">Source code</a>
+            <a v-if="supportUrl" :href="supportUrl" target="_blank" rel="noopener noreferrer" class="block text-accent hover:underline">Support</a>
+            <a v-if="changelogUrl" :href="changelogUrl" target="_blank" rel="noopener noreferrer" class="block text-accent hover:underline">Changelog</a>
           </div>
         </aside>
       </div>
