@@ -122,6 +122,11 @@ export function useInstall(manifestId: Ref<string>) {
   function handleConfirmDuplicate() {
     if (!pendingRequest.value) return;
     const req = { ...pendingRequest.value, confirm: true };
+    // Close the plan dialog before clearing duplicateInfo: a 409 left planOpen
+    // true (the throw skipped the close in mutationFn), so clearing duplicateInfo
+    // alone would re-satisfy the dialog's `activePlan && !duplicateInfo` guard and
+    // flash the consent dialog back open until the retry's 202 lands.
+    planOpen.value = false;
     duplicateInfo.value = null;
     install.mutate(req);
   }

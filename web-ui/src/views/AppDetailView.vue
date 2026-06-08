@@ -225,7 +225,7 @@ const sizeLabel = computed(() => {
 
       <!-- Install consent dialog -->
       <InstallDialog
-        v-if="activePlan && !duplicateInfo"
+        v-if="activePlan && !duplicateInfo && !install.isPending.value"
         :plan="activePlan"
         :scope="dialogScope"
         :submit-error="dialogError"
