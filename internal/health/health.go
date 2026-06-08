@@ -455,10 +455,8 @@ func severityRank(s Severity) int {
 		return 2
 	case SeverityWarning:
 		return 1
-	case SeverityInfo:
-		return 0
 	}
-	return 0
+	return 0 // info and any unrecognised severity are the floor
 }
 
 // builtinDefinitions is the v1 typed-issue taxonomy. Mirrors the tables in
