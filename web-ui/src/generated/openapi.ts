@@ -193,6 +193,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/catalog/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Full detail-page view of one catalog app */
+        get: operations["get-catalog-app"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/catalog/{id}/install-plan": {
         parameters: {
             query?: never;
@@ -555,6 +572,10 @@ export interface components {
             readonly $schema?: string;
             users: components["schemas"]["LoginPickerUser"][] | null;
         };
+        Author: {
+            name?: string;
+            url?: string;
+        };
         "Change-my-passwordRequest": {
             /**
              * Format: uri
@@ -598,6 +619,27 @@ export interface components {
             internet: boolean;
             lan: boolean;
         };
+        Detail: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/Detail.json
+             */
+            readonly $schema?: string;
+            author?: components["schemas"]["Author"];
+            categories?: string[] | null;
+            changelog_url?: string;
+            footprint: components["schemas"]["Footprint"];
+            icon_url?: string;
+            id: string;
+            license?: string;
+            links?: components["schemas"]["Links"];
+            long_description?: string;
+            name: string;
+            screenshot_urls?: string[] | null;
+            short_description?: string;
+            version: string;
+        };
         ElevateRequest: {
             /**
              * Format: uri
@@ -618,9 +660,12 @@ export interface components {
             elevated_until: number;
         };
         Entry: {
+            categories?: string[] | null;
             footprint: components["schemas"]["Footprint"];
+            icon_url?: string;
             id: string;
             name: string;
+            short_description?: string;
             version: string;
         };
         ErrorDetail: {
@@ -841,6 +886,11 @@ export interface components {
         JobError: {
             code: string;
             message: string;
+        };
+        Links: {
+            homepage?: string;
+            source?: string;
+            support?: string;
         };
         "List-appsResponse": {
             /**
@@ -1460,6 +1510,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["List-catalogResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "get-catalog-app": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
                 };
             };
             /** @description Error */

@@ -20,11 +20,26 @@ type Manifest struct {
 	Name            string      `yaml:"name"`
 	Version         string      `yaml:"version"`
 	Description     Description `yaml:"description,omitempty"`
-	ComposeFile     string      `yaml:"compose_file"`
-	MainService     string      `yaml:"main_service"`
-	MainPort        int         `yaml:"main_port"`
-	PreferredSlugs  []string    `yaml:"preferred_slugs"`
-	Permissions     Permissions `yaml:"permissions"`
+
+	// Identity/metadata for the store UI (APP_MANIFEST.md # A). All optional —
+	// the brain doesn't act on any of them; they're surfaced verbatim to the
+	// store grid and detail page. Icon and Screenshots are package-relative paths
+	// (`./icon.png`); the catalog turns them into asset URLs (APP_STORE.md #
+	// Catalog schema). Absent ⇒ the store falls back to a generic glyph and an
+	// empty gallery.
+	Icon         string   `yaml:"icon,omitempty"`
+	Screenshots  []string `yaml:"screenshots,omitempty"`
+	Categories   []string `yaml:"categories,omitempty"`
+	Author       Author   `yaml:"author,omitempty"`
+	License      string   `yaml:"license,omitempty"`
+	Links        Links    `yaml:"links,omitempty"`
+	ChangelogURL string   `yaml:"changelog_url,omitempty"`
+
+	ComposeFile    string      `yaml:"compose_file"`
+	MainService    string      `yaml:"main_service"`
+	MainPort       int         `yaml:"main_port"`
+	PreferredSlugs []string    `yaml:"preferred_slugs"`
+	Permissions    Permissions `yaml:"permissions"`
 
 	// Images is the optional catalog-promised image map (APP_STORE.md # Catalog
 	// schema — the `images` object). Keyed by the exact `image:` reference used
@@ -73,6 +88,20 @@ type Description struct {
 	// Long is a markdown string rendered on the app-store detail page. Multi-line
 	// literal blocks (`|`) are idiomatic in manifests.
 	Long string `yaml:"long,omitempty"`
+}
+
+// Author is the app's publisher, shown on the detail page (APP_MANIFEST.md # A).
+type Author struct {
+	Name string `yaml:"name,omitempty" json:"name,omitempty"`
+	URL  string `yaml:"url,omitempty" json:"url,omitempty"`
+}
+
+// Links are the author's outbound links, surfaced in the detail page's info
+// panel (APP_MANIFEST.md # A). All optional.
+type Links struct {
+	Homepage string `yaml:"homepage,omitempty" json:"homepage,omitempty"`
+	Source   string `yaml:"source,omitempty" json:"source,omitempty"`
+	Support  string `yaml:"support,omitempty" json:"support,omitempty"`
 }
 
 // ImageRef is one entry in the catalog's `images` map (APP_STORE.md # Catalog

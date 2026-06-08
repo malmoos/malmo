@@ -31,12 +31,22 @@ POST /api/v1/users                         → create user
 GET  /api/v1/settings/network              → current network config
 GET  /api/v1/health                        → active health issues (see HEALTH.md; v1 path, in the OpenAPI spec as of issue #12)
 POST /api/v1/health/:id/:act               → invoke a remediation action attached to an issue
+GET  /api/v1/catalog                       → browse grid: id, name, version, short_description, categories, icon_url, footprint
+GET  /api/v1/catalog/:id                    → detail page: the browse fields plus long_description, screenshot_urls, author, license, links, changelog_url
+GET  /api/v1/catalog/:id/icon               → app icon image bytes (raw; not JSON)
+GET  /api/v1/catalog/:id/screenshots/:n     → n-th screenshot image bytes, manifest order, 0-based (raw; not JSON)
 GET  /api/v1/catalog/:id/install-plan      → permission/scope plan for installing a catalog app (see below)
 POST /api/v1/files/list                    → directory listing (see Files below)
 POST /api/v1/files/mkdir | move | copy | delete  → file operations (see Files below)
 ```
 
 Plain HTTP. Errors: HTTP status + `{ "code": "...", "message": "...", "details": {...} }`. Codes are stable strings; messages are human-readable, not contractual.
+
+#### Catalog browse, detail, and assets
+
+`GET /api/v1/catalog` returns the browse grid — one `Entry` per app with just what a card needs (`APP_STORE.md` # Catalog schema): id, name, version, `short_description`, `categories`, `icon_url`, and the coarse `footprint`. `GET /api/v1/catalog/:id` returns the detail view: the same `Entry` fields embedded, plus `long_description` (markdown), `screenshot_urls`, `author`, `license`, `links`, and `changelog_url`. Both require an authenticated session (401 if absent); unknown id → 404; a malformed catalog entry → 500 (same integrity posture as install-plan).
+
+`icon_url` and the `screenshot_urls` entries point at `GET /api/v1/catalog/:id/icon` and `/screenshots/:n` — they serve **raw image bytes**, not JSON, so the store loads them directly in `<img>` tags (and they stay out of the OpenAPI surface). `icon_url` is present only when the manifest declares an icon, so the store renders a glyph fallback without ever requesting a 404. The brain resolves these paths inside the app's catalog directory and rejects anything that would escape it; a missing file, an out-of-range index, or a non-numeric `:n` → 404.
 
 #### GET /api/v1/catalog/:id/install-plan
 
