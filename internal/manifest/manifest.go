@@ -7,6 +7,7 @@ package manifest
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -106,9 +107,69 @@ func (r *ImageRef) UnmarshalYAML(node *yaml.Node) error {
 
 // Storage is the author's on-disk hint block (APP_MANIFEST.md # Storage). v1
 // parses only estimated_size — a human-readable size string ("10GB") hoisted
-// verbatim into the catalog footprint; the brain does no unit math on it here.
+// verbatim into the catalog footprint; the brain does no unit math on it there.
 type Storage struct {
 	EstimatedSize string `yaml:"estimated_size,omitempty" json:"estimated_size,omitempty"`
+}
+
+// EstimatedSizeBytes parses storage.estimated_size into a byte count for the
+// box-specific install-plan footprint (BRAIN_UI_PROTOCOL.md # install-plan).
+// The catalog grid keeps the verbatim string (Footprint.EstimatedState); this
+// is the numeric form the install dialog adds to the image bytes.
+//
+// The three returns disambiguate cases the caller treats differently:
+//   - unset ("")        → (0, false, nil)  — author gave no estimate; omit it
+//   - valid ("10GB")    → (n, true,  nil)
+//   - malformed ("big") → (0, false, err)  — surfaced, never silently zeroed
+//
+// Units are binary (GB = 2³⁰, matching the spec example where "10GB" is
+// 10737418240), case-insensitive, with an optional fractional mantissa
+// ("1.5GB"); the result truncates to whole bytes.
+func (s Storage) EstimatedSizeBytes() (int64, bool, error) {
+	raw := strings.TrimSpace(s.EstimatedSize)
+	if raw == "" {
+		return 0, false, nil
+	}
+	n, err := parseBinarySize(raw)
+	if err != nil {
+		return 0, false, err
+	}
+	return n, true, nil
+}
+
+// sizeUnits maps a case-folded size suffix to its binary multiplier. Empty and
+// "b" are bytes; the k/m/g/t families are all powers of 1024 — the bare,
+// two-letter, and explicit -ib spellings are accepted as the same value because
+// authors write them interchangeably and the figure is advisory either way.
+var sizeUnits = map[string]int64{
+	"": 1, "b": 1,
+	"k": 1 << 10, "kb": 1 << 10, "kib": 1 << 10,
+	"m": 1 << 20, "mb": 1 << 20, "mib": 1 << 20,
+	"g": 1 << 30, "gb": 1 << 30, "gib": 1 << 30,
+	"t": 1 << 40, "tb": 1 << 40, "tib": 1 << 40,
+}
+
+// sizeRe splits a size string into a numeric mantissa and an optional unit
+// suffix, tolerating whitespace between them ("10 GB").
+var sizeRe = regexp.MustCompile(`^([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z]*)$`)
+
+// parseBinarySize parses a human size like "10GB" or "1.5 GiB" into bytes using
+// the binary multipliers in sizeUnits. The caller passes a non-empty, trimmed
+// string.
+func parseBinarySize(s string) (int64, error) {
+	m := sizeRe.FindStringSubmatch(s)
+	if m == nil {
+		return 0, fmt.Errorf("estimated_size %q is not a valid size (e.g. 10GB, 512MB)", s)
+	}
+	mult, ok := sizeUnits[strings.ToLower(m[2])]
+	if !ok {
+		return 0, fmt.Errorf("estimated_size %q has an unknown unit %q", s, m[2])
+	}
+	mant, err := strconv.ParseFloat(m[1], 64)
+	if err != nil {
+		return 0, fmt.Errorf("estimated_size %q: %w", s, err)
+	}
+	return int64(mant * float64(mult)), nil
 }
 
 // Footprint is the per-app on-disk summary the store grid renders without

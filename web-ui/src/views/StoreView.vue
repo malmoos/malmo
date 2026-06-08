@@ -27,6 +27,7 @@ import {
 import InstallDialog from "../components/InstallDialog.vue";
 import SplitButton from "../components/SplitButton.vue";
 import HealthGated from "../components/HealthGated.vue";
+import { formatSize } from "../utils";
 
 const qc = useQueryClient();
 const { currentUser, singleUserMode } = useAuth();
@@ -203,6 +204,17 @@ const isAdmin = computed(() => currentUser.value?.role === "admin");
           <div class="flex items-baseline gap-2">
             <strong class="text-sm">{{ c.name }}</strong>
             <span class="text-xs text-muted-foreground">v{{ c.version }}</span>
+            <!-- Coarse on-disk size from the catalog footprint (APP_STORE.md #
+                 Catalog schema) — a glance-level "how big is this" before the
+                 dialog's sharper, box-specific number. Skipped when the manifest
+                 carries no sized images (footprint all-zero). -->
+            <span
+              v-if="c.footprint.image_disk_bytes > 0"
+              class="text-xs text-muted-foreground"
+              title="Approximate space this app uses on your box"
+            >
+              ~{{ formatSize(c.footprint.image_disk_bytes) }}
+            </span>
           </div>
 
           <div class="flex items-center gap-2">

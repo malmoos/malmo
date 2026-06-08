@@ -112,6 +112,20 @@ type RAMReporter interface {
 	Read() []protocol.Finding
 }
 
+// DiskReporter is a consumer-side interface for the data-drive free/total
+// space behind GET /v1/system/status (DataDiskFreeBytes/DataDiskTotalBytes).
+// It backs the install-plan free_bytes figure (BRAIN_UI_PROTOCOL.md #
+// install-plan). Provider packages return concrete types: diskusage.Reporter
+// (real syscall.Statfs on /srv/molma) for cmd/host-agent-real, FakeDiskReporter
+// for the fake binary and tests.
+//
+// DataDisk always returns usable levels and never errors — a statfs failure
+// fails open to (0, 0), which the brain reads as "not measured" rather than a
+// scary empty disk.
+type DiskReporter interface {
+	DataDisk() (free, total int64)
+}
+
 // UserManager is a consumer-side interface for the system-level user account
 // operations behind /v1/auth/set-password (and, later, /set-role and
 // /delete-user). Provider packages (usermgr.LinuxUserManager) export concrete
@@ -198,6 +212,13 @@ type Agent struct {
 	// leaves resource issues alone rather than treating "no pressure measured"
 	// as "pressure healthy".
 	Resources RAMReporter
+
+	// Disk, when non-nil, backs the data-drive free/total fields of GET
+	// /v1/system/status. Swapped per binary: diskusage.Reporter (real statfs on
+	// /srv/molma) vs FakeDiskReporter. When nil, both fields report 0 ("not
+	// measured"), which the brain surfaces as "free space unknown" in the
+	// install plan rather than a misleading empty disk.
+	Disk DiskReporter
 
 	// UserMgr, when non-nil, takes over POST /v1/auth/set-password,
 	// /v1/auth/set-role, and /v1/auth/delete-user: handlers delegate to the
@@ -298,11 +319,20 @@ func (a *Agent) discoveryState(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Agent) systemStatus(w http.ResponseWriter, r *http.Request) {
+	// Data-drive free/total is 0/0 unless a disk reporter is wired (real statfs
+	// in cmd/host-agent-real, a canned reporter in the fake binary); the brain
+	// reads 0 as "not measured".
+	var free, total int64
+	if a.Disk != nil {
+		free, total = a.Disk.DataDisk()
+	}
 	writeJSON(w, http.StatusOK, protocol.SystemStatus{
-		Hostname:     "molma-dev",
-		UptimeS:      int64(time.Since(a.startedAt).Seconds()),
-		DiskPressure: false,
-		AgentVersion: AgentVersion,
+		Hostname:           "molma-dev",
+		UptimeS:            int64(time.Since(a.startedAt).Seconds()),
+		DiskPressure:       false,
+		AgentVersion:       AgentVersion,
+		DataDiskFreeBytes:  free,
+		DataDiskTotalBytes: total,
 	})
 }
 

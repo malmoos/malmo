@@ -95,6 +95,61 @@ func TestFootprintNoStorageOmitsState(t *testing.T) {
 	}
 }
 
+func TestEstimatedSizeBytes(t *testing.T) {
+	// Binary units: the spec example "10GB" → 10737418240 is the anchor.
+	cases := []struct {
+		in   string
+		want int64
+	}{
+		{"10GB", 10 << 30},
+		{"512MB", 512 << 20},
+		{"1.5GB", 1610612736}, // 1.5 * 2^30
+		{"10 GB", 10 << 30},   // internal whitespace tolerated
+		{"  2tb  ", 2 << 40},  // surrounding whitespace + lowercase
+		{"1KiB", 1 << 10},     // explicit -ib spelling
+		{"4096", 4096},        // bare number = bytes
+		{"4096B", 4096},
+	}
+	for _, c := range cases {
+		got, ok, err := Storage{EstimatedSize: c.in}.EstimatedSizeBytes()
+		if err != nil {
+			t.Fatalf("%q: unexpected error %v", c.in, err)
+		}
+		if !ok {
+			t.Fatalf("%q: want ok=true", c.in)
+		}
+		if got != c.want {
+			t.Fatalf("%q: got %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+
+// TestEstimatedSizeBytesUnset is the no-estimate case: empty string ⇒ ok=false,
+// no error, so the install plan omits estimated_state_bytes rather than zeroing
+// it.
+func TestEstimatedSizeBytesUnset(t *testing.T) {
+	for _, in := range []string{"", "   "} {
+		got, ok, err := Storage{EstimatedSize: in}.EstimatedSizeBytes()
+		if err != nil || ok || got != 0 {
+			t.Fatalf("%q: want (0,false,nil), got (%d,%v,%v)", in, got, ok, err)
+		}
+	}
+}
+
+// TestEstimatedSizeBytesMalformed pins that garbage surfaces as an error (and
+// ok=false), never a silent zero — the caller logs and degrades.
+func TestEstimatedSizeBytesMalformed(t *testing.T) {
+	for _, in := range []string{"big", "10 GG", "GB", "1.2.3MB", "-5GB"} {
+		got, ok, err := Storage{EstimatedSize: in}.EstimatedSizeBytes()
+		if err == nil {
+			t.Fatalf("%q: want error, got (%d,%v,nil)", in, got, ok)
+		}
+		if ok || got != 0 {
+			t.Fatalf("%q: want (0,false,err), got (%d,%v)", in, got, ok)
+		}
+	}
+}
+
 func TestComposeImagesDistinctSorted(t *testing.T) {
 	// Two services share one image (gateway+dashboard pattern); a third is
 	// distinct. Want the deduped, sorted set.

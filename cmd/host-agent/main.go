@@ -94,6 +94,10 @@ func main() {
 	// per followed container — so the brain→UI streaming path is exercisable
 	// end-to-end natively (BRAIN_HOST_PROTOCOL.md # Pattern C).
 	a.Logs = hostagent.NewFakeLogSource(time.Second)
+	// No real data drive in the dev loop, so GET /v1/system/status reports a
+	// canned free/total (≈412 GiB free of a 1 TiB drive) — enough for the
+	// install plan's free_bytes to render a plausible figure natively.
+	a.Disk = hostagent.NewFakeDiskReporter(412<<30, 1<<40)
 
 	mux := http.NewServeMux()
 	a.Mount(mux)

@@ -299,6 +299,9 @@
       "Entry": {
         "additionalProperties": false,
         "properties": {
+          "footprint": {
+            "$ref": "#/components/schemas/Footprint"
+          },
           "id": {
             "type": "string"
           },
@@ -312,7 +315,8 @@
         "required": [
           "id",
           "name",
-          "version"
+          "version",
+          "footprint"
         ],
         "type": "object"
       },
@@ -428,6 +432,27 @@
         "required": [
           "household",
           "personal"
+        ],
+        "type": "object"
+      },
+      "Footprint": {
+        "additionalProperties": false,
+        "properties": {
+          "estimated_state": {
+            "type": "string"
+          },
+          "image_disk_bytes": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "image_download_bytes": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "image_download_bytes",
+          "image_disk_bytes"
         ],
         "type": "object"
       },
@@ -598,6 +623,9 @@
             "readOnly": true,
             "type": "string"
           },
+          "footprint": {
+            "$ref": "#/components/schemas/InstallPlanFootprint"
+          },
           "manifest_id": {
             "type": "string"
           },
@@ -629,6 +657,7 @@
           "version",
           "scope_options",
           "scope_default",
+          "footprint",
           "permissions"
         ],
         "type": "object"
@@ -657,6 +686,33 @@
           "mode",
           "scope",
           "sources"
+        ],
+        "type": "object"
+      },
+      "InstallPlanFootprint": {
+        "additionalProperties": false,
+        "properties": {
+          "download_bytes": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "estimated_state_bytes": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "free_bytes": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "image_disk_bytes": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "download_bytes",
+          "image_disk_bytes",
+          "free_bytes"
         ],
         "type": "object"
       },

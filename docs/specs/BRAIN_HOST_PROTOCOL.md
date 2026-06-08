@@ -77,7 +77,8 @@ POST /v1/services/tailscale/enable
 ```
 GET /v1/system/status
 → 200 OK
-  { "hostname": "cindy-zx9", "uptime_s": 84021, "disk_pressure": false, ... }
+  { "hostname": "cindy-zx9", "uptime_s": 84021, "disk_pressure": false,
+    "data_disk_free_bytes": 442381180928, "data_disk_total_bytes": 1099511627776, ... }
 
 GET /v1/system/resources
 → 200 OK

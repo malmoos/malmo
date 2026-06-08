@@ -38,11 +38,23 @@ type UnpublishRequest struct {
 }
 
 // SystemStatus is GET /v1/system/status.
+//
+// DataDiskFreeBytes / DataDiskTotalBytes are a statfs snapshot of the data
+// drive's mount (/srv/molma): free = available blocks × block size (Bavail ×
+// Bsize, the space an unprivileged writer can actually use, already excluding
+// the root reserve), total = Blocks × Bsize. They back the install-plan's
+// free_bytes figure (BRAIN_UI_PROTOCOL.md # install-plan) so the install dialog
+// can warn before a download that won't fit. Advisory and racy — a snapshot, no
+// reservation — so the brain treats them as a hint, never a gate. 0 means "not
+// measured" (no disk reporter wired, or statfs failed): the brain shows no free
+// figure rather than a misleading zero.
 type SystemStatus struct {
-	Hostname     string `json:"hostname"`
-	UptimeS      int64  `json:"uptime_s"`
-	DiskPressure bool   `json:"disk_pressure"`
-	AgentVersion string `json:"agent_version"`
+	Hostname           string `json:"hostname"`
+	UptimeS            int64  `json:"uptime_s"`
+	DiskPressure       bool   `json:"disk_pressure"`
+	AgentVersion       string `json:"agent_version"`
+	DataDiskFreeBytes  int64  `json:"data_disk_free_bytes"`
+	DataDiskTotalBytes int64  `json:"data_disk_total_bytes"`
 }
 
 // SystemResources is GET /v1/system/resources: one raw cumulative-counter
