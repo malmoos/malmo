@@ -7,7 +7,7 @@
 // branches, and the per-app button logic (does the caller already have a
 // household or own-personal instance?). The view renders InstallDialog from
 // `activePlan` and wires the returned handlers; all wording stays in the view.
-import { computed, ref, type Ref } from "vue";
+import { computed, ref, watch, type Ref } from "vue";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/vue-query";
 import { useAuth } from "./auth";
 import {
@@ -118,6 +118,21 @@ export function useInstall(manifestId: Ref<string>) {
     pendingRequest.value = req;
     install.mutate(req);
   }
+
+  // AppDetailView's route component is reused across /store/:id navigations (the
+  // instance isn't unmounted, only manifestId changes), so this composable's
+  // state refs persist. Reset all install-flow display state when the app
+  // changes — otherwise a dialog/banner from the previous app leaks onto the new
+  // one: a job that fails after you've navigated away would write installError
+  // against the wrong page, and a still-true planOpen would pop the consent
+  // dialog on an app you never clicked Install on (its plan query re-fetches for
+  // the new id). The background mutation itself keeps running; only the view
+  // state is cleared.
+  watch(manifestId, () => {
+    closeDialog();
+    installError.value = null;
+    installingId.value = null;
+  });
 
   function handleConfirmDuplicate() {
     if (!pendingRequest.value) return;
