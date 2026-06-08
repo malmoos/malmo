@@ -56,7 +56,7 @@ const usesLine = computed(() => {
   if (fp.value.image_disk_bytes > 0) {
     return `Uses about ${formatSize(fp.value.image_disk_bytes)} on your box${grows ? ", and grows as you use it" : ""}.`;
   }
-  return "Uses space on your box that grows as you use it.";
+  return grows ? "Uses space on your box that grows as you use it." : "Uses some space on your box.";
 });
 // Warn when the full projected need (image + its own working data) approaches the
 // live free space — surfaced, never a hard block (DASHBOARD.md). 90% is a UI
@@ -265,7 +265,7 @@ function handleSubmit() {
         <div v-if="hasFootprint" class="space-y-1.5">
           <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Storage</p>
           <ul class="space-y-1 text-sm">
-            <li class="flex items-start gap-2">
+            <li v-if="fp.image_disk_bytes > 0 || fp.download_bytes > 0" class="flex items-start gap-2">
               <span class="mt-0.5 text-muted-foreground">•</span>{{ downloadLine }}
             </li>
             <li class="flex items-start gap-2">
@@ -281,7 +281,7 @@ function handleSubmit() {
             v-if="notEnoughSpace"
             class="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
           >
-            This might not fit — only about {{ formatSize(plan.footprint.free_bytes) }} free on your box. You can still install.
+            This might not fit — only about {{ formatSize(fp.free_bytes) }} free on your box. You can still install.
           </p>
         </div>
 
