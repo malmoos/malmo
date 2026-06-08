@@ -279,6 +279,12 @@ type fakeHost struct {
 	// resolveHomeErr, when set, is returned by ResolveHome (e.g.
 	// hostclient.ErrUnknownUser to exercise the deleted-owner path).
 	resolveHomeErr error
+
+	// systemStatus is returned by SystemStatus; tests set DataDiskFreeBytes to
+	// assert the install-plan free figure. statusErr forces the host-error path
+	// (FreeBytes must degrade to 0).
+	systemStatus protocol.SystemStatus
+	statusErr    error
 }
 
 func newFakeHost() *fakeHost { return &fakeHost{published: map[string]bool{}} }
@@ -314,6 +320,16 @@ func (h *fakeHost) WellKnownIdentity(_ context.Context) (protocol.WellKnownIdent
 	h.calls = append(h.calls, call{method: "WellKnownIdentity"})
 	h.mu.Unlock()
 	return protocol.WellKnownIdentityResponse{MolmaAppUID: 2000, MolmaAppGID: 2000, MolmaSharedGID: 2001}, nil
+}
+
+func (h *fakeHost) SystemStatus(_ context.Context) (protocol.SystemStatus, error) {
+	h.mu.Lock()
+	h.calls = append(h.calls, call{method: "SystemStatus"})
+	h.mu.Unlock()
+	if h.statusErr != nil {
+		return protocol.SystemStatus{}, h.statusErr
+	}
+	return h.systemStatus, nil
 }
 
 func (h *fakeHost) isPublished(slug string) bool {

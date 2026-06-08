@@ -618,6 +618,7 @@ export interface components {
             elevated_until: number;
         };
         Entry: {
+            footprint: components["schemas"]["Footprint"];
             id: string;
             name: string;
             version: string;
@@ -677,6 +678,13 @@ export interface components {
         FolderSources: {
             household: components["schemas"]["SourceMenu"];
             personal: components["schemas"]["SourceMenu"];
+        };
+        Footprint: {
+            estimated_state?: string;
+            /** Format: int64 */
+            image_disk_bytes: number;
+            /** Format: int64 */
+            image_download_bytes: number;
         };
         HealthListResponseBody: {
             /**
@@ -743,6 +751,7 @@ export interface components {
              * @example https://example.com/schemas/InstallPlanDTO.json
              */
             readonly $schema?: string;
+            footprint: components["schemas"]["InstallPlanFootprint"];
             manifest_id: string;
             name: string;
             permissions: components["schemas"]["InstallPlanPermissions"];
@@ -756,6 +765,16 @@ export interface components {
             scope: string;
             sources: components["schemas"]["FolderSources"];
             subfolder_default?: string;
+        };
+        InstallPlanFootprint: {
+            /** Format: int64 */
+            download_bytes: number;
+            /** Format: int64 */
+            estimated_state_bytes?: number;
+            /** Format: int64 */
+            free_bytes: number;
+            /** Format: int64 */
+            image_disk_bytes: number;
         };
         InstallPlanPermissions: {
             devices: string[] | null;

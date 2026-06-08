@@ -20,10 +20,11 @@ import (
 	"github.com/molmaos/molma/internal/protocol"
 )
 
-// Severity is one of warning | error | critical per HEALTH.md.
+// Severity is one of info | warning | error | critical per HEALTH.md.
 type Severity string
 
 const (
+	SeverityInfo     Severity = "info"
 	SeverityWarning  Severity = "warning"
 	SeverityError    Severity = "error"
 	SeverityCritical Severity = "critical"
@@ -49,7 +50,7 @@ const (
 //
 // ReportCategory ties the issue to a host-agent GET /v1/health/system report
 // domain (protocol.HealthCategory: storage | drives | services | resources |
-// time) — a *separate axis* from Category, which is the issue's display/nature
+// time | system) — a *separate axis* from Category, which is the issue's display/nature
 // taxonomy. ApplyFindings clears an issue only when its ReportCategory matches
 // the poll's category and it's absent from that slice. Brain-owned issues
 // (locus C, internal) leave it empty so a host-report poll never clears them —
@@ -455,7 +456,7 @@ func severityRank(s Severity) int {
 	case SeverityWarning:
 		return 1
 	}
-	return 0
+	return 0 // info and any unrecognised severity are the floor
 }
 
 // builtinDefinitions is the v1 typed-issue taxonomy. Mirrors the tables in
@@ -618,6 +619,24 @@ func builtinDefinitions() []Definition {
 			BlocksWrites: false, BlocksApps: false, BlocksUsers: false,
 			Summary:        "The box is low on memory and is slowing down. Check which app is using the most.",
 			ReportCategory: protocol.HealthCategoryResources, Debounce: true,
+		},
+		// Capacity & informational (HEALTH.md # Capacity & informational).
+		// reboot-required is locus B — host-agent stats /var/run/reboot-required
+		// (Debian's apt/unattended-upgrades flag) and reports its presence under the
+		// system report's *system* category; the issue itself is display Category
+		// capacity. Box-wide (no instance_key). Info severity (the first info issue),
+		// no block flags — a pending reboot is purely informational (a quiet card per
+		// HEALTH.md), pointing the user at "reboot now / schedule". The package list
+		// (/var/run/reboot-required.pkgs) rides in Details. Left 1-shot (Debounce
+		// false): file presence is deterministic — apt creates the flag, a reboot
+		// clears it (tmpfs /run) — so there's nothing to flap, and the info banner
+		// surfaces one poll sooner.
+		{
+			ID: "reboot-required", Category: CategoryCapacity,
+			Severity: SeverityInfo, Tier: 2,
+			BlocksWrites: false, BlocksApps: false, BlocksUsers: false,
+			Summary:        "A system update needs a reboot to finish.",
+			ReportCategory: protocol.HealthCategorySystem,
 		},
 	}
 }

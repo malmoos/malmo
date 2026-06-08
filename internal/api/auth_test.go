@@ -20,6 +20,7 @@ import (
 	"github.com/molmaos/molma/internal/catalog"
 	"github.com/molmaos/molma/internal/events"
 	"github.com/molmaos/molma/internal/hostclient"
+	"github.com/molmaos/molma/internal/lifecycle"
 	"github.com/molmaos/molma/internal/protocol"
 	"github.com/molmaos/molma/internal/store"
 	"github.com/molmaos/molma/internal/systemlive"
@@ -31,6 +32,12 @@ import (
 // store or hostclient — those have their own tests, and the value of these
 // tests is exercising the full HTTP boundary (CORS → auth middleware →
 // huma handler → store + host) end-to-end.
+
+// harnessFreeBytes is the canned data-drive free figure the harness host-agent
+// reports on GET /v1/system/status, so install-plan footprint tests can assert
+// free_bytes flows through (≈412 GiB).
+const harnessFreeBytes = 412 << 30
+
 type harness struct {
 	srv  *httptest.Server
 	jar  http.CookieJar // shared cookie jar across helpers
@@ -111,6 +118,14 @@ func newHarness(t *testing.T) *harness {
 		pmu.Unlock()
 		_ = json.NewEncoder(w).Encode(struct{}{})
 	})
+	// Canned data-drive free/total so the install-plan footprint's free_bytes has
+	// a stable figure to assert (harnessFreeBytes).
+	mux.HandleFunc("GET /v1/system/status", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(protocol.SystemStatus{
+			DataDiskFreeBytes:  harnessFreeBytes,
+			DataDiskTotalBytes: 1 << 40,
+		})
+	})
 	hostHTTP := &http.Server{Handler: mux}
 	go func() { _ = hostHTTP.Serve(ln) }()
 	t.Cleanup(func() { _ = hostHTTP.Close() })
@@ -128,9 +143,15 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(hubCancel)
 	live := systemlive.New(hubCtx, &constSampler{}, 5*time.Millisecond)
 
-	// life is nil — install/uninstall handlers aren't exercised here. The
-	// auth middleware fences them anyway; we only assert that fence.
-	srv := NewServer(st, cat, nil, bus, authMgr, host, audit.New(st), nil, live, nil)
+	// A partial lifecycle.Manager (nil caddy/docker) so the install-plan handler
+	// can call s.life.InstallFootprint. The install/uninstall *job* bodies are
+	// still never run here — every install/uninstall test asserts a synchronous
+	// boundary (auth fence, 422 pre-check, 404) that returns before the job — and
+	// the install-plan fixtures declare no images, so the nil docker is never
+	// reached. host (*hostclient.Client) satisfies HostDriver, including the new
+	// SystemStatus the footprint reads.
+	life := lifecycle.NewManager(st, cat, host, nil, nil, bus, t.TempDir())
+	srv := NewServer(st, cat, life, bus, authMgr, host, audit.New(st), nil, live, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 

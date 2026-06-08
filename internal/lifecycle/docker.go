@@ -96,6 +96,10 @@ type HostDriver interface {
 	// service UID/GID a household instance runs as, and the molma-shared GID a
 	// shared-source folder mount joins via group_add.
 	WellKnownIdentity(ctx context.Context) (protocol.WellKnownIdentityResponse, error)
+	// SystemStatus carries the data drive's free/total bytes (statfs snapshot)
+	// the install-plan footprint reports as free_bytes (BRAIN_UI_PROTOCOL.md #
+	// install-plan). Read-only; advisory, so InstallFootprint swallows its error.
+	SystemStatus(ctx context.Context) (protocol.SystemStatus, error)
 }
 
 // Admitter validates a verbatim compose. Default impl is admission.Check; tests

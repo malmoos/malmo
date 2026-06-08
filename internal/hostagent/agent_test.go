@@ -677,6 +677,9 @@ func TestSystemHealth_NoSourcesReportsStorageOnly(t *testing.T) {
 	if _, present := sh.Categories[protocol.HealthCategoryResources]; present {
 		t.Error("resources category must be absent when no reporter is wired")
 	}
+	if _, present := sh.Categories[protocol.HealthCategorySystem]; present {
+		t.Error("system category must be absent when no reporter is wired")
+	}
 	if sh.CheckedAt == "" {
 		t.Error("checked_at must be set even with no sources")
 	}
@@ -775,6 +778,31 @@ func TestSystemHealth_ResourcesFromReporter(t *testing.T) {
 	}
 	if len(resources) != 1 || resources[0].ID != "ram-pressure" {
 		t.Fatalf("resources category: want ram-pressure, got %v", resources)
+	}
+}
+
+// TestSystemHealth_SystemFromReporter verifies the system category appears once
+// a RebootReporter is wired and carries the reboot-required finding verbatim,
+// package list in Details (the reboot-required detector, locus B, issue #40).
+func TestSystemHealth_SystemFromReporter(t *testing.T) {
+	a, mux := newTestAgent(&stubVerifier{})
+	rb := NewFakeRebootReporter()
+	rb.Set([]protocol.Finding{
+		{ID: "reboot-required", Details: "linux-image-6.8.0, libc6"},
+	})
+	a.Reboot = rb
+
+	w := get(t, mux, "/v1/health/system")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200, got %d", w.Code)
+	}
+	sh := decodeBody[protocol.SystemHealth](t, w)
+	system, ok := sh.Categories[protocol.HealthCategorySystem]
+	if !ok {
+		t.Fatal("system category must be present when a reporter is wired")
+	}
+	if len(system) != 1 || system[0].ID != "reboot-required" || system[0].Details != "linux-image-6.8.0, libc6" {
+		t.Fatalf("system category: want reboot-required with package list, got %v", system)
 	}
 }
 
