@@ -140,7 +140,7 @@ func (m *Manager) provisionServices(ctx context.Context, instanceID, manifestID 
 		stem := sanitizeIdent(manifestID)
 		// MySQL caps user names at 32 chars (Postgres truncates past 63); the
 		// role name is the db name, so bound the stem to fit "<stem>_xxxx".
-		if len(stem) > 26 {
+		if _, isMySQL := mysqlTools[dep.Type]; isMySQL && len(stem) > 26 {
 			stem = stem[:26]
 		}
 		dbName := stem + "_" + randSuffix()
