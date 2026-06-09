@@ -3,9 +3,11 @@ manifest_version: 1
 name: Open WebUI
 version: "0.9.6"
 description:
-  short: "Self-hosted chat interface for large language models."
+  short: "Self-hosted chat interface for large language models (connect your own model backend)."
   long: |
-    Open WebUI is a polished, self-hosted chat interface for large language models — a private alternative to the ChatGPT web app that runs on your own hardware. Chat with models, organize conversations into folders, upload documents for retrieval-augmented answers, and manage multiple household users, all from one dashboard. Open WebUI is the front end only: you connect it to a model backend of your choice from the in-app Connections settings — an OpenAI-compatible API (OpenAI, OpenRouter, Groq, and others) or an Ollama server running elsewhere on your network. Running models locally on this machine would need a dedicated GPU, which molma does not yet wire through.
+    Open WebUI is a polished, self-hosted chat interface for large language models — a private alternative to the ChatGPT web app that runs on your own hardware. Chat with models, organize conversations into folders, upload documents for retrieval-augmented answers, and manage multiple household users, all from one dashboard.
+
+    Note: this app is the chat front end only — it does not run AI models on this machine yet. You connect it to a model backend of your choice from the in-app Connections settings: an OpenAI-compatible API (OpenAI, OpenRouter, Groq, and others) or an Ollama server running elsewhere on your network. On-device inference needs a dedicated GPU, which molma does not yet wire through.
 icon: ./icon.png
 screenshots: [./screenshots/01.png]
 categories: [ai, productivity]
