@@ -123,6 +123,8 @@ App state (indexes, configs, the app's own DB) lives under the instance dir at `
 
 **Bind mounts to arbitrary host paths are forbidden for both doors.** Only relative bind mounts under the instance's `data/` dir are allowed; an absolute host source is an admission rejection (store or custom alike).
 
+**Every instance runs as a resolved `user:`, and its `data/` dir is owned by that same UID.** A Tier-3 container has `cap_drop: [ALL]`, which removes `CAP_DAC_OVERRIDE` — so even a root-UID container can only write `data/` when it is that dir's actual owner. The brain therefore pins `user:` on every instance and chowns `data/` to match: a **folder app** runs as the owner's UID (personal) or the molma-app identity (household) per the runtime-identity rule below; a **folderless app** runs as the brain's own effective UID/GID, which is the creator and owner of the freshly-made `data/` dir (root under the production brain, the operator's user under the native dev brain). This is why a folderless app does not "just run as root by default" — relying on the image's default user breaks the moment the brain is not itself root (the native inner loop) or the image's default user is non-root.
+
 ### User content (use-case folders)
 
 Apps reach user content by **bind-mounting use-case folders** declared in the manifest (`APP_MANIFEST.md` # `folders`):
