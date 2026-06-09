@@ -62,4 +62,4 @@ images:
   kimai/kimai2:2.59.0:
     digest: sha256:c955507585f791ac410025095d887bb9fbbba4f497aa3410e6a1b40b5879a93e
     download_bytes: 300086308
-    disk_bytes: 300120809
+    disk_bytes: 887843328
