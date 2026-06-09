@@ -105,3 +105,11 @@ Unlike `docs/progress/` entries (frozen ADR snapshots), this file is **mutable b
 - **What breaks:** molma can't pass a GPU through to a container yet (#67, GPU runtime wiring, `blocked`), and CPU-only Ollama is impractical for real models — so the bundled-Ollama mode isn't shippable. The catalog app drops the `ollama` service and ships **frontend-only**: Open WebUI is fully functional, but the user must point it at an *external* model backend (an OpenAI-compatible API over the internet, or an Ollama running on another LAN box) via the in-app Connections settings. No on-device inference.
 - **Why molma can't satisfy it (v1):** no GPU passthrough mechanism (`gpu: true` is parsed in the manifest schema but the platform override + capacity check are unbuilt — #67). Without it there's no point bundling Ollama. Note: the frontend itself runs cleanly under the Tier-3 sandbox — the image defaults to root (`ARG UID=0`), so it writes molma's root-owned `./data` with no `nonroot-data-ownership` issue (smoke-tested healthy under `cap_drop: ALL` + `no-new-privileges`), and it fetches its RAG embedding model from HuggingFace on first boot (hence `internet: true`, cached in `./data` thereafter).
 - **Status:** open — `catalog/open-webui/` shipped frontend-only (closes #74). When GPU passthrough (#67) lands, revisit to offer a bundled-Ollama variant for on-device inference.
+
+### smtp-relay — kimai (2026-06-09)
+
+- **Severity:** degraded
+- **Trigger:** `MAILER_URL` — the image defaults it to `null://localhost`, Symfony's discard-everything transport, so all mail is silently dropped until an admin supplies a real SMTP DSN. Second app in this gap-class (see `smtp-relay — ghost`).
+- **What breaks:** every email Kimai sends — "forgot password" reset links and any mail an admin enables later (scheduled report delivery, notifications). Silent failure: the UI reports the mail as sent. Workaround inside the app: an admin can reset any user's password from the admin UI, so nobody is permanently locked out. Core time-tracking is unaffected.
+- **Why molma can't satisfy it (v1):** same missing mechanism as the ghost entry — molma has no outgoing-mail relay, no `MOLMA_SMTP_*` injection, and no per-app env-override UI through which a user could supply their own provider's credentials post-install.
+- **Status:** open
