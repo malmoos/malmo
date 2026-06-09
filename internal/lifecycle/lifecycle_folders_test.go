@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/molmaos/molma/internal/hostclient"
@@ -164,6 +165,15 @@ func TestInstallFolders_FolderlessRunsAsBrainIdentity(t *testing.T) {
 	}
 	if e.host.called("WellKnownIdentity") || e.host.called("ResolveHome") {
 		t.Error("folderless install must not resolve host identity")
+	}
+	dataDir := filepath.Join(e.stateDir, "instances", inst.ID, "data")
+	if fi, err := os.Stat(dataDir); err != nil {
+		t.Errorf("data dir must exist: %v", err)
+	} else if st, ok := fi.Sys().(*syscall.Stat_t); !ok {
+		t.Error("data dir stat: unexpected Stat_t type")
+	} else if int(st.Uid) != os.Geteuid() || int(st.Gid) != os.Getegid() {
+		t.Errorf("data dir must be owned by brain identity %d:%d, got %d:%d",
+			os.Geteuid(), os.Getegid(), st.Uid, st.Gid)
 	}
 }
 

@@ -64,9 +64,9 @@ type FolderMount struct {
 }
 
 // isolation is the resolved per-instance identity + folder binds writeOverride
-// and writeEnv stamp onto every service. Always present: every instance runs as
-// a resolved UID/GID (folderless apps as the brain's own effective identity).
-// mounts is empty for a folderless app, so the folder-bind paths are no-ops.
+// and writeEnv stamp onto every service. Every instance carries one: folder apps
+// run as the owner's UID/GID with mounts populated; folderless apps run as the
+// brain's own effective identity with mounts empty (folder-bind paths are no-ops).
 type isolation struct {
 	uid, gid  int    // container runtime identity (compose user:)
 	sharedGID int    // molma-shared GID for group_add on shared-source mounts
@@ -325,7 +325,7 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	// effective UID/GID — the owner of the ./data dir writeInstanceDir just
 	// created (root under the production brain; the dev user under the native
 	// inner-loop brain, so the bind stays writable there too).
-	iso := &isolation{uid: os.Geteuid(), gid: os.Getegid()}
+	iso := isolation{uid: os.Geteuid(), gid: os.Getegid()}
 	if len(man.Permissions.Folders) > 0 {
 		wk, err := m.host.WellKnownIdentity(ctx)
 		if err != nil {
@@ -828,7 +828,7 @@ func (m *Manager) writeInstanceDir(id string, man *manifest.Manifest, composeByt
 // attachment, plus the `image: name@sha256:…` pin per service (digest pinning
 // — APP_LIFECYCLE.md). main_service additionally joins the ingress network
 // with a per-instance alias so Caddy can reach exactly this instance.
-func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes []byte, pins []servicePin, iso *isolation) error {
+func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes []byte, pins []servicePin, iso isolation) error {
 	svcs, err := parseComposeServices(composeBytes)
 	if err != nil {
 		return err
@@ -894,26 +894,24 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 		// as the brain's euid). Folder apps additionally bind each declared folder
 		// at /molma/<folder> from its elected source and join molma-shared when any
 		// source is the household tree (APP_ISOLATION.md # User content).
-		if iso != nil {
-			entry["user"] = fmt.Sprintf("%d:%d", iso.uid, iso.gid)
-			volumes := make([]string, 0, len(iso.mounts))
-			needShared := false
-			for _, mt := range iso.mounts {
-				mode := ":ro"
-				if modeByFolder[mt.Folder] == "write" {
-					mode = ":rw"
-				}
-				volumes = append(volumes, iso.hostSource(mt)+":"+containerDest(mt)+mode)
-				if mt.Source == sourceShared {
-					needShared = true
-				}
+		entry["user"] = fmt.Sprintf("%d:%d", iso.uid, iso.gid)
+		volumes := make([]string, 0, len(iso.mounts))
+		needShared := false
+		for _, mt := range iso.mounts {
+			mode := ":ro"
+			if modeByFolder[mt.Folder] == "write" {
+				mode = ":rw"
 			}
-			if len(volumes) > 0 {
-				entry["volumes"] = volumes
+			volumes = append(volumes, iso.hostSource(mt)+":"+containerDest(mt)+mode)
+			if mt.Source == sourceShared {
+				needShared = true
 			}
-			if needShared {
-				entry["group_add"] = []string{strconv.Itoa(iso.sharedGID)}
-			}
+		}
+		if len(volumes) > 0 {
+			entry["volumes"] = volumes
+		}
+		if needShared {
+			entry["group_add"] = []string{strconv.Itoa(iso.sharedGID)}
 		}
 		// Device passthrough (APP_ISOLATION.md # Devices). Each declared /dev path
 		// is exposed at the same path inside the container. Host-side existence
@@ -945,7 +943,7 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 	return os.WriteFile(filepath.Join(m.instanceDir(id), "compose.override.yml"), out, 0o644)
 }
 
-func (m *Manager) writeEnv(id, slug string, iso *isolation) error {
+func (m *Manager) writeEnv(id, slug string, iso isolation) error {
 	dataDir, _ := filepath.Abs(filepath.Join(m.instanceDir(id), "data"))
 	lines := []string{
 		"MOLMA_INSTANCE_ID=" + id,
@@ -956,10 +954,8 @@ func (m *Manager) writeEnv(id, slug string, iso *isolation) error {
 	// folders) — a store app's compose maps MOLMA_FOLDER_<NAME> to its library
 	// path; a Door-2 grant already bound straight to its target, but the var still
 	// reflects the real in-container path. Stable regardless of the elected source.
-	if iso != nil {
-		for _, mt := range iso.mounts {
-			lines = append(lines, "MOLMA_FOLDER_"+strings.ToUpper(mt.Folder)+"="+containerDest(mt))
-		}
+	for _, mt := range iso.mounts {
+		lines = append(lines, "MOLMA_FOLDER_"+strings.ToUpper(mt.Folder)+"="+containerDest(mt))
 	}
 	// Re-emit the instance's generated secrets as MOLMA_SECRET_<NAME>
 	// (SERVICE_PROVISIONING.md # Env-var injection). Read from the store rather
