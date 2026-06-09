@@ -112,11 +112,41 @@ services:
 	}
 }
 
+func TestParseServicesMySQLFamily(t *testing.T) {
+	for _, dep := range []struct{ typ, version string }{
+		{"mysql", "8.0"}, {"mysql", "8.4"}, {"mariadb", "10.11"}, {"mariadb", "11.4"},
+	} {
+		src := []byte(`
+id: ghost
+manifest_version: 1
+name: Ghost
+version: "1.0"
+compose_file: compose.yml
+main_service: web
+main_port: 2368
+services:
+  database:
+    type: ` + dep.typ + `
+    version: "` + dep.version + `"
+`)
+		m, err := Parse(src)
+		if err != nil {
+			t.Fatalf("%s %s: parse: %v", dep.typ, dep.version, err)
+		}
+		if got := m.Services["database"]; got.Type != dep.typ || got.Version != dep.version {
+			t.Errorf("%s %s: database = %+v", dep.typ, dep.version, got)
+		}
+	}
+}
+
 func TestParseRejectsBadServices(t *testing.T) {
 	cases := map[string]string{
-		"unknown type":    "database:\n    type: mysql\n    version: \"8\"",
+		"unknown type":    "database:\n    type: mongodb\n    version: \"7\"",
 		"bad pg version":  "database:\n    type: postgres\n    version: \"13\"",
 		"bad redis ver":   "cache:\n    type: redis\n    version: \"6\"",
+		"bad mysql ver":   "database:\n    type: mysql\n    version: \"5.7\"",
+		"major-only ver":  "database:\n    type: mysql\n    version: \"8\"",
+		"bad mariadb ver": "database:\n    type: mariadb\n    version: \"10.6\"",
 		"missing version": "database:\n    type: postgres",
 		"bad key":         "My_DB:\n    type: postgres\n    version: \"15\"",
 	}

@@ -351,24 +351,29 @@ type Secret struct {
 }
 
 // ServiceDep is one managed-service dependency (APP_MANIFEST.md # D). Type is
-// the service kind (`postgres`, `redis`); Version is the major-version pin the
-// brain runs a shared instance of. Name is the author's advisory logical name
-// for the resource; v1 ignores it (the brain generates the real database name)
-// — parsed for forward-compat, not used.
+// the service kind (`postgres`, `mysql`, `mariadb`, `redis`); Version is the
+// version pin the brain runs a shared instance of (a major for postgres/redis,
+// an upstream LTS series for the MySQL family). Name is the author's advisory
+// logical name for the resource; v1 ignores it (the brain generates the real
+// database name) — parsed for forward-compat, not used.
 type ServiceDep struct {
 	Type    string `yaml:"type"`
 	Version string `yaml:"version"`
 	Name    string `yaml:"name,omitempty"`
 }
 
-// serviceVersions is the allowlist of major versions per managed-service type
+// serviceVersions is the allowlist of versions per managed-service type
 // (SERVICE_PROVISIONING.md # Catalog (v1)). A manifest declaring a type/version
 // outside this set is rejected at parse time. Note: schema-valid is not the
-// same as provisioned — v1 only provisions postgres; a redis declaration parses
-// but install fails until Redis provisioning lands (NEXT.md).
+// same as provisioned — v1 provisions postgres and the MySQL family; a redis
+// declaration parses but install fails until Redis provisioning lands
+// (NEXT.md). The MySQL-family entries are the upstream LTS series; mysql 8.0
+// is past Oracle EOL but kept because Ghost pins it specifically.
 var serviceVersions = map[string]map[string]bool{
 	"postgres": {"15": true, "16": true},
 	"redis":    {"7": true},
+	"mysql":    {"8.0": true, "8.4": true},
+	"mariadb":  {"10.11": true, "11.4": true},
 }
 
 // DefaultSecretBytes is the entropy drawn for a declared secret when `bytes` is
@@ -485,7 +490,7 @@ func (m *Manifest) validateServices() error {
 		}
 		versions, ok := serviceVersions[dep.Type]
 		if !ok {
-			return fmt.Errorf("services[%s]: unknown type %q (allowed: postgres, redis)", key, dep.Type)
+			return fmt.Errorf("services[%s]: unknown type %q (allowed: postgres, redis, mysql, mariadb)", key, dep.Type)
 		}
 		if dep.Version == "" {
 			return fmt.Errorf("services[%s]: version is required", key)
