@@ -29,10 +29,12 @@ import (
 	"github.com/molmaos/molma/internal/hostagent"
 	"github.com/molmaos/molma/internal/hostagent/avahipublisher"
 	"github.com/molmaos/molma/internal/hostagent/clockhealth"
+	"github.com/molmaos/molma/internal/hostagent/diskusage"
 	"github.com/molmaos/molma/internal/hostagent/healthsource"
 	"github.com/molmaos/molma/internal/hostagent/journalsource"
 	"github.com/molmaos/molma/internal/hostagent/pamverifier"
 	"github.com/molmaos/molma/internal/hostagent/rampressure"
+	"github.com/molmaos/molma/internal/hostagent/rebootrequired"
 	"github.com/molmaos/molma/internal/hostagent/servicehealth"
 	"github.com/molmaos/molma/internal/hostagent/usermgr"
 	"github.com/molmaos/molma/internal/protocol"
@@ -74,6 +76,8 @@ func main() {
 	a.Time = clockhealth.New()
 	a.Logs = journalsource.New()
 	a.Resources = rampressure.New()
+	a.Disk = diskusage.New()
+	a.Reboot = rebootrequired.New()
 
 	mux := http.NewServeMux()
 	a.Mount(mux)

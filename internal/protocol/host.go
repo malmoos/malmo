@@ -38,11 +38,23 @@ type UnpublishRequest struct {
 }
 
 // SystemStatus is GET /v1/system/status.
+//
+// DataDiskFreeBytes / DataDiskTotalBytes are a statfs snapshot of the data
+// drive's mount (/srv/molma): free = available blocks × block size (Bavail ×
+// Bsize, the space an unprivileged writer can actually use, already excluding
+// the root reserve), total = Blocks × Bsize. They back the install-plan's
+// free_bytes figure (BRAIN_UI_PROTOCOL.md # install-plan) so the install dialog
+// can warn before a download that won't fit. Advisory and racy — a snapshot, no
+// reservation — so the brain treats them as a hint, never a gate. 0 means "not
+// measured" (no disk reporter wired, or statfs failed): the brain shows no free
+// figure rather than a misleading zero.
 type SystemStatus struct {
-	Hostname     string `json:"hostname"`
-	UptimeS      int64  `json:"uptime_s"`
-	DiskPressure bool   `json:"disk_pressure"`
-	AgentVersion string `json:"agent_version"`
+	Hostname           string `json:"hostname"`
+	UptimeS            int64  `json:"uptime_s"`
+	DiskPressure       bool   `json:"disk_pressure"`
+	AgentVersion       string `json:"agent_version"`
+	DataDiskFreeBytes  int64  `json:"data_disk_free_bytes"`
+	DataDiskTotalBytes int64  `json:"data_disk_total_bytes"`
 }
 
 // SystemResources is GET /v1/system/resources: one raw cumulative-counter
@@ -153,18 +165,20 @@ type SetRoleRequest struct {
 // (health.Category: storage | state | network | version | capacity, which
 // drives display + the blocks_* nature of an issue): HealthCategory partitions
 // the locus-B report so the brain can reconcile each domain independently. The
-// full enum is pinned here (DECISIONS.md 2026-05-29 + issue #34 clarification
-// 2026-05-31) so downstream detectors land as pure follow-ups: ram-pressure
-// (#38) emits into resources, clock-not-synced (#39) into time, disk-smart
-// into drives. Today host-agent only populates storage and services.
+// enum is broad so downstream detectors land as pure follow-ups: ram-pressure
+// (#38) emits into resources, clock-not-synced (#39) into time, disk-smart into
+// drives. system (reboot-required, #40) was added after the #34 pin when that
+// detector was reclassified to locus B (DECISIONS.md 2026-05-31) — no existing
+// physical-measurement domain fits an OS-state flag.
 type HealthCategory string
 
 const (
 	HealthCategoryStorage   HealthCategory = "storage"   // filesystem / mount / canary / mergerfs
 	HealthCategoryDrives    HealthCategory = "drives"    // SMART / per-device health (reserved)
 	HealthCategoryServices  HealthCategory = "services"  // systemctl is-active (service-down)
-	HealthCategoryResources HealthCategory = "resources" // memory / CPU pressure (reserved)
+	HealthCategoryResources HealthCategory = "resources" // memory / CPU pressure (ram-pressure)
 	HealthCategoryTime      HealthCategory = "time"      // chronyc tracking (clock-not-synced)
+	HealthCategorySystem    HealthCategory = "system"    // OS/box state — reboot-required pending-reboot flag
 )
 
 // SystemHealth is GET /v1/health/system — the single locus-B findings report

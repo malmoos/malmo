@@ -16,6 +16,7 @@ func TestHealthCategoryWireValues(t *testing.T) {
 		HealthCategoryServices:  "services",
 		HealthCategoryResources: "resources",
 		HealthCategoryTime:      "time",
+		HealthCategorySystem:    "system",
 	}
 	for c, want := range cases {
 		if string(c) != want {
