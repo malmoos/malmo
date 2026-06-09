@@ -979,7 +979,7 @@ func (m *Manager) writeEnv(id, slug string, iso isolation) error {
 		prefix := "MOLMA_SERVICE_" + strings.ToUpper(g.LogicalName) + "_"
 		host := serviceDNSAlias(g.Kind, g.Version)
 		port := servicePort[g.Kind]
-		dsn := fmt.Sprintf("%s://%s:%s@%s:%d/%s", g.Kind, g.RoleName, g.Password, host, port, g.DBName)
+		dsn := fmt.Sprintf("%s://%s:%s@%s:%d/%s", serviceDSNScheme[g.Kind], g.RoleName, g.Password, host, port, g.DBName)
 		lines = append(lines,
 			prefix+"HOST="+host,
 			prefix+"PORT="+strconv.Itoa(port),

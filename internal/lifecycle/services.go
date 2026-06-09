@@ -3,13 +3,18 @@ package lifecycle
 // Managed data services — Tier 1 (SERVICE_PROVISIONING.md). The brain runs one
 // shared container per service type+version (lazy spinup), and provisions a
 // per-app database+role inside it. Credentials are injected back into the app
-// as MOLMA_SERVICE_<NAME>_*. v1 supports Postgres; Redis is staged after.
+// as MOLMA_SERVICE_<NAME>_*. v1 supports Postgres and the MySQL family
+// (mysql, mariadb — one code path, per-engine deltas only); Redis is staged
+// after.
 //
-// Provisioning runs through `docker exec <svc-container> psql` (DockerDriver.Exec)
-// rather than a Go SQL client, so the brain never joins the service's Docker
-// network (DECISIONS.md 2026-06-02 — control plane off app-reachable networks).
-// Inside the official postgres image the local unix socket trusts the postgres
-// superuser, so no password is needed for the exec'd psql.
+// Provisioning runs through `docker exec` of the service's own client (psql /
+// mysql / mariadb, DockerDriver.Exec) rather than a Go SQL client, so the brain
+// never joins the service's Docker network (DECISIONS.md 2026-06-02 — control
+// plane off app-reachable networks). Inside the official postgres image the
+// local unix socket trusts the postgres superuser, so no password is needed for
+// the exec'd psql; the MySQL-family images export the root password to the
+// container environment, which the exec'd shell expands in place — it never
+// appears in host-side argv.
 
 import (
 	"context"
@@ -28,20 +33,43 @@ import (
 	"github.com/molmaos/molma/internal/store"
 )
 
-// serviceReadyTimeout bounds the lazy-spinup readiness wait (a cold Postgres
-// container initialising its data dir). Generous: first boot runs initdb.
+// serviceReadyTimeout bounds the lazy-spinup readiness wait (a cold database
+// container initialising its data dir). Generous: first boot runs the engine's
+// init (initdb / mysqld --initialize).
 const serviceReadyTimeout = 90 * time.Second
 
 // servicePort is the in-container port each managed service kind listens on.
-var servicePort = map[string]int{"postgres": 5432}
+var servicePort = map[string]int{"postgres": 5432, "mysql": 3306, "mariadb": 3306}
 
 // serviceTag maps a managed kind to the upstream image repo; the version is the
 // tag. v1 pins by tag (digest-pinning the service image is deferred, NEXT.md).
-var serviceImageRepo = map[string]string{"postgres": "postgres"}
+var serviceImageRepo = map[string]string{"postgres": "postgres", "mysql": "mysql", "mariadb": "mariadb"}
+
+// serviceDSNScheme is the URL scheme writeEnv stamps into MOLMA_SERVICE_*_DSN.
+// MariaDB speaks the MySQL wire protocol, so both family members use mysql://.
+var serviceDSNScheme = map[string]string{"postgres": "postgres", "mysql": "mysql", "mariadb": "mysql"}
+
+// provisionedKinds is the set of service types the brain can actually provision.
+// A schema-valid but unprovisioned type (redis) fails install with a clear
+// error before anything is spun up.
+var provisionedKinds = map[string]bool{"postgres": true, "mysql": true, "mariadb": true}
+
+// mysqlTools names the per-image client binaries and root-password env var for
+// the MySQL family. The mariadb image ships mariadb-named binaries (the mysql
+// names are deprecated there); presence in this map is the "is MySQL family"
+// test.
+var mysqlTools = map[string]struct{ client, admin, rootPWVar string }{
+	"mysql":   {"mysql", "mysqladmin", "MYSQL_ROOT_PASSWORD"},
+	"mariadb": {"mariadb", "mariadb-admin", "MARIADB_ROOT_PASSWORD"},
+}
 
 // serviceName is the "<kind>-<version>" stem used for the container name, the
-// Docker network, and the in-network DNS alias.
-func serviceName(kind, version string) string { return kind + "-" + version }
+// Docker network, the compose project, and the in-network DNS alias. Dots in a
+// version (mysql "8.0") fold to dashes — compose project names reject dots —
+// so mysql 8.0 names mysql-8-0 / molma-svc-mysql-8-0 / mysql-8-0.molma.internal.
+func serviceName(kind, version string) string {
+	return kind + "-" + strings.ReplaceAll(version, ".", "-")
+}
 
 // serviceContainerName is the brain's docker-exec management handle.
 func serviceContainerName(kind, version string) string {
@@ -93,9 +121,9 @@ func sortedServiceKeys(services map[string]manifest.ServiceDep) []string {
 // provisionServices provisions every managed service the manifest declares and
 // returns the resulting grants for persistence. For each declaration it ensures
 // the shared service instance is running, then creates a dedicated database+role
-// inside it. Returns nil for a manifest with no services. Postgres only in v1;
-// any other (schema-valid) type is a terminal install error until its
-// provisioning lands.
+// inside it. Returns nil for a manifest with no services. Postgres and the
+// MySQL family in v1; any other (schema-valid) type is a terminal install error
+// until its provisioning lands.
 func (m *Manager) provisionServices(ctx context.Context, instanceID, manifestID string, services map[string]manifest.ServiceDep) ([]store.ServiceGrant, error) {
 	if len(services) == 0 {
 		return nil, nil
@@ -103,18 +131,24 @@ func (m *Manager) provisionServices(ctx context.Context, instanceID, manifestID 
 	var grants []store.ServiceGrant
 	for _, key := range sortedServiceKeys(services) {
 		dep := services[key]
-		if dep.Type != "postgres" {
+		if !provisionedKinds[dep.Type] {
 			return nil, fmt.Errorf("managed service %q (%s) is not provisioned yet", key, dep.Type)
 		}
 		if err := m.ensureServiceInstance(ctx, dep.Type, dep.Version); err != nil {
 			return nil, fmt.Errorf("ensure %s-%s: %w", dep.Type, dep.Version, err)
 		}
-		dbName := sanitizeIdent(manifestID) + "_" + randSuffix()
+		stem := sanitizeIdent(manifestID)
+		// MySQL caps user names at 32 chars (Postgres truncates past 63); the
+		// role name is the db name, so bound the stem to fit "<stem>_xxxx".
+		if len(stem) > 26 {
+			stem = stem[:26]
+		}
+		dbName := stem + "_" + randSuffix()
 		pw, err := randSecret(24)
 		if err != nil {
 			return nil, fmt.Errorf("service password: %w", err)
 		}
-		if err := m.provisionPostgresDB(ctx, dep.Version, dbName, pw); err != nil {
+		if err := m.provisionDB(ctx, dep.Type, dep.Version, dbName, pw); err != nil {
 			return nil, fmt.Errorf("provision %s db: %w", key, err)
 		}
 		grants = append(grants, store.ServiceGrant{
@@ -164,15 +198,28 @@ func (m *Manager) ensureServiceInstance(ctx context.Context, kind, version strin
 	return nil
 }
 
+// serviceReadyProbe is the per-kind in-container readiness command. Postgres:
+// `pg_isready` over the local socket (exit 0 = accepting connections), which
+// also clears the initdb window. MySQL family: an admin ping over TCP only —
+// during first-boot init the entrypoint runs a temporary socket-only server
+// (--skip-networking) that a socket ping would mistake for ready.
+func serviceReadyProbe(kind string) []string {
+	if t, ok := mysqlTools[kind]; ok {
+		return []string{"sh", "-c", fmt.Sprintf(
+			`MYSQL_PWD="$%s" exec %s ping -h127.0.0.1 --protocol=TCP -uroot --silent`,
+			t.rootPWVar, t.admin)}
+	}
+	return []string{"pg_isready", "-U", "postgres", "-q"}
+}
+
 // waitServiceReady polls the service container's own readiness probe until it
-// passes or the timeout elapses. For Postgres that's `pg_isready` over the local
-// socket (exit 0 = accepting connections), which also clears the initdb window.
+// passes or the timeout elapses.
 func (m *Manager) waitServiceReady(ctx context.Context, kind, version string) error {
 	container := serviceContainerName(kind, version)
 	deadline := time.Now().Add(serviceReadyTimeout)
 	var last string
 	for {
-		out, err := m.docker.Exec(ctx, container, []string{"pg_isready", "-U", "postgres", "-q"})
+		out, err := m.docker.Exec(ctx, container, serviceReadyProbe(kind))
 		if err == nil {
 			return nil
 		}
@@ -185,6 +232,19 @@ func (m *Manager) waitServiceReady(ctx context.Context, kind, version string) er
 			return ctx.Err()
 		case <-time.After(m.healthPoll):
 		}
+	}
+}
+
+// provisionDB creates the per-app database+role inside the shared instance of
+// the right engine. Callers have already gated on provisionedKinds.
+func (m *Manager) provisionDB(ctx context.Context, kind, version, dbName, password string) error {
+	switch kind {
+	case "postgres":
+		return m.provisionPostgresDB(ctx, version, dbName, password)
+	case "mysql", "mariadb":
+		return m.provisionMySQLDB(ctx, kind, version, dbName, password)
+	default:
+		return fmt.Errorf("managed service kind %q is not provisioned yet", kind)
 	}
 }
 
@@ -209,23 +269,50 @@ func (m *Manager) provisionPostgresDB(ctx context.Context, version, dbName, pass
 	return nil
 }
 
+// provisionMySQLDB creates a database and a scoped user inside the shared
+// MySQL/MariaDB container via docker-exec of the image's own client. The SQL
+// rides as a positional parameter ($1) so the shell never parses it (backticks
+// in a double-quoted script would be command substitution); the client's batch
+// mode stops at the first error (psql's ON_ERROR_STOP equivalent). The user
+// gets ALL on its own database only — the per-app isolation boundary.
+func (m *Manager) provisionMySQLDB(ctx context.Context, kind, version, dbName, password string) error {
+	t := mysqlTools[kind]
+	container := serviceContainerName(kind, version)
+	sql := fmt.Sprintf("CREATE DATABASE `%s`; CREATE USER '%s'@'%%' IDENTIFIED BY '%s'; GRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'%%'",
+		dbName, dbName, password, dbName, dbName)
+	if out, err := m.docker.Exec(ctx, container, []string{
+		"sh", "-c", fmt.Sprintf(`MYSQL_PWD="$%s" exec %s -uroot -e "$1"`, t.rootPWVar, t.client), "sh", sql,
+	}); err != nil {
+		return fmt.Errorf("%s: %w\n%s", t.client, err, out)
+	}
+	return nil
+}
+
 // dropServiceGrants reverses provisionServices: it drops each grant's database
 // and role inside the shared instance. Best-effort — a failure is logged, never
 // fatal (uninstall must always complete). FORCE terminates any straggler
 // connection (the app's own containers are already down by call time).
 func (m *Manager) dropServiceGrants(ctx context.Context, instanceID string, grants []store.ServiceGrant) {
 	for _, g := range grants {
-		if g.Kind != "postgres" {
+		if !provisionedKinds[g.Kind] {
 			continue
 		}
 		container := serviceContainerName(g.Kind, g.Version)
-		// Separate -c per statement: DROP DATABASE, like CREATE, cannot run inside
-		// a transaction block. FORCE terminates any straggler connection.
-		if out, err := m.docker.Exec(ctx, container, []string{
+		// Postgres: separate -c per statement — DROP DATABASE, like CREATE, cannot
+		// run inside a transaction block, and FORCE terminates any straggler
+		// connection. MySQL family: one batch run, same $1 shape as provisioning.
+		args := []string{
 			"psql", "-U", "postgres", "-v", "ON_ERROR_STOP=1",
 			"-c", fmt.Sprintf(`DROP DATABASE IF EXISTS "%s" WITH (FORCE)`, g.DBName),
 			"-c", fmt.Sprintf(`DROP ROLE IF EXISTS "%s"`, g.RoleName),
-		}); err != nil {
+		}
+		if t, ok := mysqlTools[g.Kind]; ok {
+			sql := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`; DROP USER IF EXISTS '%s'@'%%'", g.DBName, g.RoleName)
+			args = []string{
+				"sh", "-c", fmt.Sprintf(`MYSQL_PWD="$%s" exec %s -uroot -e "$1"`, t.rootPWVar, t.client), "sh", sql,
+			}
+		}
+		if out, err := m.docker.Exec(ctx, container, args); err != nil {
 			slog.Warn("drop managed-service db", "instance_id", instanceID,
 				"service", g.LogicalName, "db", g.DBName, "err", err, "output", strings.TrimSpace(out))
 			continue
@@ -260,18 +347,21 @@ func (m *Manager) reconcileServices(ctx context.Context) {
 // writeServiceDir lays down the generated compose.yml + .env for a service
 // instance under <stateDir>/services/<kind>-<version>/.
 func (m *Manager) writeServiceDir(kind, version, superuserPW string) error {
-	if kind != "postgres" {
+	if !provisionedKinds[kind] {
 		return fmt.Errorf("managed service %q is not provisioned yet", kind)
 	}
 	dir := m.serviceDir(kind, version)
 	if err := os.MkdirAll(filepath.Join(dir, "data"), 0o700); err != nil {
 		return err
 	}
-	compose := postgresServiceCompose(version)
+	compose, pwVar := postgresServiceCompose(version), "POSTGRES_SUPERUSER_PASSWORD"
+	if t, ok := mysqlTools[kind]; ok {
+		compose, pwVar = mysqlServiceCompose(kind, version), t.rootPWVar
+	}
 	if err := os.WriteFile(filepath.Join(dir, "compose.yml"), []byte(compose), 0o644); err != nil {
 		return err
 	}
-	env := "POSTGRES_SUPERUSER_PASSWORD=" + superuserPW + "\n"
+	env := pwVar + "=" + superuserPW + "\n"
 	return os.WriteFile(filepath.Join(dir, ".env"), []byte(env), 0o600)
 }
 
@@ -310,6 +400,44 @@ networks:
     name: %s
     external: true
 `, image, container, alias, serviceName("postgres", version), netName)
+}
+
+// mysqlServiceCompose renders the shared MySQL/MariaDB compose — same shape as
+// postgresServiceCompose: external --internal network, versioned DNS alias,
+// fixed container_name exec handle. The healthcheck pings over TCP only so the
+// init-time socket-only bootstrap server doesn't read as ready; $$ defers the
+// env expansion to the container shell.
+func mysqlServiceCompose(kind, version string) string {
+	t := mysqlTools[kind]
+	container := serviceContainerName(kind, version)
+	netName := serviceNetworkName(kind, version)
+	alias := serviceDNSAlias(kind, version)
+	image := serviceImageRepo[kind] + ":" + version
+	return fmt.Sprintf(`services:
+  %s:
+    image: %s
+    container_name: %s
+    environment:
+      %s: ${%s}
+    volumes:
+      - ./data:/var/lib/mysql
+    networks:
+      svc:
+        aliases:
+          - %s
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$%s\" %s ping -h127.0.0.1 --protocol=TCP -uroot --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    labels:
+      molma.service: %s
+networks:
+  svc:
+    name: %s
+    external: true
+`, kind, image, container, t.rootPWVar, t.rootPWVar, alias, t.rootPWVar, t.admin, serviceName(kind, version), netName)
 }
 
 // sanitizeIdent reduces a manifest id to a safe SQL identifier stem: lowercase

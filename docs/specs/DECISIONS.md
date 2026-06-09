@@ -21,6 +21,18 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-09 — Tier-1 managed services grow MySQL + MariaDB types (#108)
+
+**Previously:** the v1 Tier-1 catalog was Postgres (15, 16) + Redis (7), with MariaDB explicitly parked as a post-v1 candidate ("some apps require it specifically — Nextcloud, WordPress") behind the "3+ store apps actually want them" bar.
+
+**Now:** `mysql` (8.0, 8.4) and `mariadb` (10.11, 11.4) are provisioned Tier-1 types alongside Postgres. Both engines ride the existing managed-services design unchanged — lazy spinup, per-app DB+user, `docker exec`-the-client provisioning (`mysql`/`mariadb` instead of `psql`), `MOLMA_SERVICE_*` injection (port 3306, `mysql://` DSN for both — one wire protocol), dedicated `--internal` network, drop-on-uninstall. Per-engine deltas are confined to an image pin, client binary names, the root-password env var, and the readiness probe (`mysqladmin`/`mariadb-admin ping` over TCP only, so the init-time socket-only bootstrap server doesn't read as ready). Version dots fold to dashes in derived names (`molma-svc-mysql-8-0`, `mysql-8-0.molma.internal`) because compose project names reject dots.
+
+**Why:** the catalog import sprint hit the same wall twice — Ghost (#85) requires MySQL 8 with no Postgres/SQLite-production path, Kimai (#89) speaks only the MySQL dialect — and bundling a DB into the app compose is structurally impossible under the Tier-3 sandbox (`cap_drop: ALL` strips the CAP_CHOWN/SETUID/SETGID the official `mysql`/`mariadb` entrypoints need; the `managed-mysql` ledger entries document it). A managed service type is the right seam precisely because the brain owns the service container outside the app sandbox. Both engines land as one code path because they share a wire protocol and SQL dialect; supporting both is the product call (some upstreams pin one specifically — Ghost: MySQL 8; Nextcloud: MariaDB). mysql 8.0 stays on the allowlist despite being past Oracle EOL because Ghost pins it. Unlike Postgres, the exec'd client needs the root password — the MySQL images don't trust the local socket — so the exec'd shell expands it from the container's own environment (`$MYSQL_ROOT_PASSWORD`/`$MARIADB_ROOT_PASSWORD`), never host-side argv.
+
+**Affected docs:** `SERVICE_PROVISIONING.md` (# Catalog (v1), # Provisioning protocol, # Post-v1 candidates, locked decisions), `APP_MANIFEST.md` # D, `docs/dev/catalog-import-gaps.md` (Ghost/Kimai `managed-mysql` entries → implemented). Implementation: `internal/manifest`, `internal/lifecycle/services.go`, realized by `docs/progress/managed-services-mysql.md`. Inherits the Postgres path's deferrals (backup/restore, grace-shutdown, at-rest credential encryption — `NEXT.md`).
+
+---
+
 ## 2026-06-09 — `estimated_size` is the measured app-state baseline at install, not a usage projection
 
 **Previously:** `storage.estimated_size` was an author's *estimate* of the app's eventual on-disk state — "for warnings on small disks," explicitly a coarse upper bound the catalog footprint rendered as a ceiling (`DECISIONS.md` 2026-06-03). `NEXT.md` parked the residual question of "how to present an app-state estimate that **grows over time**" (a static "~2 GB" understates a photo library).

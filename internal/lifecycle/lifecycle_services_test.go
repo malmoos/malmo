@@ -46,8 +46,17 @@ services:
 // env) and returns the instance.
 func installDBApp(t *testing.T, e *testEnv, id string) store.Instance {
 	t.Helper()
+	return installDBAppKind(t, e, id, "postgres", "15")
+}
+
+// installDBAppKind is installDBApp with the declared service type/version
+// overridable, so the MySQL-family tests share the same fixture.
+func installDBAppKind(t *testing.T, e *testEnv, id, kind, version string) store.Instance {
+	t.Helper()
 	man := strings.Replace(dbManifest, "id: dbapp", "id: "+id, 1)
 	man = strings.Replace(man, "preferred_slugs: [dbapp]", "preferred_slugs: ["+id+"]", 1)
+	man = strings.Replace(man, "type: postgres", "type: "+kind, 1)
+	man = strings.Replace(man, `version: "15"`, `version: "`+version+`"`, 1)
 	e.writeCatalogApp(t, id, dbCompose, man)
 	e.docker.digests[testImage] = testDigest
 	inst, err := e.m.Install(context.Background(), id,
@@ -149,6 +158,79 @@ func TestUninstallDropsServiceDB(t *testing.T) {
 		t.Fatalf("uninstall: %v", err)
 	}
 	if !e.docker.hasCall("DROP DATABASE") || !e.docker.hasCall(dbName) {
+		t.Fatalf("uninstall did not drop %s; calls: %v", dbName, e.docker.Calls())
+	}
+}
+
+func TestInstallProvisionsMySQLFamily(t *testing.T) {
+	for _, tc := range []struct {
+		kind, version, stem, client string
+	}{
+		// The version dot folds to a dash in every derived name (compose project
+		// names reject dots); mariadb provisions via its own-named client binary.
+		{"mysql", "8.0", "mysql-8-0", "mysql -uroot"},
+		{"mariadb", "11.4", "mariadb-11-4", "mariadb -uroot"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			e := newTestEnv(t)
+			inst := installDBAppKind(t, e, "dbapp", tc.kind, tc.version)
+
+			if _, err := e.store.GetServiceInstance(tc.kind, tc.version); err != nil {
+				t.Fatalf("service instance not recorded: %v", err)
+			}
+			if !e.docker.hasCall("ServiceUp(") {
+				t.Fatalf("ServiceUp never called; calls: %v", e.docker.Calls())
+			}
+
+			grants, err := e.store.GetServiceGrants(inst.ID)
+			if err != nil || len(grants) != 1 {
+				t.Fatalf("grants = %v, err %v", grants, err)
+			}
+			g := grants[0]
+			if g.Kind != tc.kind || g.Version != tc.version {
+				t.Fatalf("grant = %+v", g)
+			}
+
+			// Provisioning ran the engine's own client with CREATE DATABASE +
+			// CREATE USER + GRANT.
+			if !e.docker.hasCall(tc.client) || !e.docker.hasCall("CREATE DATABASE") ||
+				!e.docker.hasCall("CREATE USER") || !e.docker.hasCall("GRANT ALL PRIVILEGES") {
+				t.Fatalf("no MySQL provisioning call; calls: %v", e.docker.Calls())
+			}
+
+			// The injected family carries the dot-folded host, port 3306, and a
+			// mysql:// DSN for both engines (one wire protocol).
+			env := readInstanceEnv(t, e, inst.ID)
+			wantHost := tc.stem + ".molma.internal"
+			if got := envValue(env, "MOLMA_SERVICE_DATABASE_HOST"); got != wantHost {
+				t.Fatalf("HOST = %q, want %q", got, wantHost)
+			}
+			if got := envValue(env, "MOLMA_SERVICE_DATABASE_PORT"); got != "3306" {
+				t.Fatalf("PORT = %q, want 3306", got)
+			}
+			dsn := envValue(env, "MOLMA_SERVICE_DATABASE_DSN")
+			if !strings.HasPrefix(dsn, "mysql://") || !strings.Contains(dsn, wantHost+":3306/"+g.DBName) {
+				t.Fatalf("DSN = %q, want mysql:// … %s:3306/%s", dsn, wantHost, g.DBName)
+			}
+
+			override := readInstanceFile(t, e, inst.ID, "compose.override.yml")
+			if !strings.Contains(override, "molma-svc-"+tc.stem) {
+				t.Fatalf("override missing service network:\n%s", override)
+			}
+		})
+	}
+}
+
+func TestUninstallDropsMySQLDB(t *testing.T) {
+	e := newTestEnv(t)
+	inst := installDBAppKind(t, e, "dbapp", "mysql", "8.0")
+	grants, _ := e.store.GetServiceGrants(inst.ID)
+	dbName := grants[0].DBName
+
+	if err := e.m.Uninstall(context.Background(), inst.ID); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	if !e.docker.hasCall("DROP DATABASE") || !e.docker.hasCall("DROP USER") || !e.docker.hasCall(dbName) {
 		t.Fatalf("uninstall did not drop %s; calls: %v", dbName, e.docker.Calls())
 	}
 }
