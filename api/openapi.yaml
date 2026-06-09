@@ -66,6 +66,14 @@ components:
       required:
         - users
       type: object
+    Author:
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        url:
+          type: string
+      type: object
     Change-my-passwordRequest:
       additionalProperties: false
       properties:
@@ -176,6 +184,56 @@ components:
         - folders
         - devices
       type: object
+    Detail:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/Detail.json
+          format: uri
+          readOnly: true
+          type: string
+        author:
+          $ref: "#/components/schemas/Author"
+        categories:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        changelog_url:
+          type: string
+        footprint:
+          $ref: "#/components/schemas/Footprint"
+        icon_url:
+          type: string
+        id:
+          type: string
+        license:
+          type: string
+        links:
+          $ref: "#/components/schemas/Links"
+        long_description:
+          type: string
+        name:
+          type: string
+        screenshot_urls:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        short_description:
+          type: string
+        version:
+          type: string
+      required:
+        - id
+        - name
+        - version
+        - footprint
+      type: object
     ElevateRequest:
       additionalProperties: false
       properties:
@@ -210,9 +268,21 @@ components:
     Entry:
       additionalProperties: false
       properties:
+        categories:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        footprint:
+          $ref: "#/components/schemas/Footprint"
+        icon_url:
+          type: string
         id:
           type: string
         name:
+          type: string
+        short_description:
           type: string
         version:
           type: string
@@ -220,6 +290,7 @@ components:
         - id
         - name
         - version
+        - footprint
       type: object
     ErrorDetail:
       additionalProperties: false
@@ -302,6 +373,21 @@ components:
       required:
         - household
         - personal
+      type: object
+    Footprint:
+      additionalProperties: false
+      properties:
+        estimated_state:
+          type: string
+        image_disk_bytes:
+          format: int64
+          type: integer
+        image_download_bytes:
+          format: int64
+          type: integer
+      required:
+        - image_download_bytes
+        - image_disk_bytes
       type: object
     HealthListResponseBody:
       additionalProperties: false
@@ -423,6 +509,8 @@ components:
           format: uri
           readOnly: true
           type: string
+        footprint:
+          $ref: "#/components/schemas/InstallPlanFootprint"
         manifest_id:
           type: string
         name:
@@ -445,6 +533,7 @@ components:
         - version
         - scope_options
         - scope_default
+        - footprint
         - permissions
       type: object
     InstallPlanFolder:
@@ -465,6 +554,26 @@ components:
         - mode
         - scope
         - sources
+      type: object
+    InstallPlanFootprint:
+      additionalProperties: false
+      properties:
+        download_bytes:
+          format: int64
+          type: integer
+        estimated_state_bytes:
+          format: int64
+          type: integer
+        free_bytes:
+          format: int64
+          type: integer
+        image_disk_bytes:
+          format: int64
+          type: integer
+      required:
+        - download_bytes
+        - image_disk_bytes
+        - free_bytes
       type: object
     InstallPlanPermissions:
       additionalProperties: false
@@ -624,6 +733,16 @@ components:
       required:
         - code
         - message
+      type: object
+    Links:
+      additionalProperties: false
+      properties:
+        homepage:
+          type: string
+        source:
+          type: string
+        support:
+          type: string
       type: object
     List-appsResponse:
       additionalProperties: false
@@ -1323,6 +1442,29 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       summary: List installable apps from the catalog
+  /api/v1/catalog/{id}:
+    get:
+      operationId: get-catalog-app
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Detail"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Full detail-page view of one catalog app
   /api/v1/catalog/{id}/install-plan:
     get:
       operationId: get-install-plan

@@ -7,6 +7,7 @@ package manifest
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,11 +20,26 @@ type Manifest struct {
 	Name            string      `yaml:"name"`
 	Version         string      `yaml:"version"`
 	Description     Description `yaml:"description,omitempty"`
-	ComposeFile     string      `yaml:"compose_file"`
-	MainService     string      `yaml:"main_service"`
-	MainPort        int         `yaml:"main_port"`
-	PreferredSlugs  []string    `yaml:"preferred_slugs"`
-	Permissions     Permissions `yaml:"permissions"`
+
+	// Identity/metadata for the store UI (APP_MANIFEST.md # A). All optional —
+	// the brain doesn't act on any of them; they're surfaced verbatim to the
+	// store grid and detail page. Icon and Screenshots are package-relative paths
+	// (`./icon.png`); the catalog turns them into asset URLs (APP_STORE.md #
+	// Catalog schema). Absent ⇒ the store falls back to a generic glyph and an
+	// empty gallery.
+	Icon         string   `yaml:"icon,omitempty"`
+	Screenshots  []string `yaml:"screenshots,omitempty"`
+	Categories   []string `yaml:"categories,omitempty"`
+	Author       Author   `yaml:"author,omitempty"`
+	License      string   `yaml:"license,omitempty"`
+	Links        Links    `yaml:"links,omitempty"`
+	ChangelogURL string   `yaml:"changelog_url,omitempty"`
+
+	ComposeFile    string      `yaml:"compose_file"`
+	MainService    string      `yaml:"main_service"`
+	MainPort       int         `yaml:"main_port"`
+	PreferredSlugs []string    `yaml:"preferred_slugs"`
+	Permissions    Permissions `yaml:"permissions"`
 
 	// Images is the optional catalog-promised image map (APP_STORE.md # Catalog
 	// schema — the `images` object). Keyed by the exact `image:` reference used
@@ -74,6 +90,20 @@ type Description struct {
 	Long string `yaml:"long,omitempty"`
 }
 
+// Author is the app's publisher, shown on the detail page (APP_MANIFEST.md # A).
+type Author struct {
+	Name string `yaml:"name,omitempty" json:"name,omitempty"`
+	URL  string `yaml:"url,omitempty" json:"url,omitempty"`
+}
+
+// Links are the author's outbound links, surfaced in the detail page's info
+// panel (APP_MANIFEST.md # A). All optional.
+type Links struct {
+	Homepage string `yaml:"homepage,omitempty" json:"homepage,omitempty"`
+	Source   string `yaml:"source,omitempty" json:"source,omitempty"`
+	Support  string `yaml:"support,omitempty" json:"support,omitempty"`
+}
+
 // ImageRef is one entry in the catalog's `images` map (APP_STORE.md # Catalog
 // schema): the pinned digest plus the display-only on-disk footprint of a
 // single `image:tag`. Digest is the binding the brain enforces at install
@@ -106,16 +136,78 @@ func (r *ImageRef) UnmarshalYAML(node *yaml.Node) error {
 
 // Storage is the author's on-disk hint block (APP_MANIFEST.md # Storage). v1
 // parses only estimated_size — a human-readable size string ("10GB") hoisted
-// verbatim into the catalog footprint; the brain does no unit math on it here.
+// verbatim into the catalog footprint; the brain does no unit math on it there.
 type Storage struct {
 	EstimatedSize string `yaml:"estimated_size,omitempty" json:"estimated_size,omitempty"`
 }
 
+// EstimatedSizeBytes parses storage.estimated_size into a byte count for the
+// box-specific install-plan footprint (BRAIN_UI_PROTOCOL.md # install-plan).
+// The catalog grid keeps the verbatim string (Footprint.EstimatedState); this
+// is the numeric form the install dialog adds to the image bytes.
+//
+// The three returns disambiguate cases the caller treats differently:
+//   - unset ("")        → (0, false, nil)  — author gave no estimate; omit it
+//   - valid ("10GB")    → (n, true,  nil)
+//   - malformed ("big") → (0, false, err)  — surfaced, never silently zeroed
+//
+// Units are binary (GB = 2³⁰, matching the spec example where "10GB" is
+// 10737418240), case-insensitive, with an optional fractional mantissa
+// ("1.5GB"); the result truncates to whole bytes.
+func (s Storage) EstimatedSizeBytes() (int64, bool, error) {
+	raw := strings.TrimSpace(s.EstimatedSize)
+	if raw == "" {
+		return 0, false, nil
+	}
+	n, err := parseBinarySize(raw)
+	if err != nil {
+		return 0, false, err
+	}
+	return n, true, nil
+}
+
+// sizeUnits maps a case-folded size suffix to its binary multiplier. Empty and
+// "b" are bytes; the k/m/g/t families are all powers of 1024 — the bare,
+// two-letter, and explicit -ib spellings are accepted as the same value because
+// authors write them interchangeably and the figure is advisory either way.
+var sizeUnits = map[string]int64{
+	"": 1, "b": 1,
+	"k": 1 << 10, "kb": 1 << 10, "kib": 1 << 10,
+	"m": 1 << 20, "mb": 1 << 20, "mib": 1 << 20,
+	"g": 1 << 30, "gb": 1 << 30, "gib": 1 << 30,
+	"t": 1 << 40, "tb": 1 << 40, "tib": 1 << 40,
+}
+
+// sizeRe splits a size string into a numeric mantissa and an optional unit
+// suffix, tolerating whitespace between them ("10 GB").
+var sizeRe = regexp.MustCompile(`^([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z]*)$`)
+
+// parseBinarySize parses a human size like "10GB" or "1.5 GiB" into bytes using
+// the binary multipliers in sizeUnits. The caller passes a non-empty, trimmed
+// string.
+func parseBinarySize(s string) (int64, error) {
+	m := sizeRe.FindStringSubmatch(s)
+	if m == nil {
+		return 0, fmt.Errorf("estimated_size %q is not a valid size (e.g. 10GB, 512MB)", s)
+	}
+	mult, ok := sizeUnits[strings.ToLower(m[2])]
+	if !ok {
+		return 0, fmt.Errorf("estimated_size %q has an unknown unit %q", s, m[2])
+	}
+	mant, err := strconv.ParseFloat(m[1], 64)
+	if err != nil {
+		return 0, fmt.Errorf("estimated_size %q: %w", s, err)
+	}
+	return int64(mant * float64(mult)), nil
+}
+
 // Footprint is the per-app on-disk summary the store grid renders without
-// fetching the full manifest (APP_STORE.md # Catalog schema — `footprint`). It
-// is a coarse upper bound (nothing assumed cached locally); the install dialog
-// shows a sharper, box-specific figure (BRAIN_UI_PROTOCOL.md #
-// GET /api/v1/catalog/:id/install-plan).
+// fetching the full manifest (APP_STORE.md # Catalog schema — `footprint`). The
+// image totals are an upper bound (nothing assumed cached locally); the install
+// dialog shows a sharper, box-specific figure (BRAIN_UI_PROTOCOL.md #
+// GET /api/v1/catalog/:id/install-plan). EstimatedState is the manifest's
+// measured app-state baseline at install, not a usage projection (DECISIONS.md
+// 2026-06-09).
 type Footprint struct {
 	ImageDownloadBytes int64  `json:"image_download_bytes" yaml:"image_download_bytes"`
 	ImageDiskBytes     int64  `json:"image_disk_bytes" yaml:"image_disk_bytes"`
@@ -259,24 +351,29 @@ type Secret struct {
 }
 
 // ServiceDep is one managed-service dependency (APP_MANIFEST.md # D). Type is
-// the service kind (`postgres`, `redis`); Version is the major-version pin the
-// brain runs a shared instance of. Name is the author's advisory logical name
-// for the resource; v1 ignores it (the brain generates the real database name)
-// — parsed for forward-compat, not used.
+// the service kind (`postgres`, `mysql`, `mariadb`, `redis`); Version is the
+// version pin the brain runs a shared instance of (a major for postgres/redis,
+// an upstream LTS series for the MySQL family). Name is the author's advisory
+// logical name for the resource; v1 ignores it (the brain generates the real
+// database name) — parsed for forward-compat, not used.
 type ServiceDep struct {
 	Type    string `yaml:"type"`
 	Version string `yaml:"version"`
 	Name    string `yaml:"name,omitempty"`
 }
 
-// serviceVersions is the allowlist of major versions per managed-service type
+// serviceVersions is the allowlist of versions per managed-service type
 // (SERVICE_PROVISIONING.md # Catalog (v1)). A manifest declaring a type/version
 // outside this set is rejected at parse time. Note: schema-valid is not the
-// same as provisioned — v1 only provisions postgres; a redis declaration parses
-// but install fails until Redis provisioning lands (NEXT.md).
+// same as provisioned — v1 provisions postgres and the MySQL family; a redis
+// declaration parses but install fails until Redis provisioning lands
+// (NEXT.md). The MySQL-family entries are the upstream LTS series; mysql 8.0
+// is past Oracle EOL but kept because Ghost pins it specifically.
 var serviceVersions = map[string]map[string]bool{
 	"postgres": {"15": true, "16": true},
 	"redis":    {"7": true},
+	"mysql":    {"8.0": true, "8.4": true},
+	"mariadb":  {"10.11": true, "11.4": true},
 }
 
 // DefaultSecretBytes is the entropy drawn for a declared secret when `bytes` is
@@ -393,7 +490,7 @@ func (m *Manifest) validateServices() error {
 		}
 		versions, ok := serviceVersions[dep.Type]
 		if !ok {
-			return fmt.Errorf("services[%s]: unknown type %q (allowed: postgres, redis)", key, dep.Type)
+			return fmt.Errorf("services[%s]: unknown type %q (allowed: postgres, redis, mysql, mariadb)", key, dep.Type)
 		}
 		if dep.Version == "" {
 			return fmt.Errorf("services[%s]: version is required", key)

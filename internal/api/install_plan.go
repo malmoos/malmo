@@ -34,7 +34,38 @@ type InstallPlanDTO struct {
 	Version      string                 `json:"version"`
 	ScopeOptions []string               `json:"scope_options"`
 	ScopeDefault string                 `json:"scope_default"`
+	Footprint    InstallPlanFootprint   `json:"footprint"`
 	Permissions  InstallPlanPermissions `json:"permissions"`
+}
+
+// InstallPlanFootprint is the box-specific on-disk estimate the install dialog
+// shows (BRAIN_UI_PROTOCOL.md # install-plan). Sharper than the catalog grid's
+// coarse footprint: image bytes already pulled on THIS box are subtracted, and
+// FreeBytes is the live data-drive reading. The brain returns raw bytes; the UI
+// owns all wording and unit rounding. EstimatedStateBytes is a pointer so it is
+// omitted entirely when the manifest declares no estimated_size, rather than
+// rendering a misleading 0.
+type InstallPlanFootprint struct {
+	DownloadBytes       int64  `json:"download_bytes"`
+	ImageDiskBytes      int64  `json:"image_disk_bytes"`
+	EstimatedStateBytes *int64 `json:"estimated_state_bytes,omitempty"`
+	FreeBytes           int64  `json:"free_bytes"`
+}
+
+// toInstallPlanFootprint maps the lifecycle estimate to the wire shape, setting
+// EstimatedStateBytes only when the manifest actually declared one (HasEstimate)
+// so the field is omitted otherwise.
+func toInstallPlanFootprint(fp lifecycle.InstallFootprint) InstallPlanFootprint {
+	out := InstallPlanFootprint{
+		DownloadBytes:  fp.DownloadBytes,
+		ImageDiskBytes: fp.ImageDiskBytes,
+		FreeBytes:      fp.FreeBytes,
+	}
+	if fp.HasEstimate {
+		n := fp.EstimatedStateBytes
+		out.EstimatedStateBytes = &n
+	}
+	return out
 }
 
 // InstallPlanPermissions mirrors manifest.Permissions for the install-plan
@@ -225,5 +256,11 @@ func (s *Server) installPlan(ctx context.Context, in *struct {
 		slog.Error("install-plan: catalog entry failed to load", "manifest_id", in.ID, "err", err)
 		return nil, huma.Error500InternalServerError("catalog entry is malformed")
 	}
-	return &struct{ Body InstallPlanDTO }{Body: buildInstallPlan(man, id.IsAdmin())}, nil
+	// buildInstallPlan stays pure (permissions + scope menus); the box-specific
+	// footprint is attached here because it queries Docker + the host (read-only,
+	// advisory — see InstallFootprint). A footprint sub-failure degrades to zeros
+	// inside InstallFootprint rather than failing the plan.
+	plan := buildInstallPlan(man, id.IsAdmin())
+	plan.Footprint = toInstallPlanFootprint(s.life.InstallFootprint(ctx, man))
+	return &struct{ Body InstallPlanDTO }{Body: plan}, nil
 }

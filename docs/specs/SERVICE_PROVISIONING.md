@@ -8,7 +8,7 @@ Every "service" on a molma box falls into one of three tiers, distinguished by *
 
 ### Tier 1 — Managed data services
 
-Pure containers with persistent state: **Postgres, Redis** (v1). Later: MariaDB, MongoDB, others as demand justifies.
+Pure containers with persistent state: **Postgres, MySQL, MariaDB, Redis** (v1). Later: MongoDB, others as demand justifies.
 
 - Run as containers, fully isolated.
 - Brain owns lifecycle, schema, credentials.
@@ -52,15 +52,19 @@ No `apt`, no terminal-by-default. The OS surface area is the UI.
 ### Catalog (v1)
 
 - **Postgres** — versions 15 and 16. Most modern self-hosted apps target Postgres.
+- **MySQL** — versions 8.0 and 8.4 (upstream LTS series; 8.0 is past Oracle EOL but kept because Ghost pins it specifically). Some apps speak only the MySQL dialect — Ghost, Kimai.
+- **MariaDB** — versions 10.11 and 11.4 (upstream LTS series). Some apps require it specifically — Nextcloud, WordPress.
 - **Redis** — version 7. Caching, sessions, queues.
+
+MySQL and MariaDB share one wire protocol and SQL dialect, so they are two `type` values backed by one provisioning path; the per-engine deltas are the image pin, the client binary names, the root-password env var, and the readiness probe (`DECISIONS.md` 2026-06-09).
 
 We add new types when **3+ store apps actually want them**, not before. Each new type is real ongoing operational complexity (backup integration, version management, schema isolation).
 
-Plausible v2+ additions: MariaDB (some apps require it specifically — Nextcloud, WordPress), MongoDB (common in modern self-hosted apps).
+Plausible v2+ additions: MongoDB (common in modern self-hosted apps).
 
 ### Provisioning protocol — end to end
 
-> **Implementation status (v1, 2026-06-05 — `docs/progress/managed-services-postgres.md`).** Built: Postgres provisioning end-to-end (lazy spinup, per-app DB+role, `MOLMA_SERVICE_<NAME>_*` injection, drop-on-uninstall). The brain provisions via **`docker exec <svc-container> psql`** — not a SQL connection of its own — so the control plane never joins the service network (`DECISIONS.md` 2026-06-02, 2026-06-05). Each service is a brain-owned compose project with a fixed `container_name` (`molma-svc-postgres-15`, the exec handle) and an in-network DNS alias (`postgres-15.molma.internal`, the DSN host). **Deferred:** Redis provisioning (schema-valid, not yet provisioned), the grace-shutdown timer (services stay running after the last consumer uninstalls), backup/restore + cross-version migration (gated on the backup design), and at-rest encryption of the stored superuser + per-app passwords (plaintext today — folds into `NEXT.md` # App-secret injection hardening). See `NEXT.md` for each.
+> **Implementation status (v1, 2026-06-05 — `docs/progress/managed-services-postgres.md`; MySQL family 2026-06-09 — `docs/progress/managed-services-mysql.md`).** Built: Postgres, MySQL, and MariaDB provisioning end-to-end (lazy spinup, per-app DB+role, `MOLMA_SERVICE_<NAME>_*` injection, drop-on-uninstall). The brain provisions via **`docker exec` of the service's own client** (`psql` / `mysql` / `mariadb`) — not a SQL connection of its own — so the control plane never joins the service network (`DECISIONS.md` 2026-06-02, 2026-06-05). Each service is a brain-owned compose project with a fixed `container_name` (`molma-svc-postgres-15`, the exec handle) and an in-network DNS alias (`postgres-15.molma.internal`, the DSN host); dots in a version fold to dashes in every derived name (`molma-svc-mysql-8-0`, `mysql-8-0.molma.internal`) because compose project names reject dots. MySQL-family DSNs are `mysql://…:3306/…` for both engines (one wire protocol). **Deferred:** Redis provisioning (schema-valid, not yet provisioned), the grace-shutdown timer (services stay running after the last consumer uninstalls), backup/restore + cross-version migration (gated on the backup design), and at-rest encryption of the stored superuser + per-app passwords (plaintext today — folds into `NEXT.md` # App-secret injection hardening). See `NEXT.md` for each.
 
 #### At app install
 
@@ -228,9 +232,10 @@ Caveat: apps with framework-embedded schedulers (Sidekiq-cron, APScheduler, etc.
 Extend the catalog as concrete app demand justifies. We **host the substrates apps already use** rather than inventing new APIs — same shape as Postgres/Redis today.
 
 Plausible additions:
-- **MariaDB** — Nextcloud, WordPress, and similar require it specifically.
 - **MongoDB** — common in modern self-hosted apps.
 - **Kafka, RabbitMQ** — queue/streaming *substrates*, if app demand emerges.
+
+(MariaDB graduated from this list to the v1 catalog alongside MySQL — `DECISIONS.md` 2026-06-09.)
 
 We host queue substrates, not queue libraries. Sidekiq (Ruby), BullMQ (Node), Celery (Python), RQ — these are libraries that run *inside the app's own container*, pointed at a substrate we provide (already-managed Redis for most; potentially Kafka or RabbitMQ later). Molma does not build or expose a queue API of its own.
 
@@ -262,11 +267,11 @@ Locked now: **the molma mesh is the intended transport for future cross-box serv
 ## Locked decisions
 
 - **Three-tier model:** managed data services / OS integrations / regular apps.
-- **v1 Tier-1 catalog:** Postgres (15, 16) and Redis (7). Add types only when 3+ store apps justify it.
+- **v1 Tier-1 catalog:** Postgres (15, 16), MySQL (8.0, 8.4), MariaDB (10.11, 11.4), and Redis (7). Add types only when 3+ store apps justify it.
 - **v1 Tier-2 list:** Tailscale, Samba/SMB, DLNA/UPnP (DLNA possibly deprioritized).
 - **Shared instances for Tier 1.** One Postgres-15 instance serves many apps; isolation via Postgres roles/DBs.
 - **Lazy spinup.** Tier-1 instances start when first needed, shut down with a grace period after the last app using them is uninstalled. *(v1: lazy spinup built; grace-shutdown deferred — services stay running.)*
-- **Provisioning via `docker exec`, not a brain SQL client.** The brain runs the service's own client (`psql`) inside the shared container to create per-app databases/roles, so it never joins the service's Docker network — same principle as probing through Caddy (`DECISIONS.md` 2026-06-05). The container has a fixed `container_name` (the exec handle) and an in-network DNS alias (the DSN host).
+- **Provisioning via `docker exec`, not a brain SQL client.** The brain runs the service's own client (`psql` / `mysql` / `mariadb`) inside the shared container to create per-app databases/roles, so it never joins the service's Docker network — same principle as probing through Caddy (`DECISIONS.md` 2026-06-05). The container has a fixed `container_name` (the exec handle) and an in-network DNS alias (the DSN host).
 - **Cross-version migration: auto-migrate** with an automatic pre-migration backup as the rollback safety net. No prompts.
 - **Network isolation:** apps reach Tier-1 services only via dedicated Docker networks; no manifest declaration → no network membership → no reachability.
 - **Env-var injection:** stable `MOLMA_SERVICE_*` names; app maps them in its compose to whatever it actually expects (per `APP_MANIFEST.md`). Same contract for the rest of the `MOLMA_*` family (`MOLMA_FOLDER_*`, `MOLMA_APP_URL`, `MOLMA_SECRET_*`).

@@ -6,9 +6,11 @@ package lifecycle
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/molmaos/molma/internal/hostclient"
@@ -139,9 +141,11 @@ func TestInstallFolders_DeletedOwnerRollsBack(t *testing.T) {
 	}
 }
 
-func TestInstallFolders_FolderlessSkipsIdentity(t *testing.T) {
-	// An app with no declared folders keeps today's override (no user:/volumes)
-	// and makes no host identity calls.
+func TestInstallFolders_FolderlessRunsAsBrainIdentity(t *testing.T) {
+	// An app with no declared folders still runs as a resolved user: — the
+	// brain's own euid/egid, which owns the ./data bind it created — so a
+	// cap_drop:ALL container can write its private state. It binds no folders and
+	// makes no host identity calls (the brain identity is local).
 	e := newTestEnv(t)
 	e.writeCatalogApp(t, "whoami", whoamiCompose, whoamiManifest(testDigest))
 	e.docker.digests[testImage] = testDigest
@@ -152,11 +156,24 @@ func TestInstallFolders_FolderlessSkipsIdentity(t *testing.T) {
 		t.Fatalf("install: %v", err)
 	}
 	ov, _ := os.ReadFile(filepath.Join(e.stateDir, "instances", inst.ID, "compose.override.yml"))
-	if strings.Contains(string(ov), "user:") {
-		t.Errorf("folderless override must not set user:, got:\n%s", ov)
+	wantUser := fmt.Sprintf("user: %d:%d", os.Geteuid(), os.Getegid())
+	if !strings.Contains(string(ov), wantUser) {
+		t.Errorf("folderless override must run as brain identity %q, got:\n%s", wantUser, ov)
+	}
+	if strings.Contains(string(ov), "volumes:") || strings.Contains(string(ov), "group_add:") {
+		t.Errorf("folderless override must bind no folders, got:\n%s", ov)
 	}
 	if e.host.called("WellKnownIdentity") || e.host.called("ResolveHome") {
 		t.Error("folderless install must not resolve host identity")
+	}
+	dataDir := filepath.Join(e.stateDir, "instances", inst.ID, "data")
+	if fi, err := os.Stat(dataDir); err != nil {
+		t.Errorf("data dir must exist: %v", err)
+	} else if st, ok := fi.Sys().(*syscall.Stat_t); !ok {
+		t.Error("data dir stat: unexpected Stat_t type")
+	} else if int(st.Uid) != os.Geteuid() || int(st.Gid) != os.Getegid() {
+		t.Errorf("data dir must be owned by brain identity %d:%d, got %d:%d",
+			os.Geteuid(), os.Getegid(), st.Uid, st.Gid)
 	}
 }
 

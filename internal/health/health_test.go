@@ -525,6 +525,69 @@ func TestApplyFindings_RAMPressureDebounces(t *testing.T) {
 	}
 }
 
+// TestApplyFindings_RebootRequiredOneShot is the locus-B reconcile for the
+// reboot-required detector (issue #40): a finding under the *system* category
+// is 1-shot (raises on the first sample — Debounce false, unlike the noisy
+// resources/services/time siblings), surfaces as a box-wide capacity-category
+// *info* issue with the pending package list in Details, and clears on one good
+// sample (HEALTH.md # Capacity & informational; self-clears on reboot).
+func TestApplyFindings_RebootRequiredOneShot(t *testing.T) {
+	m := NewManager(nil)
+	pending := []protocol.Finding{{ID: "reboot-required", Details: "linux-image-6.8.0, libc6"}}
+
+	// First sample raises immediately — no debounce gate for this detector.
+	raised, _ := m.ApplyFindings(protocol.HealthCategorySystem, pending)
+	if len(raised) != 1 || raised[0].ID != "reboot-required" || raised[0].InstanceKey != "" {
+		t.Fatalf("first sample: want box-wide reboot-required raised 1-shot, got %v", raised)
+	}
+	l := m.List()
+	if len(l) != 1 || l[0].Category != CategoryCapacity || l[0].Severity != SeverityInfo {
+		t.Fatalf("want one active capacity/info issue, got %v", l)
+	}
+	if l[0].Details != "linux-image-6.8.0, libc6" {
+		t.Errorf("Details: want the package list carried through, got %q", l[0].Details)
+	}
+
+	// The flag is gone (reboot happened / file absent): clears.
+	if _, cleared := m.ApplyFindings(protocol.HealthCategorySystem, nil); len(cleared) != 1 {
+		t.Fatalf("good sample: want reboot-required cleared, got cleared=%d", len(cleared))
+	}
+	if len(m.List()) != 0 {
+		t.Fatalf("want 0 active after the flag clears, got %v", m.List())
+	}
+}
+
+// TestList_RebootRequiredDefinition pins reboot-required's static metadata
+// (issue #40, HEALTH.md # Capacity & informational): the first info-severity
+// issue, Tier-2 (reboot now / schedule), CategoryCapacity, box-wide, and it
+// blocks nothing — a pending reboot is purely informational.
+func TestList_RebootRequiredDefinition(t *testing.T) {
+	m := NewManager(nil)
+	if !m.Raise("reboot-required", "", "linux-image-6.8.0") {
+		t.Fatal("first raise should transition")
+	}
+
+	got := m.List()[0]
+	if got.InstanceKey != "" {
+		t.Errorf("InstanceKey: want empty (box-wide), got %q", got.InstanceKey)
+	}
+	if got.Category != CategoryCapacity {
+		t.Errorf("Category: want capacity, got %s", got.Category)
+	}
+	if got.Severity != SeverityInfo {
+		t.Errorf("Severity: want info, got %s", got.Severity)
+	}
+	if got.Tier != 2 {
+		t.Errorf("Tier: want 2, got %d", got.Tier)
+	}
+	if got.BlocksWrites || got.BlocksApps || got.BlocksUsers {
+		t.Errorf("blocks_*: want all false (informational), got %+v", got)
+	}
+	if got.Summary == "" {
+		t.Error("Summary must be populated from definition")
+	}
+}
+
 // TestApplyFindings_StoragePollLeavesServiceDownAlone is the locked
 // cross-category isolation property (issue #34): reconciling one report
 // category must never clear an active issue belonging to another. A storage

@@ -123,6 +123,8 @@ App state (indexes, configs, the app's own DB) lives under the instance dir at `
 
 **Bind mounts to arbitrary host paths are forbidden for both doors.** Only relative bind mounts under the instance's `data/` dir are allowed; an absolute host source is an admission rejection (store or custom alike).
 
+**Every instance runs as a resolved `user:`, and its `data/` dir is owned by that same UID.** A Tier-3 container has `cap_drop: [ALL]`, which removes `CAP_DAC_OVERRIDE` — so even a root-UID container can only write `data/` when it is that dir's actual owner. The brain therefore pins `user:` on every instance and chowns `data/` to match: a **folder app** runs as the owner's UID (personal) or the molma-app identity (household); a **folderless app** runs as the brain's own effective UID/GID, which is the creator and owner of the freshly-made `data/` dir (root under the production brain, the operator's user under the native dev brain), or — when it declares `service_user: true` — a dedicated allocated non-root identity. The full source-of-identity table and the `service_user` rule are in # Runtime identity & data ownership. This is why a folderless app does not "just run as root by default" — relying on the image's default user breaks the moment the brain is not itself root (the native inner loop) or the image's default user is non-root.
+
 ### User content (use-case folders)
 
 Apps reach user content by **bind-mounting use-case folders** declared in the manifest (`APP_MANIFEST.md` # `folders`):
@@ -175,6 +177,39 @@ If no GPU is present, the brain refuses to install the app at capacity-check tim
 
 ---
 
+## Runtime identity & data ownership
+
+Every Tier-3 instance runs as a **resolved, molma-managed UID/GID** (the compose `user:` field), and its private `data/` dir is chowned to match — the invariant that lets a `cap_drop: [ALL]` container, which has no `CAP_DAC_OVERRIDE`, write its own state (# Volumes). The identity is never the image's choice; it is one of four molma-owned sources:
+
+| App shape | Runtime identity | Drawn from |
+|---|---|---|
+| Folder app, personal source | the **owner's** UID/GID | the molma user range (≥ 3000, `STORAGE.md` # Permissions) |
+| Folder app, shared source | the **molma-app** shared service identity (+ `molma-shared` group) | fixed well-known (`/v1/identity/well-known`: 2000/2001) |
+| Folderless app (default) | the **brain's own euid/gid** — root in production, the operator's user in the native dev brain | n/a (it is the creator of `data/`) |
+| Folderless app, `service_user: true` | a **dedicated per-instance service identity** | the molma-reserved app-service band (below 3000, distinct from the fixed 2000/2001) |
+
+### `service_user` — a dedicated non-root identity for folderless apps
+
+The default folderless identity is the brain's euid, which is **root** in production. An image that writes its data as a **non-root** user — common in nginx+php-fpm and LinuxServer-style images — then cannot write that root-owned `data/` dir, and cannot chown it itself because `CAP_CHOWN` is stripped. `service_user: true` (`APP_MANIFEST.md` # B) is the author's declaration *"run me as a dedicated unprivileged account, and make my data writable by it."* When set, the brain:
+
+- **allocates a UID/GID from a reserved app-service band** — below the 3000 user floor and above the fixed 2000/2001 well-known identities; host-agent owns the exact range and the allocation, a sibling of `/v1/identity/well-known`,
+- **persists it on the instance row and reuses it across container recreations** — the identity is *stable for the life of the instance*, never re-rolled on update or restart (a transient UID would orphan the data it owns),
+- **pins the container `user:` to it and chowns `data/` to it**, exactly as the folder cases already do.
+
+**The app declares intent, never a UID.** There is deliberately **no manifest field naming a numeric UID/GID.** A manifest-named UID would be interpreted in the *host* namespace — molma runs no user-namespace remap (# Not in v1) — so it could alias a real host principal: a system service account, or a molma user in the 3000+ range. That would hand a compromised app that principal's filesystem identity, and `THREAT_MODEL.md` names a compromised app as a top adversary. molma owns the number; the manifest owns the *intent*. A numeric `user:`/UID in a submitted manifest is an admission rejection for both doors.
+
+**`service_user` is meaningful only for folderless apps.** A folder app's identity is already a managed non-root UID (the owner, or the molma-app identity), so the field is redundant there; admission rejects `service_user: true` combined with a `folders` grant.
+
+### What this does *not* cover
+
+`service_user` works for images that **adopt the runtime `user:`** molma assigns. It does **not** rescue an image that **hardcodes a different internal UID** for its data writes and ignores the runtime user — e.g. a php-fpm pool pinned to `user = www-data` in baked config, or an entrypoint that runs as root and `setuid`-drops to a fixed service user (which additionally needs the stripped `CAP_SETUID`/`CAP_SETGID`). For those, molma cannot align ownership without either naming the image's host UID (refused, above) or user-namespace remapping (# Not in v1). Such images stay **curation-rejects** until userns-remap lands; the catalog-import ledger tracks the specific apps (`docs/dev/catalog-import-gaps.md` # nonroot-data-ownership) to revisit when it does.
+
+### Foundation for future cross-app data grants
+
+Keeping every runtime identity a **stable, molma-managed** principal (rather than a free-form or transient host UID) is also what keeps a future *"app A may read app B's data"* grant expressible: such a grant would be a bind mount of B's `data/` into A plus a group/ACL grant *referencing A's runtime UID* — the same shape as a `molma-shared` folder grant today. A free-form or re-rolled identity would make that grant point at an unmanaged principal. Whether cross-app data reads are ever sanctioned at all is a separate, open product question — today inter-app data sharing goes only through shared use-case folders and managed services (# Inter-app traffic, `THREAT_MODEL.md`).
+
+---
+
 ## Capabilities & privilege
 
 ### Default
@@ -214,7 +249,7 @@ Neither door can request them through the UI. **Admission is deliberately door-s
 
 ### Not in v1
 
-- **User namespace remap.** Breaks too many images. Revisit once the catalog is mature.
+- **User namespace remap.** Breaks too many images. Revisit once the catalog is mature. It is also the blocker for supporting images that hardcode a non-root *internal* UID (# Runtime identity & data ownership — `service_user` covers images that adopt the runtime user, not that class).
 - **Custom seccomp / AppArmor profiles.** Docker defaults are sufficient for the threat model.
 
 ---

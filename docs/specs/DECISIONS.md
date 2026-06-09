@@ -21,6 +21,42 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-10 — Folderless apps can opt into a dedicated non-root identity (`service_user`); manifests never name a UID
+
+**Previously:** every Tier-3 instance ran as a resolved managed UID with `data/` chowned to match, but a **folderless** app's only identity was the brain's euid — **root** in production. An image that writes its data as a non-root user (nginx+php-fpm, LinuxServer-style) then couldn't write the root-owned `data/` dir and couldn't chown it (`CAP_CHOWN` stripped), so it failed to start. The catalog-import ledger captured this as `nonroot-data-ownership` (poznote #90; kimai's secondary finding, #89).
+
+**Now:** a manifest may set `service_user: true`. The brain then allocates a **stable per-instance UID/GID from a reserved app-service band** (below the 3000 user floor, distinct from the fixed 2000/2001 well-known identities), persists it on the instance row, reuses it across recreations, pins the container `user:`, and chowns `data/` to it. The app declares **intent only — it can never name a numeric UID.** A manifest-named UID would be read in the host namespace (molma runs no userns-remap) and could alias a real host principal — a system account, or a molma user ≥ 3000 — so a numeric `user:` is an admission rejection for both doors. `service_user` is folderless-only; a folder app already runs as a managed non-root identity (the owner, or the molma-app identity).
+
+**Why:** smallest mechanism that unblocks the broad "runs as a non-root user and owns its own data" class while preserving the model's core invariant — *every running UID is a molma-managed principal.* A free-form declared UID was rejected on exactly that ground: handing an app a say over its host UID hands a compromised app (a top adversary in `THREAT_MODEL.md`) a say over its host identity. Allocating from a reserved band follows the systemd `DynamicUser=`/`StateDirectory=` and Kubernetes `fsGroup` pattern — the platform owns volume ownership, the app declares the need — and keeping the identity *stable* (not transient like `DynamicUser`) leaves a future cross-app data grant able to reference it. Deliberately **scoped to images that adopt the runtime user**: images that hardcode a *different* internal UID or `setuid`-drop to a fixed service user (poznote, kimai) need user-namespace remap and stay curation-rejects until that lands (`NEXT.md`).
+
+**Affected docs:** `APP_ISOLATION.md` (# Runtime identity & data ownership — new section), `APP_MANIFEST.md` (# B, # Locked decisions), `docs/dev/catalog-import-gaps.md` (`nonroot-data-ownership` status), `NEXT.md` (userns-remap follow-on).
+
+---
+
+## 2026-06-09 — Tier-1 managed services grow MySQL + MariaDB types (#108)
+
+**Previously:** the v1 Tier-1 catalog was Postgres (15, 16) + Redis (7), with MariaDB explicitly parked as a post-v1 candidate ("some apps require it specifically — Nextcloud, WordPress") behind the "3+ store apps actually want them" bar.
+
+**Now:** `mysql` (8.0, 8.4) and `mariadb` (10.11, 11.4) are provisioned Tier-1 types alongside Postgres. Both engines ride the existing managed-services design unchanged — lazy spinup, per-app DB+user, `docker exec`-the-client provisioning (`mysql`/`mariadb` instead of `psql`), `MOLMA_SERVICE_*` injection (port 3306, `mysql://` DSN for both — one wire protocol), dedicated `--internal` network, drop-on-uninstall. Per-engine deltas are confined to an image pin, client binary names, the root-password env var, and the readiness probe (`mysqladmin`/`mariadb-admin ping` over TCP only, so the init-time socket-only bootstrap server doesn't read as ready). Version dots fold to dashes in derived names (`molma-svc-mysql-8-0`, `mysql-8-0.molma.internal`) because compose project names reject dots.
+
+**Why:** the catalog import sprint hit the same wall twice — Ghost (#85) requires MySQL 8 with no Postgres/SQLite-production path, Kimai (#89) speaks only the MySQL dialect — and bundling a DB into the app compose is structurally impossible under the Tier-3 sandbox (`cap_drop: ALL` strips the CAP_CHOWN/SETUID/SETGID the official `mysql`/`mariadb` entrypoints need; the `managed-mysql` ledger entries document it). A managed service type is the right seam precisely because the brain owns the service container outside the app sandbox. Both engines land as one code path because they share a wire protocol and SQL dialect; supporting both is the product call (some upstreams pin one specifically — Ghost: MySQL 8; Nextcloud: MariaDB). mysql 8.0 stays on the allowlist despite being past Oracle EOL because Ghost pins it. Unlike Postgres, the exec'd client needs the root password — the MySQL images don't trust the local socket — so the exec'd shell expands it from the container's own environment (`$MYSQL_ROOT_PASSWORD`/`$MARIADB_ROOT_PASSWORD`), never host-side argv.
+
+**Affected docs:** `SERVICE_PROVISIONING.md` (# Catalog (v1), # Provisioning protocol, # Post-v1 candidates, locked decisions), `APP_MANIFEST.md` # D, `docs/dev/catalog-import-gaps.md` (Ghost/Kimai `managed-mysql` entries → implemented). Implementation: `internal/manifest`, `internal/lifecycle/services.go`, realized by `docs/progress/managed-services-mysql.md`. Inherits the Postgres path's deferrals (backup/restore, grace-shutdown, at-rest credential encryption — `NEXT.md`).
+
+---
+
+## 2026-06-09 — `estimated_size` is the measured app-state baseline at install, not a usage projection
+
+**Previously:** `storage.estimated_size` was an author's *estimate* of the app's eventual on-disk state — "for warnings on small disks," explicitly a coarse upper bound the catalog footprint rendered as a ceiling (`DECISIONS.md` 2026-06-03). `NEXT.md` parked the residual question of "how to present an app-state estimate that **grows over time**" (a static "~2 GB" understates a photo library).
+
+**Now:** `estimated_size` is the **measured** size of the app's `data/` volumes the moment install completes (main service first healthy), on a clean install — the real cost of *having installed* the app, not a guess at how big it gets with use. Growth from later downloads or user uploads is **not** counted; that's a runtime disk-pressure concern (`HEALTH.md` # `disk-full`). Undercounting (a first-boot download still in flight at the health probe) is acceptable; overcounting by speculating about usage is not. The catalog `footprint` is therefore a measured baseline, not a "coarse upper bound."
+
+**Why:** the old definition produced numbers that varied wildly by use case and tended to alarmism — a speculative "5 GB" on an app that lands at ~200 MB scares a non-technical user off a perfectly cheap install. A concrete "this is what it costs to install" is more honest and actionable, and — unlike the projection — it's **mechanically measurable**: anchoring to "main service healthy" (a signal the brain already owns, and a checkpoint the import smoke-test already hits) makes it reproducible, whereas "size once first-boot setup settles" has no universal observable signal (you'd poll for data-dir quiescence, which is flaky per-app). This resolves the parked `NEXT.md` "grows over time" question by sidestepping it: the manifest figure never represents growth; runtime disk-pressure does.
+
+**Affected docs:** `APP_MANIFEST.md` # Storage, `APP_STORE.md` # Catalog schema, `BRAIN_UI_PROTOCOL.md` # GET /api/v1/catalog/:id/install-plan, `DASHBOARD.md` # Install authorization, `NEXT.md` (residual item resolved), `docs/dev/authoring-apps-with-an-agent.md`. Supersedes the "coarse upper-bound" framing of the 2026-06-03 footprint entry (the footprint shape — image + app-state, user content excluded — otherwise stands).
+
+---
+
 ## 2026-06-05 — Override forces `restart: unless-stopped` *except* for terminating jobs; `compose up` is time-bounded
 
 **Previously:** `APP_LIFECYCLE.md` # Locked: override file contents force-stamped `restart: unless-stopped` onto **every** service ("forced, overrides whatever the author wrote"). And `Manager.install` ran `compose up -d` on an unbounded context.

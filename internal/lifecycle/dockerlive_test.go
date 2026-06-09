@@ -121,6 +121,130 @@ services:
 	t.Logf("database %q dropped on uninstall", dbName)
 }
 
+// TestLiveMySQLProvisioning mirrors TestLivePostgresProvisioning for the MySQL
+// family: a real mysql:8.0 service container is lazily spun up, the per-app
+// DB+user is provisioned via docker-exec of the image's own client, the user
+// connects over TCP with the injected password, and the DB is dropped on
+// uninstall. MariaDB shares the code path (only the image, client binaries, and
+// root-password env var differ), so one live engine suffices.
+//
+//	go test ./internal/lifecycle/ -tags dockerlive -run TestLiveMySQLProvisioning -v -timeout 300s
+func TestLiveMySQLProvisioning(t *testing.T) {
+	ctx := context.Background()
+	stateDir := t.TempDir()
+	catDir := t.TempDir()
+	s, err := store.Open(filepath.Join(stateDir, "molma.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	cat := catalog.New(catDir)
+	docker := NewCLIDocker()
+	m := NewManager(s, cat, newFakeHost(), newFakeCaddy(), docker, events.NewBus(), stateDir)
+	m.SetAdmitter(admission.Check)
+
+	if err := docker.NetworkCreate(ctx, ingressNetwork, false); err != nil {
+		t.Fatalf("ingress net: %v", err)
+	}
+
+	man := `
+id: livemysql
+manifest_version: 1
+name: Live MySQL App
+version: "1.0"
+compose_file: compose.yml
+main_service: app
+main_port: 80
+preferred_slugs: [livemysql]
+services:
+  database:
+    type: mysql
+    version: "8.0"
+permissions:
+  internet: false
+  lan: false
+`
+	compose := `
+services:
+  app:
+    image: traefik/whoami:v1.10.3
+    environment:
+      DATABASE_URL: ${MOLMA_SERVICE_DATABASE_DSN}
+`
+	writeLiveCatalogApp(t, catDir, "livemysql", compose, man)
+
+	t.Cleanup(func() {
+		_ = exec.Command("docker", "rm", "-f", serviceContainerName("mysql", "8.0")).Run()
+		_ = exec.Command("docker", "network", "rm", serviceNetworkName("mysql", "8.0")).Run()
+		_ = exec.Command("docker", "network", "rm", ingressNetwork).Run()
+		// mysqld chowns its data dir to the mysql user; remove it via a throwaway
+		// container so t.TempDir cleanup doesn't hit permission-denied.
+		_ = exec.Command("docker", "run", "--rm", "-v", stateDir+":/s",
+			"alpine", "rm", "-rf", "/s/services").Run()
+	})
+
+	inst, err := m.Install(ctx, "livemysql",
+		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, nil)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	grants, err := s.GetServiceGrants(inst.ID)
+	if err != nil || len(grants) != 1 {
+		t.Fatalf("grants = %v, err %v", grants, err)
+	}
+	dbName := grants[0].DBName
+
+	if !mysqlDatabaseExists(t, dbName) {
+		t.Fatalf("database %q not found in the live MySQL", dbName)
+	}
+	t.Logf("provisioned database %q present in live MySQL", dbName)
+
+	if !mysqlUserCanConnect(t, grants[0].RoleName, grants[0].Password, dbName) {
+		t.Fatalf("user %q could not connect to %q with injected password", grants[0].RoleName, dbName)
+	}
+	t.Logf("user %q connects to %q with the injected credentials", grants[0].RoleName, dbName)
+
+	if err := m.Uninstall(ctx, inst.ID); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	if mysqlDatabaseExists(t, dbName) {
+		t.Fatalf("database %q survived uninstall", dbName)
+	}
+	t.Logf("database %q dropped on uninstall", dbName)
+}
+
+// mysqlDatabaseExists reports whether a database is present in the live
+// container, querying as root via the in-container password env.
+func mysqlDatabaseExists(t *testing.T, dbName string) bool {
+	t.Helper()
+	out, _ := exec.Command("docker", "exec", serviceContainerName("mysql", "8.0"),
+		"sh", "-c", `MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot -N -e "$1"`, "sh",
+		"SELECT 1 FROM information_schema.schemata WHERE schema_name='"+dbName+"'").CombinedOutput()
+	return strings.TrimSpace(string(out)) == "1"
+}
+
+// mysqlUserCanConnect verifies the provisioned user authenticates against its
+// DB over TCP with the injected password, exercising the real DSN.
+func mysqlUserCanConnect(t *testing.T, user, password, dbName string) bool {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		out, err := exec.Command("docker", "exec", "-e", "MYSQL_PWD="+password,
+			serviceContainerName("mysql", "8.0"),
+			"mysql", "-h127.0.0.1", "--protocol=TCP", "-u"+user, "-D", dbName, "-N", "-e", "SELECT 1").CombinedOutput()
+		if err == nil && strings.TrimSpace(string(out)) == "1" {
+			return true
+		}
+		if time.Now().After(deadline) {
+			t.Logf("connect attempt output: %s", out)
+			return false
+		}
+		time.Sleep(time.Second)
+	}
+}
+
 // TestLiveKanBoot installs the real `kan` catalog app against a freshly
 // provisioned Postgres and asserts it boots — the concrete goal the managed-
 // service slice unblocks. Pulls kan's images, so it's the heaviest live test.

@@ -32,7 +32,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/molmaos/molma/internal/hostagent"
 	"github.com/molmaos/molma/internal/hostagent/avahipublisher"
@@ -89,11 +88,14 @@ func main() {
 		a.Health = healthsource.New(healthPath)
 		slog.Info("host-agent (fake) wired to storage health file", "path", healthPath)
 	}
-	// No real journald or Docker journald log driver in the dev loop, so the
-	// per-app Logs tab is fed a synthetic ticker — one plausible line per second
-	// per followed container — so the brain→UI streaming path is exercisable
-	// end-to-end natively (BRAIN_HOST_PROTOCOL.md # Pattern C).
-	a.Logs = hostagent.NewFakeLogSource(time.Second)
+	// No journald in the dev loop, so stream real Docker container output via
+	// `docker logs -f --timestamps`. The compose replica suffix (-1) is probed
+	// automatically; falls back to the bare stem for standalone containers.
+	a.Logs = &dockerLogSource{}
+	// No real data drive in the dev loop, so GET /v1/system/status reports a
+	// canned free/total (≈412 GiB free of a 1 TiB drive) — enough for the
+	// install plan's free_bytes to render a plausible figure natively.
+	a.Disk = hostagent.NewFakeDiskReporter(412<<30, 1<<40)
 
 	mux := http.NewServeMux()
 	a.Mount(mux)

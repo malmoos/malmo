@@ -1,0 +1,30 @@
+# Open WebUI adapted for molma's Tier-3 sandbox (cap_drop: ALL,
+# no-new-privileges). Frontend-only: the bundled `ollama` service from
+# upstream's docker-compose.yaml is dropped because local model inference needs
+# GPU passthrough (molma #67, blocked) and CPU-only inference is impractical.
+# The user picks a model backend in-app (Settings -> Connections): an external
+# OpenAI-compatible API, or an Ollama running elsewhere on the LAN.
+#
+# - molma pins `user:` to the identity that owns the ./data bind it creates
+#   (the brain's effective UID: root in production, the dev user in the native
+#   inner loop), so a cap_drop:ALL container — which has no CAP_DAC_OVERRIDE —
+#   can write its SQLite state. Open WebUI honors a non-root runtime user as
+#   long as ./data is writable and WEBUI_SECRET_KEY is injected (below), which
+#   spares the otherwise root-only write to /app/backend/.webui_secret_key.
+# - WEBUI_SECRET_KEY is injected from molma's per-app secret (MOLMA_SECRET_KEY)
+#   so the JWT-signing key is stable across restarts. Otherwise start.sh writes
+#   it to /app/backend/.webui_secret_key (outside ./data), where it regenerates
+#   on every container recreate and invalidates all logged-in sessions.
+# - WEBUI_URL is the routed molma URL so absolute links resolve correctly.
+# - Telemetry/analytics are disabled to honor molma's data-ownership posture.
+services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:0.9.6
+    environment:
+      WEBUI_SECRET_KEY: ${MOLMA_SECRET_KEY}
+      WEBUI_URL: ${MOLMA_APP_URL}
+      ANONYMIZED_TELEMETRY: "false"
+      DO_NOT_TRACK: "true"
+      SCARF_NO_ANALYTICS: "true"
+    volumes:
+      - ./data:/app/backend/data

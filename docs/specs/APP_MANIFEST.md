@@ -84,6 +84,7 @@ preferred_slugs: [photos, photoprism] # subdomain priority list; OS picks first 
 needs_secure_context: false           # optional; default false. See below.
 timezone: system                      # optional; "system" (default) or "utc"
 health_probe: /healthz                # optional; enables the "responding" check. See below.
+service_user: false                   # optional; default false. Dedicated non-root identity for folderless apps. See below.
 ```
 
 **`id` and `preferred_slugs`** must be strict kebab-case — lowercase alphanumerics joined by single internal hyphens (`home-assistant` ✓; `whoami-`, `-x`, `who--ami`, `xn--y`, `Foo` ✗). This keeps the `<slug>--<user>` personal-instance scheme parseable (`DASHBOARD.md` # instance naming): no leading/trailing hyphen and no `--` run (which would collide with the owner separator and also covers the reserved `xn--` prefix). Catalog CI and the manifest parser both reject violations.
@@ -120,6 +121,10 @@ When set, the brain probes the app on its health-poll tick and raises the **non-
 
 Door-2 synthetic manifests omit it; a power user can add it later by editing the manifest, same as any other optional field.
 
+**`service_user`** declares that the app writes its data as a **non-root** user and should run under a dedicated, molma-allocated service identity rather than the folderless default (the brain's euid — root in production). Set it for nginx+php-fpm / LinuxServer-style images whose processes drop to a service user and so can't write molma's root-owned `data/` dir. When `true`, the brain allocates a stable per-instance UID/GID from its reserved app-service band, pins the container `user:`, and chowns the instance `data/` dir to it (`APP_ISOLATION.md` # Runtime identity & data ownership).
+
+The field is a **boolean intent, never a number** — you cannot name a UID; molma owns the value, precisely so a manifest can't alias a host principal (a numeric `user:` is an admission rejection). It is meaningful only for **folderless** apps: an app with `folders` already runs as a managed non-root identity (the owner, or the shared molma-app identity), so combining `service_user: true` with a folder grant is rejected. It does **not** help an image that hardcodes a *different* internal UID and ignores the runtime user (a php-fpm pool pinned to `www-data`, an entrypoint that `setuid`-drops to a fixed user) — that class waits on user-namespace remap (`APP_ISOLATION.md` # Not in v1).
+
 ### B2. Resources (recommended, never a limit)
 
 The author declares **recommended** specs — advice only, never a ceiling.
@@ -152,13 +157,15 @@ storage:
     - ./data/cache
     - ./data/thumbnails
   tier: fast                          # fast | normal | any  (default: any)
-  estimated_size: 10GB                # for warnings on small disks
+  estimated_size: 10GB                # measured app-state on disk right after install
   app_managed_user_content: false     # opt-in; see "Apps that manage their own content tree"
 ```
 
-**`data_volumes` vs `cache_volumes`** — the backup system uses this. Cache is regeneratable; data isn't. Without this distinction, we'd back up thumbnail caches.
+**`data_volumes` vs `cache_volumes`** — the backup system uses this. Cache is regeneratable; data isn't. Without this distinction, we'd back up thumbnail caches. A `cache_volumes` path **may be nested inside a `data_volume`** — the common shape is a single `./data` bind with a `cache/` subdirectory (e.g. a downloaded model or an embeddings store the app re-fetches on demand): list `./data` under `data_volumes` and `./data/cache` under `cache_volumes`, and backup is the data tree **minus** the cache subtrees. Paths that don't nest must not otherwise overlap. (Note both lists are author-grade declarations: v1 parses neither into the Go struct yet — see `docs/dev/authoring-apps-with-an-agent.md` — so they document intent for the backup system that will consume them.)
 
-**`estimated_size` is the *app-state* estimate only** — the app's own working data (indexes, databases, caches) under `/var/lib/molma/instances/<id>/data/`. It is **not** the container-image size and **not** the user's content (Photos/Music/Documents the app bind-mounts — that is first-class, unbounded, and survives uninstall, so it is never attributed to the app). Image size is **not** author-declared: the catalog build resolves it from the actual pinned images at publish time (`APP_STORE.md` # Catalog schema). The brain combines the two — image size + `estimated_size` — into the **on-disk footprint** it shows before install (store card + consent dialog; `BRAIN_UI_PROTOCOL.md` # GET /api/v1/catalog/:id/install-plan, `DASHBOARD.md` # Install authorization). Author estimates are advisory: warn on a tight disk, never block.
+**`estimated_size` is the *app-state baseline at install* — measured, not a usage projection.** It is the size of the app's own working data (indexes, databases, configs) under `/var/lib/molma/instances/<id>/data/` **as it stands the moment install completes** (the main service first reports healthy), on a clean install. It is deliberately *not* a guess at how big the app might grow with use: if the app later downloads another model or the user uploads a 2 GB library, that growth is **not** counted here — that's a runtime disk-pressure concern (`HEALTH.md` # `disk-full`), not a pre-install figure. The goal is a number close to the real on-disk cost of *having installed* the app; undercounting (a first-boot download still in flight when the health probe passes) is acceptable, overcounting by speculating about use is not. It is **not** the container-image size and **not** the user's content (Photos/Music/Documents the app bind-mounts — that is first-class, unbounded, and survives uninstall, so it is never attributed to the app). Image size is **not** author-declared: the catalog build resolves it from the actual pinned images at publish time (`APP_STORE.md` # Catalog schema). The brain combines the two — image size + `estimated_size` — into the **on-disk footprint** it shows before install (store card + consent dialog; `BRAIN_UI_PROTOCOL.md` # GET /api/v1/catalog/:id/install-plan, `DASHBOARD.md` # Install authorization). It stays advisory: warn on a tight disk, never block.
+
+**How to measure it (authoring).** Don't estimate — measure. The import smoke-test already boots the app on a clean install and waits for the health probe; at that point `du -sb` the instance's `data/` volumes and record the result. Apps with a live-boot test can assert the figure against drift on version bumps. Full per-app CI measurement isn't required (some apps need managed services to boot); the author-time measurement during import is the source.
 
 **`app_managed_user_content: true`** is the opt-in for apps that genuinely can't expose user content via use-case folders (legacy apps with opaque libraries). Triggers an install-time warning to the user: *"This app stores your files in its own folder, not your molma Photos/Music/Documents. You'll need this app to access them."* The molma store prefers apps that don't set this; curation policy may reject third-party manifests that do (TBD, `NEXT.md`).
 
@@ -172,7 +179,7 @@ The "OS as platform" bet made concrete. Apps declare what infra they need; the b
 services:
   database:
     type: postgres
-    version: "15"                     # major version pin
+    version: "15"                     # version pin
     name: photoprism_db               # logical name within this app
   cache:
     type: redis
@@ -180,6 +187,8 @@ services:
 ```
 
 The brain provisions the resource (e.g., creates a database in the shared Postgres-15 instance with a scoped user) and **injects credentials as environment variables**.
+
+Available types and versions (`SERVICE_PROVISIONING.md` # Catalog (v1)): `postgres` (15, 16), `mysql` (8.0, 8.4), `mariadb` (10.11, 11.4), `redis` (7 — schema-valid, provisioning staged). A type/version outside this set is rejected at manifest parse time. The MySQL family injects port 3306 and a `mysql://` DSN for both engines (one wire protocol).
 
 **Naming convention: app-defined.** The molma brain exposes the credentials under stable, documented variable names (e.g., `MOLMA_SERVICE_DATABASE_HOST`, `MOLMA_SERVICE_DATABASE_USER`, `MOLMA_SERVICE_DATABASE_PASSWORD`, `MOLMA_SERVICE_DATABASE_NAME`, `MOLMA_SERVICE_DATABASE_DSN`). The app's compose file maps these to whatever variables the app actually expects:
 
@@ -405,6 +414,7 @@ permissions:
 - **`folders` mount at a fixed path + injected env var (store apps).** A store manifest declares folder + `mode` + `scope` but no in-container path; the brain mounts each at `/molma/<folder>` and injects `MOLMA_FOLDER_<NAME>`. The app's compose maps that variable to its own library path. `mode` defaults to `read`. Same injection pattern as `MOLMA_SERVICE_*` / `MOLMA_DATA_DIR`. **Door-2 custom apps diverge:** their verbatim compose has no author to map the env var, so a Door-2 folder grant carries an explicit `target` (the destination path the admin types) and the brain binds straight there. `target` is Door-2-only; store grants omit it (# Custom container — synthetic manifest, `DECISIONS.md` 2026-06-02).
 - **`gpu` is its own field, separate from `devices`.** `devices` passes through explicit `/dev/...` paths; `gpu: true` selects the platform GPU runtime. No-GPU box fails at the capacity check.
 - **`app_managed_user_content: true`** is the opt-in for apps that don't expose user content via use-case folders. Triggers an install-time warning. Curated store prefers apps without it.
+- **`service_user: true`** opts a *folderless* app into a dedicated, molma-allocated non-root runtime identity — stable per instance, drawn from a reserved app-service band below the 3000 user floor; the brain pins `user:` and chowns `data/` to it. The manifest declares **intent only — no numeric UID is namable** (a host-namespace UID could alias a real principal under molma's no-userns-remap model); a numeric `user:`, or `service_user: true` alongside a `folders` grant, is an admission rejection. Does not cover images that hardcode a *different* non-root internal UID (deferred to userns-remap, `NEXT.md`). `APP_ISOLATION.md` # Runtime identity & data ownership, `DECISIONS.md` 2026-06-10.
 - **Scope (household vs. personal) is installer-elected, not a manifest field.** No `multi_user.mode`. Admins choose household or personal; members install personal only (`DASHBOARD.md`, `DECISIONS.md` 2026-05-29). Guest-sharing and household visibility are deferred and not manifest fields.
 - **No added Linux capabilities for store apps.** Override is `cap_drop: [ALL]`, adds none; admission rejects `cap_add`. Capability / `privileged` / Docker-socket needs go through Door-2 or Tier 2. A reviewed `permissions.capabilities` escape hatch is not in the v1 store schema (open in `NEXT.md`).
 - **Bind mounts only — no Docker named volumes for app data.** All data lives under the instance's `data/` dir.
