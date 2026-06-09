@@ -3,7 +3,7 @@ manifest_version: 1
 name: Open WebUI
 version: "0.9.6"
 description:
-  short: "Self-hosted chat interface for large language models (connect your own model backend)."
+  short: "Self-hosted chat interface for large language models."
   long: |
     Open WebUI is a polished, self-hosted chat interface for large language models — a private alternative to the ChatGPT web app that runs on your own hardware. Chat with models, organize conversations into folders, upload documents for retrieval-augmented answers, and manage multiple household users, all from one dashboard.
 
