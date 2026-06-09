@@ -44,11 +44,12 @@ type Entry struct {
 	// the manifest declares an icon. Empty ⇒ the store renders a generic glyph.
 	IconURL string `json:"icon_url,omitempty"`
 
-	// Footprint is the coarse on-disk summary the store grid renders without a
-	// second fetch (APP_STORE.md # Catalog schema). It is an upper bound derived
-	// straight from the manifest — nothing is assumed cached locally; the install
-	// dialog shows a sharper, box-specific figure (BRAIN_UI_PROTOCOL.md #
-	// install-plan).
+	// Footprint is the on-disk summary the store grid renders without a second
+	// fetch (APP_STORE.md # Catalog schema). The image totals are an upper bound
+	// — nothing is assumed cached locally, so the install dialog shows a sharper,
+	// box-specific figure (BRAIN_UI_PROTOCOL.md # install-plan). The app-state
+	// figure (estimated_size) is the manifest's measured baseline at install, not
+	// a usage projection (APP_MANIFEST.md # Storage, DECISIONS.md 2026-06-09).
 	Footprint manifest.Footprint `json:"footprint"`
 }
 

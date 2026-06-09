@@ -21,6 +21,18 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-09 — `estimated_size` is the measured app-state baseline at install, not a usage projection
+
+**Previously:** `storage.estimated_size` was an author's *estimate* of the app's eventual on-disk state — "for warnings on small disks," explicitly a coarse upper bound the catalog footprint rendered as a ceiling (`DECISIONS.md` 2026-06-03). `NEXT.md` parked the residual question of "how to present an app-state estimate that **grows over time**" (a static "~2 GB" understates a photo library).
+
+**Now:** `estimated_size` is the **measured** size of the app's `data/` volumes the moment install completes (main service first healthy), on a clean install — the real cost of *having installed* the app, not a guess at how big it gets with use. Growth from later downloads or user uploads is **not** counted; that's a runtime disk-pressure concern (`HEALTH.md` # `disk-full`). Undercounting (a first-boot download still in flight at the health probe) is acceptable; overcounting by speculating about usage is not. The catalog `footprint` is therefore a measured baseline, not a "coarse upper bound."
+
+**Why:** the old definition produced numbers that varied wildly by use case and tended to alarmism — a speculative "5 GB" on an app that lands at ~200 MB scares a non-technical user off a perfectly cheap install. A concrete "this is what it costs to install" is more honest and actionable, and — unlike the projection — it's **mechanically measurable**: anchoring to "main service healthy" (a signal the brain already owns, and a checkpoint the import smoke-test already hits) makes it reproducible, whereas "size once first-boot setup settles" has no universal observable signal (you'd poll for data-dir quiescence, which is flaky per-app). This resolves the parked `NEXT.md` "grows over time" question by sidestepping it: the manifest figure never represents growth; runtime disk-pressure does.
+
+**Affected docs:** `APP_MANIFEST.md` # Storage, `APP_STORE.md` # Catalog schema, `BRAIN_UI_PROTOCOL.md` # GET /api/v1/catalog/:id/install-plan, `DASHBOARD.md` # Install authorization, `NEXT.md` (residual item resolved), `docs/dev/authoring-apps-with-an-agent.md`. Supersedes the "coarse upper-bound" framing of the 2026-06-03 footprint entry (the footprint shape — image + app-state, user content excluded — otherwise stands).
+
+---
+
 ## 2026-06-05 — Override forces `restart: unless-stopped` *except* for terminating jobs; `compose up` is time-bounded
 
 **Previously:** `APP_LIFECYCLE.md` # Locked: override file contents force-stamped `restart: unless-stopped` onto **every** service ("forced, overrides whatever the author wrote"). And `Manager.install` ran `compose up -d` on an unbounded context.
