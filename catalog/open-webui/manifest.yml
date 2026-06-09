@@ -35,6 +35,11 @@ resources:
 
 storage:
   data_volumes: [./data]
+  # ./data/cache holds re-fetchable artifacts — the RAG embedding model, plus
+  # speech/image generation caches — so it's carved out of backups (regenerable;
+  # APP_MANIFEST.md # Storage). The chats/users SQLite DB, uploaded documents,
+  # and their vector store stay under data_volumes and are backed up.
+  cache_volumes: [./data/cache]
   # Measured app-state baseline at install (APP_MANIFEST.md # Storage): du of
   # ./data the moment /health first passes on a clean boot ≈ 890MB — almost all
   # of it the all-MiniLM-L6-v2 RAG embedding model fetched automatically on first
