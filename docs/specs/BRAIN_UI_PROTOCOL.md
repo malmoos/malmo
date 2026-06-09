@@ -31,12 +31,22 @@ POST /api/v1/users                         → create user
 GET  /api/v1/settings/network              → current network config
 GET  /api/v1/health                        → active health issues (see HEALTH.md; v1 path, in the OpenAPI spec as of issue #12)
 POST /api/v1/health/:id/:act               → invoke a remediation action attached to an issue
+GET  /api/v1/catalog                       → browse grid: id, name, version, short_description, categories, icon_url, footprint
+GET  /api/v1/catalog/:id                    → detail page: the browse fields plus long_description, screenshot_urls, author, license, links, changelog_url
+GET  /api/v1/catalog/:id/icon               → app icon image bytes (raw; not JSON)
+GET  /api/v1/catalog/:id/screenshots/:n     → n-th screenshot image bytes, manifest order, 0-based (raw; not JSON)
 GET  /api/v1/catalog/:id/install-plan      → permission/scope plan for installing a catalog app (see below)
 POST /api/v1/files/list                    → directory listing (see Files below)
 POST /api/v1/files/mkdir | move | copy | delete  → file operations (see Files below)
 ```
 
 Plain HTTP. Errors: HTTP status + `{ "code": "...", "message": "...", "details": {...} }`. Codes are stable strings; messages are human-readable, not contractual.
+
+#### Catalog browse, detail, and assets
+
+`GET /api/v1/catalog` returns the browse grid — one `Entry` per app with just what a card needs (`APP_STORE.md` # Catalog schema): id, name, version, `short_description`, `categories`, `icon_url`, and the coarse `footprint`. `GET /api/v1/catalog/:id` returns the detail view: the same `Entry` fields embedded, plus `long_description` (markdown), `screenshot_urls`, `author`, `license`, `links`, and `changelog_url`. Both require an authenticated session (401 if absent); unknown id → 404; a malformed catalog entry → 500 (same integrity posture as install-plan).
+
+`icon_url` and the `screenshot_urls` entries point at `GET /api/v1/catalog/:id/icon` and `/screenshots/:n` — they serve **raw image bytes**, not JSON, so the store loads them directly in `<img>` tags (and they stay out of the OpenAPI surface). `icon_url` is present only when the manifest declares an icon, so the store renders a glyph fallback without ever requesting a 404. The brain resolves these paths inside the app's catalog directory and rejects anything that would escape it; a missing file, an out-of-range index, or a non-numeric `:n` → 404.
 
 #### GET /api/v1/catalog/:id/install-plan
 
@@ -82,7 +92,7 @@ Returns everything the install-consent screen needs before the user confirms. Re
 - **Role-derived scope options.** `scope_options` and `scope_default` are computed from the caller's role. `POST /api/v1/apps` enforces the same rule (members are rejected on household scope). The scope is no longer selected inside the consent dialog — it is set externally by the split-button in the store row (see `DASHBOARD.md` # single-user simplification) and passed into the dialog as context. `scope_options`/`scope_default` remain in the response for future use but the dashboard does not render a picker from them.
 - **Per-scope source menus (Option A).** Each folder carries `sources.household` and `sources.personal`, each a `{options, default}` menu. The UI does zero policy derivation: pick a scope, look up `folder.sources[<scope>]`, render. A single-option menu (`household → ["shared"]`) renders as fixed/disabled. Both menus are always populated regardless of the caller's role — the household menu is unreachable for members (household scope isn't offered) but keeping the shape uniform means the UI doesn't branch on role when rendering a folder row.
 - **Structured fields only, no copy.** The brain returns `mode`/`scope`/`subfolder_default` and source fields. The UI owns all wording ("can add, change & delete files in…", "Which folder should this app manage?"). This matches how the rest of the brain returns data, not sentences.
-- **Advisory, not authoritative.** The install-plan drives the consent screen. The authoritative validation + override stamping happen in slice 4 when `POST /api/v1/apps` receives the user's elections in its `config`. This endpoint makes no host calls and mutates nothing.
+- **Advisory, not authoritative.** The install-plan drives the consent screen. The authoritative validation + override stamping happen in slice 4 when `POST /api/v1/apps` receives the user's elections in its `config`. This endpoint makes no *mutating* host calls and changes nothing on the box — the footprint's read-only host (free space) and Docker (already-present images) queries are its only host contact, and a failure of either degrades to zeros rather than failing the plan.
 
 **`single_user_mode` on session-bearing responses.** `GET /api/v1/me`, `POST /api/v1/login`, and `POST /api/v1/setup` all return a `UserDTO` that includes `"single_user_mode": true|false` — computed as `user_count == 1`. The flag is present on every session-establishing response (not just `/me`) so the UI has the correct value from the moment the session is created, without a follow-up fetch. Other endpoints that return `UserDTO` (user-management list/patch) omit it (`omitempty`). The dashboard uses this flag to: (a) show a plain Install button instead of a split-button, (b) suppress the Household/Yours section headers on the home grid, (c) hide the scope label on app tiles and in Settings, and (d) relabel the shared folder source from "The household's shared X" to "Shared X (accessible from your other devices)" in the consent dialog.
 

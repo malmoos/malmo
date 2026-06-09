@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -93,6 +94,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/system/live", s.systemLive)
 	mux.HandleFunc("GET /api/v1/apps/{id}/log", s.appLog)
 
+	// Catalog assets (icon/screenshots) serve raw image bytes, not JSON, so they
+	// bypass huma and stay out of the OpenAPI surface — the store loads them
+	// directly in <img> tags (APP_STORE.md # Catalog schema).
+	mux.HandleFunc("GET /api/v1/catalog/{id}/icon", s.catalogIcon)
+	mux.HandleFunc("GET /api/v1/catalog/{id}/screenshots/{n}", s.catalogScreenshot)
+
 	return withCORS(s.authMiddleware(s.rateLimit(mux)))
 }
 
@@ -135,6 +142,11 @@ func (s *Server) register(api huma.API) {
 		OperationID: "list-catalog", Method: "GET", Path: "/api/v1/catalog",
 		Summary: "List installable apps from the catalog",
 	}, s.listCatalog)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "get-catalog-app", Method: "GET", Path: "/api/v1/catalog/{id}",
+		Summary: "Full detail-page view of one catalog app",
+	}, s.getCatalogApp)
 
 	huma.Register(api, huma.Operation{
 		OperationID: "list-apps", Method: "GET", Path: "/api/v1/apps",
@@ -239,6 +251,58 @@ func (s *Server) listCatalog(ctx context.Context, _ *struct{}) (*struct {
 	}{}
 	out.Body.Apps = apps
 	return out, nil
+}
+
+func (s *Server) getCatalogApp(ctx context.Context, in *struct {
+	ID string `path:"id"`
+}) (*struct{ Body catalog.Detail }, error) {
+	d, err := s.catalog.Detail(in.ID)
+	if errors.Is(err, catalog.ErrNotFound) {
+		return nil, huma.Error404NotFound("no such app")
+	}
+	if err != nil {
+		return nil, huma.Error500InternalServerError("catalog read failed", err)
+	}
+	return &struct{ Body catalog.Detail }{Body: d}, nil
+}
+
+// catalogIcon and catalogScreenshot serve an app's raw image bytes from the
+// catalog directory. They resolve the on-disk path through the catalog (which
+// guards against path traversal) and hand off to http.ServeFile, which sets the
+// content-type and handles range/conditional requests.
+func (s *Server) catalogIcon(w http.ResponseWriter, r *http.Request) {
+	path, err := s.catalog.IconPath(r.PathValue("id"))
+	if s.serveAsset(w, r, path, err) {
+		http.ServeFile(w, r, path)
+	}
+}
+
+func (s *Server) catalogScreenshot(w http.ResponseWriter, r *http.Request) {
+	n, err := strconv.Atoi(r.PathValue("n"))
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	path, perr := s.catalog.ScreenshotPath(r.PathValue("id"), n)
+	if s.serveAsset(w, r, path, perr) {
+		http.ServeFile(w, r, path)
+	}
+}
+
+// serveAsset maps a catalog asset-path lookup error to the right status and
+// reports whether the caller should proceed to serve the file. ErrNotFound →
+// 404 (unknown app / no such asset); any other error → 500.
+func (s *Server) serveAsset(w http.ResponseWriter, _ *http.Request, _ string, err error) bool {
+	switch {
+	case errors.Is(err, catalog.ErrNotFound):
+		http.Error(w, "not found", http.StatusNotFound)
+		return false
+	case err != nil:
+		slog.Error("catalog asset lookup failed", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return false
+	}
+	return true
 }
 
 func (s *Server) listApps(ctx context.Context, _ *struct{}) (*struct {

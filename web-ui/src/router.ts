@@ -10,7 +10,12 @@ const routes: RouteRecordRaw[] = [
   { path: "/store", name: "store", component: () => import("@/views/StoreView.vue") },
   // Door-2 custom-container install — a dedicated full-screen form, admin-only
   // (the view guards the role; the Store affordance is hidden from members).
+  // Declared before /store/:id; Vue Router also ranks the static segment higher,
+  // so "custom" never matches the app-detail param.
   { path: "/store/custom", name: "store-custom", component: () => import("@/views/CustomInstallView.vue") },
+  // App detail page (APP_STORE.md # Catalog schema) — the browse grid links here;
+  // it's where the description, screenshots, and the Install flow live.
+  { path: "/store/:id", name: "store-app", component: () => import("@/views/AppDetailView.vue") },
   { path: "/settings", name: "settings", component: () => import("@/views/SettingsView.vue") },
   // Sub-routes under Settings (DASHBOARD.md # global navigation, AUTH.md # Roles).
   // Users is admin-only (the view guards the role, CustomInstallView pattern);

@@ -57,7 +57,65 @@ permissions:
       scope: whole
 `
 
+const footprintManifestYML = `id: sizer
+manifest_version: 1
+name: Sizer
+version: "2.0"
+compose_file: compose.yml
+main_service: app
+main_port: 80
+storage:
+  estimated_size: 10GB
+`
+
 // --- tests ---------------------------------------------------------------
+
+// TestInstallPlan_Footprint asserts the box-specific footprint block: the parsed
+// estimated_size and the host's free figure flow through. The fixture declares no
+// images (the harness wires a nil Docker driver), so the incremental image bytes
+// are zero — image subtraction is covered by the lifecycle unit tests.
+func TestInstallPlan_Footprint(t *testing.T) {
+	h := newHarness(t)
+	writeManifestFixture(t, h.catalogDir, "sizer", footprintManifestYML)
+	h.setupAdmin("alice", "pass1")
+
+	resp := h.do("GET", "/api/v1/catalog/sizer/install-plan", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	fp := decodeJSON[InstallPlanDTO](t, resp).Footprint
+
+	if fp.DownloadBytes != 0 || fp.ImageDiskBytes != 0 {
+		t.Errorf("no-image manifest: want zero image bytes, got %d/%d", fp.DownloadBytes, fp.ImageDiskBytes)
+	}
+	if fp.EstimatedStateBytes == nil || *fp.EstimatedStateBytes != 10<<30 {
+		t.Errorf("estimated_state_bytes: want %d, got %v", int64(10<<30), fp.EstimatedStateBytes)
+	}
+	if fp.FreeBytes != harnessFreeBytes {
+		t.Errorf("free_bytes: want %d, got %d", int64(harnessFreeBytes), fp.FreeBytes)
+	}
+}
+
+// TestInstallPlan_FootprintOmitsUnsetEstimate: a manifest with no
+// storage.estimated_size omits estimated_state_bytes (nil pointer) rather than
+// reporting a misleading 0.
+func TestInstallPlan_FootprintOmitsUnsetEstimate(t *testing.T) {
+	h := newHarness(t)
+	writeManifestFixture(t, h.catalogDir, "whoami", minimalManifestYML)
+	h.setupAdmin("alice", "pass1")
+
+	resp := h.do("GET", "/api/v1/catalog/whoami/install-plan", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	fp := decodeJSON[InstallPlanDTO](t, resp).Footprint
+	if fp.EstimatedStateBytes != nil {
+		t.Errorf("want estimated_state_bytes omitted, got %d", *fp.EstimatedStateBytes)
+	}
+	if fp.FreeBytes != harnessFreeBytes {
+		t.Errorf("free_bytes: want %d, got %d", int64(harnessFreeBytes), fp.FreeBytes)
+	}
+}
 
 func TestInstallPlan_RequiresAuth(t *testing.T) {
 	h := newHarness(t)

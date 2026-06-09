@@ -77,7 +77,8 @@ POST /v1/services/tailscale/enable
 ```
 GET /v1/system/status
 → 200 OK
-  { "hostname": "cindy-zx9", "uptime_s": 84021, "disk_pressure": false, ... }
+  { "hostname": "cindy-zx9", "uptime_s": 84021, "disk_pressure": false,
+    "data_disk_free_bytes": 442381180928, "data_disk_total_bytes": 1099511627776, ... }
 
 GET /v1/system/resources
 → 200 OK
@@ -94,7 +95,7 @@ GET /v1/system/resources
 
 **Live system-resources sample (`GET /v1/system/resources`).** Pattern A; the host source for the all-users live-resources view (`LOCAL_ANALYTICS.md` # Real-time system resources). Returns the **raw cumulative counters** from `/proc/stat`, `/proc/meminfo`, `/proc/loadavg`, `/proc/net/dev`, `/sys/block/<dev>/stat` plus a monotonic `ts_ns`. host-agent is stateless — it reads on request and computes no rates; the brain polls once per second *while a UI is watching*, diffs successive samples (rate denominator = `ts_ns` delta), and fans the derived rates out over its own SSE channel. host-agent applies the interface/device allowlist — physical LAN NICs + mesh, excluding `lo`/`docker0`/`veth*`/`br-*`, whole-disk devices only — so the brain never sees container-bridge noise. Distinct from `GET /v1/health/system`, which is a coarse 60s health poll, not a 1 Hz live feed.
 
-**Health findings report (`GET /v1/health/system`).** The brain can't read host hardware directly (it's containerized behind the socket-proxy), so all *physical* health detection — SMART, `statfs`, mount flags, `systemctl is-active`, memory pressure — is host-agent's job. host-agent samples on its own cadence and the brain polls this one report on the 60s heartbeat, reconciling findings into typed health issues (`HEALTH.md` # Detector catalog, locus B). It returns findings across domains (storage, drives, services, resources) in one payload — **not** a proliferation of per-domain endpoints — so the brain's `ApplyFindings(category, …)` reconcile can clear-absent / raise-present per category atomically. This supersedes the slice-1 single-purpose storage report (`/run/molma/health/storage.json` boot reporter stays; the polled endpoint generalizes). See `DECISIONS.md` 2026-05-29.
+**Health findings report (`GET /v1/health/system`).** The brain can't read host hardware directly (it's containerized behind the socket-proxy), so all *physical* health detection — SMART, `statfs`, mount flags, `systemctl is-active`, memory pressure, the pending-reboot flag (`/var/run/reboot-required`) — is host-agent's job. host-agent samples on its own cadence and the brain polls this one report on the 60s heartbeat, reconciling findings into typed health issues (`HEALTH.md` # Detector catalog, locus B). It returns findings across domains (storage, drives, services, resources, time, system) in one payload — **not** a proliferation of per-domain endpoints — so the brain's `ApplyFindings(category, …)` reconcile can clear-absent / raise-present per category atomically. This supersedes the slice-1 single-purpose storage report (`/run/molma/health/storage.json` boot reporter stays; the polled endpoint generalizes). See `DECISIONS.md` 2026-05-29.
 
 ```
 POST /v1/auth/verify-password
