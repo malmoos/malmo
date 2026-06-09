@@ -35,7 +35,12 @@ resources:
 
 storage:
   data_volumes: [./data]
-  estimated_size: 5GB
+  # Measured app-state baseline at install (APP_MANIFEST.md # Storage): du of
+  # ./data the moment /health first passes on a clean boot ≈ 890MB — almost all
+  # of it the all-MiniLM-L6-v2 RAG embedding model fetched automatically on first
+  # boot (cache/embedding); the SQLite DB and empty vector store are <1MB. Not a
+  # usage projection: documents the user later uploads grow it past this.
+  estimated_size: 900MB
   app_managed_user_content: true
 
 # Open WebUI signs session JWTs with WEBUI_SECRET_KEY. The brain generates it

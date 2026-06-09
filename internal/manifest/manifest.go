@@ -202,10 +202,12 @@ func parseBinarySize(s string) (int64, error) {
 }
 
 // Footprint is the per-app on-disk summary the store grid renders without
-// fetching the full manifest (APP_STORE.md # Catalog schema — `footprint`). It
-// is a coarse upper bound (nothing assumed cached locally); the install dialog
-// shows a sharper, box-specific figure (BRAIN_UI_PROTOCOL.md #
-// GET /api/v1/catalog/:id/install-plan).
+// fetching the full manifest (APP_STORE.md # Catalog schema — `footprint`). The
+// image totals are an upper bound (nothing assumed cached locally); the install
+// dialog shows a sharper, box-specific figure (BRAIN_UI_PROTOCOL.md #
+// GET /api/v1/catalog/:id/install-plan). EstimatedState is the manifest's
+// measured app-state baseline at install, not a usage projection (DECISIONS.md
+// 2026-06-09).
 type Footprint struct {
 	ImageDownloadBytes int64  `json:"image_download_bytes" yaml:"image_download_bytes"`
 	ImageDiskBytes     int64  `json:"image_disk_bytes" yaml:"image_disk_bytes"`

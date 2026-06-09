@@ -9,10 +9,12 @@ import (
 
 // InstallFootprint is the box-specific install estimate behind the install-plan
 // footprint block (BRAIN_UI_PROTOCOL.md # install-plan). Where the catalog
-// Entry's Footprint is a static upper bound straight from the manifest, this
-// sharpens it for THIS box: it subtracts images already pulled locally and adds
-// the live free-space reading, so the install dialog shows what the install will
-// actually cost here.
+// Entry's Footprint carries static image totals (an upper bound — nothing assumed
+// cached) plus the manifest's measured app-state baseline, this sharpens the image
+// side for THIS box: it subtracts images already pulled locally and adds the live
+// free-space reading, so the install dialog shows what the install will actually
+// cost here. The app-state figure (estimated_size) is the same measured baseline
+// either way (APP_MANIFEST.md # Storage, DECISIONS.md 2026-06-09).
 type InstallFootprint struct {
 	// DownloadBytes is the compressed bytes still to pull — the sum of
 	// download_bytes over images NOT already present locally. 0 when every image
