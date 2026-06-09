@@ -1,8 +1,11 @@
 package usermgr
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
+
+	"github.com/molmaos/molma/internal/protocol"
 )
 
 func TestUseraddArgs_Defaults(t *testing.T) {
@@ -74,6 +77,88 @@ nogroup:x:65534:
 		got := parseGroupMembership([]byte(content), c.slug, c.group)
 		if got != c.want {
 			t.Errorf("parseGroupMembership(%q,%q) = %v, want %v", c.slug, c.group, got, c.want)
+		}
+	}
+}
+
+func TestFirstFreeAppServiceID(t *testing.T) {
+	min := protocol.AppServiceUIDMin
+	t.Run("empty files start at band min", func(t *testing.T) {
+		n, err := firstFreeAppServiceID(nil, nil)
+		if err != nil || n != min {
+			t.Fatalf("got %d, %v; want %d, nil", n, err, min)
+		}
+	})
+	t.Run("UIDs outside the band are ignored", func(t *testing.T) {
+		passwd := []byte("root:x:0:0:root:/root:/bin/bash\nmolma-app:x:2000:2000::/nonexistent:/usr/sbin/nologin\nalice:x:3000:3000::/home/alice:/bin/bash\n")
+		n, err := firstFreeAppServiceID(passwd, nil)
+		if err != nil || n != min {
+			t.Fatalf("got %d, %v; want %d, nil", n, err, min)
+		}
+	})
+	t.Run("taken UIDs are skipped", func(t *testing.T) {
+		passwd := []byte("molma-svc-2100:x:2100:2100:gecos:/nonexistent:/usr/sbin/nologin\nmolma-svc-2101:x:2101:2101:gecos:/nonexistent:/usr/sbin/nologin\n")
+		n, err := firstFreeAppServiceID(passwd, nil)
+		if err != nil || n != min+2 {
+			t.Fatalf("got %d, %v; want %d, nil", n, err, min+2)
+		}
+	})
+	t.Run("a GID alone reserves the number", func(t *testing.T) {
+		// A group squatting on a band number (even with no matching user) makes
+		// the pair unusable — groupadd --gid would fail. Skip it.
+		group := []byte("stray:x:2100:\n")
+		n, err := firstFreeAppServiceID(nil, group)
+		if err != nil || n != min+1 {
+			t.Fatalf("got %d, %v; want %d, nil", n, err, min+1)
+		}
+	})
+	t.Run("exhausted band errors", func(t *testing.T) {
+		var passwd []byte
+		for n := protocol.AppServiceUIDMin; n <= protocol.AppServiceUIDMax; n++ {
+			passwd = append(passwd, []byte(fmt.Sprintf("molma-svc-%d:x:%d:%d:g:/nonexistent:/usr/sbin/nologin\n", n, n, n))...)
+		}
+		if _, err := firstFreeAppServiceID(passwd, nil); err == nil {
+			t.Fatal("want exhaustion error, got nil")
+		}
+	})
+}
+
+func TestFindAppServiceByGecos(t *testing.T) {
+	passwd := []byte(`root:x:0:0:root:/root:/bin/bash
+molma-svc-2100:x:2100:2100:molma app-service for inst_aaa:/nonexistent:/usr/sbin/nologin
+molma-svc-2101:x:2101:2101:molma app-service for inst_bbb:/nonexistent:/usr/sbin/nologin
+imposter:x:2102:2102:molma app-service for inst_ccc:/home/imposter:/bin/bash
+`)
+	if got := findAppServiceByGecos(passwd, svcGecos("inst_aaa")); got != 2100 {
+		t.Errorf("inst_aaa: got %d, want 2100", got)
+	}
+	if got := findAppServiceByGecos(passwd, svcGecos("inst_bbb")); got != 2101 {
+		t.Errorf("inst_bbb: got %d, want 2101", got)
+	}
+	if got := findAppServiceByGecos(passwd, svcGecos("inst_unknown")); got != 0 {
+		t.Errorf("unknown instance: got %d, want 0", got)
+	}
+	// A matching GECOS on a non-molma-svc account must not count: only
+	// accounts we created are reservations.
+	if got := findAppServiceByGecos(passwd, svcGecos("inst_ccc")); got != 0 {
+		t.Errorf("imposter account matched: got %d, want 0", got)
+	}
+}
+
+func TestAllocateAppService_EmptyInstanceID(t *testing.T) {
+	m := &LinuxUserManager{}
+	if _, _, err := m.AllocateAppService(""); err == nil {
+		t.Error("want error for empty instance id")
+	}
+}
+
+func TestReleaseAppService_RejectsOutOfBandUID(t *testing.T) {
+	m := &LinuxUserManager{}
+	// Must error before any lookup/shell-out — this guard is what keeps the
+	// endpoint from ever deleting an arbitrary account.
+	for _, uid := range []int{0, 1000, protocol.AppServiceUIDMin - 1, protocol.AppServiceUIDMax + 1} {
+		if err := m.ReleaseAppService(uid); err == nil {
+			t.Errorf("ReleaseAppService(%d): want out-of-band error, got nil", uid)
 		}
 	}
 }
