@@ -65,4 +65,4 @@ images:
   ghost:6.44.1:
     digest: sha256:5e61e2add86c23121d57f99866ffea0cd21f252ff81ec55e425338bb06de129a
     download_bytes: 259467879
-    disk_bytes: 259487963
+    disk_bytes: 1028196864
