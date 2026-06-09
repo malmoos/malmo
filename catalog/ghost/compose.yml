@@ -1,0 +1,48 @@
+# Ghost adapted for molma's Tier-3 sandbox (cap_drop: ALL, no-new-privileges,
+# brain-pinned user:). Upstream's compose runs ghost + its own mysql:8.0
+# container; molma drops the bundled database and declares a managed MySQL 8
+# in the manifest instead (#108) — Ghost has no Postgres support and its
+# SQLite path is dev-mode-only, and a bundled mysql image cannot initialize
+# under the sandbox (see the managed-mysql ledger entry). The database__*
+# variables are Ghost's documented env-config mapping, wired to the injected
+# MOLMA_SERVICE_DATABASE_* credentials; url is the brain-injected routed URL,
+# which Ghost requires for every absolute link it renders.
+#
+# command replaces the image CMD with a wrapper that replicates the stock
+# entrypoint's first-boot content seeding (default themes copied into ./data)
+# and execs node directly. The stock entrypoint, when started as uid 0, does
+# `chown` + `exec gosu node` — both impossible under cap_drop: ALL (CAP_CHOWN,
+# CAP_SETUID/SETGID), and molma pins user: to the brain identity, which is
+# root in production. Upstream's supported `--user` path skips that branch;
+# the wrapper gives every pinned uid that same behavior. The seed loop is the
+# image's docker-entrypoint.sh loop ($$ defers expansion to the container
+# shell) plus one delta: --no-same-owner on the extracting tar, because as
+# uid 0 tar defaults to restoring the archived node:node ownership — a chown,
+# forbidden under cap_drop: ALL. Re-verify the loop against the entrypoint on
+# version bumps.
+services:
+  ghost:
+    image: ghost:6.44.1
+    command:
+      - bash
+      - -c
+      - |
+        set -e
+        baseDir="$$GHOST_INSTALL/content.orig"
+        for src in "$$baseDir"/*/ "$$baseDir"/themes/*; do
+          src="$${src%/}"
+          target="$$GHOST_CONTENT/$${src#$$baseDir/}"
+          mkdir -p "$$(dirname "$$target")"
+          [ -e "$$target" ] || tar -cC "$$(dirname "$$src")" "$$(basename "$$src")" | tar --no-same-owner -xC "$$(dirname "$$target")"
+        done
+        exec node current/index.js
+    environment:
+      database__client: mysql
+      database__connection__host: ${MOLMA_SERVICE_DATABASE_HOST}
+      database__connection__port: ${MOLMA_SERVICE_DATABASE_PORT}
+      database__connection__user: ${MOLMA_SERVICE_DATABASE_USER}
+      database__connection__password: ${MOLMA_SERVICE_DATABASE_PASSWORD}
+      database__connection__database: ${MOLMA_SERVICE_DATABASE_NAME}
+      url: ${MOLMA_APP_URL}
+    volumes:
+      - ./data:/var/lib/ghost/content
