@@ -64,8 +64,9 @@ type FolderMount struct {
 }
 
 // isolation is the resolved per-instance identity + folder binds writeOverride
-// and writeEnv stamp onto every service. nil when the manifest declares no
-// folders (writeOverride then emits today's network/cap_drop-only override).
+// and writeEnv stamp onto every service. Every instance carries one: folder apps
+// run as the owner's UID/GID with mounts populated; folderless apps run as the
+// brain's own effective identity with mounts empty (folder-bind paths are no-ops).
 type isolation struct {
 	uid, gid  int    // container runtime identity (compose user:)
 	sharedGID int    // molma-shared GID for group_add on shared-source mounts
@@ -314,19 +315,23 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 		return rollback(fmt.Errorf("persist service grants: %w", err))
 	}
 
-	// 6. Resolve the per-instance isolation (container identity + folder binds)
-	// when the manifest declares folders. Personal instances run as the owner's
-	// UID/GID; household instances run as the shared molma-app identity. Both
-	// learn the molma-shared GID for shared-source group_add. Folderless apps
-	// (and Door-2 custom apps) skip this and keep the network/cap_drop-only
-	// override (APP_ISOLATION.md # User content).
-	var iso *isolation
+	// 6. Resolve the per-instance isolation (container identity + folder binds).
+	// EVERY instance runs as a resolved UID/GID via the compose `user:` field,
+	// because a cap_drop:ALL container has no CAP_DAC_OVERRIDE and can only write
+	// its private ./data bind when it runs as that dir's owner (APP_ISOLATION.md
+	// # User content). Folder apps run as the owner's UID/GID (personal) or the
+	// shared molma-app identity (household) and additionally bind use-case
+	// folders. Folderless apps (and Door-2 custom apps) run as the brain's own
+	// effective UID/GID — the owner of the ./data dir writeInstanceDir just
+	// created (root under the production brain; the dev user under the native
+	// inner-loop brain, so the bind stays writable there too).
+	iso := isolation{uid: os.Geteuid(), gid: os.Getegid()}
 	if len(man.Permissions.Folders) > 0 {
 		wk, err := m.host.WellKnownIdentity(ctx)
 		if err != nil {
 			return rollback(fmt.Errorf("resolve host identity: %w", err))
 		}
-		iso = &isolation{sharedGID: wk.MolmaSharedGID, mounts: mounts}
+		iso.sharedGID, iso.mounts = wk.MolmaSharedGID, mounts
 		if scope == store.ScopeHousehold {
 			iso.uid, iso.gid = wk.MolmaAppUID, wk.MolmaAppGID
 		} else {
@@ -341,6 +346,21 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 			}
 			iso.uid, iso.gid, iso.home = rh.UID, rh.GID, rh.HomePath
 		}
+	}
+
+	// Align the private ./data bind's ownership with the container's runtime
+	// identity so the cap_drop:ALL app can write its own state. No-op when the
+	// runtime UID already owns the dir (folderless apps run as the brain's euid,
+	// which created it). Under the production brain (euid 0) a chown failure is a
+	// real fault; under the unprivileged native dev brain it cannot chown ./data
+	// to a host-agent-assigned UID it does not own, so that case is downgraded to
+	// a warning (folderless apps — the common dev path — are unaffected).
+	if err := os.Chown(filepath.Join(m.instanceDir(id), "data"), iso.uid, iso.gid); err != nil {
+		if os.Geteuid() == 0 {
+			return rollback(fmt.Errorf("chown data dir: %w", err))
+		}
+		slog.Warn("data dir chown skipped under unprivileged brain",
+			"instance_id", id, "uid", iso.uid, "gid", iso.gid, "err", err)
 	}
 
 	// 7. Generate override (with pins + isolation) + .env.
@@ -808,7 +828,7 @@ func (m *Manager) writeInstanceDir(id string, man *manifest.Manifest, composeByt
 // attachment, plus the `image: name@sha256:…` pin per service (digest pinning
 // — APP_LIFECYCLE.md). main_service additionally joins the ingress network
 // with a per-instance alias so Caddy can reach exactly this instance.
-func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes []byte, pins []servicePin, iso *isolation) error {
+func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes []byte, pins []servicePin, iso isolation) error {
 	svcs, err := parseComposeServices(composeBytes)
 	if err != nil {
 		return err
@@ -870,29 +890,28 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 		if ref, ok := pinBySvc[svc]; ok {
 			entry["image"] = ref
 		}
-		// Folder enforcement: run as the elected identity, bind each declared
-		// folder at /molma/<folder> from its elected source, and join molma-shared
-		// when any source is the household tree (APP_ISOLATION.md # User content).
-		if iso != nil {
-			entry["user"] = fmt.Sprintf("%d:%d", iso.uid, iso.gid)
-			volumes := make([]string, 0, len(iso.mounts))
-			needShared := false
-			for _, mt := range iso.mounts {
-				mode := ":ro"
-				if modeByFolder[mt.Folder] == "write" {
-					mode = ":rw"
-				}
-				volumes = append(volumes, iso.hostSource(mt)+":"+containerDest(mt)+mode)
-				if mt.Source == sourceShared {
-					needShared = true
-				}
+		// Run as the resolved runtime identity (every instance — folderless apps
+		// as the brain's euid). Folder apps additionally bind each declared folder
+		// at /molma/<folder> from its elected source and join molma-shared when any
+		// source is the household tree (APP_ISOLATION.md # User content).
+		entry["user"] = fmt.Sprintf("%d:%d", iso.uid, iso.gid)
+		volumes := make([]string, 0, len(iso.mounts))
+		needShared := false
+		for _, mt := range iso.mounts {
+			mode := ":ro"
+			if modeByFolder[mt.Folder] == "write" {
+				mode = ":rw"
 			}
-			if len(volumes) > 0 {
-				entry["volumes"] = volumes
+			volumes = append(volumes, iso.hostSource(mt)+":"+containerDest(mt)+mode)
+			if mt.Source == sourceShared {
+				needShared = true
 			}
-			if needShared {
-				entry["group_add"] = []string{strconv.Itoa(iso.sharedGID)}
-			}
+		}
+		if len(volumes) > 0 {
+			entry["volumes"] = volumes
+		}
+		if needShared {
+			entry["group_add"] = []string{strconv.Itoa(iso.sharedGID)}
 		}
 		// Device passthrough (APP_ISOLATION.md # Devices). Each declared /dev path
 		// is exposed at the same path inside the container. Host-side existence
@@ -924,7 +943,7 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 	return os.WriteFile(filepath.Join(m.instanceDir(id), "compose.override.yml"), out, 0o644)
 }
 
-func (m *Manager) writeEnv(id, slug string, iso *isolation) error {
+func (m *Manager) writeEnv(id, slug string, iso isolation) error {
 	dataDir, _ := filepath.Abs(filepath.Join(m.instanceDir(id), "data"))
 	lines := []string{
 		"MOLMA_INSTANCE_ID=" + id,
@@ -935,10 +954,8 @@ func (m *Manager) writeEnv(id, slug string, iso *isolation) error {
 	// folders) — a store app's compose maps MOLMA_FOLDER_<NAME> to its library
 	// path; a Door-2 grant already bound straight to its target, but the var still
 	// reflects the real in-container path. Stable regardless of the elected source.
-	if iso != nil {
-		for _, mt := range iso.mounts {
-			lines = append(lines, "MOLMA_FOLDER_"+strings.ToUpper(mt.Folder)+"="+containerDest(mt))
-		}
+	for _, mt := range iso.mounts {
+		lines = append(lines, "MOLMA_FOLDER_"+strings.ToUpper(mt.Folder)+"="+containerDest(mt))
 	}
 	// Re-emit the instance's generated secrets as MOLMA_SECRET_<NAME>
 	// (SERVICE_PROVISIONING.md # Env-var injection). Read from the store rather
