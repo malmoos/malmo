@@ -10,9 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/molmaos/molma/internal/manifest"
 )
 
 // Error is a rejection with a stable, user-facing message naming the field.
@@ -35,6 +38,7 @@ type rawService struct {
 	Build       any    `yaml:"build"`
 	Volumes     []any  `yaml:"volumes"`
 	Extends     any    `yaml:"extends"`
+	User        any    `yaml:"user"` // string or bare YAML int
 }
 
 type composeDoc struct {
@@ -50,6 +54,17 @@ func Check(ctx context.Context, composeBytes []byte) error {
 		return err
 	}
 	return CheckStructure(ctx, composeBytes)
+}
+
+// CheckManifest applies the manifest-side admission rules — declarations that
+// are illegal regardless of the compose content. Door-symmetric like Check:
+// lifecycle's shared install transaction runs it for both doors (a Door-2
+// synthetic manifest never sets service_user, so it passes trivially).
+func CheckManifest(man *manifest.Manifest) error {
+	if man.ServiceUser && len(man.Permissions.Folders) > 0 {
+		return reject("manifest sets service_user: true together with a folders grant — a folder app already runs as a managed non-root identity (APP_MANIFEST.md # B); remove service_user")
+	}
+	return nil
 }
 
 // CheckStructure runs only the structural rejection rules — no daemon needed.
@@ -111,9 +126,41 @@ func checkService(name string, svc rawService) error {
 			return reject("service %q sets %s: host — host namespace sharing is not allowed", name, ns.field)
 		}
 	}
+	if err := checkUser(name, svc.User); err != nil {
+		return err
+	}
 	for _, v := range svc.Volumes {
 		if err := checkVolume(name, v); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// checkUser rejects a numeric `user:` (any numeric UID or GID component).
+// A compose-named number is read in the HOST user namespace — molma runs no
+// userns remap — so it could alias a real host principal: a system account,
+// or a molma user in the 3000+ range (APP_ISOLATION.md # Runtime identity &
+// data ownership). molma owns the runtime UID; the brain's override pins
+// `user:` on every service regardless. A non-numeric name (`user: postgres`)
+// is left alone — it resolves in the container's own /etc/passwd and the
+// override wins anyway.
+func checkUser(name string, u any) error {
+	val, ok := u.(string)
+	if !ok {
+		if u == nil {
+			return nil
+		}
+		// Bare YAML scalar like `user: 1000` (or 1000.5; any non-string is
+		// numeric as far as compose's uid syntax is concerned).
+		return reject("service %q sets a numeric user: (%v) — molma assigns every app's runtime UID; remove it (a folderless app that needs a non-root identity declares service_user: true in its manifest)", name, u)
+	}
+	for _, part := range strings.SplitN(val, ":", 2) {
+		if part == "" {
+			continue
+		}
+		if _, err := strconv.Atoi(part); err == nil {
+			return reject("service %q sets a numeric user: (%q) — molma assigns every app's runtime UID; remove it (a folderless app that needs a non-root identity declares service_user: true in its manifest)", name, val)
 		}
 	}
 	return nil

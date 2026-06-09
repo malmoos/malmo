@@ -151,11 +151,15 @@ type stubUserMgr struct {
 	deleteCalls            []string
 	resolveHomeCalls       []string
 	wellKnownIdentityCalls int
+	allocateCalls          []string
+	releaseCalls           []int
 	err                    error
 	roleErr                error
 	deleteErr              error
 	resolveHomeErr         error
 	wellKnownIdentityErr   error
+	allocateErr            error
+	releaseErr             error
 	// resolveHomeResult is returned on ResolveHome success; zero value = /home/<user>, 3000, 3000.
 	resolveHomeResult *struct {
 		home     string
@@ -202,6 +206,19 @@ func (s *stubUserMgr) WellKnownIdentity() (int, int, int, error) {
 		return s.wellKnownIdentityResult.appUID, s.wellKnownIdentityResult.appGID, s.wellKnownIdentityResult.sharedGID, nil
 	}
 	return 2000, 2000, 2001, nil
+}
+
+func (s *stubUserMgr) AllocateAppService(instanceID string) (int, int, error) {
+	s.allocateCalls = append(s.allocateCalls, instanceID)
+	if s.allocateErr != nil {
+		return 0, 0, s.allocateErr
+	}
+	return 2100, 2100, nil
+}
+
+func (s *stubUserMgr) ReleaseAppService(uid int) error {
+	s.releaseCalls = append(s.releaseCalls, uid)
+	return s.releaseErr
 }
 
 func TestSetPassword_DelegatesToUserMgrWhenSet(t *testing.T) {

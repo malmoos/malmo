@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/molmaos/molma/internal/hostagent"
+	"github.com/molmaos/molma/internal/protocol"
 )
 
 // LinuxUserManager implements hostagent.UserManager against the local system.
@@ -273,6 +274,141 @@ func (m *LinuxUserManager) WellKnownIdentity() (appUID, appGID, sharedGID int, e
 		return 0, 0, 0, fmt.Errorf("parse molma-shared gid %q: %w", g.Gid, err)
 	}
 	return parsedUID, parsedGID, parsedSharedGID, nil
+}
+
+// svcAccountPrefix names the system accounts that back app-service identity
+// reservations: molma-svc-<uid>. Naming by UID (not instance ID) keeps the
+// account name short and valid regardless of instance-ID length; the
+// instance ↔ UID mapping lives on the brain's instance row, and the GECOS
+// comment carries the instance ID for debuggability.
+const svcAccountPrefix = "molma-svc-"
+
+func svcGecos(instanceID string) string { return "molma app-service for " + instanceID }
+
+// AllocateAppService implements hostagent.UserManager. Reserves the first
+// free UID/GID pair in the app-service band [protocol.AppServiceUIDMin,
+// AppServiceUIDMax] by creating a real system account + group named
+// molma-svc-<uid> — the /etc/passwd entry IS the durable reservation, so the
+// band's state survives host-agent restarts without any side state.
+// Idempotent per instance: if an account's GECOS already carries this
+// instance ID, its pair is returned instead of allocating a second one.
+//
+// /etc/passwd and /etc/group are parsed directly (same call as isInGroup) so
+// the free-number scan doesn't depend on nsswitch/nscd lookups.
+func (m *LinuxUserManager) AllocateAppService(instanceID string) (uid, gid int, err error) {
+	if instanceID == "" {
+		return 0, 0, fmt.Errorf("usermgr: empty instance id")
+	}
+	passwd, err := os.ReadFile("/etc/passwd")
+	if err != nil {
+		return 0, 0, fmt.Errorf("usermgr: read /etc/passwd: %w", err)
+	}
+	group, err := os.ReadFile("/etc/group")
+	if err != nil {
+		return 0, 0, fmt.Errorf("usermgr: read /etc/group: %w", err)
+	}
+	if existing := findAppServiceByGecos(passwd, svcGecos(instanceID)); existing != 0 {
+		return existing, existing, nil
+	}
+	n, err := firstFreeAppServiceID(passwd, group)
+	if err != nil {
+		return 0, 0, err
+	}
+	name := svcAccountPrefix + strconv.Itoa(n)
+	if err := runCmd("groupadd", "--gid", strconv.Itoa(n), name); err != nil {
+		return 0, 0, fmt.Errorf("usermgr: groupadd %q: %w", name, err)
+	}
+	if err := runCmd("useradd", "--system", "--uid", strconv.Itoa(n), "--gid", strconv.Itoa(n),
+		"--no-create-home", "--shell", "/usr/sbin/nologin",
+		"--comment", svcGecos(instanceID), name); err != nil {
+		// Don't leave a groupless half-reservation behind.
+		_ = runCmd("groupdel", name)
+		return 0, 0, fmt.Errorf("usermgr: useradd %q: %w", name, err)
+	}
+	return n, n, nil
+}
+
+// ReleaseAppService implements hostagent.UserManager. Deletes the
+// molma-svc-<uid> account + group, returning the number to the band.
+// Idempotent: a missing account returns nil. Only accounts in the band and
+// named with the molma-svc- prefix are ever touched — this must never be
+// usable to delete an arbitrary user.
+func (m *LinuxUserManager) ReleaseAppService(uid int) error {
+	if uid < protocol.AppServiceUIDMin || uid > protocol.AppServiceUIDMax {
+		return fmt.Errorf("usermgr: uid %d outside the app-service band", uid)
+	}
+	name := svcAccountPrefix + strconv.Itoa(uid)
+	if _, err := user.Lookup(name); err != nil {
+		var unknown user.UnknownUserError
+		if errors.As(err, &unknown) {
+			// Account gone; the group may still exist if a past release was
+			// interrupted between userdel and groupdel.
+			if _, gerr := user.LookupGroup(name); gerr == nil {
+				if err := runCmd("groupdel", name); err != nil {
+					return fmt.Errorf("usermgr: groupdel %q: %w", name, err)
+				}
+			}
+			return nil
+		}
+		return fmt.Errorf("usermgr: lookup %q: %w", name, err)
+	}
+	if err := runCmd("userdel", name); err != nil {
+		return fmt.Errorf("usermgr: userdel %q: %w", name, err)
+	}
+	// userdel only removes the primary group when USERGROUPS_ENAB applies;
+	// delete it explicitly and tolerate "already gone".
+	if _, err := user.LookupGroup(name); err == nil {
+		if err := runCmd("groupdel", name); err != nil {
+			return fmt.Errorf("usermgr: groupdel %q: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// firstFreeAppServiceID is the pure free-number scan: the smallest n in the
+// app-service band that is neither a UID in passwd nor a GID in group.
+// Errors when the band is exhausted (900 slots — a box would need 900 live
+// service_user instances).
+func firstFreeAppServiceID(passwd, group []byte) (int, error) {
+	taken := map[int]bool{}
+	for _, line := range strings.Split(string(passwd), "\n") {
+		fields := strings.Split(line, ":")
+		if len(fields) >= 3 {
+			if n, err := strconv.Atoi(fields[2]); err == nil {
+				taken[n] = true
+			}
+		}
+	}
+	for _, line := range strings.Split(string(group), "\n") {
+		fields := strings.Split(line, ":")
+		if len(fields) >= 3 {
+			if n, err := strconv.Atoi(fields[2]); err == nil {
+				taken[n] = true
+			}
+		}
+	}
+	for n := protocol.AppServiceUIDMin; n <= protocol.AppServiceUIDMax; n++ {
+		if !taken[n] {
+			return n, nil
+		}
+	}
+	return 0, fmt.Errorf("usermgr: app-service band exhausted")
+}
+
+// findAppServiceByGecos returns the UID of the molma-svc-* account whose
+// GECOS field matches, or 0 when none does — the idempotency probe for
+// AllocateAppService.
+func findAppServiceByGecos(passwd []byte, gecos string) int {
+	for _, line := range strings.Split(string(passwd), "\n") {
+		fields := strings.Split(line, ":")
+		if len(fields) < 5 || !strings.HasPrefix(fields[0], svcAccountPrefix) || fields[4] != gecos {
+			continue
+		}
+		if n, err := strconv.Atoi(fields[2]); err == nil {
+			return n
+		}
+	}
+	return 0
 }
 
 func runChpasswd(slug, password string) error {
