@@ -150,6 +150,20 @@ GET /v1/identity/well-known
 
 `molma_app_uid`/`molma_app_gid` is the shared service identity stamped as the compose `user:` for household instances; `molma_shared_gid` is the GID added via `group_add` whenever any folder elects the shared source (`/srv/molma/shared/<Folder>/`), in either scope. The real host-agent resolves these from `/etc/passwd` and `/etc/group` (`os/user.Lookup("molma-app")`, `os/user.LookupGroup("molma-shared")`); these accounts are provisioned by the box build, not by host-agent. The fake host-agent returns fixed dev constants (`2000`/`2000`/`2001`) that sit below the per-user `[3000, 3999]` range so service identities never collide with hashed user UIDs. See `APP_ISOLATION.md` # User content and `USERS_AND_GROUPS.md` # Group reference.
 
+**App-service identity allocation.** A folderless app declaring `service_user: true` runs as a dedicated, molma-allocated non-root identity (`APP_ISOLATION.md` # Runtime identity & data ownership). host-agent owns the reserved **app-service band [2100, 2999]** — below the molma user floor (`UID_MIN` 3000), above the fixed 2000/2001 well-knowns, with 2002–2099 left as headroom for future fixed identities — and exposes allocation as a sibling of the well-known endpoint:
+
+```
+POST /v1/identity/app-service
+  { "instance_id": "navidrome-20260610t101500" }
+  → 200 OK  { "uid": 2100, "gid": 2100 }
+
+POST /v1/identity/app-service/release
+  { "uid": 2100 }
+  → 200 OK
+```
+
+The brain calls allocate once during install, persists the pair on the instance row, and never re-requests it — the identity is stable for the life of the instance. Release runs at uninstall (and on install rollback); it is idempotent, and a UID outside the band is a 400 — the endpoint must never be usable to delete an arbitrary account. The real host-agent reserves the number by creating a real system account + group named `molma-svc-<uid>` (`useradd --system`, nologin shell, no home; the instance ID goes in the GECOS comment), so the `/etc/passwd` entry is the durable reservation and the band's state survives restarts with no side state; allocation is idempotent per instance via the GECOS label. The fake host-agent allocates from an in-memory map (not persisted — the brain stores the pair, and the unprivileged dev brain can't chown to it anyway).
+
 **Network endpoints (NetworkManager-backed).** host-agent exposes Pattern A routes that wrap NetworkManager's DBus surface:
 
 ```
