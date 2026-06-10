@@ -1,0 +1,37 @@
+# Kimai adapted for molma's Tier-3 sandbox (cap_drop: ALL, no-new-privileges,
+# brain-pinned user:). Upstream's documented compose runs kimai + its own
+# mysql container; molma drops the bundled database and declares a managed
+# MySQL in the manifest instead (#108) — Kimai speaks only the MySQL dialect
+# (no Postgres, no SQLite-prod mode), and a bundled mysql image cannot
+# initialize under the sandbox (see the managed-mysql ledger entries).
+# DATABASE_URL is the injected DSN plus Doctrine's charset/serverVersion
+# params.
+#
+# The stock image entrypoint is kept as-is — verified live under the sandbox
+# at both pinned identities. Its chown calls fail (CAP_CHOWN is dropped) and,
+# started as uid 0, Apache's worker setgid/setuid drop to www-data fails too
+# (AH02156 alerts in the logs) — all of it non-fatal: the entrypoint has no
+# set -e, Apache continues with workers at the pinned identity, and every
+# var write lands in ./data, which the brain owns-and-pins to match. The
+# chown noise on each boot is cosmetic. One observable consequence: the
+# entrypoint's copy of the image's docker monolog config also fails, so
+# Kimai's application log goes to ./data/log/prod.log instead of docker
+# logs (docker logs carry only Apache + entrypoint output). Re-verify on
+# version bumps.
+#
+# ADMINMAIL/ADMINPASS seed the initial super-admin on first boot (Kimai has
+# no setup wizard; this is upstream's documented quickstart mechanism). The
+# credentials are fixed and public — the app description tells the user to
+# change the password immediately after first login. TRUSTED_PROXIES covers
+# the private ranges Caddy can proxy from, so forwarded Host/proto headers
+# are honored when secure URLs are on.
+services:
+  kimai:
+    image: kimai/kimai2:2.59.0
+    environment:
+      DATABASE_URL: "${MOLMA_SERVICE_DATABASE_DSN}?charset=utf8mb4&serverVersion=8.4"
+      ADMINMAIL: admin@kimai.local
+      ADMINPASS: changemeplease
+      TRUSTED_PROXIES: "127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    volumes:
+      - ./data:/opt/kimai/var
