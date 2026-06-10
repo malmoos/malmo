@@ -164,6 +164,20 @@ POST /v1/identity/app-service/release
 
 The brain calls allocate once during install, persists the pair on the instance row, and never re-requests it — the identity is stable for the life of the instance. Release runs at uninstall (and on install rollback); it is idempotent, and a UID outside the band is a 400 — the endpoint must never be usable to delete an arbitrary account. The real host-agent reserves the number by creating a real system account + group named `molma-svc-<uid>` (`useradd --system`, nologin shell, no home; the instance ID goes in the GECOS comment), so the `/etc/passwd` entry is the durable reservation and the band's state survives restarts with no side state; allocation is idempotent per instance via the GECOS label. The fake host-agent allocates from an in-memory map (not persisted — the brain stores the pair, and the unprivileged dev brain can't chown to it anyway).
 
+**GPU capability query (`GET /v1/system/gpu`).** When a manifest declares `permissions.gpu: true`, the brain needs two host facts before it can install: *is there a usable GPU* (the capacity gate — no GPU is a hard install refusal, `APP_ISOLATION.md` # GPU) and *which render group grants access to it* (so it can `group_add` the container onto `/dev/dri`). One Pattern A probe answers both:
+
+```
+GET /v1/system/gpu
+→ 200 OK  { "present": true,  "vendor": "intel", "render_gid": 104 }   # iGPU detected
+→ 200 OK  { "present": false, "vendor": "",      "render_gid": 0 }     # no usable GPU
+```
+
+- `present` — a usable GPU was detected. `false` is what the brain turns into the specced capacity refusal (`APP_ISOLATION.md` # GPU), **before** it generates the compose override — not a late `docker compose up` failure.
+- `vendor` — `"intel"` in v1, the only supported runtime (`APP_ISOLATION.md` # GPU scopes the first slice to the Intel iGPU / VA-API path). `"amd"` and `"nvidia"` are reserved for the follow-on runtimes and not emitted yet. Empty when `present` is false.
+- `render_gid` — the GID of the host `render` group, which owns the `/dev/dri/renderD*` nodes. The brain `group_add`s it onto the main service so a `cap_drop: [ALL]` container (which lacks `CAP_DAC_OVERRIDE`) can still open the render node. Only meaningful when `present`.
+
+The real host-agent detects the GPU by scanning `/dev/dri/renderD*` and reading each node's PCI vendor (`/sys/class/drm/renderD*/device/vendor`; `0x8086` → `intel`), and resolves the render GID via `os/user.LookupGroup("render")` — the same way `/v1/identity/well-known` resolves `molma-shared`. The `render` group and the udev rules binding the DRI nodes to it are provisioned by the box build's media stack, not by host-agent (the OS-image half is tracked separately — see issue #125). The fake host-agent returns a synthetic Intel iGPU (`present: true, vendor: "intel"`, a fixed dev `render_gid`) so the override path is exercisable under `make dev`, with a toggle to report `present: false` so the capacity-refusal path is testable without real hardware. This is the brain's only GPU host query — vendor→runtime selection is entirely the brain's job; the manifest stays vendor-agnostic `gpu: true` (`APP_MANIFEST.md` # E).
+
 **Network endpoints (NetworkManager-backed).** host-agent exposes Pattern A routes that wrap NetworkManager's DBus surface:
 
 ```
@@ -428,6 +442,7 @@ Beyond the molma-group membership assertion (above), CI asserts:
 - **Heartbeat: 60 seconds.** Brain polls `GET /v1/state/summary`.
 - **host-agent self-update drains all jobs first**; 5-minute hard cap before failing the OS update.
 - **Network endpoints wrap NetworkManager over DBus.** host-agent is the only thing on the box that talks to NM. WiFi credentials live in NM's connection store (`/etc/NetworkManager/system-connections/`, root-only); the brain never persists them. See `BOOT.md` # NetworkManager and `DECISIONS.md` 2026-05-18.
+- **GPU capability is a host query, not a manifest fact.** `GET /v1/system/gpu` reports presence + vendor + the `render` group GID; the brain uses it for both the install-time capacity gate and the `/dev/dri` `group_add`. v1 detects the Intel iGPU only (`vendor: "intel"`); AMD/NVIDIA runtimes are follow-ons. See `APP_ISOLATION.md` # GPU.
 
 ## Knock-ons to other docs
 
@@ -437,3 +452,4 @@ Beyond the molma-group membership assertion (above), CI asserts:
 - `UPDATES.md` — apt operations are Pattern B (jobs with SSE log streams). The "brain ↔ host-agent protocol versioning" open item is resolved (lockstep).
 - `NEXT.md` — carries the future web-terminal and app-facing-background-jobs items (failure semantics is now closed).
 - `HEALTH.md` — the # Detector catalog owns the per-issue measurement/cadence/threshold contract; this doc owns the `GET /v1/health/system` transport that carries locus-B findings to the brain.
+- `APP_ISOLATION.md` — # GPU owns the locked install-refusal-on-no-GPU behaviour and the `/dev/dri` + render-group override stanza; this doc owns the `GET /v1/system/gpu` transport that feeds both. The OS-image media stack and the real `/dev/dri` detection are tracked in issue #125.
