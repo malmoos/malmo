@@ -38,12 +38,15 @@ func unpackedDiskBytes(ctx context.Context, image string) (int64, error) {
 	}
 	n, perr := sumUnpackedLayers(stdout)
 	if perr != nil {
-		io.Copy(io.Discard, stdout) // unblock docker so Wait can reap it
+		_, _ = io.Copy(io.Discard, stdout) // unblock docker so Wait can reap it
 	}
 	if werr := cmd.Wait(); werr != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = werr.Error()
+		}
+		if perr != nil {
+			return 0, fmt.Errorf("docker save %s: %s (parse error: %w)", image, msg, perr)
 		}
 		return 0, fmt.Errorf("docker save %s: %s", image, msg)
 	}
