@@ -247,6 +247,22 @@ type Agent struct {
 	// this nil (fake path); cmd/host-agent-real wires usermgr.LinuxUserManager
 	// so /etc/passwd + /etc/shadow + /etc/group become the source of truth.
 	UserMgr UserManager
+
+	// System, when non-nil, backs GET /v1/system/resources with real kernel
+	// counters. Swapped per binary: procsource.Sampler (real /proc, Linux-only)
+	// in cmd/host-agent-real vs nil in the fake binary, which keeps the
+	// synthetic monotonically-climbing counters so the inner dev loop needs no
+	// host /proc.
+	System SystemSampler
+}
+
+// SystemSampler is a consumer-side interface for the raw system-resources
+// sample behind GET /v1/system/resources. One call = one snapshot of raw
+// cumulative counters (never rates — the brain derives those by diffing
+// successive samples, BRAIN_HOST_PROTOCOL.md # Pattern A). Provider:
+// procsource.Sampler.
+type SystemSampler interface {
+	Sample() (protocol.SystemResources, error)
 }
 
 // New constructs an Agent with the given PasswordVerifier and Publisher.
@@ -358,14 +374,27 @@ func (a *Agent) systemStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // systemResources serves one raw cumulative-counter sample for the live
-// system-resources view (BRAIN_HOST_PROTOCOL.md # Pattern A). The real binary
-// reads /proc and /sys and applies the iface/device allowlist; this fake
-// synthesizes monotonically-climbing counters off a.startedAt so two successive
-// 1 Hz polls always diff to a non-zero, plausible rate in the dev loop. It is
-// stateless (no Agent field, no mutex) — the same property the spec requires of
-// the real implementation. ts_ns advances on every call so the brain's rate
-// denominator (ts_ns delta) is always positive.
+// system-resources view (BRAIN_HOST_PROTOCOL.md # Pattern A). When a System
+// sampler is wired (cmd/host-agent-real injects procsource.Sampler), the
+// sample is real kernel counters with the iface/device allowlist applied at
+// the source; a sampler error is a 500 the brain logs and skips, keeping its
+// previous rate baseline. When System is nil (the fake binary and tests), the
+// fallback below synthesizes monotonically-climbing counters off a.startedAt
+// so two successive 1 Hz polls always diff to a non-zero, plausible rate in
+// the dev loop. Both paths are stateless per request — the property the spec
+// requires. ts_ns advances on every call so the brain's rate denominator
+// (ts_ns delta) is always positive.
 func (a *Agent) systemResources(w http.ResponseWriter, r *http.Request) {
+	if a.System != nil {
+		res, err := a.System.Sample()
+		if err != nil {
+			slog.Error("system-resources: sampler error", "err", err)
+			writeErr(w, http.StatusInternalServerError, "sample-failed", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+		return
+	}
 	elapsed := time.Since(a.startedAt)
 	secs := elapsed.Seconds()
 	writeJSON(w, http.StatusOK, protocol.SystemResources{

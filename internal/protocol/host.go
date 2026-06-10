@@ -61,7 +61,7 @@ type SystemStatus struct {
 // sample plus a monotonic ts_ns, the host source for the all-users live
 // system-resources view (LOCAL_ANALYTICS.md # Real-time system resources).
 // host-agent reads /proc/stat, /proc/meminfo, /proc/loadavg, /proc/net/dev,
-// /sys/block/<dev>/stat on request and computes no rates — it is stateless. The
+// /proc/diskstats on request and computes no rates — it is stateless. The
 // brain polls this once per second while ≥1 UI subscriber is connected, diffs
 // successive samples (rate denominator = ts_ns delta), and fans the derived
 // rates out over its own SSE channel (BRAIN_HOST_PROTOCOL.md # Pattern A).
@@ -104,7 +104,8 @@ type NetCounters struct {
 }
 
 // DiskCounters are cumulative per-device byte counters derived from
-// /sys/block/<dev>/stat (sectors × 512).
+// /proc/diskstats (sectors × 512 — the kernel's sector unit there is a fixed
+// 512 bytes regardless of the device's real sector size).
 type DiskCounters struct {
 	Dev        string `json:"dev"`
 	ReadBytes  int64  `json:"read_bytes"`

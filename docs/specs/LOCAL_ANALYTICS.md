@@ -85,7 +85,7 @@ Different beast. Not stored, not periodic — a live stream that only runs while
 
 ### Source
 
-`/proc/stat`, `/proc/meminfo`, `/proc/loadavg`, `/proc/net/dev`, `/sys/block/<dev>/stat`, `/proc/uptime`. No Docker stats subscription — this view is box-level, not per-container.
+`/proc/stat`, `/proc/meminfo`, `/proc/loadavg`, `/proc/net/dev`, `/proc/diskstats`, `/proc/uptime`. No Docker stats subscription — this view is box-level, not per-container. (`/proc/diskstats` carries the same per-device sector counters as `/sys/block/<dev>/stat` in a single read — the implementation reads it instead of one file per device.)
 
 **These are host reads, so host-agent owns them, not the brain.** The brain runs in a container and cannot read host `/proc`/`/sys` directly — the same constraint that puts physical health detection in locus B (`BRAIN_HOST_PROTOCOL.md` # Health findings report). host-agent exposes a single raw-counter sample endpoint; the brain polls it and derives the rates. See # Mechanism.
 
