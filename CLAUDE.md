@@ -88,7 +88,7 @@ Small set of rules. Codified now so we don't have to back them out later.
 
 - **Debian base, single-node, BYO x86, Docker apps, custom YAML manifest, ISO install.**
 - **Subdomain routing** (`photos.molma.local`), explicitly *not* path-based — browser same-origin policy is the reason. See `SPEC.md`.
-- **Headscale + DERP (BSD-3)** for the mesh. Tailscale's coordinator is proprietary; NetBird's server is AGPLv3. Both rejected.
+- **Headscale + DERP (BSD-3)** for the molma mesh — **deferred, not v1.** Locked for when remote access ships; Tailscale's coordinator is proprietary and NetBird's server is AGPLv3, both rejected as the substrate. In v1, remote access is user-opt-in Tailscale (Tier-2 service, `SERVICE_PROVISIONING.md`), which is entirely separate — the user's own Tailscale account, not molma-brokered.
 - **ext4 + LUKS, not ZFS.** ZFS forecloses mergerfs/SnapRAID upgrades and adds CDDL/kernel licensing pain.
 - **Mergerfs from day 1** when a data drive is present (pool of one with one drive; `epmfs` placement). Enables zero-downtime drive addition. SnapRAID parity stays deferred.
 - **User content at `/home/<user>/`** with macOS-style capitalized use-case folders (`Photos/`, `Music/`, `Movies/`, `Documents/`, `Notes/`, `Downloads/`). Data drive mounts at `/srv/molma/` with bind mounts to `/home/` and `/var/lib/molma/`.
