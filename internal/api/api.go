@@ -189,6 +189,16 @@ func (s *Server) register(api huma.API) {
 	}, s.uninstallApp)
 
 	huma.Register(api, huma.Operation{
+		OperationID: "stop-app", Method: "POST", Path: "/api/v1/apps/{id}/stop",
+		Summary: "Stop a running app instance (job)", DefaultStatus: http.StatusAccepted,
+	}, s.stopApp)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "start-app", Method: "POST", Path: "/api/v1/apps/{id}/start",
+		Summary: "Start a stopped app instance (job)", DefaultStatus: http.StatusAccepted,
+	}, s.startApp)
+
+	huma.Register(api, huma.Operation{
 		OperationID: "get-job", Method: "GET", Path: "/api/v1/jobs/{id}",
 		Summary: "Get job status",
 	}, s.getJob)
@@ -648,6 +658,77 @@ func (s *Server) uninstallApp(ctx context.Context, in *struct {
 		err := s.life.Uninstall(context.Background(), id)
 		s.auditor.Record(jobCtx, audit.ActionAppUninstall, audit.Target{Kind: "app", ID: id}, nil, err == nil)
 		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"instance_id": id}, nil
+	})
+	return &struct{ Body Job }{Body: job.snapshot()}, nil
+}
+
+// authorizeAppMutation is the shared gate for stop/start: the actor must be
+// able to see the instance (else 404, no existence leak), and household
+// instances are admin-only — a member may only act on their own personal
+// instance (DASHBOARD.md # install authorization, mirrored by stop/start/
+// uninstall). Returns the loaded instance on success.
+func (s *Server) authorizeAppMutation(ctx context.Context, id string) (store.Instance, error) {
+	actor, ok := auth.FromContext(ctx)
+	if !ok {
+		return store.Instance{}, huma.Error401Unauthorized("unauthenticated")
+	}
+	inst, err := s.store.Get(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.Instance{}, huma.Error404NotFound("no such app")
+	}
+	if err != nil {
+		return store.Instance{}, huma.Error500InternalServerError("get failed", err)
+	}
+	if !canSee(actor, inst) {
+		return store.Instance{}, huma.Error404NotFound("no such app")
+	}
+	if !actor.IsAdmin() && inst.Scope == store.ScopeHousehold {
+		return store.Instance{}, huma.Error403Forbidden("only an admin can control a household app")
+	}
+	return inst, nil
+}
+
+func (s *Server) stopApp(ctx context.Context, in *struct {
+	ID string `path:"id"`
+}) (*struct{ Body Job }, error) {
+	id := in.ID
+	inst, err := s.authorizeAppMutation(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	// Synchronous guard so an illegal transition is a clean 409 instead of a
+	// failed job the UI has to poll for. Start re-checks under the per-instance
+	// lock, which is the authority if state races between here and the goroutine.
+	if inst.State != "running" {
+		return nil, huma.Error409Conflict("app is not running")
+	}
+	job := s.jobs.run("app-stop", func(job *Job) (map[string]any, error) {
+		job.setStep("stopping")
+		if err := s.life.Stop(context.Background(), id); err != nil {
+			return nil, err
+		}
+		return map[string]any{"instance_id": id}, nil
+	})
+	return &struct{ Body Job }{Body: job.snapshot()}, nil
+}
+
+func (s *Server) startApp(ctx context.Context, in *struct {
+	ID string `path:"id"`
+}) (*struct{ Body Job }, error) {
+	id := in.ID
+	inst, err := s.authorizeAppMutation(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if inst.State != "stopped" {
+		return nil, huma.Error409Conflict("app is not stopped")
+	}
+	job := s.jobs.run("app-start", func(job *Job) (map[string]any, error) {
+		job.setStep("starting")
+		if err := s.life.Start(context.Background(), id); err != nil {
 			return nil, err
 		}
 		return map[string]any{"instance_id": id}, nil

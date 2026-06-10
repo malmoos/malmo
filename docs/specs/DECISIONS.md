@@ -21,6 +21,18 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-10 — App Start uses `docker compose up -d`, not `compose start`
+
+**Previously:** `APP_LIFECYCLE.md` # stop, start, uninstall locked Start as `docker compose -p molma-<id> start`, the literal inverse of the `stop` it pairs with.
+
+**Now:** Start runs `docker compose up -d` — the same op the reconcile pass already uses to bring a drifted instance back. `stop` is unchanged.
+
+**Why:** `compose start` only restarts the containers that already exist in a stopped state. That has two bites for a real app: a one-shot migration/seed/init job that already exited 0 gets started *again* (re-running the migration), and `start` ignores `depends_on` ordering, so a service can come up before the dependency it gates on. `up -d` reconciles to the desired set instead — it respects `depends_on` ordering and the completion-gate job semantics the override already encodes (`APP_LIFECYCLE.md` # override file contents, #92), and it's idempotent, so it doubles as the crash-recovery path. Using the same op as reconcile means one code path and one set of semantics, not two. The state row is written `running` before the op (brain-commits-first), so a crash mid-start is finished by the reconcile pass exactly as a reboot is.
+
+**Affected docs:** `APP_LIFECYCLE.md` (# stop, start, uninstall). Implementation: `internal/lifecycle/lifecycle.go` (`Manager.Start`/`Stop` + per-instance lock), `internal/api/api.go` (stop/start routes), realized by `docs/progress/stop-start-service.md`.
+
+---
+
 ## 2026-06-10 — Folderless apps can opt into a dedicated non-root identity (`service_user`); manifests never name a UID
 
 **Previously:** every Tier-3 instance ran as a resolved managed UID with `data/` chowned to match, but a **folderless** app's only identity was the brain's euid — **root** in production. An image that writes its data as a non-root user (nginx+php-fpm, LinuxServer-style) then couldn't write the root-owned `data/` dir and couldn't chown it (`CAP_CHOWN` stripped), so it failed to start. The catalog-import ledger captured this as `nonroot-data-ownership` (poznote #90; kimai's secondary finding, #89).

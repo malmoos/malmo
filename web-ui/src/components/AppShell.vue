@@ -22,7 +22,7 @@ useEvents();
     <HealthBanner />
     <!-- pb-28 keeps the last row clear of the floating dock. -->
     <main class="flex-1 overflow-y-auto px-4 pb-28 pt-2">
-      <div class="mx-auto max-w-6xl">
+      <div class="mx-auto h-full max-w-6xl">
         <RouterView />
       </div>
     </main>

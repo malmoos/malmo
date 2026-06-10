@@ -8,10 +8,10 @@
 // shows only Household + *my* Yours, so we filter personal tiles to the
 // current user — other members' personal instances never appear here even for
 // an admin (DASHBOARD.md: "they never see other members' personal instances").
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { RouterLink } from "vue-router";
-import { useQuery } from "@tanstack/vue-query";
-import { api, type Instance } from "../api";
+import { useQuery, useQueryClient } from "@tanstack/vue-query";
+import { api, waitForJob, type Instance, type Job } from "../api";
 import { useAuth } from "../auth";
 import { useHealth } from "../useHealth";
 import { relativeTime } from "../utils";
@@ -36,6 +36,25 @@ const yours = computed(() =>
 );
 const empty = computed(() => household.value.length === 0 && yours.value.length === 0);
 
+// Click-to-start straight from a stopped tile (DASHBOARD.md # Tile). The set of
+// in-flight ids drives each tile's "Starting up…" caption; the brain re-checks
+// authorization, so a tile only emits start when the viewer may control it.
+const qc = useQueryClient();
+const startingIds = ref(new Set<string>());
+
+async function startApp(id: string) {
+  if (startingIds.value.has(id)) return;
+  startingIds.value = new Set(startingIds.value).add(id);
+  try {
+    const job = await api.post<Job>(`/apps/${id}/start`);
+    await waitForJob(job.job_id);
+  } finally {
+    const next = new Set(startingIds.value);
+    next.delete(id);
+    startingIds.value = next;
+    qc.invalidateQueries({ queryKey: ["apps"] });
+  }
+}
 </script>
 
 <template>
@@ -86,14 +105,14 @@ const empty = computed(() => household.value.length === 0 && yours.value.length 
       <section v-if="household.length" class="space-y-3">
         <h2 v-if="!singleUserMode" class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Household</h2>
         <div class="grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-4 lg:grid-cols-6">
-          <AppTile v-for="a in household" :key="a.id" :instance="a" />
+          <AppTile v-for="a in household" :key="a.id" :instance="a" :starting="startingIds.has(a.id)" @start="startApp(a.id)" />
         </div>
       </section>
 
       <section v-if="yours.length" class="space-y-3">
         <h2 v-if="!singleUserMode" class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Yours</h2>
         <div class="grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-4 lg:grid-cols-6">
-          <AppTile v-for="a in yours" :key="a.id" :instance="a" />
+          <AppTile v-for="a in yours" :key="a.id" :instance="a" :starting="startingIds.has(a.id)" @start="startApp(a.id)" />
         </div>
       </section>
     </template>
