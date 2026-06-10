@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/molmaos/molma/internal/manifest"
@@ -62,6 +61,9 @@ func resolve(ctx context.Context, sizer imageSizer, manifestPath string) error {
 		resolved[img] = ref
 		fmt.Printf("  %s\n    digest %s\n    download %s  disk %s\n",
 			img, ref.Digest, humanBytes(ref.DownloadBytes), humanBytes(ref.DiskBytes))
+		if lowExpansion(ref) {
+			fmt.Printf("    warning: disk < 1.2× download — unless this image is mostly pre-compressed content, the sizer may be recording compressed sizes (#117)\n")
+		}
 	}
 
 	newContent := replaceImagesBlock(string(data), resolved)
@@ -150,23 +152,20 @@ func renderImagesBlock(resolved map[string]manifest.ImageRef) string {
 }
 
 // dockerSizer resolves sizes by driving the local Docker daemon: the registry
-// manifest for the compressed download size, a `--platform linux/amd64` pull for
-// the uncompressed on-disk size and the pinned (index) digest. molma is x86-only
-// (CLAUDE.md # Load-bearing decisions), so amd64 is the size that matters.
+// manifest for the compressed download size, a `--platform linux/amd64` pull
+// then a `docker save` decompress-count for the uncompressed on-disk size and
+// the pinned (index) digest. molma is x86-only (CLAUDE.md # Load-bearing
+// decisions), so amd64 is the size that matters.
 type dockerSizer struct{}
 
 func (dockerSizer) Size(ctx context.Context, image string) (manifest.ImageRef, error) {
-	// Pull first so .Size and the index RepoDigest are readable locally.
+	// Pull first so the layer blobs and the index RepoDigest are readable locally.
 	if _, err := runDocker(ctx, "pull", "--platform", "linux/amd64", image); err != nil {
 		return manifest.ImageRef{}, err
 	}
-	sizeOut, err := runDocker(ctx, "image", "inspect", image, "--format", "{{.Size}}")
+	diskBytes, err := unpackedDiskBytes(ctx, image)
 	if err != nil {
 		return manifest.ImageRef{}, err
-	}
-	diskBytes, err := strconv.ParseInt(strings.TrimSpace(sizeOut), 10, 64)
-	if err != nil {
-		return manifest.ImageRef{}, fmt.Errorf("parse .Size for %s: %w", image, err)
 	}
 	digest, err := indexDigest(ctx, image)
 	if err != nil {
@@ -298,6 +297,15 @@ func repoOf(image string) string {
 		return image[:colon]
 	}
 	return image
+}
+
+// lowExpansion reports a disk size suspiciously close to the compressed
+// download size (< 1.2×). Genuine images expand 2–4× when unpacked, so a ≈1×
+// ratio is the signature of recording compressed sizes (issue #117) — or,
+// rarely, an image whose content is itself pre-compressed. Advisory only;
+// drives a warning print, never a failure.
+func lowExpansion(ref manifest.ImageRef) bool {
+	return ref.DiskBytes*10 < ref.DownloadBytes*12
 }
 
 // humanBytes renders a byte count in decimal units (MB = 1e6) to match the

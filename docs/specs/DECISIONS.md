@@ -21,6 +21,18 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-10 — Folderless apps can opt into a dedicated non-root identity (`service_user`); manifests never name a UID
+
+**Previously:** every Tier-3 instance ran as a resolved managed UID with `data/` chowned to match, but a **folderless** app's only identity was the brain's euid — **root** in production. An image that writes its data as a non-root user (nginx+php-fpm, LinuxServer-style) then couldn't write the root-owned `data/` dir and couldn't chown it (`CAP_CHOWN` stripped), so it failed to start. The catalog-import ledger captured this as `nonroot-data-ownership` (poznote #90; kimai's secondary finding, #89).
+
+**Now:** a manifest may set `service_user: true`. The brain then allocates a **stable per-instance UID/GID from a reserved app-service band** (below the 3000 user floor, distinct from the fixed 2000/2001 well-known identities), persists it on the instance row, reuses it across recreations, pins the container `user:`, and chowns `data/` to it. The app declares **intent only — it can never name a numeric UID.** A manifest-named UID would be read in the host namespace (molma runs no userns-remap) and could alias a real host principal — a system account, or a molma user ≥ 3000 — so a numeric `user:` is an admission rejection for both doors. `service_user` is folderless-only; a folder app already runs as a managed non-root identity (the owner, or the molma-app identity).
+
+**Why:** smallest mechanism that unblocks the broad "runs as a non-root user and owns its own data" class while preserving the model's core invariant — *every running UID is a molma-managed principal.* A free-form declared UID was rejected on exactly that ground: handing an app a say over its host UID hands a compromised app (a top adversary in `THREAT_MODEL.md`) a say over its host identity. Allocating from a reserved band follows the systemd `DynamicUser=`/`StateDirectory=` and Kubernetes `fsGroup` pattern — the platform owns volume ownership, the app declares the need — and keeping the identity *stable* (not transient like `DynamicUser`) leaves a future cross-app data grant able to reference it. Deliberately **scoped to images that adopt the runtime user**: images that hardcode a *different* internal UID or `setuid`-drop to a fixed service user (poznote, kimai) need user-namespace remap and stay curation-rejects until that lands (`NEXT.md`).
+
+**Affected docs:** `APP_ISOLATION.md` (# Runtime identity & data ownership — new section), `APP_MANIFEST.md` (# B, # Locked decisions), `docs/dev/catalog-import-gaps.md` (`nonroot-data-ownership` status), `NEXT.md` (userns-remap follow-on).
+
+---
+
 ## 2026-06-09 — Tier-1 managed services grow MySQL + MariaDB types (#108)
 
 **Previously:** the v1 Tier-1 catalog was Postgres (15, 16) + Redis (7), with MariaDB explicitly parked as a post-v1 candidate ("some apps require it specifically — Nextcloud, WordPress") behind the "3+ store apps actually want them" bar.

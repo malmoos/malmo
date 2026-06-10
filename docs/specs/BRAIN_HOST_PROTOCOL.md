@@ -93,7 +93,7 @@ GET /v1/system/resources
   }
 ```
 
-**Live system-resources sample (`GET /v1/system/resources`).** Pattern A; the host source for the all-users live-resources view (`LOCAL_ANALYTICS.md` # Real-time system resources). Returns the **raw cumulative counters** from `/proc/stat`, `/proc/meminfo`, `/proc/loadavg`, `/proc/net/dev`, `/sys/block/<dev>/stat` plus a monotonic `ts_ns`. host-agent is stateless — it reads on request and computes no rates; the brain polls once per second *while a UI is watching*, diffs successive samples (rate denominator = `ts_ns` delta), and fans the derived rates out over its own SSE channel. host-agent applies the interface/device allowlist — physical LAN NICs + mesh, excluding `lo`/`docker0`/`veth*`/`br-*`, whole-disk devices only — so the brain never sees container-bridge noise. Distinct from `GET /v1/health/system`, which is a coarse 60s health poll, not a 1 Hz live feed.
+**Live system-resources sample (`GET /v1/system/resources`).** Pattern A; the host source for the all-users live-resources view (`LOCAL_ANALYTICS.md` # Real-time system resources). Returns the **raw cumulative counters** from `/proc/stat`, `/proc/meminfo`, `/proc/loadavg`, `/proc/net/dev`, `/proc/diskstats` plus a monotonic `ts_ns`. host-agent is stateless — it reads on request and computes no rates; the brain polls once per second *while a UI is watching*, diffs successive samples (rate denominator = `ts_ns` delta), and fans the derived rates out over its own SSE channel. host-agent applies the interface/device allowlist — physical LAN NICs + mesh, excluding `lo`/`docker0`/`veth*`/`br-*`, whole-disk devices only — so the brain never sees container-bridge noise. Distinct from `GET /v1/health/system`, which is a coarse 60s health poll, not a 1 Hz live feed.
 
 **Health findings report (`GET /v1/health/system`).** The brain can't read host hardware directly (it's containerized behind the socket-proxy), so all *physical* health detection — SMART, `statfs`, mount flags, `systemctl is-active`, memory pressure, the pending-reboot flag (`/var/run/reboot-required`) — is host-agent's job. host-agent samples on its own cadence and the brain polls this one report on the 60s heartbeat, reconciling findings into typed health issues (`HEALTH.md` # Detector catalog, locus B). It returns findings across domains (storage, drives, services, resources, time, system) in one payload — **not** a proliferation of per-domain endpoints — so the brain's `ApplyFindings(category, …)` reconcile can clear-absent / raise-present per category atomically. This supersedes the slice-1 single-purpose storage report (`/run/molma/health/storage.json` boot reporter stays; the polled endpoint generalizes). See `DECISIONS.md` 2026-05-29.
 
@@ -149,6 +149,20 @@ GET /v1/identity/well-known
 ```
 
 `molma_app_uid`/`molma_app_gid` is the shared service identity stamped as the compose `user:` for household instances; `molma_shared_gid` is the GID added via `group_add` whenever any folder elects the shared source (`/srv/molma/shared/<Folder>/`), in either scope. The real host-agent resolves these from `/etc/passwd` and `/etc/group` (`os/user.Lookup("molma-app")`, `os/user.LookupGroup("molma-shared")`); these accounts are provisioned by the box build, not by host-agent. The fake host-agent returns fixed dev constants (`2000`/`2000`/`2001`) that sit below the per-user `[3000, 3999]` range so service identities never collide with hashed user UIDs. See `APP_ISOLATION.md` # User content and `USERS_AND_GROUPS.md` # Group reference.
+
+**App-service identity allocation.** A folderless app declaring `service_user: true` runs as a dedicated, molma-allocated non-root identity (`APP_ISOLATION.md` # Runtime identity & data ownership). host-agent owns the reserved **app-service band [2100, 2999]** — below the molma user floor (`UID_MIN` 3000), above the fixed 2000/2001 well-knowns, with 2002–2099 left as headroom for future fixed identities — and exposes allocation as a sibling of the well-known endpoint:
+
+```
+POST /v1/identity/app-service
+  { "instance_id": "navidrome-20260610t101500" }
+  → 200 OK  { "uid": 2100, "gid": 2100 }
+
+POST /v1/identity/app-service/release
+  { "uid": 2100 }
+  → 200 OK
+```
+
+The brain calls allocate once during install, persists the pair on the instance row, and never re-requests it — the identity is stable for the life of the instance. Release runs at uninstall (and on install rollback); it is idempotent, and a UID outside the band is a 400 — the endpoint must never be usable to delete an arbitrary account. The real host-agent reserves the number by creating a real system account + group named `molma-svc-<uid>` (`useradd --system`, nologin shell, no home; the instance ID goes in the GECOS comment), so the `/etc/passwd` entry is the durable reservation and the band's state survives restarts with no side state; allocation is idempotent per instance via the GECOS label. The fake host-agent allocates from an in-memory map (not persisted — the brain stores the pair, and the unprivileged dev brain can't chown to it anyway).
 
 **Network endpoints (NetworkManager-backed).** host-agent exposes Pattern A routes that wrap NetworkManager's DBus surface:
 

@@ -61,6 +61,14 @@ type Manifest struct {
 	// manifests omit it.
 	HealthProbe *HealthProbe `yaml:"health_probe,omitempty"`
 
+	// ServiceUser opts a folderless app into a dedicated, molma-allocated
+	// non-root runtime identity instead of the folderless default (the brain's
+	// euid — root in production). Boolean intent only: no UID is namable in a
+	// manifest (APP_MANIFEST.md # B, APP_ISOLATION.md # Runtime identity & data
+	// ownership). Meaningless with a folders grant — admission rejects the
+	// combination. Door-2 synthetic manifests never set it.
+	ServiceUser bool `yaml:"service_user,omitempty"`
+
 	// Secrets declares per-app random secrets the brain generates once at install
 	// and injects as `MOLMA_SECRET_<NAME>` env vars (APP_MANIFEST.md # secrets,
 	// SERVICE_PROVISIONING.md # Env-var injection). Each name maps in the compose

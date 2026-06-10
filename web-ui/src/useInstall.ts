@@ -37,7 +37,7 @@ export function useInstall(manifestId: Ref<string>) {
   const dialogScope = ref<Scope>("personal");
   const dialogError = ref<string | null>(null); // 422 election rejection (inline)
   const duplicateInfo = ref<string | null>(null); // 409 duplicate-install (banner)
-  const pendingRequest = ref<InstallRequest | null>(null); // last sent, for confirm retry
+  const pendingRequest = ref<InstallRequest | null>(null); // last sent, for confirm retry + pending-window scoping
   const installingId = ref<string | null>(null); // set once POST is accepted (202)
   const installError = ref<string | null>(null); // failure during the job, after dialog closed
 
@@ -143,6 +143,7 @@ export function useInstall(manifestId: Ref<string>) {
     // flash the consent dialog back open until the retry's 202 lands.
     planOpen.value = false;
     duplicateInfo.value = null;
+    pendingRequest.value = req;
     install.mutate(req);
   }
 
@@ -169,7 +170,20 @@ export function useInstall(manifestId: Ref<string>) {
       : [],
   );
 
-  const installing = computed(() => installingId.value === manifestId.value);
+  // installing drives the page button's "Installing…" disabled state. It must
+  // also cover the POST-pending window (#114): installingId is only set once
+  // the POST is accepted, so between the dialog's Install click and the 202
+  // the button would otherwise read as a plain enabled "Install" (the dialog
+  // has already unmounted on isPending) and a re-click could fire a duplicate
+  // POST. isPending alone can't be used — the composable survives /store/:id
+  // navigation, so a background install for the previous app would mark the
+  // new page as installing; pendingRequest (set before mutate, cleared by the
+  // manifestId watch) scopes it to this app.
+  const installing = computed(
+    () =>
+      installingId.value === manifestId.value ||
+      (install.isPending.value && pendingRequest.value?.manifest_id === manifestId.value),
+  );
 
   return {
     // dialog

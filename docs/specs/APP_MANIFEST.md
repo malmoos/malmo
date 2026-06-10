@@ -84,6 +84,7 @@ preferred_slugs: [photos, photoprism] # subdomain priority list; OS picks first 
 needs_secure_context: false           # optional; default false. See below.
 timezone: system                      # optional; "system" (default) or "utc"
 health_probe: /healthz                # optional; enables the "responding" check. See below.
+service_user: false                   # optional; default false. Dedicated non-root identity for folderless apps. See below.
 ```
 
 **`id` and `preferred_slugs`** must be strict kebab-case — lowercase alphanumerics joined by single internal hyphens (`home-assistant` ✓; `whoami-`, `-x`, `who--ami`, `xn--y`, `Foo` ✗). This keeps the `<slug>--<user>` personal-instance scheme parseable (`DASHBOARD.md` # instance naming): no leading/trailing hyphen and no `--` run (which would collide with the owner separator and also covers the reserved `xn--` prefix). Catalog CI and the manifest parser both reject violations.
@@ -119,6 +120,10 @@ When set, the brain probes the app on its health-poll tick and raises the **non-
 - **`start_period`** is the grace after the container starts before the probe counts, so a warming-up app doesn't flap the banner on install/update.
 
 Door-2 synthetic manifests omit it; a power user can add it later by editing the manifest, same as any other optional field.
+
+**`service_user`** declares that the app writes its data as a **non-root** user and should run under a dedicated, molma-allocated service identity rather than the folderless default (the brain's euid — root in production). Set it for nginx+php-fpm / LinuxServer-style images whose processes drop to a service user and so can't write molma's root-owned `data/` dir. When `true`, the brain allocates a stable per-instance UID/GID from its reserved app-service band, pins the container `user:`, and chowns the instance `data/` dir to it (`APP_ISOLATION.md` # Runtime identity & data ownership).
+
+The field is a **boolean intent, never a number** — you cannot name a UID; molma owns the value, precisely so a manifest can't alias a host principal (a numeric `user:` is an admission rejection). It is meaningful only for **folderless** apps: an app with `folders` already runs as a managed non-root identity (the owner, or the shared molma-app identity), so combining `service_user: true` with a folder grant is rejected. It does **not** help an image that hardcodes a *different* internal UID and ignores the runtime user (a php-fpm pool pinned to `www-data`, an entrypoint that `setuid`-drops to a fixed user) — that class waits on user-namespace remap (`APP_ISOLATION.md` # Not in v1).
 
 ### B2. Resources (recommended, never a limit)
 
@@ -409,6 +414,7 @@ permissions:
 - **`folders` mount at a fixed path + injected env var (store apps).** A store manifest declares folder + `mode` + `scope` but no in-container path; the brain mounts each at `/molma/<folder>` and injects `MOLMA_FOLDER_<NAME>`. The app's compose maps that variable to its own library path. `mode` defaults to `read`. Same injection pattern as `MOLMA_SERVICE_*` / `MOLMA_DATA_DIR`. **Door-2 custom apps diverge:** their verbatim compose has no author to map the env var, so a Door-2 folder grant carries an explicit `target` (the destination path the admin types) and the brain binds straight there. `target` is Door-2-only; store grants omit it (# Custom container — synthetic manifest, `DECISIONS.md` 2026-06-02).
 - **`gpu` is its own field, separate from `devices`.** `devices` passes through explicit `/dev/...` paths; `gpu: true` selects the platform GPU runtime. No-GPU box fails at the capacity check.
 - **`app_managed_user_content: true`** is the opt-in for apps that don't expose user content via use-case folders. Triggers an install-time warning. Curated store prefers apps without it.
+- **`service_user: true`** opts a *folderless* app into a dedicated, molma-allocated non-root runtime identity — stable per instance, drawn from a reserved app-service band below the 3000 user floor; the brain pins `user:` and chowns `data/` to it. The manifest declares **intent only — no numeric UID is namable** (a host-namespace UID could alias a real principal under molma's no-userns-remap model); a numeric `user:`, or `service_user: true` alongside a `folders` grant, is an admission rejection. Does not cover images that hardcode a *different* non-root internal UID (deferred to userns-remap, `NEXT.md`). `APP_ISOLATION.md` # Runtime identity & data ownership, `DECISIONS.md` 2026-06-10.
 - **Scope (household vs. personal) is installer-elected, not a manifest field.** No `multi_user.mode`. Admins choose household or personal; members install personal only (`DASHBOARD.md`, `DECISIONS.md` 2026-05-29). Guest-sharing and household visibility are deferred and not manifest fields.
 - **No added Linux capabilities for store apps.** Override is `cap_drop: [ALL]`, adds none; admission rejects `cap_add`. Capability / `privileged` / Docker-socket needs go through Door-2 or Tier 2. A reviewed `permissions.capabilities` escape hatch is not in the v1 store schema (open in `NEXT.md`).
 - **Bind mounts only — no Docker named volumes for app data.** All data lives under the instance's `data/` dir.
