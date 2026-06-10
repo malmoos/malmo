@@ -1,16 +1,16 @@
 <script setup lang="ts">
 // Settings → Activity — the audit-log browser (LOGGING.md # Activity (audit log),
-// issue #11). Consumes the already-built GET /api/v1/audit: admins see the full
-// box-wide feed, members see only events where they are the actor or the target.
-// The brain enforces that split server-side (LOGGING.md # Visibility rules) —
-// this view renders whatever the API returns and does no client-side row
+// issue #11). Lives as a section of the Settings left-nav shell
+// (SettingsLayout.vue). Consumes the already-built GET /api/v1/audit: admins see
+// the full box-wide feed, members see only events where they are the actor or the
+// target. The brain enforces that split server-side (LOGGING.md # Visibility
+// rules) — this view renders whatever the API returns and does no client-side row
 // filtering. Open to all authenticated users (not admin-gated), unlike the
-// sibling Users view.
+// sibling Users section.
 import { computed } from "vue";
-import { RouterLink } from "vue-router";
 import { useQuery, useInfiniteQuery } from "@tanstack/vue-query";
-import { api, type AuditEvent, type User } from "../api";
-import { useAuth } from "../auth";
+import { api, type AuditEvent, type User } from "@/api";
+import { useAuth } from "@/auth";
 
 const { currentUser } = useAuth();
 const isAdmin = computed(() => currentUser.value?.role === "admin");
@@ -143,13 +143,7 @@ function exportJson() {
 </script>
 
 <template>
-  <div class="space-y-6 pt-2">
-    <div class="flex items-center gap-2">
-      <RouterLink to="/settings" class="text-sm text-muted-foreground hover:text-foreground">← Settings</RouterLink>
-      <span class="text-sm text-muted-foreground">/</span>
-      <span class="text-sm font-medium">Activity</span>
-    </div>
-
+  <div class="space-y-6">
     <div class="flex items-center justify-between gap-2">
       <p class="text-sm text-muted-foreground">
         {{ isAdmin ? "Everything that happened on this box." : "Your account activity." }}

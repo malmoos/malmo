@@ -63,8 +63,14 @@ web-ui/
     │   ├── AppDetailView.vue   # /store/:id — app detail page; Install lives here
     │   ├── CustomInstallView.vue  # Door-2 custom-container form (admin-only)
     │   ├── FilesView.vue
-    │   ├── SettingsView.vue
-    │   └── UsersView.vue       # admin-only, nested under Settings
+    │   └── settings/           # Settings left-nav shell + its sections
+    │       ├── SettingsLayout.vue        # sidebar + nested-route content pane
+    │       ├── AccountSection.vue        # identity + self-service password change
+    │       ├── NotificationsSection.vue  # per-category bell mutes
+    │       ├── InstalledAppsSection.vue  # manage/uninstall/logs list
+    │       ├── ActivitySection.vue       # audit-log browser (all users)
+    │       ├── UsersSection.vue          # admin-only user management
+    │       └── AboutSection.vue          # product identity
     │
     └── components/         # reusable chrome + dialogs
         ├── AppShell.vue        # signed-in chrome; mounts useEvents() once
@@ -121,7 +127,9 @@ Regenerate after any brain DTO change, and re-export the new schema as a friendl
 
 ## Recipes
 
-**Add a screen:** create `views/FooView.vue` (`<script setup>`), add a lazy route in `router.ts`, link it from `Dock.vue` or the relevant parent. Admin-only? Guard the role in the view like `CustomInstallView`/`UsersView`.
+**Add a screen:** create `views/FooView.vue` (`<script setup>`), add a lazy route in `router.ts`, link it from `Dock.vue` or the relevant parent. Admin-only? Guard the role in the view like `CustomInstallView`/`UsersSection`.
+
+**Add a Settings section:** create `views/settings/FooSection.vue`, add a nested child route under `/settings` in `router.ts`, and add a nav item to `SettingsLayout.vue` (`adminOnly: true` hides it from members). The section renders inside the shell's content pane — no breadcrumb or back-link; the sidebar is the navigation.
 
 **Fetch brain data:** `useQuery({ queryKey: ["foo"], queryFn: () => api.get<Foo>("/foo") })`. If the brain emits an SSE event when `foo` changes, add that event kind to `useEvents.ts` to invalidate `["foo"]`. Never copy query results into a standalone `ref`.
 

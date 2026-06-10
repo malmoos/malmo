@@ -1,7 +1,10 @@
 // Vue Router 4, history mode (WEB_UI.md: Caddy serves index.html for unmatched
 // routes). The four destinations mirror the dock in DASHBOARD.md # global
-// navigation. Activity and Users live *under* Settings as role-gated routes
-// (not built yet); they'll nest here when AUTH.md gating lands.
+// navigation. Settings is a left-nav shell (SettingsLayout) whose sections —
+// Account, Notifications, Installed apps, Activity, Users, About — are nested
+// child routes; the right pane is the shell's <RouterView>. Activity is open to
+// all signed-in users; Users is admin-only (the section guards the role, and the
+// shell hides its nav item from members). Role gating per AUTH.md # Roles.
 import { createRouter, createWebHistory, type RouteRecordRaw } from "vue-router";
 
 const routes: RouteRecordRaw[] = [
@@ -16,13 +19,23 @@ const routes: RouteRecordRaw[] = [
   // App detail page (APP_STORE.md # Catalog schema) — the browse grid links here;
   // it's where the description, screenshots, and the Install flow live.
   { path: "/store/:id", name: "store-app", component: () => import("@/views/AppDetailView.vue") },
-  { path: "/settings", name: "settings", component: () => import("@/views/SettingsView.vue") },
-  // Sub-routes under Settings (DASHBOARD.md # global navigation, AUTH.md # Roles).
-  // Users is admin-only (the view guards the role, CustomInstallView pattern);
-  // Activity is open to all authenticated users — members see only their own
-  // events, enforced server-side (LOGGING.md # Visibility rules).
-  { path: "/settings/users", name: "settings-users", component: () => import("@/views/UsersView.vue") },
-  { path: "/settings/activity", name: "settings-activity", component: () => import("@/views/ActivityView.vue") },
+  // Settings shell + its sections (DASHBOARD.md # global navigation, AUTH.md #
+  // Roles). The bare /settings redirects to Account, the default landing. The old
+  // /settings/users and /settings/activity paths are preserved here as the same
+  // nested children, so existing links keep working.
+  {
+    path: "/settings",
+    component: () => import("@/views/settings/SettingsLayout.vue"),
+    children: [
+      { path: "", redirect: "/settings/account" },
+      { path: "account", name: "settings-account", component: () => import("@/views/settings/AccountSection.vue") },
+      { path: "notifications", name: "settings-notifications", component: () => import("@/views/settings/NotificationsSection.vue") },
+      { path: "apps", name: "settings-apps", component: () => import("@/views/settings/InstalledAppsSection.vue") },
+      { path: "activity", name: "settings-activity", component: () => import("@/views/settings/ActivitySection.vue") },
+      { path: "users", name: "settings-users", component: () => import("@/views/settings/UsersSection.vue") },
+      { path: "about", name: "settings-about", component: () => import("@/views/settings/AboutSection.vue") },
+    ],
+  },
   // Recovery is reachable while logged OUT (AUTH.md # Using the recovery code).
   // It's registered here so the catch-all below doesn't redirect the path away;
   // App.vue renders RecoverView directly in its logged-out branch, since the

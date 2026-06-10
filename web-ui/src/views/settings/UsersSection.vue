@@ -1,5 +1,8 @@
 <script setup lang="ts">
 // Settings → Users — admin-only user management (USERS_AND_GROUPS.md, issue #10).
+// Lives as a section of the Settings left-nav shell (SettingsLayout.vue, which
+// hides this nav item from members); this view also redirects members away as
+// defence in depth.
 // Consumes: GET /users, POST /users, PATCH /users/{id} (role), DELETE /users/{id},
 // POST /users/{id}/password. Guard rejections (409 last-admin, 409 self-delete/self-
 // demotion, 409 duplicate) surface as inline error messages; controls are never
@@ -7,11 +10,11 @@
 // elevation window for these ops (USERS_AND_GROUPS.md # Elevation in the UI), so the
 // first mutation re-prompts for the password via ElevateDialog and retries.
 import { ref, watch } from "vue";
-import { RouterLink, useRouter } from "vue-router";
+import { useRouter } from "vue-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/vue-query";
-import { api, ApiError, type User } from "../api";
-import { withElevation } from "../elevate";
-import { useAuth } from "../auth";
+import { api, ApiError, type User } from "@/api";
+import { withElevation } from "@/elevate";
+import { useAuth } from "@/auth";
 
 const router = useRouter();
 const qc = useQueryClient();
@@ -132,13 +135,7 @@ const doResetPassword = useMutation({
 </script>
 
 <template>
-  <div class="space-y-6 pt-2">
-    <div class="flex items-center gap-2">
-      <RouterLink to="/settings" class="text-sm text-muted-foreground hover:text-foreground">← Settings</RouterLink>
-      <span class="text-sm text-muted-foreground">/</span>
-      <span class="text-sm font-medium">Users</span>
-    </div>
-
+  <div class="space-y-6">
     <!-- Create user form -->
     <section class="space-y-3">
       <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Add user</h2>

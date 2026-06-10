@@ -4,7 +4,7 @@
 // they collapse it — mount drives the SSE open/close, so the brain only follows
 // host-agent while a panel is on screen.
 //
-// Visibility is pre-gated by the caller (SettingsView only renders the toggle
+// Visibility is pre-gated by the caller (the Installed apps section only renders the toggle
 // when the viewer may see the logs): admins always, plus a member viewing their
 // own personal app. The brain enforces the same rule (403/404) as defense in
 // depth — but EventSource can't read a non-200 status, so pre-gating avoids a
