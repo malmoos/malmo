@@ -143,6 +143,7 @@ export function useInstall(manifestId: Ref<string>) {
     // flash the consent dialog back open until the retry's 202 lands.
     planOpen.value = false;
     duplicateInfo.value = null;
+    pendingRequest.value = req;
     install.mutate(req);
   }
 
