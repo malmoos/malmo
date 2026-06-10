@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/molmaos/molma/internal/admission"
@@ -118,6 +119,14 @@ type Manager struct {
 	healthWait time.Duration
 	// healthPoll is the inter-poll interval; production uses 2s.
 	healthPoll time.Duration
+
+	// instLocks serializes lifecycle ops on a single existing instance
+	// (APP_LIFECYCLE.md # concurrency — one op at a time per instance). Stop,
+	// Start, and Uninstall all take the per-id lock so a stop can't race an
+	// uninstall (or each other). Install allocates a fresh id, so it has nothing
+	// to contend with and skips the lock.
+	locksMu   sync.Mutex
+	instLocks map[string]*sync.Mutex
 }
 
 func NewManager(st *store.Store, cat *catalog.Catalog, host HostDriver, cd CaddyDriver, docker DockerDriver, bus *events.Bus, stateDir string) *Manager {
@@ -125,7 +134,22 @@ func NewManager(st *store.Store, cat *catalog.Catalog, host HostDriver, cd Caddy
 		store: st, catalog: cat, host: host, caddy: cd, docker: docker,
 		admit: admission.Check, bus: bus, stateDir: stateDir,
 		healthWait: healthWaitTimeout, healthPoll: 2 * time.Second,
+		instLocks: map[string]*sync.Mutex{},
 	}
+}
+
+// lockInstance acquires the per-instance lock (creating it on first use) and
+// returns the unlock func. Callers `defer unlock()`. See instLocks.
+func (m *Manager) lockInstance(id string) func() {
+	m.locksMu.Lock()
+	lk, ok := m.instLocks[id]
+	if !ok {
+		lk = &sync.Mutex{}
+		m.instLocks[id] = lk
+	}
+	m.locksMu.Unlock()
+	lk.Lock()
+	return lk.Unlock
 }
 
 // SetAdmitter overrides the default compose admitter (admission.Check). Tests
@@ -524,6 +548,7 @@ func (m *Manager) waitHealthy(ctx context.Context, id, mainService string, timeo
 // Uninstall tears down an instance (APP_LIFECYCLE.md: compose down -v, remove
 // route + mDNS, rm instance dir). Skeleton always deletes data.
 func (m *Manager) Uninstall(ctx context.Context, id string) error {
+	defer m.lockInstance(id)()
 	inst, err := m.store.Get(id)
 	if err != nil {
 		return err
@@ -561,6 +586,157 @@ func (m *Manager) Uninstall(ctx context.Context, id string) error {
 	slog.Info("app uninstalled", "instance_id", id, "name", inst.Name)
 	m.reclaimImages(ctx, id, images)
 	return nil
+}
+
+// ErrNotRunning / ErrNotStopped are returned by Stop/Start when the instance
+// is not in the state the transition requires. The API maps them to 409 so the
+// UI can tell "illegal transition" apart from a missing app (404) or a host
+// fault (500). State guards are the only place lifecycle discriminates a
+// conflict, so these are the only two sentinels here.
+var (
+	ErrNotRunning = errors.New("app is not running")
+	ErrNotStopped = errors.New("app is not stopped")
+)
+
+// Stop halts an instance's containers without removing them
+// (APP_LIFECYCLE.md # stop, start, uninstall): `docker compose stop`, never
+// `down` — data, network, Caddy route, and mDNS all stay in place. The Caddy
+// route flips to the "stopped" splash so the hostname serves a styled page
+// instead of a connection error. Legal only from `running`.
+func (m *Manager) Stop(ctx context.Context, id string) error {
+	defer m.lockInstance(id)()
+	inst, err := m.store.Get(id)
+	if err != nil {
+		return err
+	}
+	if inst.State != "running" {
+		return fmt.Errorf("%w (state=%s)", ErrNotRunning, inst.State)
+	}
+	// Commit desired state FIRST (brain-commits-first, same as Start). If
+	// ComposeStop then fails, the row already reads `stopped`, so the reconcile
+	// pass sees "stopped but containers up" and retries the stop — converging on
+	// the user's intent. The reverse order (stop, then write) would leave a
+	// `running` row on a write failure, and reconcile would *restart* the
+	// containers, silently undoing the stop.
+	if err := m.store.SetState(id, "stopped"); err != nil {
+		return fmt.Errorf("set state stopped: %w", err)
+	}
+	inst.State = "stopped"
+	if out, err := m.docker.ComposeStop(ctx, m.instanceDir(id), "molma-"+id); err != nil {
+		return fmt.Errorf("compose stop: %w\n%s", err, out)
+	}
+	// Best-effort splash flip — the route already exists; a failure here leaves
+	// the real upstream pointing at now-stopped containers (which Caddy will fail
+	// to reach), so it's degraded UX, not a reason to fail the stop.
+	host := routeHost(inst)
+	man, err := m.loadInstanceManifest(id)
+	appName := inst.Name
+	if err == nil {
+		appName = man.Name
+	}
+	if err := m.caddy.AddSplashRoute(ctx, id, host, appName, "stopped"); err != nil {
+		slog.Warn("stop: caddy splash flip failed (continuing)",
+			"instance_id", id, "host", host, "err", err)
+	}
+	m.emitState(inst, "running")
+	slog.Info("app stopped", "instance_id", id, "name", inst.Name)
+	return nil
+}
+
+// Start brings a stopped instance back up (APP_LIFECYCLE.md # stop, start,
+// uninstall). It uses `docker compose up -d` rather than `compose start` — the
+// same op the reconcile pass uses — so dependency ordering and one-shot
+// completion-gate jobs (#92) behave exactly as on install, and the op is
+// idempotent. Legal only from `stopped`.
+//
+// State is written to `running` BEFORE the docker op (brain-commits-first): a
+// crash mid-start leaves a `running` row the reconcile pass finishes, the same
+// recovery path a reboot takes. The Caddy route flips to the "starting" splash,
+// then to the real upstream once main_service is healthy.
+func (m *Manager) Start(ctx context.Context, id string) error {
+	defer m.lockInstance(id)()
+	inst, err := m.store.Get(id)
+	if err != nil {
+		return err
+	}
+	if inst.State != "stopped" {
+		return fmt.Errorf("%w (state=%s)", ErrNotStopped, inst.State)
+	}
+	man, err := m.loadInstanceManifest(id)
+	if err != nil {
+		return fmt.Errorf("load manifest: %w", err)
+	}
+	host := routeHost(inst)
+
+	// Commit desired state first, then flip the route to the starting splash so
+	// the hostname stops serving the "stopped" page the moment the user acts.
+	if err := m.store.SetState(id, "running"); err != nil {
+		return fmt.Errorf("set state running: %w", err)
+	}
+	inst.State = "running"
+	if err := m.caddy.AddSplashRoute(ctx, id, host, man.Name, "starting"); err != nil {
+		slog.Warn("start: caddy splash flip failed (continuing)",
+			"instance_id", id, "host", host, "err", err)
+	}
+
+	// Two serial budgets, matching the install transaction (steps 10-11): the
+	// `up -d` is bounded by healthWait so a never-completing completion gate (#92)
+	// fails cleanly instead of wedging, then waitHealthy spends a fresh healthWait
+	// on the health poll. Worst-case wall time is therefore ~2×healthWait — the
+	// same as install, deliberately so the two paths behave identically.
+	upCtx, cancelUp := context.WithTimeout(ctx, m.healthWait)
+	out, upErr := m.docker.ComposeUp(upCtx, m.instanceDir(id), "molma-"+id)
+	cancelUp()
+	if upErr != nil {
+		return m.startFailed(ctx, inst, host, man.Name, fmt.Errorf("compose up: %w\n%s", upErr, out))
+	}
+	if err := m.waitHealthy(ctx, id, man.MainService, m.healthWait); err != nil {
+		return m.startFailed(ctx, inst, host, man.Name, fmt.Errorf("%s did not become healthy: %w", man.Name, err))
+	}
+
+	// Healthy — flip the splash to the real container.
+	upstream := fmt.Sprintf("molma-%s-%s:%d", id, man.MainService, man.MainPort)
+	if err := m.caddy.AddRoute(ctx, id, host, upstream); err != nil {
+		slog.Warn("start: caddy upstream flip failed (continuing)",
+			"instance_id", id, "host", host, "upstream", upstream, "err", err)
+	}
+	m.emitState(inst, "stopped")
+	slog.Info("app started", "instance_id", id, "name", inst.Name, "upstream", upstream)
+	return nil
+}
+
+// startFailed parks a start that came up but never went healthy in the same
+// `failed` state install uses (APP_LIFECYCLE.md install transaction, steps
+// 10-11 failure): instance dir kept for inspection, route flipped to the
+// "failed" splash. The containers are left up — Docker keeps retrying — so the
+// app can recover without a manual start.
+func (m *Manager) startFailed(ctx context.Context, inst store.Instance, host, appName string, cause error) error {
+	// Both flips are best-effort but must leave a trace — a silent failure here
+	// strands the route on the "starting" splash (wrong page, no log) or leaves
+	// the row at `running` while the app is down (reconcile retries, but the
+	// operator gets no signal). Mirror the warn-and-continue pattern in Stop.
+	if err := m.caddy.AddSplashRoute(ctx, inst.ID, host, appName, "failed"); err != nil {
+		slog.Warn("startFailed: caddy splash flip failed", "instance_id", inst.ID, "host", host, "err", err)
+	}
+	if err := m.store.SetState(inst.ID, "failed"); err != nil {
+		slog.Warn("startFailed: set state failed (row stays running; reconcile will retry)",
+			"instance_id", inst.ID, "err", err)
+	}
+	inst.State = "failed"
+	m.emitState(inst, "running")
+	slog.Warn("app start failed", "instance_id", inst.ID, "name", inst.Name, "err", cause)
+	return cause
+}
+
+// routeHost is the hostname an instance's Caddy route is keyed on: the published
+// mDNS name when we have one (it may be the box-qualified collision fallback),
+// else the reconstructed primary `<slug>.local`. Mirrors the fallback chain in
+// install + reassertRouting so the three never disagree.
+func routeHost(inst store.Instance) string {
+	if inst.MDNSName != "" {
+		return inst.MDNSName
+	}
+	return inst.Slug + protocol.AppHostSuffix
 }
 
 // releaseServiceIdentity returns an allocated app-service identity to the

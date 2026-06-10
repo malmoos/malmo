@@ -38,7 +38,7 @@ const items = computed(() =>
 </script>
 
 <template>
-  <div class="flex flex-col gap-6 pt-2 md:flex-row md:gap-8">
+  <div class="flex h-full min-h-0 flex-col gap-6 pt-2 md:flex-row md:gap-8">
     <!-- Left nav. Horizontal scroll strip on narrow screens, sticky rail on md+. -->
     <nav
       class="-mx-1 flex shrink-0 gap-1 overflow-x-auto px-1 md:mx-0 md:w-56 md:flex-col md:overflow-visible md:px-0"
@@ -55,8 +55,9 @@ const items = computed(() =>
       </RouterLink>
     </nav>
 
-    <!-- Content pane — the active section. -->
-    <div class="min-w-0 flex-1">
+    <!-- Content pane — the active section. flex-col + min-h-0 so a section can
+         host a full-height child (e.g. the app detail page's expanded logs). -->
+    <div class="flex min-h-0 min-w-0 flex-1 flex-col">
       <RouterView />
     </div>
   </div>
