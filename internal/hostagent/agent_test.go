@@ -586,6 +586,63 @@ func TestSystemResources_TimestampIsMonotonic(t *testing.T) {
 	}
 }
 
+// --- system-resources sampler seam ---
+
+type stubSampler struct {
+	res protocol.SystemResources
+	err error
+}
+
+func (s *stubSampler) Sample() (protocol.SystemResources, error) { return s.res, s.err }
+
+// When a System sampler is wired (cmd/host-agent-real injects
+// procsource.Sampler), the handler serves its snapshot verbatim instead of the
+// synthetic counters.
+func TestSystemResources_DelegatesToSampler(t *testing.T) {
+	a, mux := newTestAgent(&stubVerifier{})
+	a.System = &stubSampler{res: protocol.SystemResources{
+		TsNs:    42,
+		CPU:     protocol.CPUCounters{TotalJiffies: 1000, IdleJiffies: 800},
+		LoadAvg: [3]float64{1.5, 1.0, 0.5},
+		Mem:     protocol.MemCounters{TotalBytes: 100, AvailableBytes: 60, UsedBytes: 40},
+		Net:     []protocol.NetCounters{{Iface: "enp3s0", RxBytes: 7, TxBytes: 9}},
+		Disk:    []protocol.DiskCounters{{Dev: "nvme0n1", ReadBytes: 512, WriteBytes: 1024}},
+		UptimeS: 84021,
+	}}
+	w := get(t, mux, "/v1/system/resources")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	s := decodeBody[protocol.SystemResources](t, w)
+	if s.TsNs != 42 || s.CPU.TotalJiffies != 1000 || s.UptimeS != 84021 {
+		t.Errorf("sampler snapshot not served verbatim: %+v", s)
+	}
+	if len(s.Net) != 1 || s.Net[0].Iface != "enp3s0" || len(s.Disk) != 1 || s.Disk[0].Dev != "nvme0n1" {
+		t.Errorf("net/disk not served verbatim: net=%+v disk=%+v", s.Net, s.Disk)
+	}
+}
+
+// A sampler error is a 500 the brain's poller logs and skips (keeping its
+// previous rate baseline) — never a silent fall-through to synthetic counters,
+// which would corrupt the rate diff with a fake baseline.
+func TestSystemResources_SamplerError_Returns500(t *testing.T) {
+	a, mux := newTestAgent(&stubVerifier{})
+	a.System = &stubSampler{err: errors.New("proc unreadable")}
+	w := get(t, mux, "/v1/system/resources")
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", w.Code)
+	}
+	var resp struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Code != "sample-failed" {
+		t.Errorf("code = %q, want sample-failed", resp.Code)
+	}
+}
+
 func TestPublishUnpublish_RoundTrip(t *testing.T) {
 	_, mux := newTestAgent(&stubVerifier{})
 
