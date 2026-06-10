@@ -389,7 +389,7 @@ func (a *Agent) systemResources(w http.ResponseWriter, r *http.Request) {
 		res, err := a.System.Sample()
 		if err != nil {
 			slog.Error("system-resources: sampler error", "err", err)
-			writeErr(w, http.StatusInternalServerError, "sample-failed", err.Error())
+			writeErr(w, http.StatusInternalServerError, "sample-failed", "")
 			return
 		}
 		writeJSON(w, http.StatusOK, res)
