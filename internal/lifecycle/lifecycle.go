@@ -224,11 +224,16 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 		}
 	}
 
-	// 1-2. Manifest validated by the caller; admit the compose. Admission runs
-	// for BOTH doors and writes no state on rejection (APP_LIFECYCLE.md #
-	// admission policy).
+	// 1-2. Manifest validated by the caller; admit the compose + the manifest's
+	// isolation declarations. Admission runs for BOTH doors and writes no state
+	// on rejection (APP_LIFECYCLE.md # admission policy). CheckManifest is pure,
+	// so it doesn't go through the Admitter seam (which exists only to skip the
+	// docker-CLI syntax pass in tests).
 	step("admitting_compose")
 	if err := m.admit(ctx, composeBytes); err != nil {
+		return store.Instance{}, err
+	}
+	if err := admission.CheckManifest(man); err != nil {
 		return store.Instance{}, err
 	}
 
@@ -261,6 +266,12 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 		// rollback that fires before step 5c.
 		if grants, err := m.store.GetServiceGrants(id); err == nil && len(grants) > 0 {
 			m.dropServiceGrants(context.Background(), id, grants)
+		}
+		// Return any allocated app-service identity to the host's band, read
+		// back from the row before Delete erases it. Zero for a rollback that
+		// fires before step 6 (or for any non-service_user instance).
+		if row, err := m.store.Get(id); err == nil && row.ServiceUID != 0 {
+			m.releaseServiceIdentity(context.Background(), id, row.ServiceUID)
 		}
 		_ = m.store.Delete(id)
 		return store.Instance{}, cause
@@ -324,7 +335,10 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	// folders. Folderless apps (and Door-2 custom apps) run as the brain's own
 	// effective UID/GID — the owner of the ./data dir writeInstanceDir just
 	// created (root under the production brain; the dev user under the native
-	// inner-loop brain, so the bind stays writable there too).
+	// inner-loop brain, so the bind stays writable there too) — unless the
+	// manifest declares service_user: true, which swaps in a dedicated
+	// host-allocated identity (APP_ISOLATION.md # Runtime identity & data
+	// ownership).
 	iso := isolation{uid: os.Geteuid(), gid: os.Getegid()}
 	if len(man.Permissions.Folders) > 0 {
 		wk, err := m.host.WellKnownIdentity(ctx)
@@ -346,15 +360,35 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 			}
 			iso.uid, iso.gid, iso.home = rh.UID, rh.GID, rh.HomePath
 		}
+	} else if man.ServiceUser {
+		// Folderless app that writes its data as a non-root user: allocate a
+		// dedicated identity from the host's app-service band and persist it on
+		// the instance row — stable for the life of the instance (recreations
+		// reuse the row + override; nothing re-allocates), released at
+		// uninstall. Persisted before the chown/override so every later failure
+		// path can read it back for release.
+		alloc, err := m.host.AllocateAppServiceIdentity(ctx, id)
+		if err != nil {
+			return rollback(fmt.Errorf("allocate app-service identity: %w", err))
+		}
+		if err := m.store.SetServiceIdentity(id, alloc.UID, alloc.GID); err != nil {
+			// The row never carried the allocation, so rollback can't see it —
+			// release directly (mirrors the service-grants persist-failure path).
+			m.releaseServiceIdentity(context.Background(), id, alloc.UID)
+			return rollback(fmt.Errorf("persist app-service identity: %w", err))
+		}
+		inst.ServiceUID, inst.ServiceGID = alloc.UID, alloc.GID
+		iso.uid, iso.gid = alloc.UID, alloc.GID
 	}
 
 	// Align the private ./data bind's ownership with the container's runtime
 	// identity so the cap_drop:ALL app can write its own state. No-op when the
-	// runtime UID already owns the dir (folderless apps run as the brain's euid,
-	// which created it). Under the production brain (euid 0) a chown failure is a
-	// real fault; under the unprivileged native dev brain it cannot chown ./data
-	// to a host-agent-assigned UID it does not own, so that case is downgraded to
-	// a warning (folderless apps — the common dev path — are unaffected).
+	// runtime UID already owns the dir (default folderless apps run as the
+	// brain's euid, which created it). Under the production brain (euid 0) a
+	// chown failure is a real fault; under the unprivileged native dev brain it
+	// cannot chown ./data to a host-agent-assigned UID it does not own — folder
+	// or service_user identities alike — so that case is downgraded to a warning
+	// (default folderless apps, the common dev path, are unaffected).
 	if err := os.Chown(filepath.Join(m.instanceDir(id), "data"), iso.uid, iso.gid); err != nil {
 		if os.Geteuid() == 0 {
 			return rollback(fmt.Errorf("chown data dir: %w", err))
@@ -517,10 +551,28 @@ func (m *Manager) Uninstall(ctx context.Context, id string) error {
 		return err
 	}
 	m.dropServiceGrants(ctx, id, grants)
+	// Return the instance's allocated app-service identity to the host's band
+	// (captured in inst before the row was deleted; zero for non-service_user
+	// instances). After teardown, so no container is still running as the UID.
+	if inst.ServiceUID != 0 {
+		m.releaseServiceIdentity(ctx, id, inst.ServiceUID)
+	}
 	m.bus.Publish(events.AppUninstalled, map[string]any{"instance_id": id})
 	slog.Info("app uninstalled", "instance_id", id, "name", inst.Name)
 	m.reclaimImages(ctx, id, images)
 	return nil
+}
+
+// releaseServiceIdentity returns an allocated app-service identity to the
+// host's band. Best-effort like dropServiceGrants: a failed release leaks one
+// band slot (the host-side molma-svc account stays for manual cleanup) and is
+// logged, but never blocks an uninstall or rollback.
+func (m *Manager) releaseServiceIdentity(ctx context.Context, id string, uid int) {
+	if err := m.host.ReleaseAppServiceIdentity(ctx, uid); err != nil {
+		slog.Warn("release app-service identity", "instance_id", id, "uid", uid, "err", err)
+		return
+	}
+	slog.Info("released app-service identity", "instance_id", id, "uid", uid)
 }
 
 // reclaimImages removes the just-uninstalled instance's pinned images from the

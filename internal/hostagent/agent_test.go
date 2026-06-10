@@ -151,11 +151,15 @@ type stubUserMgr struct {
 	deleteCalls            []string
 	resolveHomeCalls       []string
 	wellKnownIdentityCalls int
+	allocateCalls          []string
+	releaseCalls           []int
 	err                    error
 	roleErr                error
 	deleteErr              error
 	resolveHomeErr         error
 	wellKnownIdentityErr   error
+	allocateErr            error
+	releaseErr             error
 	// resolveHomeResult is returned on ResolveHome success; zero value = /home/<user>, 3000, 3000.
 	resolveHomeResult *struct {
 		home     string
@@ -202,6 +206,19 @@ func (s *stubUserMgr) WellKnownIdentity() (int, int, int, error) {
 		return s.wellKnownIdentityResult.appUID, s.wellKnownIdentityResult.appGID, s.wellKnownIdentityResult.sharedGID, nil
 	}
 	return 2000, 2000, 2001, nil
+}
+
+func (s *stubUserMgr) AllocateAppService(instanceID string) (int, int, error) {
+	s.allocateCalls = append(s.allocateCalls, instanceID)
+	if s.allocateErr != nil {
+		return 0, 0, s.allocateErr
+	}
+	return 2100, 2100, nil
+}
+
+func (s *stubUserMgr) ReleaseAppService(uid int) error {
+	s.releaseCalls = append(s.releaseCalls, uid)
+	return s.releaseErr
 }
 
 func TestSetPassword_DelegatesToUserMgrWhenSet(t *testing.T) {
@@ -883,6 +900,164 @@ func TestWellKnownIdentity_UserMgrError_Returns500(t *testing.T) {
 		t.Fatalf("want 500, got %d", w.Code)
 	}
 	if bytes.Contains(w.Body.Bytes(), []byte("molma-app")) {
+		t.Errorf("response leaked system detail: %s", w.Body.String())
+	}
+}
+
+// --- app-service identity tests ---
+
+func allocate(t *testing.T, mux *http.ServeMux, instanceID string) *httptest.ResponseRecorder {
+	t.Helper()
+	return post(t, mux, "/v1/identity/app-service",
+		protocol.AllocateAppServiceIdentityRequest{InstanceID: instanceID})
+}
+
+func release(t *testing.T, mux *http.ServeMux, uid int) *httptest.ResponseRecorder {
+	t.Helper()
+	return post(t, mux, "/v1/identity/app-service/release",
+		protocol.ReleaseAppServiceIdentityRequest{UID: uid})
+}
+
+func TestAllocateAppService_FakeBranch_InBandAndStablePerInstance(t *testing.T) {
+	_, mux := newTestAgent(&stubVerifier{})
+
+	w := allocate(t, mux, "inst_a")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	first := decodeBody[protocol.AllocateAppServiceIdentityResponse](t, w)
+	if first.UID < protocol.AppServiceUIDMin || first.UID > protocol.AppServiceUIDMax {
+		t.Errorf("uid %d outside band [%d, %d]", first.UID, protocol.AppServiceUIDMin, protocol.AppServiceUIDMax)
+	}
+	if first.GID != first.UID {
+		t.Errorf("gid %d != uid %d", first.GID, first.UID)
+	}
+
+	// Idempotent per instance: re-allocating returns the same pair.
+	again := decodeBody[protocol.AllocateAppServiceIdentityResponse](t, allocate(t, mux, "inst_a"))
+	if again != first {
+		t.Errorf("re-allocate for same instance: got %+v, want %+v", again, first)
+	}
+
+	// Distinct across instances.
+	other := decodeBody[protocol.AllocateAppServiceIdentityResponse](t, allocate(t, mux, "inst_b"))
+	if other.UID == first.UID {
+		t.Errorf("second instance got the same uid %d", other.UID)
+	}
+}
+
+func TestAllocateAppService_FakeBranch_ReleaseReturnsUIDToBand(t *testing.T) {
+	_, mux := newTestAgent(&stubVerifier{})
+
+	first := decodeBody[protocol.AllocateAppServiceIdentityResponse](t, allocate(t, mux, "inst_a"))
+	if w := release(t, mux, first.UID); w.Code != http.StatusOK {
+		t.Fatalf("release: want 200, got %d", w.Code)
+	}
+	// The freed number is allocatable again (a NEW instance may receive it).
+	reused := decodeBody[protocol.AllocateAppServiceIdentityResponse](t, allocate(t, mux, "inst_c"))
+	if reused.UID != first.UID {
+		t.Errorf("freed uid not reused: got %d, want %d", reused.UID, first.UID)
+	}
+}
+
+func TestAllocateAppService_MissingInstanceID_Returns400(t *testing.T) {
+	_, mux := newTestAgent(&stubVerifier{})
+	if w := allocate(t, mux, ""); w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", w.Code)
+	}
+}
+
+func TestReleaseAppService_OutOfBandUID_Returns400(t *testing.T) {
+	mgr := &stubUserMgr{}
+	a := New(&stubVerifier{}, NewFakePublisher(".local"))
+	a.UserMgr = mgr
+	mux := http.NewServeMux()
+	a.Mount(mux)
+
+	for _, uid := range []int{0, 1000, protocol.AppServiceUIDMin - 1, protocol.AppServiceUIDMax + 1} {
+		if w := release(t, mux, uid); w.Code != http.StatusBadRequest {
+			t.Errorf("release(%d): want 400, got %d", uid, w.Code)
+		}
+	}
+	// The band guard sits in front of the manager: nothing may be delegated.
+	if len(mgr.releaseCalls) != 0 {
+		t.Errorf("out-of-band release reached UserMgr: %v", mgr.releaseCalls)
+	}
+}
+
+func TestReleaseAppService_FakeBranch_Idempotent(t *testing.T) {
+	_, mux := newTestAgent(&stubVerifier{})
+
+	// Never-allocated in-band UID: 200 no-op.
+	if w := release(t, mux, protocol.AppServiceUIDMin); w.Code != http.StatusOK {
+		t.Fatalf("never-allocated: want 200, got %d", w.Code)
+	}
+
+	// Allocate then release twice: second release must also be 200.
+	first := decodeBody[protocol.AllocateAppServiceIdentityResponse](t, allocate(t, mux, "inst_idem"))
+	if w := release(t, mux, first.UID); w.Code != http.StatusOK {
+		t.Fatalf("first release: want 200, got %d", w.Code)
+	}
+	if w := release(t, mux, first.UID); w.Code != http.StatusOK {
+		t.Fatalf("double release: want 200, got %d", w.Code)
+	}
+}
+
+func TestAllocateAppService_DelegatesToUserMgrWhenSet(t *testing.T) {
+	mgr := &stubUserMgr{}
+	a := New(&stubVerifier{}, NewFakePublisher(".local"))
+	a.UserMgr = mgr
+	mux := http.NewServeMux()
+	a.Mount(mux)
+
+	w := allocate(t, mux, "inst_a")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	resp := decodeBody[protocol.AllocateAppServiceIdentityResponse](t, w)
+	if resp.UID != 2100 || resp.GID != 2100 {
+		t.Errorf("unexpected response: %+v", resp)
+	}
+	if len(mgr.allocateCalls) != 1 || mgr.allocateCalls[0] != "inst_a" {
+		t.Errorf("AllocateAppService calls = %v, want [inst_a]", mgr.allocateCalls)
+	}
+
+	if w := release(t, mux, 2100); w.Code != http.StatusOK {
+		t.Fatalf("release: want 200, got %d", w.Code)
+	}
+	if len(mgr.releaseCalls) != 1 || mgr.releaseCalls[0] != 2100 {
+		t.Errorf("ReleaseAppService calls = %v, want [2100]", mgr.releaseCalls)
+	}
+}
+
+func TestAllocateAppService_UserMgrError_Returns500(t *testing.T) {
+	mgr := &stubUserMgr{allocateErr: errors.New("useradd: UID 2100 is not unique")}
+	a := New(&stubVerifier{}, NewFakePublisher(".local"))
+	a.UserMgr = mgr
+	mux := http.NewServeMux()
+	a.Mount(mux)
+
+	w := allocate(t, mux, "inst_a")
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", w.Code)
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte("useradd")) {
+		t.Errorf("response leaked system detail: %s", w.Body.String())
+	}
+}
+
+func TestReleaseAppService_UserMgrError_Returns500(t *testing.T) {
+	mgr := &stubUserMgr{releaseErr: errors.New("userdel: user molma-svc-2100 is currently used by process 4242")}
+	a := New(&stubVerifier{}, NewFakePublisher(".local"))
+	a.UserMgr = mgr
+	mux := http.NewServeMux()
+	a.Mount(mux)
+
+	w := release(t, mux, 2100)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", w.Code)
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte("userdel")) {
 		t.Errorf("response leaked system detail: %s", w.Body.String())
 	}
 }

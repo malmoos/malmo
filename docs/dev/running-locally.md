@@ -35,7 +35,9 @@ compiles clean; Docker Desktop covers Caddy and app containers.
 - **The dashboard** — all of `web-ui/` (Vue 3 + Vite + npm). Fully OS-agnostic. For its internal code architecture (folders, state model, composables, codegen), see [`web-ui.md`](web-ui.md).
 - **The fake host-agent** (`cmd/host-agent`) — speaks the real
   `../specs/BRAIN_HOST_PROTOCOL.md` wire format over a real UNIX socket, with
-  host ops stubbed. Lets the entire control-plane spine run on a Mac.
+  host ops stubbed. Lets the entire control-plane spine run on a Mac. Its
+  `journal_follow` op streams **real** container output via `docker logs -f`
+  (no journald needed), so the per-app Logs tab shows live logs in the inner loop.
 - **The full inner-loop stack** — `make dev` (Caddy container + fake host-agent
   + brain + Vite), installing apps, SSE, routing, uninstall.
 - **Sample manifests** — `catalog/`.

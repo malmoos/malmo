@@ -216,10 +216,10 @@ const hasLinks = computed(
         <div class="flex gap-2">
           <button
             class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
-            :disabled="install.isPending.value"
+            :disabled="installing"
             @click="handleConfirmDuplicate"
           >
-            {{ install.isPending.value ? "Installing…" : "Install my own copy" }}
+            {{ installing ? "Installing…" : "Install my own copy" }}
           </button>
           <button class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted" @click="closeDialog">
             Cancel

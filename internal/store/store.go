@@ -30,7 +30,15 @@ type Instance struct {
 	MDNSName    string
 	OwnerUserID string
 	Scope       string // ScopeHousehold | ScopePersonal
-	CreatedAt   time.Time
+	// ServiceUID/GID is the dedicated app-service identity allocated for a
+	// folderless `service_user: true` instance (APP_ISOLATION.md # Runtime
+	// identity & data ownership). 0 = none — allocated values are always in
+	// the reserved band (≥ protocol.AppServiceUIDMin), never root. Persisted
+	// so the identity is stable across container recreations and releasable
+	// at uninstall.
+	ServiceUID int
+	ServiceGID int
+	CreatedAt  time.Time
 }
 
 const (
@@ -107,6 +115,8 @@ func (s *Store) migrate() error {
 			mdns_name   TEXT NOT NULL DEFAULT '',
 			owner_user_id TEXT NOT NULL DEFAULT '',
 			scope         TEXT NOT NULL DEFAULT 'household' CHECK (scope IN ('household','personal')),
+			service_uid INTEGER NOT NULL DEFAULT 0,
+			service_gid INTEGER NOT NULL DEFAULT 0,
 			created_at  INTEGER NOT NULL
 		);
 		CREATE TABLE IF NOT EXISTS instance_images (
@@ -279,6 +289,8 @@ func (s *Store) migrate() error {
 		{"sessions", "elevated_until", "ALTER TABLE sessions ADD COLUMN elevated_until INTEGER NOT NULL DEFAULT 0"},
 		{"instances", "owner_user_id", "ALTER TABLE instances ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT ''"},
 		{"instances", "scope", "ALTER TABLE instances ADD COLUMN scope TEXT NOT NULL DEFAULT 'household'"},
+		{"instances", "service_uid", "ALTER TABLE instances ADD COLUMN service_uid INTEGER NOT NULL DEFAULT 0"},
+		{"instances", "service_gid", "ALTER TABLE instances ADD COLUMN service_gid INTEGER NOT NULL DEFAULT 0"},
 	} {
 		has, hErr := s.hasColumn(col.table, col.name)
 		if hErr != nil {
@@ -569,9 +581,9 @@ func (s *Store) Create(i Instance) error {
 		return fmt.Errorf("invalid instance scope %q", i.Scope)
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO instances (id, manifest_id, name, slug, version, state, mdns_name, owner_user_id, scope, created_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		i.ID, i.ManifestID, i.Name, i.Slug, i.Version, i.State, i.MDNSName, i.OwnerUserID, i.Scope, i.CreatedAt.Unix())
+		`INSERT INTO instances (id, manifest_id, name, slug, version, state, mdns_name, owner_user_id, scope, service_uid, service_gid, created_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		i.ID, i.ManifestID, i.Name, i.Slug, i.Version, i.State, i.MDNSName, i.OwnerUserID, i.Scope, i.ServiceUID, i.ServiceGID, i.CreatedAt.Unix())
 	return err
 }
 
@@ -591,12 +603,27 @@ func (s *Store) SetMDNSName(id, name string) error {
 	return err
 }
 
+// SetServiceIdentity persists the allocated app-service UID/GID on the
+// instance row (APP_ISOLATION.md # Runtime identity & data ownership). Written
+// once at install, read back for release at uninstall; never re-rolled — a
+// transient identity would orphan the data it owns.
+func (s *Store) SetServiceIdentity(id string, uid, gid int) error {
+	res, err := s.db.Exec(`UPDATE instances SET service_uid=?, service_gid=? WHERE id=?`, uid, gid, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) Delete(id string) error {
 	_, err := s.db.Exec(`DELETE FROM instances WHERE id=?`, id)
 	return err
 }
 
-const instanceColumns = `id, manifest_id, name, slug, version, state, mdns_name, owner_user_id, scope, created_at`
+const instanceColumns = `id, manifest_id, name, slug, version, state, mdns_name, owner_user_id, scope, service_uid, service_gid, created_at`
 
 func (s *Store) Get(id string) (Instance, error) {
 	return scan(s.db.QueryRow(
@@ -1035,7 +1062,7 @@ type scanner interface{ Scan(dest ...any) error }
 func scan(row scanner) (Instance, error) {
 	var i Instance
 	var created int64
-	err := row.Scan(&i.ID, &i.ManifestID, &i.Name, &i.Slug, &i.Version, &i.State, &i.MDNSName, &i.OwnerUserID, &i.Scope, &created)
+	err := row.Scan(&i.ID, &i.ManifestID, &i.Name, &i.Slug, &i.Version, &i.State, &i.MDNSName, &i.OwnerUserID, &i.Scope, &i.ServiceUID, &i.ServiceGID, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Instance{}, ErrNotFound
 	}
