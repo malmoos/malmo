@@ -64,4 +64,4 @@ images:
   ghcr.io/open-webui/open-webui:0.9.6:
     digest: sha256:90eae5b419e40b4c3dd684582b2c83440b36f9ae2f6532c09639b2ba4ee65158
     download_bytes: 1709338172
-    disk_bytes: 1709363460
+    disk_bytes: 4846628352
