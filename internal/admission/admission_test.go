@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/molmaos/molma/internal/manifest"
 )
 
 // TestCheckStructure is the table-driven core of the admission policy
@@ -166,6 +168,76 @@ services:
 			yaml:    `services: {}`,
 			wantErr: true, wantSub: []string{"no services"},
 		},
+		{
+			name: "numeric user rejected (bare int)",
+			yaml: `
+services:
+  web:
+    image: nginx
+    user: 1000
+`,
+			wantErr: true, wantSub: []string{`"web"`, "numeric user"},
+		},
+		{
+			name: "numeric user rejected (quoted)",
+			yaml: `
+services:
+  web:
+    image: nginx
+    user: "1000"
+`,
+			wantErr: true, wantSub: []string{`"web"`, "numeric user"},
+		},
+		{
+			name: "numeric user rejected (uid:gid)",
+			yaml: `
+services:
+  web:
+    image: nginx
+    user: "1000:1000"
+`,
+			wantErr: true, wantSub: []string{`"web"`, "numeric user"},
+		},
+		{
+			name: "numeric user rejected (root)",
+			yaml: `
+services:
+  web:
+    image: nginx
+    user: "0"
+`,
+			wantErr: true, wantSub: []string{`"web"`, "numeric user"},
+		},
+		{
+			name: "numeric gid component rejected (name:gid)",
+			yaml: `
+services:
+  web:
+    image: nginx
+    user: "www-data:33"
+`,
+			wantErr: true, wantSub: []string{`"web"`, "numeric user"},
+		},
+		{
+			name: "named user allowed",
+			yaml: `
+services:
+  web:
+    image: nginx
+    user: www-data
+`,
+			wantErr: false,
+		},
+		{
+			name: "variable user allowed",
+			yaml: `
+services:
+  web:
+    image: nginx
+    user: "${APP_UID}"
+`,
+			wantErr: false,
+		},
 	}
 
 	for _, tc := range cases {
@@ -183,6 +255,39 @@ services:
 						t.Errorf("error %q missing %q", err.Error(), sub)
 					}
 				}
+			}
+		})
+	}
+}
+
+// TestCheckManifest covers the manifest-side rule: service_user is only for
+// folderless apps — a folder app already has a managed non-root identity
+// (APP_MANIFEST.md # B).
+func TestCheckManifest(t *testing.T) {
+	folders := []manifest.Folder{{Folder: "documents", Mode: "read"}}
+	cases := []struct {
+		name    string
+		man     manifest.Manifest
+		wantErr bool
+	}{
+		{name: "plain folderless", man: manifest.Manifest{}, wantErr: false},
+		{name: "service_user folderless", man: manifest.Manifest{ServiceUser: true}, wantErr: false},
+		{name: "folders without service_user", man: manifest.Manifest{
+			Permissions: manifest.Permissions{Folders: folders}}, wantErr: false},
+		{name: "service_user with folders rejected", man: manifest.Manifest{
+			ServiceUser: true, Permissions: manifest.Permissions{Folders: folders}}, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := CheckManifest(&tc.man)
+			if tc.wantErr && err == nil {
+				t.Fatal("want rejection, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("want nil, got %v", err)
+			}
+			if err != nil && !strings.Contains(err.Error(), "service_user") {
+				t.Errorf("error %q must name service_user", err.Error())
 			}
 		})
 	}

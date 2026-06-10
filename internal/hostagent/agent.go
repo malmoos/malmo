@@ -149,14 +149,20 @@ type RebootReporter interface {
 // (admin → in `sudo`, member → not in `sudo`); idempotent. ResolveHome returns
 // the user's home directory path and POSIX UID/GID; returns ErrUnknownUser when
 // the user does not exist. WellKnownIdentity returns the fixed service-account
-// UIDs/GIDs for molma-app and molma-shared. See BRAIN_HOST_PROTOCOL.md # User
-// info endpoints and USERS_AND_GROUPS.md # Roles.
+// UIDs/GIDs for molma-app and molma-shared. AllocateAppService reserves a
+// fresh UID/GID pair from the app-service band [protocol.AppServiceUIDMin,
+// protocol.AppServiceUIDMax] for a `service_user: true` instance;
+// ReleaseAppService returns one to the band (idempotent — releasing an
+// unallocated UID is a no-op). See BRAIN_HOST_PROTOCOL.md # User info
+// endpoints and USERS_AND_GROUPS.md # Roles.
 type UserManager interface {
 	UpsertPassword(user, password string) error
 	SetRole(user, role string) error
 	DeleteUser(user string) error
 	ResolveHome(user string) (home string, uid, gid int, err error)
 	WellKnownIdentity() (appUID, appGID, sharedGID int, err error)
+	AllocateAppService(instanceID string) (uid, gid int, err error)
+	ReleaseAppService(uid int) error
 }
 
 // Agent is the HTTP handler set for host-agent. It holds both the
@@ -176,6 +182,13 @@ type Agent struct {
 	// the map entirely — /etc/shadow is the source of truth there.
 	passwords map[string][]byte
 	roles     map[string]string
+	// svcIdents is the in-memory app-service allocation map (instance_id →
+	// UID) used by allocate/releaseAppService when UserMgr is nil. Not
+	// persisted: the brain stores the allocated UID on its instance row and
+	// never re-asks, and the dev brain can't chown to the allocated UID
+	// anyway, so a post-restart re-issue of the same number is harmless in
+	// the fake loop. The real agent's reservation is the /etc/passwd entry.
+	svcIdents map[string]int
 	// statePath, when non-empty, backs passwords+roles with a JSON file so the
 	// fake binary's accounts survive a restart (a dev stand-in for /etc/shadow,
 	// which the real agent persists for free). Empty by default — tests and the
@@ -258,6 +271,7 @@ func New(v PasswordVerifier, pub Publisher) *Agent {
 		published: map[string]protocol.PublishedName{},
 		passwords: map[string][]byte{},
 		roles:     map[string]string{},
+		svcIdents: map[string]int{},
 		startedAt: time.Now(),
 		Verifier:  v,
 		Publisher: pub,
@@ -279,6 +293,8 @@ func (a *Agent) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/journal/follow", a.journalFollow)
 	mux.HandleFunc("GET /v1/users/{username}/home", a.resolveHome)
 	mux.HandleFunc("GET /v1/identity/well-known", a.wellKnownIdentity)
+	mux.HandleFunc("POST /v1/identity/app-service", a.allocateAppService)
+	mux.HandleFunc("POST /v1/identity/app-service/release", a.releaseAppService)
 }
 
 func (a *Agent) publish(w http.ResponseWriter, r *http.Request) {
@@ -738,6 +754,98 @@ func (a *Agent) wellKnownIdentity(w http.ResponseWriter, r *http.Request) {
 		MolmaAppGID:    2000,
 		MolmaSharedGID: 2001,
 	})
+}
+
+// allocateAppService reserves a UID/GID pair from the app-service band
+// [protocol.AppServiceUIDMin, AppServiceUIDMax] for a folderless
+// `service_user: true` instance (APP_ISOLATION.md # Runtime identity & data
+// ownership). Idempotent per instance: re-allocating for an instance that
+// already holds a reservation returns the same pair.
+//
+// When UserMgr is wired (cmd/host-agent-real), the reservation is a real
+// system account (molma-svc-<uid> in /etc/passwd, durable across restarts).
+// When nil (cmd/host-agent fake), it's an in-memory map — see svcIdents.
+func (a *Agent) allocateAppService(w http.ResponseWriter, r *http.Request) {
+	var req protocol.AllocateAppServiceIdentityRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.InstanceID == "" {
+		writeErr(w, http.StatusBadRequest, "bad-request", "instance_id is required")
+		return
+	}
+
+	if a.UserMgr != nil {
+		uid, gid, err := a.UserMgr.AllocateAppService(req.InstanceID)
+		if err != nil {
+			slog.Error("allocate-app-service: user-manager error", "instance_id", req.InstanceID, "err", err)
+			writeErr(w, http.StatusInternalServerError, "allocate-app-service-failed", "allocate-app-service failed")
+			return
+		}
+		slog.Info("allocate-app-service", "instance_id", req.InstanceID, "uid", uid)
+		writeJSON(w, http.StatusOK, protocol.AllocateAppServiceIdentityResponse{UID: uid, GID: gid})
+		return
+	}
+
+	// Fake branch: first free number in the band not already handed out.
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if uid, ok := a.svcIdents[req.InstanceID]; ok {
+		writeJSON(w, http.StatusOK, protocol.AllocateAppServiceIdentityResponse{UID: uid, GID: uid})
+		return
+	}
+	taken := make(map[int]bool, len(a.svcIdents))
+	for _, uid := range a.svcIdents {
+		taken[uid] = true
+	}
+	for uid := protocol.AppServiceUIDMin; uid <= protocol.AppServiceUIDMax; uid++ {
+		if taken[uid] {
+			continue
+		}
+		a.svcIdents[req.InstanceID] = uid
+		slog.Info("allocate-app-service (fake)", "instance_id", req.InstanceID, "uid", uid)
+		writeJSON(w, http.StatusOK, protocol.AllocateAppServiceIdentityResponse{UID: uid, GID: uid})
+		return
+	}
+	writeErr(w, http.StatusInternalServerError, "app-service-band-exhausted", "no free UID in the app-service band")
+}
+
+// releaseAppService returns an allocated app-service identity to the band
+// (uninstall, or install rollback). Idempotent: releasing a UID that is not
+// allocated returns 200. UIDs outside the band are rejected — the handler
+// must never be usable to delete an arbitrary account.
+func (a *Agent) releaseAppService(w http.ResponseWriter, r *http.Request) {
+	var req protocol.ReleaseAppServiceIdentityRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.UID < protocol.AppServiceUIDMin || req.UID > protocol.AppServiceUIDMax {
+		writeErr(w, http.StatusBadRequest, "bad-request", "uid outside the app-service band")
+		return
+	}
+
+	if a.UserMgr != nil {
+		if err := a.UserMgr.ReleaseAppService(req.UID); err != nil {
+			slog.Error("release-app-service: user-manager error", "uid", req.UID, "err", err)
+			writeErr(w, http.StatusInternalServerError, "release-app-service-failed", "release-app-service failed")
+			return
+		}
+		slog.Info("release-app-service", "uid", req.UID)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Fake branch.
+	a.mu.Lock()
+	for id, uid := range a.svcIdents {
+		if uid == req.UID {
+			delete(a.svcIdents, id)
+			break
+		}
+	}
+	a.mu.Unlock()
+	slog.Info("release-app-service (fake)", "uid", req.UID)
+	w.WriteHeader(http.StatusOK)
 }
 
 // fakeUID returns a stable UID in the range [3000, 3999] for the given username
