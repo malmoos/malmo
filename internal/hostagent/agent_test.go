@@ -987,9 +987,19 @@ func TestReleaseAppService_OutOfBandUID_Returns400(t *testing.T) {
 
 func TestReleaseAppService_FakeBranch_Idempotent(t *testing.T) {
 	_, mux := newTestAgent(&stubVerifier{})
-	// Releasing a never-allocated in-band UID is a 200 no-op.
+
+	// Never-allocated in-band UID: 200 no-op.
 	if w := release(t, mux, protocol.AppServiceUIDMin); w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", w.Code)
+		t.Fatalf("never-allocated: want 200, got %d", w.Code)
+	}
+
+	// Allocate then release twice: second release must also be 200.
+	first := decodeBody[protocol.AllocateAppServiceIdentityResponse](t, allocate(t, mux, "inst_idem"))
+	if w := release(t, mux, first.UID); w.Code != http.StatusOK {
+		t.Fatalf("first release: want 200, got %d", w.Code)
+	}
+	if w := release(t, mux, first.UID); w.Code != http.StatusOK {
+		t.Fatalf("double release: want 200, got %d", w.Code)
 	}
 }
 

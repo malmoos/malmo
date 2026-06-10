@@ -844,6 +844,7 @@ func (a *Agent) releaseAppService(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a.mu.Unlock()
+	slog.Info("release-app-service (fake)", "uid", req.UID)
 	w.WriteHeader(http.StatusOK)
 }
 

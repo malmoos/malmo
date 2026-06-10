@@ -160,7 +160,7 @@ func TestInstallServiceUser_WithFoldersRejectedBeforeState(t *testing.T) {
 
 	_, err := e.m.Install(context.Background(), "whoami",
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold,
-		[]FolderMount{{Folder: "documents", Source: sourceShared}}, nil)
+		nil, nil)
 	if err == nil {
 		t.Fatal("want admission rejection, got nil")
 	}

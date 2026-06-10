@@ -398,10 +398,18 @@ func firstFreeAppServiceID(passwd, group []byte) (int, error) {
 // findAppServiceByGecos returns the UID of the molma-svc-* account whose
 // GECOS field matches, or 0 when none does — the idempotency probe for
 // AllocateAppService.
+//
+// /etc/passwd uses ":" as its field separator, so a ":" in the instance ID
+// would split the GECOS across multiple fields. We reassemble it from field
+// index 4 to the last-two (home:shell) boundary, which handles any colons in
+// the value. A valid passwd entry has at least 7 fields.
 func findAppServiceByGecos(passwd []byte, gecos string) int {
 	for _, line := range strings.Split(string(passwd), "\n") {
 		fields := strings.Split(line, ":")
-		if len(fields) < 5 || !strings.HasPrefix(fields[0], svcAccountPrefix) || fields[4] != gecos {
+		if len(fields) < 7 || !strings.HasPrefix(fields[0], svcAccountPrefix) {
+			continue
+		}
+		if strings.Join(fields[4:len(fields)-2], ":") != gecos {
 			continue
 		}
 		if n, err := strconv.Atoi(fields[2]); err == nil {

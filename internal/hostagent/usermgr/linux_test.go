@@ -143,6 +143,12 @@ imposter:x:2102:2102:molma app-service for inst_ccc:/home/imposter:/bin/bash
 	if got := findAppServiceByGecos(passwd, svcGecos("inst_ccc")); got != 0 {
 		t.Errorf("imposter account matched: got %d, want 0", got)
 	}
+	// A colon in the instance ID must still match — the GECOS field is
+	// reassembled across multiple split fields.
+	passwdColon := []byte("molma-svc-2103:x:2103:2103:molma app-service for inst:colon:/nonexistent:/usr/sbin/nologin\n")
+	if got := findAppServiceByGecos(passwdColon, svcGecos("inst:colon")); got != 2103 {
+		t.Errorf("colon in instance id: got %d, want 2103", got)
+	}
 }
 
 func TestAllocateAppService_EmptyInstanceID(t *testing.T) {
