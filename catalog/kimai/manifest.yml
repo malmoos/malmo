@@ -23,9 +23,9 @@ main_service: kimai
 main_port: 8001
 preferred_slugs: [kimai, time-tracking]
 
-# Unauthenticated / answers 302 (the locale/login redirect) — any status
-# < 500 counts as healthy. First boot runs ~75 schema migrations plus a
-# Symfony cache warm-up against the managed MySQL, so allow a generous
+# Unauthenticated → redirects to locale/login (200 after redirect); any
+# status < 500 counts as healthy. First boot runs ~75 schema migrations plus
+# a Symfony cache warm-up against the managed MySQL, so allow a generous
 # start period.
 health_probe:
   path: /
