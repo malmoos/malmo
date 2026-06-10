@@ -12,6 +12,17 @@ import (
 // the job goroutine runs (auth rejections + 409 guards). The happy path is
 // exercised at the lifecycle layer (lifecycle_stopstart_test.go).
 
+func TestStopStartRequireAuth(t *testing.T) {
+	h := newHarness(t) // no setup → no session
+	for _, path := range []string{"/api/v1/apps/i1/stop", "/api/v1/apps/i1/start"} {
+		resp := h.do("POST", path, nil)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("%s unauthenticated = %d, want 401", path, resp.StatusCode)
+		}
+	}
+}
+
 func TestStopMemberCannotControlHousehold(t *testing.T) {
 	h := newHarness(t)
 	h.setupAdmin("admin", "hunter2")

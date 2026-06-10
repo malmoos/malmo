@@ -711,8 +711,17 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 // "failed" splash. The containers are left up — Docker keeps retrying — so the
 // app can recover without a manual start.
 func (m *Manager) startFailed(ctx context.Context, inst store.Instance, host, appName string, cause error) error {
-	_ = m.caddy.AddSplashRoute(ctx, inst.ID, host, appName, "failed")
-	_ = m.store.SetState(inst.ID, "failed")
+	// Both flips are best-effort but must leave a trace — a silent failure here
+	// strands the route on the "starting" splash (wrong page, no log) or leaves
+	// the row at `running` while the app is down (reconcile retries, but the
+	// operator gets no signal). Mirror the warn-and-continue pattern in Stop.
+	if err := m.caddy.AddSplashRoute(ctx, inst.ID, host, appName, "failed"); err != nil {
+		slog.Warn("startFailed: caddy splash flip failed", "instance_id", inst.ID, "host", host, "err", err)
+	}
+	if err := m.store.SetState(inst.ID, "failed"); err != nil {
+		slog.Warn("startFailed: set state failed (row stays running; reconcile will retry)",
+			"instance_id", inst.ID, "err", err)
+	}
 	inst.State = "failed"
 	m.emitState(inst, "running")
 	slog.Warn("app start failed", "instance_id", inst.ID, "name", inst.Name, "err", cause)
