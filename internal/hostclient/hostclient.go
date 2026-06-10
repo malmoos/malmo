@@ -135,6 +135,26 @@ func (c *Client) WellKnownIdentity(ctx context.Context) (protocol.WellKnownIdent
 	return out, err
 }
 
+// AllocateAppServiceIdentity reserves a dedicated UID/GID pair from the
+// host's app-service band for a folderless `service_user: true` instance
+// (APP_ISOLATION.md # Runtime identity & data ownership). The brain calls it
+// once at install and persists the pair on the instance row; it is never
+// re-requested for the life of the instance.
+func (c *Client) AllocateAppServiceIdentity(ctx context.Context, instanceID string) (protocol.AllocateAppServiceIdentityResponse, error) {
+	var out protocol.AllocateAppServiceIdentityResponse
+	err := c.do(ctx, "POST", "/v1/identity/app-service",
+		protocol.AllocateAppServiceIdentityRequest{InstanceID: instanceID}, &out)
+	return out, err
+}
+
+// ReleaseAppServiceIdentity returns an allocated app-service identity to the
+// band. Called at uninstall and on install rollback; idempotent on the host
+// side, so releasing an already-released UID is safe.
+func (c *Client) ReleaseAppServiceIdentity(ctx context.Context, uid int) error {
+	return c.do(ctx, "POST", "/v1/identity/app-service/release",
+		protocol.ReleaseAppServiceIdentityRequest{UID: uid}, nil)
+}
+
 func (c *Client) SystemStatus(ctx context.Context) (protocol.SystemStatus, error) {
 	var out protocol.SystemStatus
 	err := c.do(ctx, "GET", "/v1/system/status", nil, &out)

@@ -253,6 +253,43 @@ type WellKnownIdentityResponse struct {
 	MolmaSharedGID int `json:"molma_shared_gid"`
 }
 
+// AppServiceUIDMin/Max bound the reserved app-service identity band host-agent
+// allocates `service_user: true` instances from (APP_ISOLATION.md # Runtime
+// identity & data ownership): below the molma user floor (UID_MIN 3000,
+// FIRST_RUN.md # Identity), above the fixed well-known identities (2000/2001),
+// with 2002–2099 left unallocated as headroom for future fixed identities.
+// Both sides of the socket validate against the band — host-agent never
+// allocates or releases outside it — so the constants live in the shared
+// wire-contract package.
+const (
+	AppServiceUIDMin = 2100
+	AppServiceUIDMax = 2999
+)
+
+// AllocateAppServiceIdentityRequest is POST /v1/identity/app-service, the
+// allocating sibling of GET /v1/identity/well-known. The brain calls it during
+// install of a folderless `service_user: true` instance; host-agent reserves a
+// fresh UID/GID pair from the app-service band and the brain persists it on
+// the instance row (it is never re-requested for the life of the instance).
+// InstanceID labels the reservation for debuggability (the real host-agent
+// stamps it into the account's GECOS field).
+type AllocateAppServiceIdentityRequest struct {
+	InstanceID string `json:"instance_id"`
+}
+
+type AllocateAppServiceIdentityResponse struct {
+	UID int `json:"uid"`
+	GID int `json:"gid"`
+}
+
+// ReleaseAppServiceIdentityRequest is POST /v1/identity/app-service/release.
+// The brain calls it at uninstall (and on install rollback) to return the
+// instance's allocated identity to the band. Idempotent: releasing a UID that
+// is not allocated returns 200.
+type ReleaseAppServiceIdentityRequest struct {
+	UID int `json:"uid"`
+}
+
 // JournalLine is one log line streamed over the per-app log tail
 // (GET /v1/journal/follow, BRAIN_HOST_PROTOCOL.md # Pattern C). It is the
 // `data:` payload of each SSE frame: the journald entry's timestamp, the std

@@ -99,6 +99,29 @@ func startFakeAuthAgent(t *testing.T) string {
 		})
 	})
 
+	mux.HandleFunc("POST /v1/identity/app-service", func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.AllocateAppServiceIdentityRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.InstanceID == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(protocol.Error{Code: "bad-request", Message: "instance_id is required"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(protocol.AllocateAppServiceIdentityResponse{UID: 2100, GID: 2100})
+	})
+	mux.HandleFunc("POST /v1/identity/app-service/release", func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.ReleaseAppServiceIdentityRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.UID < protocol.AppServiceUIDMin || req.UID > protocol.AppServiceUIDMax {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(protocol.Error{Code: "bad-request", Message: "uid outside the app-service band"})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
 	mux.HandleFunc("GET /v1/system/resources", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(protocol.SystemResources{
 			TsNs:    84021000000000,
@@ -186,6 +209,27 @@ func TestWellKnownIdentity(t *testing.T) {
 	}
 	if resp.MolmaSharedGID != 2001 {
 		t.Errorf("molma_shared_gid: want 2001, got %d", resp.MolmaSharedGID)
+	}
+}
+
+func TestAppServiceIdentity(t *testing.T) {
+	c := New(startFakeAuthAgent(t))
+	ctx := context.Background()
+
+	resp, err := c.AllocateAppServiceIdentity(ctx, "inst_a")
+	if err != nil {
+		t.Fatalf("AllocateAppServiceIdentity: %v", err)
+	}
+	if resp.UID != 2100 || resp.GID != 2100 {
+		t.Errorf("uid/gid: want 2100/2100, got %d/%d", resp.UID, resp.GID)
+	}
+
+	if err := c.ReleaseAppServiceIdentity(ctx, 2100); err != nil {
+		t.Fatalf("ReleaseAppServiceIdentity: %v", err)
+	}
+	// Out-of-band UID: the agent's 400 must surface as an error.
+	if err := c.ReleaseAppServiceIdentity(ctx, 1000); err == nil {
+		t.Fatal("ReleaseAppServiceIdentity(out-of-band) = nil; want error")
 	}
 }
 

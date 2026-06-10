@@ -285,6 +285,13 @@ type fakeHost struct {
 	// (FreeBytes must degrade to 0).
 	systemStatus protocol.SystemStatus
 	statusErr    error
+
+	// allocated counts app-service identities handed out (UIDs are band start +
+	// counter); released records every UID returned. allocErr forces the
+	// allocation host-failure path.
+	allocated int
+	released  []int
+	allocErr  error
 }
 
 func newFakeHost() *fakeHost { return &fakeHost{published: map[string]bool{}} }
@@ -330,6 +337,28 @@ func (h *fakeHost) SystemStatus(_ context.Context) (protocol.SystemStatus, error
 		return protocol.SystemStatus{}, h.statusErr
 	}
 	return h.systemStatus, nil
+}
+
+// AllocateAppServiceIdentity hands out sequential UIDs from the band start,
+// mirroring the fake host-agent. allocErr forces the host-failure path.
+func (h *fakeHost) AllocateAppServiceIdentity(_ context.Context, instanceID string) (protocol.AllocateAppServiceIdentityResponse, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.calls = append(h.calls, call{method: "AllocateAppServiceIdentity", args: []any{instanceID}})
+	if h.allocErr != nil {
+		return protocol.AllocateAppServiceIdentityResponse{}, h.allocErr
+	}
+	uid := protocol.AppServiceUIDMin + h.allocated
+	h.allocated++
+	return protocol.AllocateAppServiceIdentityResponse{UID: uid, GID: uid}, nil
+}
+
+func (h *fakeHost) ReleaseAppServiceIdentity(_ context.Context, uid int) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.calls = append(h.calls, call{method: "ReleaseAppServiceIdentity", args: []any{uid}})
+	h.released = append(h.released, uid)
+	return nil
 }
 
 func (h *fakeHost) isPublished(slug string) bool {

@@ -28,6 +28,45 @@ main_port: 80
 	}
 }
 
+func TestParseServiceUser(t *testing.T) {
+	src := []byte(`
+id: whoami
+manifest_version: 1
+name: Whoami
+version: "1.10"
+compose_file: compose.yml
+main_service: whoami
+main_port: 80
+service_user: true
+`)
+	m, err := Parse(src)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !m.ServiceUser {
+		t.Error("service_user: true not parsed")
+	}
+}
+
+func TestParseServiceUserDefaultsFalse(t *testing.T) {
+	src := []byte(`
+id: whoami
+manifest_version: 1
+name: Whoami
+version: "1.10"
+compose_file: compose.yml
+main_service: whoami
+main_port: 80
+`)
+	m, err := Parse(src)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if m.ServiceUser {
+		t.Error("service_user must default to false")
+	}
+}
+
 func TestParseSecretsNormalizesBytes(t *testing.T) {
 	src := []byte(`
 id: kan

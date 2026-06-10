@@ -174,6 +174,42 @@ func TestCreateGetListDelete(t *testing.T) {
 	}
 }
 
+func TestSetServiceIdentity(t *testing.T) {
+	s := open(t)
+	if err := s.Create(sample("a", "alpha")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// Fresh rows carry no identity (0 = none).
+	row, err := s.Get("a")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if row.ServiceUID != 0 || row.ServiceGID != 0 {
+		t.Fatalf("fresh row identity = %d:%d, want 0:0", row.ServiceUID, row.ServiceGID)
+	}
+	if err := s.SetServiceIdentity("a", 2100, 2100); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	row, err = s.Get("a")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if row.ServiceUID != 2100 || row.ServiceGID != 2100 {
+		t.Fatalf("roundtrip: got %d:%d, want 2100:2100", row.ServiceUID, row.ServiceGID)
+	}
+	// Identity must also survive the List path (same scan).
+	insts, err := s.List()
+	if err != nil || len(insts) != 1 {
+		t.Fatalf("list: %v (%d rows)", err, len(insts))
+	}
+	if insts[0].ServiceUID != 2100 || insts[0].ServiceGID != 2100 {
+		t.Fatalf("list roundtrip: got %d:%d, want 2100:2100", insts[0].ServiceUID, insts[0].ServiceGID)
+	}
+	if err := s.SetServiceIdentity("missing", 2101, 2101); err != ErrNotFound {
+		t.Fatalf("set on missing instance: err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestSetStateOnMissingInstanceErrors(t *testing.T) {
 	s := open(t)
 	if err := s.SetState("nope", "running"); err != ErrNotFound {
