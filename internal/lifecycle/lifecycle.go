@@ -612,6 +612,16 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 	if inst.State != "running" {
 		return fmt.Errorf("%w (state=%s)", ErrNotRunning, inst.State)
 	}
+	// Commit desired state FIRST (brain-commits-first, same as Start). If
+	// ComposeStop then fails, the row already reads `stopped`, so the reconcile
+	// pass sees "stopped but containers up" and retries the stop — converging on
+	// the user's intent. The reverse order (stop, then write) would leave a
+	// `running` row on a write failure, and reconcile would *restart* the
+	// containers, silently undoing the stop.
+	if err := m.store.SetState(id, "stopped"); err != nil {
+		return fmt.Errorf("set state stopped: %w", err)
+	}
+	inst.State = "stopped"
 	if out, err := m.docker.ComposeStop(ctx, m.instanceDir(id), "molma-"+id); err != nil {
 		return fmt.Errorf("compose stop: %w\n%s", err, out)
 	}
@@ -628,10 +638,6 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 		slog.Warn("stop: caddy splash flip failed (continuing)",
 			"instance_id", id, "host", host, "err", err)
 	}
-	if err := m.store.SetState(id, "stopped"); err != nil {
-		return fmt.Errorf("set state stopped: %w", err)
-	}
-	inst.State = "stopped"
 	m.emitState(inst, "running")
 	slog.Info("app stopped", "instance_id", id, "name", inst.Name)
 	return nil
@@ -673,6 +679,11 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 			"instance_id", id, "host", host, "err", err)
 	}
 
+	// Two serial budgets, matching the install transaction (steps 10-11): the
+	// `up -d` is bounded by healthWait so a never-completing completion gate (#92)
+	// fails cleanly instead of wedging, then waitHealthy spends a fresh healthWait
+	// on the health poll. Worst-case wall time is therefore ~2×healthWait — the
+	// same as install, deliberately so the two paths behave identically.
 	upCtx, cancelUp := context.WithTimeout(ctx, m.healthWait)
 	out, upErr := m.docker.ComposeUp(upCtx, m.instanceDir(id), "molma-"+id)
 	cancelUp()

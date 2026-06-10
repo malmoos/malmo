@@ -12,6 +12,7 @@ import { computed, ref } from "vue";
 import { RouterLink } from "vue-router";
 import { useQuery, useQueryClient } from "@tanstack/vue-query";
 import { api, waitForJob, type Instance, type Job } from "../api";
+import { pushErrorToast } from "../toasts";
 import { useAuth } from "../auth";
 import { useHealth } from "../useHealth";
 import { relativeTime } from "../utils";
@@ -42,12 +43,18 @@ const empty = computed(() => household.value.length === 0 && yours.value.length 
 const qc = useQueryClient();
 const startingIds = ref(new Set<string>());
 
-async function startApp(id: string) {
+async function startApp(id: string, name: string) {
   if (startingIds.value.has(id)) return;
   startingIds.value = new Set(startingIds.value).add(id);
   try {
     const job = await api.post<Job>(`/apps/${id}/start`);
-    await waitForJob(job.job_id);
+    const done = await waitForJob(job.job_id);
+    if (done.status === "failed") throw new Error(done.error?.message || "the start job failed");
+  } catch (e) {
+    // The tile just falls back to its grayed stopped state, so without a toast a
+    // failed start (403/409/job error) would be silent. The detail page surfaces
+    // these inline; here a toast is the only feedback channel.
+    pushErrorToast(`Couldn't start ${name}: ${(e as Error).message}`);
   } finally {
     const next = new Set(startingIds.value);
     next.delete(id);
@@ -105,14 +112,14 @@ async function startApp(id: string) {
       <section v-if="household.length" class="space-y-3">
         <h2 v-if="!singleUserMode" class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Household</h2>
         <div class="grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-4 lg:grid-cols-6">
-          <AppTile v-for="a in household" :key="a.id" :instance="a" :starting="startingIds.has(a.id)" @start="startApp(a.id)" />
+          <AppTile v-for="a in household" :key="a.id" :instance="a" :starting="startingIds.has(a.id)" @start="startApp(a.id, a.name)" />
         </div>
       </section>
 
       <section v-if="yours.length" class="space-y-3">
         <h2 v-if="!singleUserMode" class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Yours</h2>
         <div class="grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-4 lg:grid-cols-6">
-          <AppTile v-for="a in yours" :key="a.id" :instance="a" :starting="startingIds.has(a.id)" @start="startApp(a.id)" />
+          <AppTile v-for="a in yours" :key="a.id" :instance="a" :starting="startingIds.has(a.id)" @start="startApp(a.id, a.name)" />
         </div>
       </section>
     </template>

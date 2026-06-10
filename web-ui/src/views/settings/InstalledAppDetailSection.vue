@@ -58,19 +58,22 @@ function invalidate() {
   qc.invalidateQueries({ queryKey: ["apps", id.value] });
 }
 
+// awaitJob polls to terminal and throws on a failed job, so a job-level failure
+// (e.g. compose up never goes healthy) surfaces via useMutation's isError —
+// api.post only throws on the synchronous 4xx, not on a job that fails later.
+async function awaitJob(job: Job): Promise<Job> {
+  const done = await waitForJob(job.job_id);
+  if (done.status === "failed") throw new Error(done.error?.message || "the operation failed");
+  return done;
+}
+
 const stop = useMutation({
-  mutationFn: async () => {
-    const job = await api.post<Job>(`/apps/${id.value}/stop`);
-    return waitForJob(job.job_id);
-  },
+  mutationFn: async () => awaitJob(await api.post<Job>(`/apps/${id.value}/stop`)),
   onSettled: invalidate,
 });
 
 const start = useMutation({
-  mutationFn: async () => {
-    const job = await api.post<Job>(`/apps/${id.value}/start`);
-    return waitForJob(job.job_id);
-  },
+  mutationFn: async () => awaitJob(await api.post<Job>(`/apps/${id.value}/start`)),
   onSettled: invalidate,
 });
 
@@ -81,10 +84,7 @@ const confirmingUninstall = ref(false);
 // Logs start collapsed — they're a drill-down, not the first thing on the page.
 const logsOpen = ref(false);
 const uninstall = useMutation({
-  mutationFn: async () => {
-    const job = await api.del<Job>(`/apps/${id.value}`);
-    return waitForJob(job.job_id);
-  },
+  mutationFn: async () => awaitJob(await api.del<Job>(`/apps/${id.value}`)),
   onSuccess: () => {
     qc.invalidateQueries({ queryKey: ["apps"] });
     router.push("/settings/apps");
