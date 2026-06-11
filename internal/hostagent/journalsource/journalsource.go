@@ -8,15 +8,8 @@
 // It relies on Docker's journald log driver, which tags every container line
 // with CONTAINER_NAME and encodes the std stream in PRIORITY (stdout = 6,
 // stderr = 3). The brain passes the container name it computes from the
-// compose project + main service (molma-<id>-<service>).
-//
-// Known gap (documented in docs/progress/per-app-logs.md): Docker's journald
-// driver sets CONTAINER_NAME to the *running container* name, which compose
-// suffixes with a replica number (molma-<id>-<service>-1). An exact
-// CONTAINER_NAME= match therefore misses the line until the brain passes the
-// replica-qualified name. The brain-side container-name resolution and a
-// CONTAINER_NAME prefix/glob strategy are deferred to a follow-up; this package
-// keeps the exact-match form the wire contract describes.
+// compose project + main service (molma-<id>-<service>) — the override pins
+// the running container to that exact name, so the exact match is reliable.
 package journalsource
 
 import (
