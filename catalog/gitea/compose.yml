@@ -25,6 +25,7 @@
 services:
   gitea:
     image: gitea/gitea:1.26.2-rootless
+    restart: unless-stopped
     environment:
       USER: git
       GITEA__server__ROOT_URL: ${MOLMA_APP_URL}
