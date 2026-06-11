@@ -36,12 +36,14 @@ The **Blocked vs. Rejected** split is the load-bearing one. `Blocked` says *"re-
 | mealie | Full | None known | — |
 | memos | Full | None known | — |
 | whoami | Full | None known (sample app) | — |
+| gitea | Degraded | git-over-SSH is disabled (HTTP clone/push only); outgoing email (notifications, password resets) is silently dropped until an SMTP relay ships. | [gaps][gitea] |
 | docuseal | Degraded | Email signing links only resolve on the LAN until remote access ships; outgoing mail needs an SMTP relay. | [gaps][docuseal] |
 | jotty | Degraded | Uploads over ~1 MB fail (images, drawio, avatars); text notes and checklists are unaffected. | [gaps][jotty] |
 | kimai | Degraded | Outgoing email (password-reset links, reports) is silently dropped until an admin configures SMTP. | [gaps][kimai] |
 | open-webui | Degraded | No on-device inference; the user must point it at an external model API (OpenAI-compatible or a LAN Ollama). | [gaps][openwebui] |
 | calibre-web | Blocked | Crash-loops on every boot — never serves a page. Currently pulled / not installable. | [gaps][calibre] |
 
+[gitea]: catalog-import-gaps.md#smtp-relay--gitea-2026-06-11
 [kan]: catalog-import-gaps.md#secret-injection--kan-2026-06-05
 [docuseal]: catalog-import-gaps.md#app-url-injection--docuseal-2026-06-05
 [jotty]: catalog-import-gaps.md#runtime-self-patch--jotty-2026-06-07
