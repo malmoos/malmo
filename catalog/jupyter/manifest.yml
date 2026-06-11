@@ -1,0 +1,71 @@
+id: jupyter
+manifest_version: 1
+name: Jupyter Notebook
+version: "7.5.7"
+description:
+  short: "Interactive Python notebooks in your browser — code, notes, and charts in one document, with the scientific stack preinstalled."
+  long: |
+    Jupyter Notebook lets you write and run Python in your browser, mixing live code, notes, and visualizations in a single document. This is the Jupyter team's scipy image, so the standard data-science stack — NumPy, pandas, Matplotlib, scikit-learn and friends — is preinstalled and ready to import; you never need to install anything to get started. Extra pure-Python packages can be added from a notebook with `pip install --user`.
+
+    Your notebooks are regular files in your Documents folder (a subfolder you pick at install, "Notebooks" by default) — they stay yours and stay put if you uninstall the app.
+
+    First sign-in: enter the one-time setup token `molma-setup` together with a password of your choice on the login screen. Restart the app afterwards — from then on only your password works and the setup token is permanently disabled. To change the password later, open a Terminal inside Jupyter, run `jupyter server password`, and restart the app.
+
+    Two limitations by design: there is no `sudo` / `apt install` inside the sandbox (the preinstalled stack plus `pip install --user` covers everyday use), and there is no GPU acceleration, so heavy ML training is out of scope — interactive CPU data work is what this is for.
+icon: ./icon.png
+screenshots: [./screenshots/01.png]
+categories: [productivity, development]
+author:
+  name: Project Jupyter
+  url: https://jupyter.org
+license: BSD-3-Clause
+links:
+  homepage: https://jupyter.org
+  source: https://github.com/jupyter/notebook
+  support: https://discourse.jupyter.org
+
+compose_file: compose.yml
+main_service: jupyter
+main_port: 8888
+preferred_slugs: [jupyter, notebooks]
+
+# /api answers 200 without auth (JSON version probe); / redirects to the login
+# page, so it is not a usable probe target. First boot on slow disks takes a
+# while to populate the home bind, hence the generous start period.
+health_probe:
+  path: /api
+  start_period: 120s
+
+# ~140 MiB idle; real headroom is for kernels — a pandas session eats memory
+# fast, and scipy-notebook is shipped precisely for that workload.
+resources:
+  recommended: { memory: 2G, cpu: 1.0 }
+
+# ./data is the container home (~jovyan): Jupyter config (including the
+# user-set password hash), kernel runtime state, and pip install --user
+# packages. Notebooks themselves live in the Documents grant below, not here.
+# 46 MB measured at first healthy; pip --user installs grow it.
+storage:
+  data_volumes: [./data]
+  estimated_size: 50M
+
+# Notebooks are first-class user content: the served root is the granted
+# Documents subfolder ("Notebooks" by default, installer can override), so
+# every notebook is a regular file under ~/Documents — never buried in app
+# state. internet: true because pip install --user and the Lab extension
+# manager fetch from PyPI.
+permissions:
+  internet: true
+  lan: false
+  folders:
+    - folder: documents
+      mode: write
+      scope: pick-subfolder
+      default: Notebooks
+
+# Filled by `go run ./cmd/molma manifest resolve catalog/jupyter/manifest.yml`.
+images:
+  quay.io/jupyter/scipy-notebook:2026-06-08:
+    digest: sha256:7901fffcb245325b08495588a4cb5bc248e6a820c4d8455d73507b1e0c8b529a
+    download_bytes: 1267466348
+    disk_bytes: 3780954624
