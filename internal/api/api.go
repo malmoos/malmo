@@ -339,11 +339,6 @@ func (s *Server) listApps(ctx context.Context, _ *struct{}) (*struct {
 	if err != nil {
 		return nil, huma.Error500InternalServerError("owner lookup failed", err)
 	}
-	catEntries, _ := s.catalog.List() // best-effort; icon fields are cosmetic
-	catByID := make(map[string]*catalog.Entry, len(catEntries))
-	for idx := range catEntries {
-		catByID[catEntries[idx].ID] = &catEntries[idx]
-	}
 	out := &struct {
 		Body struct {
 			Apps []InstanceDTO `json:"apps"`
@@ -351,7 +346,14 @@ func (s *Server) listApps(ctx context.Context, _ *struct{}) (*struct {
 	}{}
 	out.Body.Apps = []InstanceDTO{}
 	for _, i := range insts {
-		out.Body.Apps = append(out.Body.Apps, toDTO(i, names[i.OwnerUserID], catByID[i.ManifestID]))
+		// Enrich by id, not via List(): an app unlisted after install still owns a
+		// card here. Entry doesn't apply the store-visibility filter. Best-effort —
+		// icon/name fields are cosmetic, so a lookup miss just renders the fallback.
+		var ce *catalog.Entry
+		if e, err := s.catalog.Entry(i.ManifestID); err == nil {
+			ce = &e
+		}
+		out.Body.Apps = append(out.Body.Apps, toDTO(i, names[i.OwnerUserID], ce))
 	}
 	return out, nil
 }
@@ -379,9 +381,11 @@ func (s *Server) getApp(ctx context.Context, in *struct {
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, huma.Error500InternalServerError("owner lookup failed", err)
 	}
+	// Enrich by id via Entry (honest), not Detail (store-filtered): an installed
+	// app that has since been unlisted must still render its own card.
 	var catEntry *catalog.Entry
-	if e, err := s.catalog.Detail(i.ManifestID); err == nil {
-		catEntry = &e.Entry
+	if e, err := s.catalog.Entry(i.ManifestID); err == nil {
+		catEntry = &e
 	}
 	return &struct{ Body InstanceDTO }{Body: toDTO(i, owner.Username, catEntry)}, nil
 }
@@ -437,6 +441,12 @@ func (s *Server) installApp(ctx context.Context, in *struct {
 	if err != nil {
 		slog.Error("install: catalog entry failed to load", "manifest_id", manifestID, "err", err)
 		return nil, huma.Error500InternalServerError("catalog entry is malformed")
+	}
+	// An unlisted app (`listed: false`) is pulled from the store: not installable.
+	// Treat it as absent — same 404 as a missing manifest — so a stale store link
+	// or direct API call can't install a deliberately-withdrawn app.
+	if !man.IsListed() {
+		return nil, huma.Error404NotFound("no such catalog app")
 	}
 	mounts, err := resolveElections(man, scope, in.Body.Config.Folders)
 	if err != nil {

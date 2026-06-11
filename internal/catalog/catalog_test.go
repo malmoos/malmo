@@ -241,6 +241,76 @@ main_port: 80
 	}
 }
 
+// TestListedFilter: `listed: false` pulls an app from the store browse (List)
+// and its detail page (Detail → ErrNotFound), but the app still loads honestly
+// by id (Entry) so an installed instance keeps its card. A manifest with no
+// `listed:` defaults to listed.
+func TestListedFilter(t *testing.T) {
+	root := t.TempDir()
+	writeApp(t, root, "shown", `id: shown
+manifest_version: 1
+name: Shown
+version: "1.0"
+compose_file: compose.yml
+main_service: web
+main_port: 80
+`)
+	writeApp(t, root, "hidden", `id: hidden
+manifest_version: 1
+name: Hidden
+version: "1.0"
+listed: false
+compose_file: compose.yml
+main_service: web
+main_port: 80
+`)
+	writeApp(t, root, "explicit", `id: explicit
+manifest_version: 1
+name: Explicit
+version: "1.0"
+listed: true
+compose_file: compose.yml
+main_service: web
+main_port: 80
+`)
+	c := New(root)
+
+	// List (store browse) shows the listed apps, hides the unlisted one.
+	entries, err := c.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, e := range entries {
+		got[e.ID] = true
+	}
+	if !got["shown"] || !got["explicit"] {
+		t.Errorf("listed apps missing from List: %v", got)
+	}
+	if got["hidden"] {
+		t.Errorf("unlisted app leaked into List: %v", got)
+	}
+
+	// Detail (store detail page) 404s the unlisted app, serves the listed one.
+	if _, err := c.Detail("hidden"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Detail(unlisted) = %v, want ErrNotFound", err)
+	}
+	if _, err := c.Detail("shown"); err != nil {
+		t.Errorf("Detail(listed) = %v, want nil", err)
+	}
+
+	// Entry (honest by-id lookup, used for installed-instance enrichment) resolves
+	// the unlisted app regardless — pulling from the store must not break the card
+	// of an app that was already installed.
+	e, err := c.Entry("hidden")
+	if err != nil {
+		t.Fatalf("Entry(unlisted) = %v, want it to resolve", err)
+	}
+	if e.Name != "Hidden" {
+		t.Errorf("Entry(unlisted) name = %q, want Hidden", e.Name)
+	}
+}
+
 // TestIconAndScreenshotPath: the asset resolvers return the on-disk path when
 // the file exists.
 func TestIconAndScreenshotPath(t *testing.T) {

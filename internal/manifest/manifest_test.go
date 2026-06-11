@@ -28,6 +28,38 @@ main_port: 80
 	}
 }
 
+func TestParseListed(t *testing.T) {
+	base := `
+id: whoami
+manifest_version: 1
+name: Whoami
+version: "1.10"
+compose_file: compose.yml
+main_service: whoami
+main_port: 80
+`
+	cases := []struct {
+		name string
+		src  string
+		want bool
+	}{
+		{"absent defaults to listed", base, true},
+		{"explicit true", base + "listed: true\n", true},
+		{"explicit false hides", base + "listed: false\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, err := Parse([]byte(tc.src))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if m.IsListed() != tc.want {
+				t.Errorf("IsListed() = %v, want %v", m.IsListed(), tc.want)
+			}
+		})
+	}
+}
+
 func TestParseServiceUser(t *testing.T) {
 	src := []byte(`
 id: whoami

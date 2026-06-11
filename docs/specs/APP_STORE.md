@@ -147,6 +147,17 @@ This shapes the v1 trust model intentionally:
 
 The data model below already accommodates additional catalogs from day one, so the transition is additive when it happens.
 
+## Listed apps — pulling an entry without deleting it
+
+Curation sometimes needs to **withdraw an app that can't currently ship** — an image that crash-loops under the sandbox until a platform gap closes, or one rejected for good — without throwing away the adaptation work (the rewritten compose, resolved digests, the manifest itself). The manifest's `listed:` field (`APP_MANIFEST.md` # A; default `true`) is that control: `listed: false` keeps the entry in the catalog directory but pulls it from the store.
+
+The brain enforces it asymmetrically, by intent:
+
+- **Store-facing paths filter it out.** The browse list (`GET /api/v1/catalog`) omits unlisted apps, the detail page (`GET /api/v1/catalog/:id`) returns 404, and both install paths (`/install-plan` and the `POST /api/v1/apps` install action) return 404 — so a stale store link or a scripted call can't install a deliberately-withdrawn app. To the store, the app simply doesn't exist.
+- **By-id resolution stays honest.** Loading the manifest by id (for an already-installed instance's dashboard card, for reconciliation, for serving its icon, for `molma manifest lint`) ignores the flag. An app unlisted *after* someone installed it keeps working and stays manageable — withdrawal affects discovery and new installs, never a running instance.
+
+This is a **curation control, not access control**: it's box-wide, not per-user or per-role, and there is no "show unlisted apps" path in v1. Which apps are pulled and why is tracked in `dev/catalog-status.md` (the `Blocked`/`Rejected` rows); `listed: false` is the mechanism that enforces those states.
+
 ## Multiple catalogs — data model only in v1
 
 `SPEC.md` and `APP_MANIFEST.md` both commit to third-party stores as a long-term shape. v1 does **not** ship UI for adding them, but the brain's data model treats "the catalog" as one entry in a list:
