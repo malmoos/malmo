@@ -77,6 +77,7 @@ web-ui/
         ├── TopBar.vue, Dock.vue
         ├── AppTile.vue         # dashboard launcher tile (opens the app)
         ├── StoreAppCard.vue    # store browse card (links to the detail page)
+        ├── AppGlyph.vue        # icon-less fallback: manifest icon_glyph → Lucide icon, else AppWindow
         ├── SplitButton.vue
         ├── InstallDialog.vue, ElevateDialog.vue
         └── ToastHost.vue
@@ -105,7 +106,9 @@ A handful of top-level `.vue` files (`Login.vue`, `Setup.vue`, `NotificationBell
 
 `router.ts` is a flat lazy-imported table (history mode). Four primary destinations mirror the dock (`DASHBOARD.md` # global navigation): Home, Files, Store, Settings. Admin-only screens (`/store/custom`, `/settings/users`) **guard the role inside the view component** rather than via a router guard — follow the `CustomInstallView` pattern when adding another admin-only screen. Unknown paths redirect to `/` so the SPA never 404s its own chrome (production Caddy also serves `index.html` for unmatched routes).
 
-The Store is a **browse → detail** pair: `/store` (`StoreView`) is a flat grid of `StoreAppCard`s (logo + name) that link to `/store/:id` (`AppDetailView`), the app-store-style detail page where the description, screenshots, and the Install flow live. `/store/custom` is declared before `/store/:id` (and Vue Router ranks the static segment higher anyway, so `custom` never matches the `:id` param).
+The Store is a **browse → detail** pair: `/store` (`StoreView`) is a grid of `StoreAppCard`s (logo + name) — filterable by a page-wide search and category pills — that link to `/store/:id` (`AppDetailView`), the app-store-style detail page where the description, screenshots, and the Install flow live. `/store/custom` is declared before `/store/:id` (and Vue Router ranks the static segment higher anyway, so `custom` never matches the `:id` param).
+
+When an app has no raster icon (`icon_url`), both the card and the detail header fall back via **`AppGlyph`**, which renders the Lucide icon named by the manifest's `icon_glyph` (kebab-case) or the generic `AppWindow`. `AppGlyph` imports the Lucide set with a lazy `import("lucide-vue-next")`, so the ~900 KB icon library is split into its own chunk that loads only when a glyph fallback is actually rendered — never on the main bundle. In a curated catalog most apps ship a real logo, so that chunk rarely loads; if glyph-fallback usage ever becomes common, switch `AppGlyph` to per-icon dynamic imports so only the few used glyphs load.
 
 ## Install flow
 

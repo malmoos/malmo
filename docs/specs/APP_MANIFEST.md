@@ -59,6 +59,7 @@ description:
     PhotoPrism is an AI-powered app for browsing,
     organizing & sharing your photo collection...
 icon: ./icon.png                  # bundled in the app package
+icon_glyph: image                 # optional; Lucide icon name used as the store fallback when no `icon` is bundled (ignored when `icon` is set)
 screenshots: [./shot1.png, ./shot2.png]
 categories: [media, photos]
 author:

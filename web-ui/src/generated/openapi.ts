@@ -664,6 +664,7 @@ export interface components {
             categories?: string[] | null;
             changelog_url?: string;
             footprint: components["schemas"]["Footprint"];
+            icon_glyph?: string;
             icon_url?: string;
             id: string;
             license?: string;
@@ -696,6 +697,7 @@ export interface components {
         Entry: {
             categories?: string[] | null;
             footprint: components["schemas"]["Footprint"];
+            icon_glyph?: string;
             icon_url?: string;
             id: string;
             name: string;
@@ -869,6 +871,8 @@ export interface components {
              * @example https://example.com/schemas/InstanceDTO.json
              */
             readonly $schema?: string;
+            icon_glyph?: string;
+            icon_url?: string;
             id: string;
             manifest_id: string;
             name: string;

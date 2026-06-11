@@ -6,6 +6,7 @@ description:
   short: "Self-improving AI agent with messaging gateway, skills system, and web dashboard."
   long: |
     Hermes is an AI agent from Nous Research with a built-in learning loop: it creates skills from experience, searches its own past conversations, and builds a persistent model of the user across sessions. It exposes a web dashboard for chat and configuration, and a messaging gateway that connects to Telegram, Discord, Slack, WhatsApp, and other platforms. LLM provider is user-configured (OpenRouter, OpenAI, Gemini, Ollama, and others).
+icon_glyph: bot
 categories: [productivity, ai]
 author:
   name: Nous Research

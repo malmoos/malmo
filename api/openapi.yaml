@@ -206,6 +206,8 @@ components:
           type: string
         footprint:
           $ref: "#/components/schemas/Footprint"
+        icon_glyph:
+          type: string
         icon_url:
           type: string
         id:
@@ -276,6 +278,8 @@ components:
             - "null"
         footprint:
           $ref: "#/components/schemas/Footprint"
+        icon_glyph:
+          type: string
         icon_url:
           type: string
         id:
@@ -612,6 +616,10 @@ components:
             - https://example.com/schemas/InstanceDTO.json
           format: uri
           readOnly: true
+          type: string
+        icon_glyph:
+          type: string
+        icon_url:
           type: string
         id:
           type: string

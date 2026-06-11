@@ -6,6 +6,7 @@ description:
   short: "Browse, read, and download your eBook library from any browser."
   long: |
     Calibre-Web gives you a clean browser-based interface to your Calibre ebook library — search by title, author, series, or tag, read books in the built-in reader, and download files in multiple formats. It connects directly to the Calibre database in your Documents folder, so your library stays portable and works alongside the desktop Calibre app without duplicating files.
+icon_glyph: book-open
 categories: [books, media]
 author:
   name: LinuxServer.io
