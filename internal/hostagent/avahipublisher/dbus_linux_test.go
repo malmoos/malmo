@@ -27,7 +27,10 @@ package avahipublisher
 
 import (
 	"errors"
+	"os/exec"
+	"strings"
 	"testing"
+	"time"
 )
 
 // TestDBusPublisher_PublishAndUnpublish exercises the full Publish → Unpublish
@@ -76,6 +79,70 @@ func TestDBusPublisher_PublishIdempotent(t *testing.T) {
 	}
 	if len(p.groups) != 1 {
 		t.Errorf("want 1 group after two publishes, got %d", len(p.groups))
+	}
+}
+
+// TestDBusPublisher_RedetectsIPPerPublish verifies the local IP is detected on
+// every Publish — no process-lifetime cache — so apps published after a DHCP
+// lease change announce the current address (#129).
+func TestDBusPublisher_RedetectsIPPerPublish(t *testing.T) {
+	calls := 0
+	p := &DBusPublisher{HostSuffix: ".local", detectIP: func() (string, error) {
+		calls++
+		return "192.0.2.55", nil
+	}}
+	defer p.Close()
+
+	if _, err := p.Publish("avahitest-redetect"); err != nil {
+		t.Fatalf("first Publish: %v", err)
+	}
+	if _, err := p.Publish("avahitest-redetect"); err != nil {
+		t.Fatalf("second Publish: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("want IP detection on every Publish (no cache), got %d detections for 2 publishes", calls)
+	}
+}
+
+// TestDBusPublisher_AnnouncesRouteProbedAddress is the #129 regression check:
+// what avahi-resolve returns for a published name must be the kernel's
+// route-chosen LAN address, not whatever interface (e.g. a Docker bridge)
+// happened to enumerate first.
+func TestDBusPublisher_AnnouncesRouteProbedAddress(t *testing.T) {
+	if _, err := exec.LookPath("avahi-resolve"); err != nil {
+		t.Skip("avahi-resolve not installed (apt install avahi-utils)")
+	}
+	want, err := probeLANIPv4()
+	if err != nil {
+		t.Skipf("route probe failed (box without a default route?): %v", err)
+	}
+
+	p := &DBusPublisher{HostSuffix: ".local"}
+	defer p.Close()
+	name, err := p.Publish("avahitest-129")
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	defer p.Unpublish("avahitest-129")
+
+	// Other resolvers see the record only after the multicast announcement;
+	// give Avahi up to ~3 seconds, same as dev/test-avahi-publisher.sh.
+	var got string
+	for i := 0; i < 15; i++ {
+		out, err := exec.Command("avahi-resolve", "-4", "-n", name).Output()
+		if err == nil {
+			if fields := strings.Fields(string(out)); len(fields) == 2 && fields[0] == name {
+				got = fields[1]
+				break
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if got == "" {
+		t.Fatalf("%s never resolved via avahi-resolve (waited ~3s)", name)
+	}
+	if got != want {
+		t.Errorf("announced %s, want the route-probed LAN address %s — a bridge address won (#129)?", got, want)
 	}
 }
 
