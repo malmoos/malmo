@@ -81,7 +81,7 @@ func (s *Sync) Apply() error {
 	}
 	if changed {
 		slog.Info("avahi sync: allow-interfaces changed; restarting avahi-daemon",
-			"path", confPath, "host", strings.Join(names, ","))
+			"path", confPath, "interfaces", strings.Join(names, ","))
 		if err := s.doRestart(); err != nil {
 			return fmt.Errorf("avahipublisher: restart avahi-daemon: %w", err)
 		}

@@ -135,7 +135,7 @@ func lanFromActiveConnection(conn *dbus.Conn, acPath dbus.ObjectPath) (LANInterf
 	// doesn't expose it directly.
 	iface, err := net.InterfaceByName(name)
 	if err != nil {
-		slog.Warn("netstate: NM device has no kernel interface; skipped", "host", name, "err", err)
+		slog.Warn("netstate: NM device has no kernel interface; skipped", "iface", name, "err", err)
 		return LANInterface{}, false
 	}
 
