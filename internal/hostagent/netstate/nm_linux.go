@@ -142,8 +142,15 @@ func lanFromActiveConnection(conn *dbus.Conn, acPath dbus.ObjectPath) (LANInterf
 	return LANInterface{Name: name, Index: iface.Index, IPv4: ip}, true
 }
 
-// firstIPv4Address reads IP4Config.AddressData and returns the first address —
-// NM orders the primary first.
+// firstIPv4Address reads IP4Config.AddressData and returns the first address.
+//
+// Assumes one IPv4 per LAN interface — the single-DHCP-lease case that is the
+// only target-hardware config. NM orders the lease/primary address first, so
+// on a multi-address interface (not a config we ship for) this announces only
+// AddressData[0] and the rest go unannounced; see the known gap in
+// docs/progress/network-state-discovery.md. The robust fix, if that ever
+// becomes real, is to announce every address on the interface, not to pick a
+// "primary" — NM exposes no such property to pick by.
 func firstIPv4Address(cfg dbus.BusObject) (string, bool) {
 	v, err := cfg.GetProperty(nmIP4ConfigIface + ".AddressData")
 	if err != nil {

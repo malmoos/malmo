@@ -46,6 +46,7 @@ The VM now has **three NICs with pinned MACs**: NIC1 carries SSH exactly as befo
 - **Host-agent mid-life restart replay** (`uptime_s` regression detection, carried from [avahi-dbus-publisher.md](avahi-dbus-publisher.md)) did **not** ride along: it is brain-side (lifecycle reconcile), not cheap, and orthogonal to the host-agent-internal watcher this slice added.
 - **`GET /v1/discovery/state` still hardcodes `publisher: "avahi-fake"` and `host_name: "molma"`** in both binaries — pre-existing debt, untouched; only `interfaces` went live this slice.
 - **The brain stays out of network state** (the issue's third open question): no brain consumer of `DiscoveryState` exists, and nothing in this slice gave it one. The dashboard network page will revisit.
+- **A LAN interface carrying multiple IPv4 addresses announces only the first** (`firstIPv4Address` returns `AddressData[0]`). This is untested and not a target-hardware config — a home box gets one DHCP lease per LAN face — but on a multi-address interface the secondary addresses go unannounced. The fix, if it ever becomes real, is to announce every address on the interface (one `AddAddress` per address per ifindex), not to guess a "primary": NM exposes no primary-address property to pick by.
 - The `nmtest`/`avahitest` tagged suites still don't run in CI (carried) — run by hand here, and by the QEMU lane once executed.
 - `deny-interfaces` from the old `DISCOVERY.md` example is not written — an allowlist already denies everything else.
 
