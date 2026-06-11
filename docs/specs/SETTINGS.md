@@ -37,6 +37,7 @@ Every panel below is already implied by an existing spec. The **owning doc** col
 | | Storage | Capacity, add / eject data drive, recovery passphrase | `STORAGE.md` | admin |
 | | Network | WiFi, static IP, hostname, multi-NIC priority, mesh enrollment | `MOLMA_NETWORK.md`, `FIRST_RUN.md` | admin |
 | | Sharing | Samba network shares, media streaming (DLNA) | `SERVICE_PROVISIONING.md` | admin |
+| | Outgoing email | SMTP provider registry (add / edit / delete / test-send) apps bind to for sending email | `SERVICE_PROVISIONING.md` # BYO outgoing mail | admin |
 | | Remote access | Tailscale / Headscale UI at `/settings/tailscale` | `SERVICE_PROVISIONING.md`, `MOLMA_NETWORK.md` | admin |
 | | Updates | Aggregate app + OS view, check-for-updates, rollback | `UPDATES.md` | admin |
 | | Privacy | Telemetry on/off (single toggle, both streams), last-transmission timestamp | `TELEMETRY.md` # Settings UI | admin |

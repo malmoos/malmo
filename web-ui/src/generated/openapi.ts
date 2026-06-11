@@ -108,6 +108,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/apps/{id}/mail-binding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Bind an app to an outgoing-mail provider (empty provider_id unbinds) */
+        put: operations["set-app-mail-binding"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/apps/{id}/start": {
         parameters: {
             query?: never;
@@ -323,6 +340,76 @@ export interface paths {
         put?: never;
         /** Revoke the current session */
         post: operations["logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mail-providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List outgoing-mail providers (admin only) */
+        get: operations["list-mail-providers"];
+        put?: never;
+        /** Register an outgoing-mail provider (admin only) */
+        post: operations["create-mail-provider"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mail-providers/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List provider picker options — id and label only (any authenticated user) */
+        get: operations["list-mail-provider-options"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mail-providers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update an outgoing-mail provider (admin only) */
+        put: operations["update-mail-provider"];
+        post?: never;
+        /** Delete an outgoing-mail provider (admin only; bound apps fall back to unbound) */
+        delete: operations["delete-mail-provider"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mail-providers/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send a test email through a provider (admin only) */
+        post: operations["test-mail-provider"];
         delete?: never;
         options?: never;
         head?: never;
@@ -622,6 +709,7 @@ export interface components {
         };
         ConfigStruct: {
             folders?: components["schemas"]["FolderElection"][] | null;
+            mail_provider_id?: string;
         };
         "Create-userRequest": {
             /**
@@ -833,6 +921,7 @@ export interface components {
              */
             readonly $schema?: string;
             footprint: components["schemas"]["InstallPlanFootprint"];
+            mail?: components["schemas"]["InstallPlanMail"];
             manifest_id: string;
             name: string;
             permissions: components["schemas"]["InstallPlanPermissions"];
@@ -857,6 +946,10 @@ export interface components {
             /** Format: int64 */
             image_disk_bytes: number;
         };
+        InstallPlanMail: {
+            optional: boolean;
+            providers: components["schemas"]["MailProviderOption"][] | null;
+        };
         InstallPlanPermissions: {
             devices: string[] | null;
             folders: components["schemas"]["InstallPlanFolder"][] | null;
@@ -874,6 +967,8 @@ export interface components {
             icon_glyph?: string;
             icon_url?: string;
             id: string;
+            mail_provider_id?: string;
+            mail_supported?: boolean;
             manifest_id: string;
             name: string;
             owner_user_id: string;
@@ -957,6 +1052,24 @@ export interface components {
             readonly $schema?: string;
             apps: components["schemas"]["Entry"][] | null;
         };
+        "List-mail-provider-optionsResponse": {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/List-mail-provider-optionsResponse.json
+             */
+            readonly $schema?: string;
+            providers: components["schemas"]["MailProviderOption"][] | null;
+        };
+        "List-mail-providersResponse": {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/List-mail-providersResponse.json
+             */
+            readonly $schema?: string;
+            providers: components["schemas"]["MailProviderDTO"][] | null;
+        };
         "List-notification-mutesResponse": {
             /**
              * Format: uri
@@ -1006,6 +1119,46 @@ export interface components {
              */
             readonly $schema?: string;
             user: components["schemas"]["UserDTO"];
+        };
+        MailProviderBody: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/MailProviderBody.json
+             */
+            readonly $schema?: string;
+            /** @enum {string} */
+            encryption: "none" | "starttls" | "tls";
+            from_address: string;
+            host: string;
+            label: string;
+            password?: string;
+            /** Format: int64 */
+            port: number;
+            username?: string;
+        };
+        MailProviderDTO: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/MailProviderDTO.json
+             */
+            readonly $schema?: string;
+            /** Format: int64 */
+            created_at: number;
+            /** @enum {string} */
+            encryption: "none" | "starttls" | "tls";
+            from_address: string;
+            host: string;
+            id: string;
+            label: string;
+            /** Format: int64 */
+            port: number;
+            username: string;
+        };
+        MailProviderOption: {
+            id: string;
+            label: string;
         };
         NotificationDTO: {
             action_label?: string;
@@ -1087,6 +1240,15 @@ export interface components {
             readonly $schema?: string;
             password: string;
         };
+        "Set-app-mail-bindingRequest": {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/Set-app-mail-bindingRequest.json
+             */
+            readonly $schema?: string;
+            provider_id: string;
+        };
         SetupRequest: {
             /**
              * Format: uri
@@ -1110,6 +1272,15 @@ export interface components {
         SourceMenu: {
             default: string;
             options: string[] | null;
+        };
+        "Test-mail-providerRequest": {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/Test-mail-providerRequest.json
+             */
+            readonly $schema?: string;
+            to: string;
         };
         "Unread-notification-countResponse": {
             /**
@@ -1391,6 +1562,41 @@ export interface operations {
         responses: {
             /** @description Accepted */
             202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "set-app-mail-binding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Set-app-mail-bindingRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1792,6 +1998,194 @@ export interface operations {
             204: {
                 headers: {
                     "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "list-mail-providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["List-mail-providersResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "create-mail-provider": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailProviderBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailProviderDTO"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "list-mail-provider-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["List-mail-provider-optionsResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "update-mail-provider": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailProviderBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailProviderDTO"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "delete-mail-provider": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "test-mail-provider": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Test-mail-providerRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
                     [name: string]: unknown;
                 };
                 content?: never;

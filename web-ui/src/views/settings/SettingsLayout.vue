@@ -14,7 +14,7 @@
 // mobile-first, so Settings must degrade the same way.
 import { computed } from "vue";
 import { RouterLink, RouterView } from "vue-router";
-import { User, Bell, LayoutGrid, ScrollText, Users, Info, type LucideIcon } from "lucide-vue-next";
+import { User, Bell, LayoutGrid, Mail, ScrollText, Users, Info, type LucideIcon } from "lucide-vue-next";
 import { useAuth } from "@/auth";
 
 const { currentUser } = useAuth();
@@ -26,6 +26,7 @@ type NavItem = { to: string; label: string; icon: LucideIcon; adminOnly?: boolea
 const allItems: NavItem[] = [
   { to: "/settings/account", label: "Account", icon: User },
   { to: "/settings/users", label: "Users", icon: Users, adminOnly: true },
+  { to: "/settings/mail", label: "Outgoing email", icon: Mail, adminOnly: true },
   { to: "/settings/notifications", label: "Notifications", icon: Bell },
   { to: "/settings/apps", label: "Installed apps", icon: LayoutGrid },
   { to: "/settings/activity", label: "Activity", icon: ScrollText },

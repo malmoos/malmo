@@ -103,6 +103,15 @@ type Manifest struct {
 	// maps those to whatever it expects — same app-defined convention as
 	// MOLMA_SECRET_*. Absent ⇒ the app brings its own datastore in its compose.
 	Services map[string]ServiceDep `yaml:"services,omitempty"`
+
+	// Mail declares the app can send outgoing email through an admin-registered
+	// SMTP provider (APP_MANIFEST.md # D, SERVICE_PROVISIONING.md # BYO outgoing
+	// mail). Presence of the block makes the install dialog offer the provider
+	// picker; when bound, the brain injects MOLMA_MAIL_* into the app's .env and
+	// the compose maps those to whatever the app expects — same app-defined
+	// convention as MOLMA_SECRET_* / MOLMA_SERVICE_*. Absent ⇒ no picker, never
+	// injected. nil-able so "no block" and "block present" are distinguishable.
+	Mail *Mail `yaml:"mail,omitempty"`
 }
 
 // Description holds the app's catalog-facing text (APP_MANIFEST.md # A).
@@ -387,6 +396,14 @@ type ServiceDep struct {
 	Name    string `yaml:"name,omitempty"`
 }
 
+// Mail is the optional outgoing-email declaration (APP_MANIFEST.md # D,
+// SERVICE_PROVISIONING.md # BYO outgoing mail). Optional must be true — v1 has
+// no required-mail semantics, because a box may have no provider registered and
+// every app must still install and run unbound (validateMail rejects false).
+type Mail struct {
+	Optional bool `yaml:"optional"`
+}
+
 // serviceVersions is the allowlist of versions per managed-service type
 // (SERVICE_PROVISIONING.md # Catalog (v1)). A manifest declaring a type/version
 // outside this set is rejected at parse time. Note: schema-valid is not the
@@ -487,6 +504,9 @@ func (m *Manifest) validate() error {
 	if err := m.validateServices(); err != nil {
 		return err
 	}
+	if err := m.validateMail(); err != nil {
+		return err
+	}
 	return ValidatePermissions(&m.Permissions)
 }
 
@@ -534,6 +554,20 @@ func (m *Manifest) validateServices() error {
 		if !versions[dep.Version] {
 			return fmt.Errorf("services[%s]: unsupported %s version %q", key, dep.Type, dep.Version)
 		}
+	}
+	return nil
+}
+
+// validateMail checks the optional outgoing-mail block (APP_MANIFEST.md # D).
+// Absent ⇒ no-op. v1 supports only `optional: true`: an app that cannot run
+// unbound would have to fail install on every box with no provider registered,
+// so required mail is rejected until a real consumer needs it.
+func (m *Manifest) validateMail() error {
+	if m.Mail == nil {
+		return nil
+	}
+	if !m.Mail.Optional {
+		return fmt.Errorf("mail: v1 supports only optional mail (set `optional: true`; apps must run unbound)")
 	}
 	return nil
 }

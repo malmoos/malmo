@@ -60,7 +60,7 @@ func installDBAppKind(t *testing.T, e *testEnv, id, kind, version string) store.
 	e.writeCatalogApp(t, id, dbCompose, man)
 	e.docker.digests[testImage] = testDigest
 	inst, err := e.m.Install(context.Background(), id,
-		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, nil)
+		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil)
 	if err != nil {
 		t.Fatalf("install %s: %v", id, err)
 	}
