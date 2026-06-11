@@ -14,7 +14,7 @@
 // stub that correctly implements EntryGroupNew, AddAddress, Commit, and Free —
 // which is more code than the publisher itself and wrong in different ways.
 //
-// The nspawn CI lane (future slice — see docs/progress/0013-avahi-dbus-publisher.md)
+// The nspawn CI lane (future slice — see docs/progress/avahi-dbus-publisher.md)
 // will provision a real avahi-daemon and run these tests automatically. Until
 // then, run manually on a Linux dev machine with avahi-daemon running:
 //

@@ -1,10 +1,10 @@
 //go:build linux
 
 // Package avahipublisher publishes per-app A-record aliases via the Avahi DBus
-// API. It replaces the earlier static-file approach (0012 false start) which
+// API. It replaces the earlier static-file approach (the false start) which
 // could not publish raw A records — Avahi static files announce *services*, not
 // bare hostname aliases. See DECISIONS.md entry 2026-05-24 and
-// docs/progress/0013-avahi-dbus-publisher.md for the full story.
+// docs/progress/avahi-dbus-publisher.md for the full story.
 //
 // # Mechanism
 //
@@ -33,10 +33,12 @@
 // interfaces (all links down, boot race) is a Publish error: the install
 // surfaces it, and the NM watcher's RepublishAll retries on the next event.
 //
-// When LAN is nil (no NetworkManager — the dev inner loop), Publish falls
-// back to #129's single-address behavior: the kernel's route-chosen source
-// address (netstate.DetectIPv4) announced with interface index -1 ("all
-// interfaces").
+// When LAN is nil, Publish falls back to #129's single-address behavior: the
+// kernel's route-chosen source address (netstate.DetectIPv4) announced with
+// interface index -1 ("all interfaces"). No production binary takes this path
+// today — cmd/host-agent-real and cmd/molma-network-verify always set LAN, and
+// the dev inner loop uses FakePublisher, not this type. It is the preserved
+// #129 compatibility shim and is exercised only by tests.
 //
 // # IP changes and avahi-daemon restarts
 //
@@ -47,7 +49,8 @@
 // the allowlist sync restarts avahi-daemon (see conf.go). DBus groups are
 // also lost when host-agent itself restarts; the brain re-publishes all
 // running instances at startup via lifecycle.Reconcile. Mid-life host-agent
-// restart while the brain is running is a known gap — see progress/0013.
+// restart while the brain is running is a known gap — see
+// docs/progress/avahi-dbus-publisher.md.
 package avahipublisher
 
 import (

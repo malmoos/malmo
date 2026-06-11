@@ -22,8 +22,8 @@
 //   - avahi-daemon running with the system DBus accessible
 //   - Must run as root (pam_unix.so requires privilege)
 //
-// See docs/progress/0011-host-agent-pam-verify.md and
-// docs/progress/0013-avahi-dbus-publisher.md for full context and known gaps.
+// See docs/progress/host-agent-pam-verify.md and
+// docs/progress/avahi-dbus-publisher.md for full context and known gaps.
 package main
 
 import (
@@ -81,7 +81,7 @@ func main() {
 	// verifyPassword uses real PAM; Avahi A records are published via DBus;
 	// set-password writes to /etc/shadow via useradd+chpasswd; set-role
 	// flips sudo group membership via gpasswd; delete-user shells out to
-	// userdel -r -f (see docs/progress/0017-host-agent-delete-user.md).
+	// userdel -r -f (see docs/progress/host-agent-delete-user.md).
 	a := hostagent.New(
 		&pamverifier.PAMVerifier{Service: "molma"},
 		pub,
@@ -104,14 +104,23 @@ func main() {
 	if err := avahiSync.Apply(); err != nil {
 		slog.Warn("avahi sync at startup", "err", err)
 	}
+	watchCtx, stopWatch := context.WithCancel(context.Background())
 	go func() {
-		if err := prov.Watch(context.Background(), func() {
+		if err := prov.Watch(watchCtx, func() {
 			if err := avahiSync.Apply(); err != nil {
 				slog.Error("avahi sync", "err", err)
 			}
 		}); err != nil {
 			slog.Error("netstate watch unavailable; IP-change replay disabled", "err", err)
 		}
+	}()
+	// On shutdown, stop the watcher and close both DBus connections (the
+	// publisher's and the provider's). os.Exit skips defers on the error path
+	// below, so that path closes explicitly too.
+	defer func() {
+		stopWatch()
+		_ = pub.Close()
+		_ = prov.Close()
 	}()
 
 	mux := http.NewServeMux()
@@ -121,8 +130,10 @@ func main() {
 	srv := &http.Server{Handler: hostagent.LogRequests(mux)}
 	if err := srv.Serve(ln); err != nil {
 		slog.Error("serve", "err", err)
+		// os.Exit skips the deferred cleanup; run it by hand first.
+		stopWatch()
 		_ = pub.Close()
+		_ = prov.Close()
 		os.Exit(1)
 	}
-	_ = pub.Close()
 }
