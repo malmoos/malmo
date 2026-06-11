@@ -23,11 +23,11 @@ We also accept up-front that **`.local` is a desktop story.** Android browsers d
 
 ## What we publish
 
-Three categories of records, all driven by the brain via host-agent:
+Three categories of records:
 
 ### 1. The host record
 
-`molma.local A <lan-ip>` — the box itself. Published once at boot, re-announced on link-up and IP change. The dashboard at `https://molma.local` (or `http://molma.local` pre-toggle) resolves through this.
+`molma.local A <lan-ip>` — the box itself. This is avahi-daemon's native per-interface host record, driven by the system hostname — not published by molma code. Avahi announces it at startup and re-announces on link-up and IP change. The dashboard at `https://molma.local` (or `http://molma.local` pre-toggle) resolves through this.
 
 ### 2. Per-app A records
 
