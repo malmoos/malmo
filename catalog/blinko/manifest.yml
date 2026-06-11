@@ -37,14 +37,15 @@ resources:
 # Notes, accounts, and settings live in the managed Postgres; ./data is
 # /app/.blinko — uploaded attachments (files/), installed plugins (plugins/),
 # the app's own scheduled pg dumps (pgdump/), and the AI embeddings index
-# (vector/), which the app can rebuild on demand and is therefore cache.
-# Measured baseline at first healthy on a clean install is ~0 (four empty
-# directories). Notes are database rows, not files in a use-case folder, and
-# there is no external-library option, so the app manages its own content
-# (forfeits the files-first-class badge).
+# (vector/). vector/ is rebuildable on demand and pgdump/ holds copies of
+# data already protected by the managed-service backup path, so both are
+# cache. Measured baseline at first healthy on a clean install is ~0 (four
+# empty directories). Notes are database rows, not files in a use-case
+# folder, and there is no external-library option, so the app manages its
+# own content (forfeits the files-first-class badge).
 storage:
   data_volumes: [./data]
-  cache_volumes: [./data/vector]
+  cache_volumes: [./data/vector, ./data/pgdump]
   estimated_size: 1M
   app_managed_user_content: true
 
