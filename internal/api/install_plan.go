@@ -256,6 +256,11 @@ func (s *Server) installPlan(ctx context.Context, in *struct {
 		slog.Error("install-plan: catalog entry failed to load", "manifest_id", in.ID, "err", err)
 		return nil, huma.Error500InternalServerError("catalog entry is malformed")
 	}
+	// Unlisted app (`listed: false`) is pulled from the store — no install plan,
+	// same 404 as a missing manifest. Mirrors the gate in installApp.
+	if !man.IsListed() {
+		return nil, huma.Error404NotFound("no such catalog app")
+	}
 	// buildInstallPlan stays pure (permissions + scope menus); the box-specific
 	// footprint is attached here because it queries Docker + the host (read-only,
 	// advisory — see InstallFootprint). A footprint sub-failure degrades to zeros

@@ -16,6 +16,16 @@ links:
   homepage: https://github.com/janeczku/calibre-web
   source: https://github.com/linuxserver/docker-calibre-web
 
+# Pulled from the store: the linuxserver.io image runs s6-overlay, which must
+# start as uid 0 to set up /run before dropping to PUID:PGID, but molma forces a
+# non-root user and strips CAP_SETUID/CAP_SETGID — so it crash-loops on every
+# boot (preinit: "/run belongs to uid 0 instead of 3276"). Blocked, not Rejected:
+# unblocks when user-namespace remap lands or a janeczku/calibre-web swap is
+# verified under the sandbox. Kept in-catalog (manifest + adaptation preserved)
+# but hidden + uninstallable. See docs/dev/catalog-status.md and the
+# nonroot-data-ownership entry in docs/dev/catalog-import-gaps.md.
+listed: false
+
 compose_file: compose.yml
 main_service: calibre-web
 main_port: 8083
