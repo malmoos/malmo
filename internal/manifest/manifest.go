@@ -42,6 +42,16 @@ type Manifest struct {
 	Links        Links    `yaml:"links,omitempty"`
 	ChangelogURL string   `yaml:"changelog_url,omitempty"`
 
+	// Listed controls store visibility (APP_MANIFEST.md # A). A *bool so absent is
+	// distinguishable from explicit false: nil or true ⇒ the app shows in the store
+	// grid/detail page and can be installed; explicit `listed: false` ⇒ the manifest
+	// stays in the catalog (parses, lints, serves icons) but is hidden from browse
+	// and uninstallable through the store — the way a Blocked/Rejected app
+	// (docs/dev/catalog-status.md) is pulled without throwing away its adaptation.
+	// Read it through IsListed(), never the raw pointer. Default-true, so every
+	// existing manifest stays listed with no change (back-compatible field add).
+	Listed *bool `yaml:"listed,omitempty"`
+
 	ComposeFile    string      `yaml:"compose_file"`
 	MainService    string      `yaml:"main_service"`
 	MainPort       int         `yaml:"main_port"`
@@ -411,6 +421,11 @@ var folderTaxonomy = map[string]bool{
 	"photos": true, "documents": true, "movies": true,
 	"music": true, "notes": true, "downloads": true,
 }
+
+// IsListed reports whether the app is visible/installable through the store.
+// Absent (`listed:` omitted) defaults to true, so the catalog hides an app only
+// when a manifest explicitly sets `listed: false` (APP_MANIFEST.md # A).
+func (m *Manifest) IsListed() bool { return m.Listed == nil || *m.Listed }
 
 func Parse(data []byte) (*Manifest, error) {
 	var m Manifest

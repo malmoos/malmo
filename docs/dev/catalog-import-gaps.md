@@ -122,6 +122,14 @@ Unlike `docs/progress/` entries (frozen ADR snapshots), this file is **mutable b
 - **Why molma can't satisfy it (v1):** same missing mechanism as the ghost entry — molma has no outgoing-mail relay, no `MOLMA_SMTP_*` injection, and no per-app env-override UI through which a user could supply their own provider's credentials post-install.
 - **Status:** planned (#122 — BYO outgoing email: per-app SMTP provider binding + injection). Recurs across apps (ghost, kimai, and docuseal's email-signing workflow); the design shape lives on the issue.
 
+### smtp-relay — gitea (2026-06-11)
+
+- **Severity:** degraded
+- **Trigger:** no `GITEA__mailer__*` env set — Gitea's mailer is disabled by default, so all outbound mail (password resets, registration confirmations, issue/PR notifications, webhook failure alerts) is silently dropped until an admin configures SMTP in the app settings.
+- **What breaks:** any email Gitea sends is never delivered. Users can work around a forgotten password via an admin reset from the Gitea admin UI, so nobody is permanently locked out. Core git hosting (repositories, issues, pull requests) is fully functional.
+- **Why molma can't satisfy it (v1):** no outgoing-mail relay, no `MOLMA_SMTP_*` injection, and no per-app env-override UI for post-install SMTP credentials. Same missing mechanism as ghost, kimai, and docuseal.
+- **Status:** planned (#122 — BYO outgoing email: per-app SMTP provider binding + injection). When #122 ships, map `GITEA__mailer__ENABLED: "true"` + `GITEA__mailer__SMTP_ADDR`, `SMTP_PORT`, `FROM`, `USER`, `PASSWD` to the injected relay credentials and revisit.
+
 ### nonroot-data-ownership — postiz (2026-06-11)
 
 - **Severity:** blocks-start
