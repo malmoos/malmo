@@ -3,6 +3,7 @@ package avahipublisher
 
 import (
 	"errors"
+	"log/slog"
 	"net"
 	"strings"
 	"testing"
@@ -26,6 +27,11 @@ func TestDetectIPv4_ProbeWins(t *testing.T) {
 }
 
 func TestDetectIPv4_FallsBackToEnumeration(t *testing.T) {
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
 	probe := func() (string, error) { return "", errors.New("network is unreachable") }
 	enumerate := func() (string, error) { return "10.0.0.5", nil }
 	ip, err := detectIPv4(probe, enumerate)
@@ -34,6 +40,9 @@ func TestDetectIPv4_FallsBackToEnumeration(t *testing.T) {
 	}
 	if ip != "10.0.0.5" {
 		t.Errorf("ip: want 10.0.0.5, got %q", ip)
+	}
+	if !strings.Contains(buf.String(), "route probe failed") {
+		t.Error("detectIPv4: want slog.Warn about route probe failure, got none")
 	}
 }
 

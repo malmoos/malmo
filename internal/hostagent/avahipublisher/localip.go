@@ -26,7 +26,7 @@ func detectIPv4(probe, enumerate func() (string, error)) (string, error) {
 		return "", fmt.Errorf("avahipublisher: no usable local IPv4: route probe: %v; interface enumeration: %w", err, enumErr)
 	}
 	slog.Warn("avahipublisher: route probe failed (no default route?); announced address picked by interface enumeration and may be wrong",
-		"err", err, "ip", ip)
+		"err", err, "host", ip)
 	return ip, nil
 }
 
