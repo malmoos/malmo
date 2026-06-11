@@ -26,9 +26,23 @@
 //
 // # Local-IP detection
 //
-// First non-loopback, non-link-local (169.254.x.x) IPv4 address on any
-// interface. Works for single-primary-interface boxes; multi-homed / dual-stack
-// will need a future tweak (see Known Gaps in the progress doc).
+// The announced address is the source address the kernel's routing table picks
+// for an outbound probe (a connected UDP socket — no packet is sent), looked
+// up fresh on every Publish so a post-DHCP-change install announces the
+// current address. The route lookup structurally excludes Docker bridges and
+// other virtual interfaces — interface-enumeration order is what previously
+// let a br-* address win and made app names unreachable from the LAN (#129).
+// If the probe fails (no default route, e.g. a static IP with no gateway),
+// enumeration is the fallback so installs still publish, with a warning that
+// the address may be wrong. See localip.go.
+//
+// Caveat: a full-tunnel VPN routes the probe through the tunnel, so a dev
+// machine running one announces the VPN address. Molma installs don't run
+// client VPNs; production is unaffected.
+//
+// Entry groups committed before an IP change keep their old literal address
+// until the brain replays them (brain restart → lifecycle.Reconcile); live
+// IP-change replay is a follow-up slice.
 //
 // # Non-Linux builds
 //
@@ -41,7 +55,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 	"sync"
 
@@ -82,9 +95,12 @@ type DBusPublisher struct {
 	// (production: protocol.AppHostSuffix, ".local").
 	HostSuffix string
 
-	// localIP may be set in tests (via a subtype or field override); otherwise
-	// it is detected lazily on the first Publish call and cached.
-	localIP string
+	// detectIP, when non-nil, replaces local-IP detection — tests stub it so
+	// they don't depend on the host's routing table. nil (production) means
+	// detectLocalIPv4: kernel route probe with enumeration fallback. Detection
+	// runs on every Publish — no caching — so an app published after a DHCP
+	// lease change announces the current address.
+	detectIP func() (string, error)
 
 	mu     sync.Mutex
 	conn   *dbus.Conn
@@ -121,7 +137,7 @@ func (p *DBusPublisher) Publish(slug string) (string, error) {
 		return "", err
 	}
 
-	localIP, err := p.ensureLocalIP()
+	localIP, err := p.localIPv4()
 	if err != nil {
 		return "", err
 	}
@@ -247,17 +263,13 @@ func (p *DBusPublisher) ensureConn() error {
 	return nil
 }
 
-// ensureLocalIP returns the cached local IPv4, detecting it on first call.
-func (p *DBusPublisher) ensureLocalIP() (string, error) {
-	if p.localIP != "" {
-		return p.localIP, nil
+// localIPv4 returns the box's LAN IPv4, re-detected on every call (no cache):
+// apps published after a DHCP lease change must announce the current address.
+func (p *DBusPublisher) localIPv4() (string, error) {
+	if p.detectIP != nil {
+		return p.detectIP()
 	}
-	ip, err := detectLocalIPv4()
-	if err != nil {
-		return "", err
-	}
-	p.localIP = ip
-	return ip, nil
+	return detectLocalIPv4()
 }
 
 // newEntryGroup calls org.freedesktop.Avahi.Server.EntryGroupNew and returns
@@ -306,43 +318,4 @@ func isCollision(err error) bool {
 		return dbusErr.Name == "org.freedesktop.Avahi.CollisionFailure"
 	}
 	return false
-}
-
-// detectLocalIPv4 returns the first non-loopback, non-link-local IPv4 address
-// found on any interface. It prefers RFC1918 addresses (10/8, 172.16-31/12,
-// 192.168/16) but falls back to any non-loopback non-link-local match.
-//
-// Limitation: on multi-homed boxes this picks whichever interface enumerates
-// first. A future tweak could prefer the interface NetworkManager reports as
-// the primary LAN connection. Single-primary-interface boxes (the v1 target)
-// are not affected.
-func detectLocalIPv4() (string, error) {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return "", fmt.Errorf("avahipublisher: list interfaces: %w", err)
-	}
-	for _, addr := range addrs {
-		var ip net.IP
-		switch v := addr.(type) {
-		case *net.IPNet:
-			ip = v.IP
-		case *net.IPAddr:
-			ip = v.IP
-		}
-		if ip == nil {
-			continue
-		}
-		ip4 := ip.To4()
-		if ip4 == nil {
-			continue // IPv6
-		}
-		if ip4.IsLoopback() {
-			continue
-		}
-		if ip4.IsLinkLocalUnicast() { // 169.254.x.x
-			continue
-		}
-		return ip4.String(), nil
-	}
-	return "", fmt.Errorf("avahipublisher: no usable local IPv4 address found (loopback and link-local excluded)")
 }
