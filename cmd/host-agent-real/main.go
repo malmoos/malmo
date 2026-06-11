@@ -8,6 +8,12 @@
 // over the core-unit allowlist (services category, service-down). All host ops
 // now hit the real system.
 //
+// Discovery announces per LAN interface: NetworkManager (via DBus) supplies
+// the set of active ethernet/WiFi interfaces, each app name is published on
+// every LAN interface with that interface's own address, and a watcher replays
+// the announcements (and keeps avahi-daemon.conf's allow-interfaces current)
+// when the network changes. See DISCOVERY.md # Interface scoping.
+//
 // Build requirements:
 //   - Linux only
 //   - CGO enabled (for PAM)
@@ -21,6 +27,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"net"
 	"net/http"
@@ -32,6 +39,7 @@ import (
 	"github.com/molmaos/molma/internal/hostagent/diskusage"
 	"github.com/molmaos/molma/internal/hostagent/healthsource"
 	"github.com/molmaos/molma/internal/hostagent/journalsource"
+	"github.com/molmaos/molma/internal/hostagent/netstate"
 	"github.com/molmaos/molma/internal/hostagent/pamverifier"
 	"github.com/molmaos/molma/internal/hostagent/procsource"
 	"github.com/molmaos/molma/internal/hostagent/rampressure"
@@ -42,7 +50,14 @@ import (
 )
 
 func main() {
-	pub := &avahipublisher.DBusPublisher{HostSuffix: protocol.AppHostSuffix}
+	// NetworkManager is the source of truth for the LAN set (#130): the
+	// publisher announces every app name per LAN interface with that
+	// interface's address, and the sync keeps avahi-daemon.conf's
+	// allow-interfaces plus the committed entry groups aligned across IP
+	// changes and interface add/remove.
+	prov := &netstate.NMProvider{}
+	pub := &avahipublisher.DBusPublisher{HostSuffix: protocol.AppHostSuffix, LAN: prov.LANInterfaces}
+	avahiSync := &avahipublisher.Sync{Publisher: pub, LAN: prov.LANInterfaces}
 
 	sockPath := os.Getenv("MOLMA_AGENT_SOCK")
 	if sockPath == "" {
@@ -80,6 +95,24 @@ func main() {
 	a.Disk = diskusage.New()
 	a.Reboot = rebootrequired.New()
 	a.System = procsource.New()
+	a.Net = prov
+
+	// Align avahi-daemon with the current LAN set once at startup, then keep
+	// it aligned from the NetworkManager watcher. Startup failure is non-fatal:
+	// unprivileged dev runs can't write /etc/avahi or restart the daemon, and
+	// every step is idempotent — the next network event retries.
+	if err := avahiSync.Apply(); err != nil {
+		slog.Warn("avahi sync at startup", "err", err)
+	}
+	go func() {
+		if err := prov.Watch(context.Background(), func() {
+			if err := avahiSync.Apply(); err != nil {
+				slog.Error("avahi sync", "err", err)
+			}
+		}); err != nil {
+			slog.Error("netstate watch unavailable; IP-change replay disabled", "err", err)
+		}
+	}()
 
 	mux := http.NewServeMux()
 	a.Mount(mux)

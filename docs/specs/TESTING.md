@@ -39,6 +39,7 @@ Full VM boot with a software TPM (`swtpm`). Mature stack — `systemd`'s own CI 
 - Disk hotplug scenarios via QEMU `device_add` / `device_del`
 - Failure injection: kill Docker mid-boot, simulate clock skew, detach the data drive
 - End-to-end first-run flow
+- NetworkManager-integrated discovery: per-LAN-interface mDNS announcement, avahi-daemon.conf allowlist sync, interface-removal rewrite, IP-change replay (realized — rides the second boot of the LUKS cycle against a multi-NIC VM; see `dev/test-qemu/`)
 
 **Core test matrix** (in priority order — these are the ones we should not ship without):
 

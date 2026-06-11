@@ -31,6 +31,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/molmaos/molma/internal/hostagent/netstate"
 )
 
 // TestDBusPublisher_PublishAndUnpublish exercises the full Publish → Unpublish
@@ -112,7 +114,7 @@ func TestDBusPublisher_AnnouncesRouteProbedAddress(t *testing.T) {
 	if _, err := exec.LookPath("avahi-resolve"); err != nil {
 		t.Skip("avahi-resolve not installed (apt install avahi-utils)")
 	}
-	want, err := probeLANIPv4()
+	want, err := netstate.ProbeIPv4()
 	if err != nil {
 		t.Skipf("route probe failed (box without a default route?): %v", err)
 	}
@@ -143,6 +145,124 @@ func TestDBusPublisher_AnnouncesRouteProbedAddress(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("announced %s, want the route-probed LAN address %s — a bridge address won (#129)?", got, want)
+	}
+}
+
+// --- #130: per-interface announcement and IP-change replay -------------------
+
+// resolve4 polls avahi-resolve for up to ~3 seconds until the name resolves to
+// want (pass "" to accept the first answer) and returns the resolved address.
+// The retry absorbs both multicast announcement latency and, for replay tests,
+// the goodbye/re-announce window where the old record is still cached.
+func resolve4(t *testing.T, name, want string) string {
+	t.Helper()
+	var got string
+	for i := 0; i < 15; i++ {
+		out, err := exec.Command("avahi-resolve", "-4", "-n", name).Output()
+		if err == nil {
+			if fields := strings.Fields(string(out)); len(fields) == 2 && fields[0] == name {
+				got = fields[1]
+				if want == "" || got == want {
+					return got
+				}
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return got
+}
+
+// TestDBusPublisher_PerInterfaceAnnounce wires the real NetworkManager LAN set
+// and verifies a published name resolves to a LAN interface's own address —
+// the #130 end-state where each interface announces itself.
+func TestDBusPublisher_PerInterfaceAnnounce(t *testing.T) {
+	if _, err := exec.LookPath("avahi-resolve"); err != nil {
+		t.Skip("avahi-resolve not installed (apt install avahi-utils)")
+	}
+	prov := &netstate.NMProvider{}
+	defer prov.Close()
+	ifaces, err := prov.LANInterfaces()
+	if err != nil {
+		t.Skipf("NetworkManager not reachable: %v", err)
+	}
+	if len(ifaces) == 0 {
+		t.Skip("no active ethernet/WiFi connections on this box")
+	}
+
+	p := &DBusPublisher{HostSuffix: ".local", LAN: prov.LANInterfaces}
+	defer p.Close()
+	name, err := p.Publish("avahitest-130")
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	defer p.Unpublish("avahitest-130")
+
+	got := resolve4(t, name, "")
+	if got == "" {
+		t.Fatalf("%s never resolved via avahi-resolve (waited ~3s)", name)
+	}
+	for _, li := range ifaces {
+		if got == li.IPv4 {
+			return
+		}
+	}
+	t.Errorf("resolved %s = %s; want one of the LAN interface addresses %+v", name, got, ifaces)
+}
+
+// TestDBusPublisher_PublishFailsWithZeroLANInterfaces pins the zero-LAN
+// decision: all links down is a Publish error the install surfaces, not a
+// silent no-op announcement.
+func TestDBusPublisher_PublishFailsWithZeroLANInterfaces(t *testing.T) {
+	p := &DBusPublisher{HostSuffix: ".local", LAN: func() ([]netstate.LANInterface, error) {
+		return nil, nil
+	}}
+	defer p.Close()
+
+	_, err := p.Publish("avahitest-zerolan")
+	if err == nil {
+		t.Fatal("Publish with zero LAN interfaces: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "no LAN interface") {
+		t.Errorf("error should name the zero-LAN condition, got: %v", err)
+	}
+}
+
+// TestDBusPublisher_RepublishAll is the IP-change replay check: committed
+// entry groups hold the literal address they were committed with, so after
+// the (stubbed) detected address changes, RepublishAll must withdraw and
+// re-announce every name with the new address — and keep the announced name
+// exactly as stored.
+func TestDBusPublisher_RepublishAll(t *testing.T) {
+	if _, err := exec.LookPath("avahi-resolve"); err != nil {
+		t.Skip("avahi-resolve not installed (apt install avahi-utils)")
+	}
+
+	// TEST-NET-2 addresses: never routable, so the announcements are inert.
+	addr := "198.51.100.7"
+	p := &DBusPublisher{HostSuffix: ".local", detectIP: func() (string, error) { return addr, nil }}
+	defer p.Close()
+
+	name, err := p.Publish("avahitest-replay")
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	defer p.Unpublish("avahitest-replay")
+	if got := resolve4(t, name, "198.51.100.7"); got != "198.51.100.7" {
+		t.Fatalf("before replay: resolved %q, want 198.51.100.7", got)
+	}
+
+	addr = "198.51.100.8" // the "DHCP lease change"
+	if err := p.RepublishAll(); err != nil {
+		t.Fatalf("RepublishAll: %v", err)
+	}
+	if got := resolve4(t, name, "198.51.100.8"); got != "198.51.100.8" {
+		t.Errorf("after replay: resolved %q, want the new address 198.51.100.8", got)
+	}
+	if g, ok := p.groups["avahitest-replay"]; !ok || g.name != name {
+		t.Errorf("after replay: stored name %q, want unchanged %q", g.name, name)
+	}
+	if len(p.groups) != 1 {
+		t.Errorf("after replay: want 1 group, got %d", len(p.groups))
 	}
 }
 

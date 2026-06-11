@@ -10,45 +10,44 @@
 //
 // For each app slug the publisher:
 //  1. Calls org.freedesktop.Avahi.Server.EntryGroupNew to get a fresh group.
-//  2. Calls org.freedesktop.Avahi.EntryGroup.AddAddress with the slug hostname
-//     and the box's local IPv4 address.
+//  2. Calls org.freedesktop.Avahi.EntryGroup.AddAddress once per LAN
+//     interface, announcing that interface's own IPv4 on that interface —
+//     the same shape avahi-daemon uses for its native host record.
 //  3. Calls org.freedesktop.Avahi.EntryGroup.Commit to start the announcement.
 //
-// Groups are stored in p.groups[slug]. Unpublish calls EntryGroup.Free, which
-// withdraws the announcement and releases the DBus object.
+// Groups are stored in p.groups[slug] together with the announced name.
+// Unpublish calls EntryGroup.Free, which withdraws the announcement and
+// releases the DBus object.
 //
-// # Restart durability
+// # Which interfaces, which addresses
 //
-// DBus groups are lost when host-agent restarts. The brain re-publishes all
-// running instances at startup via lifecycle.Reconcile (which already calls
-// m.host.Publish per running instance). Mid-life host-agent restart while the
-// brain is running is a known gap — see progress/0013.
+// The LAN set comes from the LAN field — in production netstate.NMProvider,
+// NetworkManager's active ethernet/WiFi connections (DISCOVERY.md # Interface
+// scoping). Per-interface announcement makes the bridge problem structurally
+// impossible: a Docker bridge is never in the set, so no record is ever
+// announced on or for it, and a multi-homed box (ethernet + WiFi) announces
+// each side's own address to the clients on that side (#130).
 //
-// # Local-IP detection
+// The set is re-read on every Publish — no caching — so an app published
+// after a DHCP lease change announces the current address. Zero LAN
+// interfaces (all links down, boot race) is a Publish error: the install
+// surfaces it, and the NM watcher's RepublishAll retries on the next event.
 //
-// The announced address is the source address the kernel's routing table picks
-// for an outbound probe (a connected UDP socket — no packet is sent), looked
-// up fresh on every Publish so a post-DHCP-change install announces the
-// current address. The route lookup structurally excludes Docker bridges and
-// other virtual interfaces — interface-enumeration order is what previously
-// let a br-* address win and made app names unreachable from the LAN (#129).
-// If the probe fails (no default route, e.g. a static IP with no gateway),
-// enumeration is the fallback so installs still publish, with a warning that
-// the address may be wrong. See localip.go.
+// When LAN is nil (no NetworkManager — the dev inner loop), Publish falls
+// back to #129's single-address behavior: the kernel's route-chosen source
+// address (netstate.DetectIPv4) announced with interface index -1 ("all
+// interfaces").
 //
-// Caveat: a full-tunnel VPN routes the probe through the tunnel, so a dev
-// machine running one announces the VPN address. Molma installs don't run
-// client VPNs; production is unaffected.
+// # IP changes and avahi-daemon restarts
 //
-// Entry groups committed before an IP change keep their old literal address
-// until the brain replays them (brain restart → lifecycle.Reconcile); live
-// IP-change replay is a follow-up slice.
-//
-// # Non-Linux builds
-//
-// dbus_other.go provides a stub DBusPublisher for !linux that returns
-// "not supported on this OS" from every method. The fake binary (cmd/host-agent)
-// never instantiates DBusPublisher; this exists so the package compiles on macOS.
+// Committed entry groups hold the literal addresses they were committed with;
+// `avahi-daemon --reload` does not rewrite them, and an avahi-daemon restart
+// destroys them outright. RepublishAll re-announces every published name with
+// the current LAN set — the NM watcher calls it on state changes and after
+// the allowlist sync restarts avahi-daemon (see conf.go). DBus groups are
+// also lost when host-agent itself restarts; the brain re-publishes all
+// running instances at startup via lifecycle.Reconcile. Mid-life host-agent
+// restart while the brain is running is a known gap — see progress/0013.
 package avahipublisher
 
 import (
@@ -59,6 +58,7 @@ import (
 	"sync"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/molmaos/molma/internal/hostagent/netstate"
 )
 
 // Avahi DBus constants from <avahi-common/defs.h>.
@@ -87,6 +87,23 @@ const (
 // rename) can check with errors.Is.
 var ErrCollision = errors.New("avahipublisher: name collision")
 
+// addressTarget is one A record to announce: an interface index (or
+// avahiInterfaceUnspec in the no-NM fallback) and the address to announce
+// there.
+type addressTarget struct {
+	iface int32
+	ip    string
+}
+
+// publishedGroup is the live state for one published slug: the Avahi
+// EntryGroup object and the name that won (primary or collision fallback) —
+// RepublishAll re-announces that exact name, never re-running the fallback,
+// so the name the brain stored stays true.
+type publishedGroup struct {
+	path dbus.ObjectPath
+	name string
+}
+
 // DBusPublisher publishes per-app A-record aliases via Avahi's DBus API.
 // Zero value is not usable — construct via &DBusPublisher{HostSuffix: ...}.
 // Safe for concurrent use.
@@ -95,20 +112,24 @@ type DBusPublisher struct {
 	// (production: protocol.AppHostSuffix, ".local").
 	HostSuffix string
 
-	// detectIP, when non-nil, replaces local-IP detection — tests stub it so
-	// they don't depend on the host's routing table. nil (production) means
-	// detectLocalIPv4: kernel route probe with enumeration fallback. Detection
-	// runs on every Publish — no caching — so an app published after a DHCP
-	// lease change announces the current address.
+	// LAN, when non-nil, supplies the LAN interface set to announce on
+	// (production: netstate.NMProvider.LANInterfaces). nil means no
+	// NetworkManager — the dev inner loop — and Publish falls back to one
+	// route-probed address on interface -1 (#129 behavior).
+	LAN func() ([]netstate.LANInterface, error)
+
+	// detectIP, when non-nil, replaces fallback local-IP detection — tests
+	// stub it so they don't depend on the host's routing table. nil
+	// (production) means netstate.DetectIPv4. Only consulted when LAN is nil.
 	detectIP func() (string, error)
 
 	mu     sync.Mutex
 	conn   *dbus.Conn
-	groups map[string]dbus.ObjectPath // slug → Avahi EntryGroup object path
+	groups map[string]publishedGroup // slug → live announcement
 }
 
-// Publish announces an A record for the slug pointing at the box's local IPv4
-// address and returns the announced hostname.
+// Publish announces A records for the slug on every LAN interface (each with
+// that interface's own address) and returns the announced hostname.
 //
 // The primary name is "<slug>" + HostSuffix (e.g. "photos.local"). If Avahi
 // reports a name collision (another device on the LAN already owns it), Publish
@@ -137,53 +158,124 @@ func (p *DBusPublisher) Publish(slug string) (string, error) {
 		return "", err
 	}
 
-	localIP, err := p.localIPv4()
+	targets, err := p.announceTargets()
 	if err != nil {
 		return "", err
 	}
 
 	// If already published, free the old group first (idempotent replay).
 	if old, ok := p.groups[slug]; ok {
-		_ = p.freeGroup(old)
+		_ = p.freeGroup(old.path)
 		delete(p.groups, slug)
 	}
 
 	hostname := slug + p.HostSuffix
-	groupPath, err := p.tryPublish(hostname, localIP)
+	groupPath, err := p.tryPublish(hostname, targets)
 	if errors.Is(err, ErrCollision) {
 		fallback := slug + "-" + p.boxLabel() + p.HostSuffix
 		slog.Warn("avahi name collision; retrying with box-qualified name",
 			"slug", slug, "name", hostname, "fallback", fallback)
 		hostname = fallback
-		groupPath, err = p.tryPublish(hostname, localIP)
+		groupPath, err = p.tryPublish(hostname, targets)
 	}
 	if err != nil {
 		return "", err
 	}
 
 	if p.groups == nil {
-		p.groups = make(map[string]dbus.ObjectPath)
+		p.groups = make(map[string]publishedGroup)
 	}
-	p.groups[slug] = groupPath
-	slog.Info("avahi publish", "slug", slug, "name", hostname, "ip", localIP)
+	p.groups[slug] = publishedGroup{path: groupPath, name: hostname}
+	slog.Info("avahi publish", "slug", slug, "name", hostname, "targets", targetsForLog(targets))
 	return hostname, nil
 }
 
-// tryPublish creates a fresh entry group, adds the A record, and commits it.
-// On an Avahi collision it returns ErrCollision (wrapped) so Publish can retry
-// with a box-qualified name. The group is freed on any error.
-func (p *DBusPublisher) tryPublish(hostname, localIP string) (dbus.ObjectPath, error) {
+// RepublishAll re-announces every published name with the current LAN set.
+// Called by the avahi sync (conf.go) after an NM state change — committed
+// entry groups hold the literal old addresses — and after an avahi-daemon
+// restart, which destroys all entry groups server-side (freeing the stale
+// group object is best-effort there).
+//
+// Each name is re-announced exactly as stored: the collision fallback never
+// re-runs, so the name the brain persisted cannot silently change. A name
+// that now collides (another device claimed it while we were down) fails its
+// replay; the failure is logged, the slug stays tracked, and the next replay
+// retries. Returns the first error encountered after attempting every slug.
+func (p *DBusPublisher) RepublishAll() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if len(p.groups) == 0 {
+		return nil
+	}
+	if err := p.ensureConn(); err != nil {
+		return err
+	}
+	targets, err := p.announceTargets()
+	if err != nil {
+		return err
+	}
+
+	var firstErr error
+	for slug, g := range p.groups {
+		_ = p.freeGroup(g.path) // stale after an avahi restart — best-effort
+		groupPath, err := p.tryPublish(g.name, targets)
+		if err != nil {
+			slog.Error("avahi republish failed; will retry on next network change",
+				"slug", slug, "name", g.name, "err", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		p.groups[slug] = publishedGroup{path: groupPath, name: g.name}
+		slog.Info("avahi republish", "slug", slug, "name", g.name, "targets", targetsForLog(targets))
+	}
+	return firstErr
+}
+
+// announceTargets resolves what to announce where. Called with p.mu held.
+func (p *DBusPublisher) announceTargets() ([]addressTarget, error) {
+	if p.LAN == nil {
+		// No NetworkManager (dev inner loop): one route-probed address,
+		// announced on all interfaces (#129).
+		ip, err := p.fallbackIPv4()
+		if err != nil {
+			return nil, err
+		}
+		return []addressTarget{{iface: avahiInterfaceUnspec, ip: ip}}, nil
+	}
+	ifaces, err := p.LAN()
+	if err != nil {
+		return nil, fmt.Errorf("avahipublisher: LAN interface set: %w", err)
+	}
+	if len(ifaces) == 0 {
+		return nil, fmt.Errorf("avahipublisher: no LAN interface is up (all links down?); nothing to announce on")
+	}
+	targets := make([]addressTarget, 0, len(ifaces))
+	for _, li := range ifaces {
+		targets = append(targets, addressTarget{iface: int32(li.Index), ip: li.IPv4})
+	}
+	return targets, nil
+}
+
+// tryPublish creates a fresh entry group, adds one A record per target, and
+// commits it. On an Avahi collision it returns ErrCollision (wrapped) so
+// Publish can retry with a box-qualified name. The group is freed on any error.
+func (p *DBusPublisher) tryPublish(hostname string, targets []addressTarget) (dbus.ObjectPath, error) {
 	groupPath, err := p.newEntryGroup()
 	if err != nil {
 		return "", fmt.Errorf("avahipublisher: EntryGroupNew: %w", err)
 	}
 
-	if err := p.addAddress(groupPath, hostname, localIP); err != nil {
-		_ = p.freeGroup(groupPath)
-		if isCollision(err) {
-			return "", fmt.Errorf("%w: %s", ErrCollision, hostname)
+	for _, t := range targets {
+		if err := p.addAddress(groupPath, t.iface, hostname, t.ip); err != nil {
+			_ = p.freeGroup(groupPath)
+			if isCollision(err) {
+				return "", fmt.Errorf("%w: %s", ErrCollision, hostname)
+			}
+			return "", fmt.Errorf("avahipublisher: AddAddress(%s, if%d, %s): %w", hostname, t.iface, t.ip, err)
 		}
-		return "", fmt.Errorf("avahipublisher: AddAddress(%s, %s): %w", hostname, localIP, err)
 	}
 
 	if err := p.commitGroup(groupPath); err != nil {
@@ -204,7 +296,7 @@ func (p *DBusPublisher) boxLabel() string {
 	return sanitizeBoxLabel(h)
 }
 
-// Unpublish withdraws the A record for the given slug.
+// Unpublish withdraws the A records for the given slug.
 // Idempotent: if the slug was never published (or already unpublished), returns nil.
 func (p *DBusPublisher) Unpublish(slug string) error {
 	if !slugRE.MatchString(slug) {
@@ -214,12 +306,12 @@ func (p *DBusPublisher) Unpublish(slug string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	groupPath, ok := p.groups[slug]
+	g, ok := p.groups[slug]
 	if !ok {
 		return nil // already gone — idempotent
 	}
 
-	if err := p.freeGroup(groupPath); err != nil {
+	if err := p.freeGroup(g.path); err != nil {
 		return fmt.Errorf("avahipublisher: Free(%s): %w", slug, err)
 	}
 	delete(p.groups, slug)
@@ -233,8 +325,8 @@ func (p *DBusPublisher) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	for slug, groupPath := range p.groups {
-		if err := p.freeGroup(groupPath); err != nil {
+	for slug, g := range p.groups {
+		if err := p.freeGroup(g.path); err != nil {
 			slog.Warn("avahi close: free group", "slug", slug, "err", err)
 		}
 	}
@@ -263,13 +355,14 @@ func (p *DBusPublisher) ensureConn() error {
 	return nil
 }
 
-// localIPv4 returns the box's LAN IPv4, re-detected on every call (no cache):
-// apps published after a DHCP lease change must announce the current address.
-func (p *DBusPublisher) localIPv4() (string, error) {
+// fallbackIPv4 returns the box's single LAN IPv4 for the no-NM path,
+// re-detected on every call (no cache): apps published after a DHCP lease
+// change must announce the current address.
+func (p *DBusPublisher) fallbackIPv4() (string, error) {
 	if p.detectIP != nil {
 		return p.detectIP()
 	}
-	return detectLocalIPv4()
+	return netstate.DetectIPv4()
 }
 
 // newEntryGroup calls org.freedesktop.Avahi.Server.EntryGroupNew and returns
@@ -283,11 +376,12 @@ func (p *DBusPublisher) newEntryGroup() (dbus.ObjectPath, error) {
 	return groupPath, nil
 }
 
-// addAddress calls org.freedesktop.Avahi.EntryGroup.AddAddress on the given group.
-func (p *DBusPublisher) addAddress(groupPath dbus.ObjectPath, hostname, ip string) error {
+// addAddress calls org.freedesktop.Avahi.EntryGroup.AddAddress on the given
+// group, announcing the record on one interface (or all, for iface -1).
+func (p *DBusPublisher) addAddress(groupPath dbus.ObjectPath, iface int32, hostname, ip string) error {
 	group := p.conn.Object(avahiService, groupPath)
 	return group.Call(avahiEntryGroupIface+".AddAddress", 0,
-		avahiInterfaceUnspec,
+		iface,
 		avahiProtoUnspec,
 		avahiPublishFlagsAlias,
 		hostname,
@@ -318,4 +412,14 @@ func isCollision(err error) bool {
 		return dbusErr.Name == "org.freedesktop.Avahi.CollisionFailure"
 	}
 	return false
+}
+
+// targetsForLog renders the announce targets as "if2=192.168.2.160" pairs for
+// the structured publish/republish log lines.
+func targetsForLog(targets []addressTarget) []string {
+	out := make([]string, len(targets))
+	for i, t := range targets {
+		out[i] = fmt.Sprintf("if%d=%s", t.iface, t.ip)
+	}
+	return out
 }
