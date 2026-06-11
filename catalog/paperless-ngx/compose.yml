@@ -26,11 +26,27 @@
 # (upstream's documented mechanism; a no-op once the user exists). The
 # credentials are fixed and public — the app description tells the user to
 # change the password immediately after first login.
+#
+# gotenberg + tika: Paperless natively handles only PDFs and images. To
+# consume Office documents (Word/Excel/PowerPoint + LibreOffice formats) and
+# saved emails (.eml), it hands each file to two stateless sidecars over HTTP:
+# Tika extracts text/metadata, Gotenberg renders the file to a PDF (LibreOffice
+# for Office docs, Chromium for email). Both are stateless — no volumes, no
+# folder/network grants beyond the app network. PAPERLESS_TIKA_ENABLED wires
+# them in. Verified booting and converting under the Tier-3 sandbox.
+#
+# gotenberg HOME=/tmp: Chromium's crashpad handler needs a writable home dir,
+# and the brain-pinned non-root uid has none (its real home is the owner's
+# tree, not mounted here). Pointing HOME at the container's writable /tmp is
+# enough — without it the Chromium route exits and .eml conversion 500s. The
+# rootfs is not read-only, so no tmpfs is required (cf. the webserver's /run).
 services:
   webserver:
     image: ghcr.io/paperless-ngx/paperless-ngx:2.20.15
     depends_on:
       - broker
+      - gotenberg
+      - tika
     tmpfs:
       - /run:exec,mode=1777
     environment:
@@ -46,6 +62,9 @@ services:
       PAPERLESS_CONSUMPTION_DIR: ${MOLMA_FOLDER_DOCUMENTS}
       PAPERLESS_ADMIN_USER: admin
       PAPERLESS_ADMIN_PASSWORD: changemeplease
+      PAPERLESS_TIKA_ENABLED: 1
+      PAPERLESS_TIKA_GOTENBERG_ENDPOINT: http://gotenberg:3000
+      PAPERLESS_TIKA_ENDPOINT: http://tika:9998
     volumes:
       - ./data/data:/usr/src/paperless/data
       - ./data/media:/usr/src/paperless/media
@@ -54,3 +73,15 @@ services:
     image: redis:8
     volumes:
       - ./data/redis:/data
+  gotenberg:
+    image: gotenberg/gotenberg:8.33
+    environment:
+      HOME: /tmp
+    # Disable JS and restrict file access — Gotenberg renders untrusted email
+    # HTML, so no tracking pixels or scripts (upstream's recommended flags).
+    command:
+      - gotenberg
+      - --chromium-disable-javascript=true
+      - --chromium-allow-list=file:///tmp/.*
+  tika:
+    image: apache/tika:3.2.3.0

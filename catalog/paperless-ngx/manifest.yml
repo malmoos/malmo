@@ -5,7 +5,7 @@ version: "2.20.15"
 description:
   short: "Scan, index, and archive your paper documents — searchable, tagged, and filed away."
   long: |
-    Paperless-ngx turns your paper pile into a searchable digital archive. Drop a scan or photo of a document into the Scans folder inside your Documents and it is picked up within seconds, OCR'd into searchable text, tagged, and filed — the original file is absorbed into the archive, so the folder stays an inbox, not a copy. Find anything later by full-text search, correspondent, document type, or date. molma provisions and manages the PostgreSQL database automatically — nothing to set up. Sign in with username `admin` and password `changemeplease`, and change that password immediately — it is the same on every fresh install. OCR works out of the box in English, German, Italian, Spanish, and French; additional languages are not available in this packaging.
+    Paperless-ngx turns your paper pile into a searchable digital archive. Drop a scan, photo, or PDF into the Scans folder inside your Documents and it is picked up within seconds, OCR'd into searchable text, tagged, and filed — the original file is absorbed into the archive, so the folder stays an inbox, not a copy. Office documents (Word, Excel, PowerPoint and their LibreOffice equivalents) and saved emails (.eml) are supported too, converted and indexed on the way in. Find anything later by full-text search, correspondent, document type, or date. molma provisions and manages the PostgreSQL database automatically — nothing to set up. Sign in with username `admin` and password `changemeplease`, and change that password immediately — it is the same on every fresh install. OCR works out of the box in English, German, Italian, Spanish, and French; additional languages are not available in this packaging.
 icon: ./icon.png
 screenshots: [./screenshots/01.png]
 categories: [documents, productivity]
@@ -32,9 +32,12 @@ health_probe:
   start_period: 180s
 
 # OCR (tesseract via celery workers) is the load: parallel consumption spikes
-# CPU and the idle footprint is ~530M for the web service alone.
+# CPU and the idle footprint is ~530M for the web service alone. The tika
+# (JVM, ~155M idle) and gotenberg (~25M idle, but Chromium/LibreOffice spike
+# during Office-doc and email conversion) sidecars push the recommendation to
+# 3G so a conversion running alongside OCR has headroom.
 resources:
-  recommended: { memory: 2G, cpu: 2.0 }
+  recommended: { memory: 3G, cpu: 2.0 }
 
 # ./data/data is Django state + the search index, ./data/media the archived
 # documents (originals + archive PDFs + thumbnails), ./data/export the
@@ -80,10 +83,18 @@ permissions:
       default: Scans
 
 images:
+  apache/tika:3.2.3.0:
+    digest: sha256:c0154cb95587cde64be74f35ada1a2bd7892219f3f0ac3c9dc6cab34046b3573
+    download_bytes: 160873494
+    disk_bytes: 360539648
   ghcr.io/paperless-ngx/paperless-ngx:2.20.15:
     digest: sha256:6c86cad803970ea782683a8e80e7403444c5bf3cf70de63b4d3c8e87500db92f
     download_bytes: 506783124
     disk_bytes: 1447538176
+  gotenberg/gotenberg:8.33:
+    digest: sha256:bddd8ea9d076e2d08b6ddaa6efae6403185202c6dab65a6488ed0a6923d6d8e8
+    download_bytes: 690110861
+    disk_bytes: 1686751744
   redis:8:
     digest: sha256:4c7ecf5d14207f5baf8e140ab428a54ae5cf2a0411956f75deb0ef89d3cb4fda
     download_bytes: 54274641
