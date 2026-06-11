@@ -38,11 +38,11 @@ The VM now has **three NICs with pinned MACs**: NIC1 carries SSH exactly as befo
 - **`make test-avahi`** (`avahitest` tag, real avahi-daemon + real NM): per-interface announce resolves to a LAN interface address; zero-LAN publish errors; `RepublishAll` flips a stub address 198.51.100.7 → .8 and resolution follows while the stored name stays put. 9/9 pass on this box.
 - **`dev/test-avahi-publisher.sh`** end to end with the real binary: startup `Sync.Apply` warns (unprivileged, expected), publish announces `targets=[if2=192.168.2.160]`, resolves, withdraws.
 - **`make check` green** (gofmt + vet + OpenAPI freshness + full suite, with libpam0g-dev).
-- **Medium QEMU lane: extended but not yet executed** — the lane needs interactive sudo, which this session didn't have. Run `sudo make test-medium-qemu` (first run rebuilds the image, ~5 min) to execute the network-state phase; everything up to the lane was verified as above.
+- **Medium QEMU lane: PASS** (`sudo make test-medium-qemu`, full image rebuild at canary v17). Both LUKS/TPM boots unchanged by the three-NIC split (first boot enrolled PCR-7, second boot unsealed unattended), and the second-boot network phase passed end to end: NM LAN set == exactly the two NM NICs with the SSH NIC excluded, `allow-interfaces` written + daemon restarted + the published name resolving to a LAN address, interface removal rewriting the allowlist, and the static-IP change re-resolving to the new address through the watcher.
 
 ## Known gaps & deviations
 
-- **Multi-interface `AddAddress` in one entry group is proven only in the QEMU lane** (this box has a single LAN interface). mDNS multi-homing this way is believed-legal and mirrors avahi-daemon's native host record; the lane's two-NIC assertions are the proof.
+- **Multi-interface `AddAddress` in one entry group is proven only in the QEMU lane** (the dev box has a single LAN interface). The lane's two-NIC assertions passed, so the multi-homed announcement shape is verified — but only there, not on physical multi-NIC hardware.
 - **Host-agent mid-life restart replay** (`uptime_s` regression detection, carried from [avahi-dbus-publisher.md](avahi-dbus-publisher.md)) did **not** ride along: it is brain-side (lifecycle reconcile), not cheap, and orthogonal to the host-agent-internal watcher this slice added.
 - **`GET /v1/discovery/state` still hardcodes `publisher: "avahi-fake"` and `host_name: "molma"`** in both binaries — pre-existing debt, untouched; only `interfaces` went live this slice.
 - **The brain stays out of network state** (the issue's third open question): no brain consumer of `DiscoveryState` exists, and nothing in this slice gave it one. The dashboard network page will revisit.
@@ -51,6 +51,5 @@ The VM now has **three NICs with pinned MACs**: NIC1 carries SSH exactly as befo
 
 ## What's next
 
-- **Run the extended medium lane** (`sudo make test-medium-qemu`) and fix anything the two-NIC environment surfaces — done locally everywhere else, but the lane is the issue's done-when for the host-integrated parts.
 - Brain-side host-agent-restart replay (`uptime_s` regression → reconcile republish) — still the standing gap from [avahi-dbus-publisher.md](avahi-dbus-publisher.md).
 - WiFi setup UI on the same `netstate` surface (`BRAIN_HOST_PROTOCOL.md` # Network configuration) — separate slice.
