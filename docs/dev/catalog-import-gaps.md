@@ -121,3 +121,11 @@ Unlike `docs/progress/` entries (frozen ADR snapshots), this file is **mutable b
 - **What breaks:** every email Kimai sends — "forgot password" reset links and any mail an admin enables later (scheduled report delivery, notifications). Silent failure: the UI reports the mail as sent. Workaround inside the app: an admin can reset any user's password from the admin UI, so nobody is permanently locked out. Core time-tracking is unaffected.
 - **Why molma can't satisfy it (v1):** same missing mechanism as the ghost entry — molma has no outgoing-mail relay, no `MOLMA_SMTP_*` injection, and no per-app env-override UI through which a user could supply their own provider's credentials post-install.
 - **Status:** planned (#122 — BYO outgoing email: per-app SMTP provider binding + injection). Recurs across apps (ghost, kimai, and docuseal's email-signing workflow); the design shape lives on the issue.
+
+### runtime-self-patch — paperless-ngx (2026-06-11)
+
+- **Severity:** degraded
+- **Trigger:** `PAPERLESS_OCR_LANGUAGES` — the image's init scripts install additional tesseract language packs at container start via `apt-get install`, a runtime self-patch of the image's own filesystem.
+- **What breaks:** OCR languages beyond the five preinstalled in the image (English, German, Italian, Spanish, French) cannot be added. Documents in other languages still consume and archive, but their OCR text layer is garbage, so full-text search misses them. Core scanning/archiving in the preinstalled languages is unaffected.
+- **Why molma can't satisfy it (v1):** same mechanism as `runtime-self-patch — jotty` — the app runs as the granted-folder owner's non-root uid under `cap_drop: ALL`, and upstream's rootless docs themselves state the apt-based language install requires root. There is no molma-side fix in scope: granting root or `CAP_DAC_OVERRIDE` so an app can rewrite its own image is what Tier-3 exists to prevent. The clean unblock is upstream shipping language packs in the image (or a non-root plugin path); until then the catalog description states the fixed language set.
+- **Status:** open — shipped degraded (`catalog/paperless-ngx`).

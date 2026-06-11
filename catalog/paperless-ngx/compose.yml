@@ -1,0 +1,56 @@
+# Paperless-ngx adapted for molma's Tier-3 sandbox (cap_drop: ALL,
+# no-new-privileges, brain-pinned user:). Rootless operation is supported
+# upstream (docs "Rootless" section): the init scripts detect a non-root uid
+# and skip their privilege remapping. It is mandatory here — the webserver
+# runs as the granted Documents folder owner's identity, never root.
+#
+# tmpfs /run: the image boots via s6-overlay, whose preinit requires /run to
+# be writable and exec-mounted by the runtime uid. Docker's default tmpfs is
+# root-owned 0755 + noexec, which s6 rejects with a fatal (exit 100).
+# mode=1777 takes s6's "single-uid mapping" acceptance path (a logged
+# warning, harmless); exec is required or /init crashes after preinit.
+# Re-verify on version bumps.
+#
+# broker: Paperless requires Redis for its Celery task queue. molma's managed
+# services don't provision redis yet (internal/lifecycle/services.go
+# provisionedKinds is postgres/mysql/mariadb), so it ships as a sandboxed
+# sidecar — a deliberate deviation from issue #140's managed-service note.
+# The database IS managed Postgres, declared in the manifest.
+#
+# The consume directory is the granted Documents subfolder: the brain mounts
+# it at /molma/documents and injects MOLMA_FOLDER_DOCUMENTS, so no bind for
+# it appears here. Consumed originals are deleted from the folder after
+# import (hence the write grant) and archived into ./data/media.
+#
+# PAPERLESS_ADMIN_USER/PASSWORD seed the initial superuser on first boot
+# (upstream's documented mechanism; a no-op once the user exists). The
+# credentials are fixed and public — the app description tells the user to
+# change the password immediately after first login.
+services:
+  webserver:
+    image: ghcr.io/paperless-ngx/paperless-ngx:2.20.15
+    depends_on:
+      - broker
+    tmpfs:
+      - /run:exec,mode=1777
+    environment:
+      PAPERLESS_REDIS: redis://broker:6379
+      PAPERLESS_DBENGINE: postgresql
+      PAPERLESS_DBHOST: ${MOLMA_SERVICE_DATABASE_HOST}
+      PAPERLESS_DBPORT: ${MOLMA_SERVICE_DATABASE_PORT}
+      PAPERLESS_DBNAME: ${MOLMA_SERVICE_DATABASE_NAME}
+      PAPERLESS_DBUSER: ${MOLMA_SERVICE_DATABASE_USER}
+      PAPERLESS_DBPASS: ${MOLMA_SERVICE_DATABASE_PASSWORD}
+      PAPERLESS_SECRET_KEY: ${MOLMA_SECRET_KEY}
+      PAPERLESS_URL: ${MOLMA_APP_URL}
+      PAPERLESS_CONSUMPTION_DIR: ${MOLMA_FOLDER_DOCUMENTS}
+      PAPERLESS_ADMIN_USER: admin
+      PAPERLESS_ADMIN_PASSWORD: changemeplease
+    volumes:
+      - ./data/data:/usr/src/paperless/data
+      - ./data/media:/usr/src/paperless/media
+      - ./data/export:/usr/src/paperless/export
+  broker:
+    image: redis:8
+    volumes:
+      - ./data/redis:/data
