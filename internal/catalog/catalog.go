@@ -105,6 +105,12 @@ func screenshotURL(id string, i int) string {
 	return fmt.Sprintf("/api/v1/catalog/%s/screenshots/%d", id, i)
 }
 
+// List returns the store browse grid: one Entry per *listed* app, sorted by
+// name. Unlisted apps (`listed: false`) are skipped — they exist on disk and
+// load fine (Load/Entry still resolve them for an installed instance's card),
+// but the store doesn't advertise them. For installed-instance enrichment by a
+// known id, use Entry, not List, so an app unlisted after install keeps its
+// metadata (APP_STORE.md # Listed apps).
 func (c *Catalog) List() ([]Entry, error) {
 	dirs, err := os.ReadDir(c.root)
 	if err != nil {
@@ -119,19 +125,41 @@ func (c *Catalog) List() ([]Entry, error) {
 		if err != nil {
 			continue // skip malformed entries
 		}
+		if !man.IsListed() {
+			continue // hidden from browse (APP_STORE.md # Listed apps)
+		}
 		out = append(out, entryFor(man))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
-// Detail returns the full detail-page view of one app. ErrNotFound (mapped to
-// 404 by the API) when the manifest doesn't exist; other Load errors are
-// integrity failures a curated catalog shouldn't ship and map to 500.
+// Entry returns the grid summary for one app by id, honestly — it does *not*
+// apply the store-visibility filter, so an unlisted-but-installed app still
+// resolves its card metadata. ErrNotFound when the manifest doesn't exist; other
+// Load errors are integrity failures. This is the lookup the instance list uses
+// to enrich an installed app; List is the store-facing (filtered) browse.
+func (c *Catalog) Entry(manifestID string) (Entry, error) {
+	man, _, err := c.Load(manifestID)
+	if err != nil {
+		return Entry{}, err
+	}
+	return entryFor(man), nil
+}
+
+// Detail returns the full detail-page view of one app, store-facing: an unlisted
+// app (`listed: false`) is reported as ErrNotFound so its detail page is
+// unreachable through the store, the same as a missing manifest. ErrNotFound is
+// mapped to 404 by the API; other Load errors are integrity failures a curated
+// catalog shouldn't ship and map to 500. (Installed-instance enrichment must not
+// go through here — use Entry, which doesn't hide unlisted apps.)
 func (c *Catalog) Detail(manifestID string) (Detail, error) {
 	man, _, err := c.Load(manifestID)
 	if err != nil {
 		return Detail{}, err
+	}
+	if !man.IsListed() {
+		return Detail{}, fmt.Errorf("%w: %q is unlisted", ErrNotFound, manifestID)
 	}
 	d := Detail{
 		Entry:           entryFor(man),
