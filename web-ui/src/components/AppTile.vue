@@ -10,12 +10,12 @@
 //               job runs (driven by the `starting` prop from HomeView).
 //   - failed/other: grayed with the corner alert mark — needs attention.
 //
-// Per-app icons aren't in the manifest/DTO yet, so every tile uses a generic
-// glyph for now; real icons are a follow-up when the catalog carries them.
-import { computed } from "vue";
-import { AppWindow, AlertTriangle } from "lucide-vue-next";
+// Icon rendering mirrors StoreAppCard: icon_url when present, AppGlyph fallback.
+import { computed, ref } from "vue";
+import { AlertTriangle } from "lucide-vue-next";
 import type { Instance } from "../api";
 import { useAuth } from "../auth";
+import AppGlyph from "./AppGlyph.vue";
 
 const props = defineProps<{ instance: Instance; starting?: boolean }>();
 const emit = defineEmits<{ start: [] }>();
@@ -32,6 +32,8 @@ const canControl = computed(
   () => currentUser.value?.role === "admin" || props.instance.scope === "personal",
 );
 const canStart = computed(() => stopped.value && canControl.value && !props.starting);
+
+const brokenIcon = ref(false);
 
 // The corner alert is for trouble (failed/crashed), not a deliberate stop or an
 // in-flight start.
@@ -58,17 +60,24 @@ function onClick() {
     :title="running ? `Open ${instance.name}` : `${instance.name} is ${instance.state}`"
     @click="onClick"
   >
-    <!-- The big square button: parchment fill, bordered, single centered glyph
-         (DASHBOARD.md # Tile). Grays out + corner alert when not running. -->
+    <!-- The big square button: parchment fill, bordered, the app icon (or glyph).
+         Mirrors StoreAppCard. Grays out + corner alert when not running. -->
     <div
-      class="relative grid aspect-square w-full place-items-center rounded-3xl border border-border bg-card text-muted-foreground transition"
+      class="relative grid aspect-square w-full place-items-center overflow-hidden rounded-3xl border border-border bg-card text-muted-foreground transition"
       :class="running ? 'group-hover:shadow-md' : 'opacity-50'"
     >
       <AlertTriangle
         v-if="showAlert"
         class="absolute right-3 top-3 size-4 text-destructive"
       />
-      <AppWindow class="size-9" />
+      <img
+        v-if="instance.icon_url && !brokenIcon"
+        :src="instance.icon_url"
+        :alt="`${instance.name} icon`"
+        class="size-1/2 object-contain"
+        @error="brokenIcon = true"
+      />
+      <AppGlyph v-else :name="instance.icon_glyph" class="size-1/2" />
     </div>
     <div class="min-w-0">
       <div class="truncate text-base font-medium">{{ instance.name }}</div>

@@ -8,8 +8,8 @@
 // against a load error).
 import { ref } from "vue";
 import { RouterLink } from "vue-router";
-import { AppWindow } from "lucide-vue-next";
 import type { CatalogEntry } from "../api";
+import AppGlyph from "./AppGlyph.vue";
 
 defineProps<{ app: CatalogEntry }>();
 
@@ -33,10 +33,10 @@ const brokenIcon = ref(false);
         v-if="app.icon_url && !brokenIcon"
         :src="app.icon_url"
         :alt="`${app.name} icon`"
-        class="size-full object-cover"
+        class="size-1/2 object-contain"
         @error="brokenIcon = true"
       />
-      <AppWindow v-else class="size-9" />
+      <AppGlyph v-else :name="app.icon_glyph" class="size-1/2" />
     </div>
     <div class="min-w-0">
       <div class="truncate text-base font-medium">{{ app.name }}</div>

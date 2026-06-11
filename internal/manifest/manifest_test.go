@@ -226,6 +226,34 @@ main_port: 80
 	}
 }
 
+func TestParseIconGlyph(t *testing.T) {
+	base := `
+id: whoami
+manifest_version: 1
+name: Whoami
+version: "1.10"
+compose_file: compose.yml
+main_service: whoami
+main_port: 80
+`
+	// A well-formed Lucide name (kebab-case) parses and round-trips verbatim; the
+	// brain can't confirm it exists, so shape is all it checks.
+	m, err := Parse([]byte(base + "icon_glyph: notebook-pen\n"))
+	if err != nil {
+		t.Fatalf("parse valid icon_glyph: %v", err)
+	}
+	if m.IconGlyph != "notebook-pen" {
+		t.Fatalf("icon_glyph = %q, want notebook-pen", m.IconGlyph)
+	}
+	// Non-kebab names are rejected (uppercase, underscores, leading/trailing or
+	// doubled hyphens) — same shape rule as slugs.
+	for _, bad := range []string{"NotebookPen", "notebook_pen", "-notebook", "notebook-", "note--book"} {
+		if _, err := Parse([]byte(base + "icon_glyph: " + bad + "\n")); err == nil {
+			t.Fatalf("icon_glyph %q accepted, want rejection", bad)
+		}
+	}
+}
+
 func TestParseRejectsMissingFields(t *testing.T) {
 	base := map[string]string{
 		"id":               "whoami",

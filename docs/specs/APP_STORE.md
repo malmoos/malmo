@@ -34,6 +34,7 @@ The brain polls the catalog on the same hourly cadence as the release manifest. 
       "categories": ["media", "photos"],
       "short_description": "Self-hosted photo library with AI tagging",
       "icon_url": "/apps/photoprism/icon.png",
+      "icon_glyph": "image",
       "manifest_url": "/apps/photoprism/manifest.yml",
       "manifest_hash": "sha256:def456...",
       "compose_url": "/apps/photoprism/docker-compose.yml",
@@ -58,6 +59,7 @@ Fields per app:
 
 - **`version`** — semver of the currently-promoted version. Bumping this is the publish action.
 - **`name`, `categories`, `short_description`, `icon_url`** — for the browse UI. The browse view is rendered from these alone, without fetching individual manifests.
+- **`icon_glyph`** — optional Lucide icon name (kebab-case, e.g. `notebook-pen`) the browse UI renders as the card/header icon when `icon_url` is absent, instead of a single generic glyph. Author-chosen fallback for apps that ship no logo; ignored when `icon_url` is present. The brain passes it through verbatim and only shape-validates it (kebab-case) — it can't confirm the name exists in the icon set, which lives in the UI, so an unknown-but-well-formed name degrades to the generic glyph client-side. Browse UI groups by category regardless of file shape; icon choice is likewise a UI concern.
 - **`manifest_url` / `manifest_hash`** — content-addressed pointer to the full manifest. On install, brain fetches and verifies the hash matches.
 - **`compose_url` / `compose_hash`** — same, for the compose file.
 - **`images`** — map of `image:tag` (as referenced in the compose) → `{ digest, download_bytes, disk_bytes }`. CI resolves all three at catalog-build time from the registry: `digest` (the pinned bytes — see Trust below; the brain pulls by digest, not by tag), `download_bytes` (sum of the image's compressed layer sizes — the bandwidth/time cost), and `disk_bytes` (sum of its uncompressed layer sizes, deduping layers shared *within this app's own image set* — the on-disk cost). Sizes are **display-only and advisory** (# Trust model); only `digest` gates the pull.

@@ -295,6 +295,9 @@
           "footprint": {
             "$ref": "#/components/schemas/Footprint"
           },
+          "icon_glyph": {
+            "type": "string"
+          },
           "icon_url": {
             "type": "string"
           },
@@ -394,6 +397,9 @@
           },
           "footprint": {
             "$ref": "#/components/schemas/Footprint"
+          },
+          "icon_glyph": {
+            "type": "string"
           },
           "icon_url": {
             "type": "string"
@@ -865,6 +871,12 @@
             ],
             "format": "uri",
             "readOnly": true,
+            "type": "string"
+          },
+          "icon_glyph": {
+            "type": "string"
+          },
+          "icon_url": {
             "type": "string"
           },
           "id": {

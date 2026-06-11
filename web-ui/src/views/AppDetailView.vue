@@ -12,10 +12,10 @@ import { useRoute, RouterLink } from "vue-router";
 import { useQuery } from "@tanstack/vue-query";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { AppWindow } from "lucide-vue-next";
 import { api, type CatalogDetail } from "../api";
 import { useInstall } from "../useInstall";
 import { formatSize, safeExternalUrl } from "../utils";
+import AppGlyph from "../components/AppGlyph.vue";
 import InstallDialog from "../components/InstallDialog.vue";
 import SplitButton from "../components/SplitButton.vue";
 import HealthGated from "../components/HealthGated.vue";
@@ -106,7 +106,7 @@ const hasLinks = computed(
             class="size-full object-cover"
             @error="brokenIcon = true"
           />
-          <AppWindow v-else class="size-9" />
+          <AppGlyph v-else :name="app.icon_glyph" class="size-9" />
         </div>
 
         <div class="min-w-0 flex-1">

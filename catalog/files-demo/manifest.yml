@@ -4,6 +4,7 @@ name: Files Demo
 version: "1.10"
 description:
   short: "whoami wired to a use-case folder — proves the folder-enforcement override path."
+icon_glyph: folder
 compose_file: compose.yml
 main_service: files-demo
 main_port: 8080

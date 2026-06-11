@@ -27,7 +27,14 @@ type Manifest struct {
 	// (`./icon.png`); the catalog turns them into asset URLs (APP_STORE.md #
 	// Catalog schema). Absent ⇒ the store falls back to a generic glyph and an
 	// empty gallery.
-	Icon         string   `yaml:"icon,omitempty"`
+	Icon string `yaml:"icon,omitempty"`
+	// IconGlyph names a Lucide icon (kebab-case, e.g. `notebook-pen`; the set at
+	// https://lucide.dev/icons) the store renders as the card/header glyph when no
+	// raster Icon is declared. Author-chosen fallback for apps that ship no logo;
+	// the brain doesn't act on it and can't verify the name exists (the icon set
+	// lives in the UI), so an unknown-but-well-formed name degrades to the generic
+	// glyph client-side. Ignored when Icon is set (APP_STORE.md # Catalog schema).
+	IconGlyph    string   `yaml:"icon_glyph,omitempty"`
 	Screenshots  []string `yaml:"screenshots,omitempty"`
 	Categories   []string `yaml:"categories,omitempty"`
 	Author       Author   `yaml:"author,omitempty"`
@@ -449,6 +456,12 @@ func (m *Manifest) validate() error {
 		if !kebabSlug.MatchString(slug) {
 			return fmt.Errorf("slug %q must be kebab-case (lowercase alphanumerics, single internal hyphens)", slug)
 		}
+	}
+	// icon_glyph is a Lucide name; same kebab-case shape as a slug. We can only
+	// check the shape (the 1700+ name set lives in the UI), so a typo'd-but-valid
+	// name passes here and falls back to the generic glyph client-side.
+	if m.IconGlyph != "" && !kebabSlug.MatchString(m.IconGlyph) {
+		return fmt.Errorf("icon_glyph %q must be a lucide icon name in kebab-case", m.IconGlyph)
 	}
 	if err := m.validateHealthProbe(); err != nil {
 		return err

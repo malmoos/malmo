@@ -222,9 +222,11 @@ type InstanceDTO struct {
 	OwnerUserID   string `json:"owner_user_id"`
 	OwnerUsername string `json:"owner_username"`
 	Scope         string `json:"scope"`
+	IconURL       string `json:"icon_url,omitempty"`
+	IconGlyph     string `json:"icon_glyph,omitempty"`
 }
 
-func toDTO(i store.Instance, ownerUsername string) InstanceDTO {
+func toDTO(i store.Instance, ownerUsername string, e *catalog.Entry) InstanceDTO {
 	// Prefer the name actually announced over Avahi (MDNSName), which may be the
 	// box-qualified collision fallback "<slug>-<box>.local". Fall back to the
 	// reconstructed primary "<slug>.local" for rows predating the published-name
@@ -236,11 +238,16 @@ func toDTO(i store.Instance, ownerUsername string) InstanceDTO {
 	case i.Slug != "":
 		url = "http://" + i.Slug + protocol.AppHostSuffix
 	}
-	return InstanceDTO{
+	dto := InstanceDTO{
 		ID: i.ID, ManifestID: i.ManifestID, Name: i.Name, Slug: i.Slug,
 		Version: i.Version, State: i.State, URL: url,
 		OwnerUserID: i.OwnerUserID, OwnerUsername: ownerUsername, Scope: i.Scope,
 	}
+	if e != nil {
+		dto.IconURL = e.IconURL
+		dto.IconGlyph = e.IconGlyph
+	}
+	return dto
 }
 
 // --- handlers ------------------------------------------------------------
@@ -332,6 +339,11 @@ func (s *Server) listApps(ctx context.Context, _ *struct{}) (*struct {
 	if err != nil {
 		return nil, huma.Error500InternalServerError("owner lookup failed", err)
 	}
+	catEntries, _ := s.catalog.List() // best-effort; icon fields are cosmetic
+	catByID := make(map[string]*catalog.Entry, len(catEntries))
+	for idx := range catEntries {
+		catByID[catEntries[idx].ID] = &catEntries[idx]
+	}
 	out := &struct {
 		Body struct {
 			Apps []InstanceDTO `json:"apps"`
@@ -339,7 +351,7 @@ func (s *Server) listApps(ctx context.Context, _ *struct{}) (*struct {
 	}{}
 	out.Body.Apps = []InstanceDTO{}
 	for _, i := range insts {
-		out.Body.Apps = append(out.Body.Apps, toDTO(i, names[i.OwnerUserID]))
+		out.Body.Apps = append(out.Body.Apps, toDTO(i, names[i.OwnerUserID], catByID[i.ManifestID]))
 	}
 	return out, nil
 }
@@ -367,7 +379,11 @@ func (s *Server) getApp(ctx context.Context, in *struct {
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, huma.Error500InternalServerError("owner lookup failed", err)
 	}
-	return &struct{ Body InstanceDTO }{Body: toDTO(i, owner.Username)}, nil
+	var catEntry *catalog.Entry
+	if e, err := s.catalog.Detail(i.ManifestID); err == nil {
+		catEntry = &e.Entry
+	}
+	return &struct{ Body InstanceDTO }{Body: toDTO(i, owner.Username, catEntry)}, nil
 }
 
 // canSee mirrors store.ListVisibleTo's visibility predicate for a single

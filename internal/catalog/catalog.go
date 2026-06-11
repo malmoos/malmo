@@ -41,8 +41,11 @@ type Entry struct {
 	// Categories group the app in the store (manifest categories).
 	Categories []string `json:"categories,omitempty"`
 	// IconURL points at the brain's icon asset route for this app, set only when
-	// the manifest declares an icon. Empty ⇒ the store renders a generic glyph.
+	// the manifest declares an icon. Empty ⇒ the store falls back to a glyph.
 	IconURL string `json:"icon_url,omitempty"`
+	// IconGlyph is the manifest's Lucide-icon fallback name (kebab-case) the store
+	// renders when IconURL is empty. Empty (and no IconURL) ⇒ the generic glyph.
+	IconGlyph string `json:"icon_glyph,omitempty"`
 
 	// Footprint is the on-disk summary the store grid renders without a second
 	// fetch (APP_STORE.md # Catalog schema). The image totals are an upper bound
@@ -85,6 +88,7 @@ func entryFor(man *manifest.Manifest) Entry {
 		Version:          man.Version,
 		ShortDescription: man.Description.Short,
 		Categories:       man.Categories,
+		IconGlyph:        man.IconGlyph,
 		Footprint:        man.Footprint(),
 	}
 	if man.Icon != "" {

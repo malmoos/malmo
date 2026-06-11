@@ -4,6 +4,7 @@ name: Whoami
 version: "1.10"
 description:
   short: "Tiny HTTP server that echoes request info — a routing smoke test."
+icon_glyph: flask-conical
 compose_file: compose.yml
 main_service: whoami
 main_port: 80
