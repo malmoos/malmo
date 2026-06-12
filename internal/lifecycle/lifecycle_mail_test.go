@@ -205,4 +205,11 @@ func TestMailDSN(t *testing.T) {
 	if got, want := mailDSN(p), "smtp://smtp.fastmail.com:587"; got != want {
 		t.Errorf("no credentials: got %q, want %q", got, want)
 	}
+
+	// A bare IPv6 host must be bracketed so the DSN stays a parseable URL
+	// (::1:587 would otherwise read as host ":" with port "1:587").
+	p.Host = "::1"
+	if got, want := mailDSN(p), "smtp://[::1]:587"; got != want {
+		t.Errorf("ipv6 host: got %q, want %q", got, want)
+	}
 }

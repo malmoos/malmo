@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -41,7 +42,7 @@ func mailEnvLines(p store.MailProvider) []string {
 // MOLMA_MAIL_ENCRYPTION var instead. url.URL escapes credentials, so a
 // password with @ / : survives the round trip.
 func mailDSN(p store.MailProvider) string {
-	u := url.URL{Scheme: "smtp", Host: p.Host + ":" + strconv.Itoa(p.Port)}
+	u := url.URL{Scheme: "smtp", Host: net.JoinHostPort(p.Host, strconv.Itoa(p.Port))}
 	if p.Encryption == store.MailEncryptionTLS {
 		u.Scheme = "smtps"
 	}

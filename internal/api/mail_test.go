@@ -180,6 +180,10 @@ func TestCreateMailProviderValidation422(t *testing.T) {
 		"port too big":   func(b map[string]any) { b["port"] = 70000 },
 		"bad from":       func(b map[string]any) { b["from_address"] = "not-an-email" },
 		"bad encryption": func(b map[string]any) { b["encryption"] = "ssl" },
+		// CRLF in any field would smuggle extra .env lines / SMTP commands.
+		"crlf in from": func(b map[string]any) { b["from_address"] = "ok@example.com\r\nBcc: evil@x.com" },
+		"crlf in host": func(b map[string]any) { b["host"] = "smtp.example.com\nINJECT=1" },
+		"crlf in user": func(b map[string]any) { b["username"] = "u\rser" },
 	} {
 		b := providerBody("v")
 		mutate(b)
@@ -532,6 +536,25 @@ func TestSetAppMailBindingMemberOwnPersonal(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("member rebind own personal = %d; want 422", resp.StatusCode)
+	}
+}
+
+// Rebinding a non-mail app is rejected synchronously (422), mirroring the
+// install path — a direct API caller must not get a 200 + a job that only
+// fails later inside RebindMail.
+func TestSetAppMailBindingNonMailApp422(t *testing.T) {
+	h := newHarness(t)
+	writeManifestFixture(t, h.catalogDir, "whoami", minimalManifestYML)
+	h.setupAdmin("alice", "pass1")
+	h.seedInstance("i1", "whoami", "whoami", "u_admin", store.ScopeHousehold)
+
+	resp := h.do("PUT", "/api/v1/apps/i1/mail-binding", map[string]string{"provider_id": "mp_x"})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("rebind non-mail app = %d; want 422", resp.StatusCode)
+	}
+	if !h.hasAuditEvent(audit.ActionAppMailRebind, "i1", false) {
+		t.Fatal("app.mail.rebind failure audit event not found")
 	}
 }
 

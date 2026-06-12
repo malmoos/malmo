@@ -117,6 +117,15 @@ func validateMailProviderBody(b *MailProviderBody) error {
 	case b.FromAddress == "" || !strings.Contains(b.FromAddress, "@"):
 		return huma.Error422UnprocessableEntity("from_address must be an email address")
 	}
+	// A newline in any of these reaches a MOLMA_MAIL_* .env line (one field per
+	// line) and the test-send's SMTP commands / RFC 5322 headers, so a CRLF would
+	// let one field smuggle extra env lines, SMTP commands, or mail headers.
+	// Reject at the boundary — none of these fields legitimately span lines.
+	for _, f := range []string{b.Label, b.Host, b.Username, b.Password, b.FromAddress} {
+		if strings.ContainsAny(f, "\r\n") {
+			return huma.Error422UnprocessableEntity("fields must not contain line breaks")
+		}
+	}
 	switch b.Encryption {
 	case store.MailEncryptionNone, store.MailEncryptionSTARTTLS, store.MailEncryptionTLS:
 		return nil
@@ -285,7 +294,7 @@ func (s *Server) testMailProvider(ctx context.Context, in *struct {
 		return nil, err
 	}
 	to := strings.TrimSpace(in.Body.To)
-	if to == "" || !strings.Contains(to, "@") {
+	if to == "" || !strings.Contains(to, "@") || strings.ContainsAny(to, "\r\n") {
 		return nil, huma.Error422UnprocessableEntity("to must be an email address")
 	}
 
@@ -316,13 +325,23 @@ func (s *Server) setAppMailBinding(ctx context.Context, in *struct {
 	}
 }) (*struct{ Body Job }, error) {
 	id := in.ID
-	if _, err := s.authorizeAppMutation(ctx, id); err != nil {
+	inst, err := s.authorizeAppMutation(ctx, id)
+	if err != nil {
 		return nil, err
 	}
 	tgt := audit.Target{Kind: "app", ID: id}
 	providerID := in.Body.ProviderID
 	meta := map[string]any{"provider_id": providerID}
 	if providerID != "" {
+		// Reject a binding on a non-mail app synchronously, mirroring the install
+		// path — without this a direct API caller (the UI hides the picker for
+		// non-mail apps) gets a 200 + job that only fails later in RebindMail. The
+		// manifest comes from the catalog; a withdrawn app falls through to that
+		// backstop, same as getApp's picker enrichment.
+		if man, _, err := s.catalog.Load(inst.ManifestID); err == nil && man.Mail == nil {
+			s.auditor.Record(ctx, audit.ActionAppMailRebind, tgt, meta, false)
+			return nil, huma.Error422UnprocessableEntity("this app does not support outgoing email")
+		}
 		if _, err := s.store.GetMailProvider(providerID); errors.Is(err, store.ErrNotFound) {
 			s.auditor.Record(ctx, audit.ActionAppMailRebind, tgt, meta, false)
 			return nil, huma.Error422UnprocessableEntity("no such mail provider")
