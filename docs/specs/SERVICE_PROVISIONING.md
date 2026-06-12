@@ -188,10 +188,12 @@ MOLMA_MAIL_USER=box@example.com
 MOLMA_MAIL_PASSWORD=<stored>
 MOLMA_MAIL_FROM=box@example.com
 MOLMA_MAIL_ENCRYPTION=tls
+MOLMA_MAIL_USE_TLS=false
+MOLMA_MAIL_USE_SSL=true
 MOLMA_MAIL_DSN=smtps://box%40example.com:...@smtp.fastmail.com:465
 ```
 
-The DSN scheme is `smtps://` for implicit TLS and `smtp://` otherwise (SMTP-URL consumers negotiate STARTTLS opportunistically; an app needing the exact mode reads `MOLMA_MAIL_ENCRYPTION`). Credentials are URL-escaped. The app's compose maps the vars to whatever it expects, per the family contract above — with a compose default for the unbound case so absence degrades cleanly (Kimai: `MAILER_URL: "${MOLMA_MAIL_DSN:-null://null}"`).
+The DSN scheme is `smtps://` for implicit TLS and `smtp://` otherwise (SMTP-URL consumers negotiate STARTTLS opportunistically; an app needing the exact mode reads `MOLMA_MAIL_ENCRYPTION`). `MOLMA_MAIL_USE_TLS` / `MOLMA_MAIL_USE_SSL` are boolean projections of that mode (STARTTLS vs implicit TLS, at most one true) for apps that take two separate flags — e.g. Django's `EMAIL_USE_TLS` / `EMAIL_USE_SSL`, which Paperless surfaces — since a compose file can't derive a boolean from the encryption string. Credentials are URL-escaped. The app's compose maps the vars to whatever it expects, per the family contract above — with a compose default for the unbound case so absence degrades cleanly (Kimai: `MAILER_URL: "${MOLMA_MAIL_DSN:-null://null}"`).
 
 **Propagation:** env is read at container create, so a rebind re-stamps the `.env` and recreates the instance's containers immediately (stopped instances pick it up at next start). Editing or deleting a *provider* does not re-stamp bound apps: they keep the previously injected values until their next rebind or reinstall — v1 accepts this lag, and the Settings UI says so. Deleting a provider unbinds its apps in the brain's state (the next rebind of each app drops the vars).
 

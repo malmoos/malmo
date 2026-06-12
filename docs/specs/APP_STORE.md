@@ -156,7 +156,7 @@ The brain enforces it asymmetrically, by intent:
 - **Store-facing paths filter it out.** The browse list (`GET /api/v1/catalog`) omits unlisted apps, the detail page (`GET /api/v1/catalog/:id`) returns 404, and both install paths (`/install-plan` and the `POST /api/v1/apps` install action) return 404 — so a stale store link or a scripted call can't install a deliberately-withdrawn app. To the store, the app simply doesn't exist.
 - **By-id resolution stays honest.** Loading the manifest by id (for an already-installed instance's dashboard card, for reconciliation, for serving its icon, for `molma manifest lint`) ignores the flag. An app unlisted *after* someone installed it keeps working and stays manageable — withdrawal affects discovery and new installs, never a running instance.
 
-This is a **curation control, not access control**: it's box-wide, not per-user or per-role, and there is no "show unlisted apps" path in v1. Which apps are pulled and why is tracked in `dev/catalog-status.md` (the `Blocked`/`Rejected` rows); `listed: false` is the mechanism that enforces those states.
+This is a **curation control, not access control**: it's box-wide, not per-user or per-role, and there is no "show unlisted apps" path in v1. `listed: false` is the mechanism that enforces a `Blocked` or `Rejected` curation verdict — it pulls the app from the store while its adaptation work stays intact in the catalog.
 
 ## Multiple catalogs — data model only in v1
 

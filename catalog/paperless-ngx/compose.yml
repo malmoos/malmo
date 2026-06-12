@@ -65,6 +65,20 @@ services:
       PAPERLESS_TIKA_ENABLED: 1
       PAPERLESS_TIKA_GOTENBERG_ENDPOINT: http://gotenberg:3000
       PAPERLESS_TIKA_ENDPOINT: http://tika:9998
+      # Outgoing mail (manifest `mail:` block). Bound, the brain injects the
+      # discrete MOLMA_MAIL_* fields and Paperless's Django backend consumes
+      # them; the USE_TLS/USE_SSL booleans are the brain's projection of the
+      # provider's encryption mode (STARTTLS vs implicit TLS). Unbound, the
+      # vars are absent and these defaults leave the host empty, so Django
+      # sends nothing instead of erroring — email features stay off until the
+      # admin binds a provider.
+      PAPERLESS_EMAIL_HOST: "${MOLMA_MAIL_HOST:-}"
+      PAPERLESS_EMAIL_PORT: "${MOLMA_MAIL_PORT:-25}"
+      PAPERLESS_EMAIL_HOST_USER: "${MOLMA_MAIL_USER:-}"
+      PAPERLESS_EMAIL_HOST_PASSWORD: "${MOLMA_MAIL_PASSWORD:-}"
+      PAPERLESS_EMAIL_FROM: "${MOLMA_MAIL_FROM:-}"
+      PAPERLESS_EMAIL_USE_TLS: "${MOLMA_MAIL_USE_TLS:-false}"
+      PAPERLESS_EMAIL_USE_SSL: "${MOLMA_MAIL_USE_SSL:-false}"
     volumes:
       - ./data/data:/usr/src/paperless/data
       - ./data/media:/usr/src/paperless/media

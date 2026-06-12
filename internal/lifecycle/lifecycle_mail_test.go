@@ -76,6 +76,9 @@ func TestInstallBoundInjectsMailVars(t *testing.T) {
 		"MOLMA_MAIL_PASSWORD":   "p@ss:word/2",
 		"MOLMA_MAIL_FROM":       "box@example.com",
 		"MOLMA_MAIL_ENCRYPTION": "tls",
+		// tls ⇒ implicit-SSL flag set, STARTTLS flag clear.
+		"MOLMA_MAIL_USE_TLS": "false",
+		"MOLMA_MAIL_USE_SSL": "true",
 		// tls ⇒ smtps scheme; credentials URL-escaped so @ : / survive.
 		"MOLMA_MAIL_DSN": "smtps://box%40example.com:p%40ss%3Aword%2F2@smtp.fastmail.com:465",
 	}

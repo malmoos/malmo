@@ -68,6 +68,16 @@ services:
     type: postgres
     version: "16"
 
+# Paperless sends email for account password resets and the workflow
+# "send by email" action. Bound, the compose maps the discrete MOLMA_MAIL_*
+# fields (host/port/user/password/from + the USE_TLS/USE_SSL booleans) onto
+# Django's PAPERLESS_EMAIL_*. Unbound, the vars are absent and the compose
+# defaults leave the mail host empty, so Django simply sends nothing — the
+# pre-binding behavior. (Inbound IMAP mail-rule ingestion is separate and
+# needs only the `internet` permission.)
+mail:
+  optional: true
+
 # internet: only for features an admin opts into later (mail-rule ingestion
 # from an IMAP mailbox, the in-app update check); core consumption and OCR
 # need no outbound access. lan: not needed — the brain routes inbound

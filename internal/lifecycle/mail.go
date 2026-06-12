@@ -31,6 +31,12 @@ func mailEnvLines(p store.MailProvider) []string {
 		"MOLMA_MAIL_PASSWORD=" + p.Password,
 		"MOLMA_MAIL_FROM=" + p.FromAddress,
 		"MOLMA_MAIL_ENCRYPTION=" + p.Encryption,
+		// Boolean projections of the encryption mode, for apps that take two
+		// separate flags rather than the string or DSN — STARTTLS vs implicit
+		// TLS as distinct booleans (e.g. Django's EMAIL_USE_TLS / EMAIL_USE_SSL,
+		// which Paperless surfaces). Compose can't derive these from the string.
+		"MOLMA_MAIL_USE_TLS=" + strconv.FormatBool(p.Encryption == store.MailEncryptionSTARTTLS),
+		"MOLMA_MAIL_USE_SSL=" + strconv.FormatBool(p.Encryption == store.MailEncryptionTLS),
 		"MOLMA_MAIL_DSN=" + mailDSN(p),
 	}
 }

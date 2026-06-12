@@ -46,8 +46,8 @@ type Manifest struct {
 	// distinguishable from explicit false: nil or true ⇒ the app shows in the store
 	// grid/detail page and can be installed; explicit `listed: false` ⇒ the manifest
 	// stays in the catalog (parses, lints, serves icons) but is hidden from browse
-	// and uninstallable through the store — the way a Blocked/Rejected app
-	// (docs/dev/catalog-status.md) is pulled without throwing away its adaptation.
+	// and uninstallable through the store — the way a Blocked/Rejected app is
+	// pulled without throwing away its adaptation.
 	// Read it through IsListed(), never the raw pointer. Default-true, so every
 	// existing manifest stays listed with no change (back-compatible field add).
 	Listed *bool `yaml:"listed,omitempty"`
