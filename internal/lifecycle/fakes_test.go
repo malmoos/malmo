@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -280,6 +281,11 @@ type fakeHost struct {
 	// hostclient.ErrUnknownUser to exercise the deleted-owner path).
 	resolveHomeErr error
 
+	// homeRoot is the parent of each fake user's home dir. Set to a writable
+	// temp dir by newTestEnv so the install path can MkdirAll a personal folder
+	// source under it (a real /home/<user> isn't writable in a unit test).
+	homeRoot string
+
 	// systemStatus is returned by SystemStatus; tests set DataDiskFreeBytes to
 	// assert the install-plan free figure. statusErr forces the host-error path
 	// (FreeBytes must degrade to 0).
@@ -325,7 +331,7 @@ func (h *fakeHost) ResolveHome(_ context.Context, user string) (protocol.Resolve
 	if h.resolveHomeErr != nil {
 		return protocol.ResolveHomeResponse{}, h.resolveHomeErr
 	}
-	return protocol.ResolveHomeResponse{HomePath: "/home/" + user, UID: 3000, GID: 3000}, nil
+	return protocol.ResolveHomeResponse{HomePath: filepath.Join(h.homeRoot, user), UID: 3000, GID: 3000}, nil
 }
 
 func (h *fakeHost) WellKnownIdentity(_ context.Context) (protocol.WellKnownIdentityResponse, error) {

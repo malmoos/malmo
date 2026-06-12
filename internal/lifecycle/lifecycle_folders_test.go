@@ -114,13 +114,23 @@ func TestInstallFolders_PersonalSourceReadWithSubfolder(t *testing.T) {
 	if got := app["user"]; got != "3000:3000" {
 		t.Errorf("user: want 3000:3000, got %v", got)
 	}
-	wantVol := "/home/alex/Documents/Work:/malmo/documents:ro" // read → :ro, subfolder narrows source
+	src := filepath.Join(e.host.homeRoot, "alex", "Documents", "Work")
+	wantVol := src + ":/malmo/documents:ro" // read → :ro, subfolder narrows source
 	if !hasString(app["volumes"], wantVol) {
 		t.Errorf("volumes: want %q, got %v", wantVol, app["volumes"])
 	}
 	// No shared source → no group_add.
 	if _, ok := app["group_add"]; ok {
 		t.Errorf("group_add: want absent for personal source, got %v", app["group_add"])
+	}
+	// The brain creates the elected personal source (the pick-subfolder subdir)
+	// before compose up, so docker can't create it root-owned and the owner-UID
+	// container can write user content into it (#147 personal-folder follow-up).
+	// Fails before the fix: the subdir was never created by the brain.
+	if fi, err := os.Stat(src); err != nil {
+		t.Errorf("personal folder source must be created: %v", err)
+	} else if !fi.IsDir() {
+		t.Errorf("personal folder source %q is not a directory", src)
 	}
 }
 

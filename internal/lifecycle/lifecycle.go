@@ -498,6 +498,37 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 		}
 	}
 
+	// Prepare each elected PERSONAL folder source so the app can write user
+	// content into it. A docker-created bind source is root:root (the same
+	// daemon behavior as the private bind dirs above), so a pick-subfolder
+	// election whose subdir doesn't exist yet — e.g. ~/Documents/Notebooks for
+	// Jupyter — lands root-owned and the cap_drop:ALL container, running as the
+	// owner UID, can't write it. The runtime identity for a personal source IS
+	// the owner, so MkdirAll + chown to iso.uid/gid is safe: a pre-existing
+	// ~/Documents is already owner-owned (chown is a no-op) and only the new
+	// leaf is created. SHARED sources (/srv/malmo/shared/…) are deliberately
+	// skipped here — that tree is group-owned via malmo-shared and must NOT be
+	// chowned to a runtime UID; preparing shared subfolders is its own concern
+	// (tracked separately). Same privilege posture as the bind-dir loop above:
+	// hard-fail under the root production brain, warn-and-skip under the
+	// unprivileged dev brain (where iso.uid is the operator that owns its home).
+	for _, mt := range iso.mounts {
+		if mt.Source != sourcePersonal {
+			continue
+		}
+		src := iso.hostSource(mt)
+		if err := os.MkdirAll(src, 0o755); err != nil {
+			return rollback(fmt.Errorf("create folder source %q: %w", src, err))
+		}
+		if err := os.Chown(src, iso.uid, iso.gid); err != nil {
+			if os.Geteuid() == 0 {
+				return rollback(fmt.Errorf("chown folder source %q: %w", src, err))
+			}
+			slog.Warn("folder source chown skipped under unprivileged brain",
+				"instance_id", id, "step", src, "uid", iso.uid, "gid", iso.gid, "err", err)
+		}
+	}
+
 	// 7. Generate override (with pins + isolation) + .env.
 	step("generating_override")
 	if err := m.writeOverride(id, man, composeBytes, pins, iso); err != nil {
