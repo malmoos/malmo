@@ -109,6 +109,32 @@ func TestInstallGPU_HostErrorFailsInstall(t *testing.T) {
 	}
 }
 
+// A present:true report with no render group is a malformed host answer: the
+// gate must fail the install rather than group_add GID 0 (the root group) onto
+// the cap_drop:ALL container. It is a host fault, not the no-GPU refusal.
+func TestInstallGPU_PresentButNoRenderGroup_FailsInstall(t *testing.T) {
+	e := newTestEnv(t)
+	e.host.gpu = protocol.SystemGPU{Present: true, Vendor: "intel", RenderGID: 0}
+	e.writeCatalogApp(t, "gpuapp", migrateJobCompose, gpuManifest)
+	e.docker.digests[testImage] = testDigest
+
+	_, err := e.m.Install(context.Background(), "gpuapp",
+		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, nil)
+	if err == nil {
+		t.Fatal("want install failure on present GPU with no render group, got nil")
+	}
+	if errors.Is(err, ErrNoGPU) {
+		t.Fatalf("malformed present-GPU report must not surface as the no-GPU refusal: %v", err)
+	}
+	// Fails at the gate, before the instance row and any Docker work.
+	if insts, _ := e.store.List(); len(insts) != 0 {
+		t.Errorf("want no instance rows after host-fault refusal, got %d", len(insts))
+	}
+	if got := e.docker.methods(); len(got) != 0 {
+		t.Errorf("want no docker calls before the gate, got %v", got)
+	}
+}
+
 func TestInstallNoGPUPermission_NoStanzaNoQuery(t *testing.T) {
 	e := newTestEnv(t)
 	// Even on a GPU-present host, an app that doesn't declare gpu: true gets

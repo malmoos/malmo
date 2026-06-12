@@ -291,6 +291,14 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 		if !g.Present {
 			return store.Instance{}, ErrNoGPU
 		}
+		// A present GPU must carry a real render group: the protocol contract is
+		// render_gid is 0 only when present is false (protocol.SystemGPU). A
+		// present:true / render_gid:0 report is a malformed host answer — fail
+		// it as a host fault here rather than group_add GID 0 (the root group)
+		// onto the cap_drop:ALL container in writeOverride.
+		if g.RenderGID <= 0 {
+			return store.Instance{}, fmt.Errorf("host reported a GPU with no render group (render_gid=%d)", g.RenderGID)
+		}
 		gpu = g
 	}
 
