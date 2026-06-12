@@ -158,7 +158,7 @@ const memBar = computed(() => {
         </div>
 
         <div class="foot">
-          <span>load {{ sample.load.map((l) => l.toFixed(2)).join(" ") }}</span>
+          <span>load {{ ["1m", "5m", "15m"].map((l, i) => `${l} ${sample.load[i].toFixed(2)}`).join("  ") }}</span>
           <span>up {{ humanUptime(sample.uptime_s) }}</span>
         </div>
       </template>
