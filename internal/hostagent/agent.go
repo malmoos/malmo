@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/molmaos/molma/internal/hostagent/netstate"
 	"github.com/molmaos/molma/internal/protocol"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -39,6 +40,14 @@ type PasswordVerifier interface {
 type Publisher interface {
 	Publish(slug string) (name string, err error)
 	Unpublish(slug string) error
+}
+
+// NetState is a consumer-side interface for the LAN interface set reported by
+// GET /v1/discovery/state (DISCOVERY.md # Interface scoping). Provider
+// packages export concrete types: netstate.NMProvider (NetworkManager over
+// DBus) for cmd/host-agent-real, FakeNetState for the fake binary and tests.
+type NetState interface {
+	LANInterfaces() ([]netstate.LANInterface, error)
 }
 
 // HealthSource is a consumer-side interface for reading the latest storage
@@ -288,6 +297,12 @@ type Agent struct {
 	// synthetic monotonically-climbing counters so the inner dev loop needs no
 	// host /proc.
 	System SystemSampler
+
+	// Net, when non-nil, backs the interfaces field of GET /v1/discovery/state
+	// with the LAN set. Swapped per binary: netstate.NMProvider (NetworkManager
+	// over DBus) vs FakeNetState. When nil, interfaces reports empty — "not
+	// measured", matching the other nil-able reporters.
+	Net NetState
 }
 
 // SystemSampler is a consumer-side interface for the raw system-resources
@@ -384,12 +399,25 @@ func (a *Agent) discoveryState(w http.ResponseWriter, r *http.Request) {
 		names = append(names, n)
 	}
 	a.mu.Unlock()
+	// Interfaces is the live LAN set when a netstate provider is wired; empty
+	// means "not measured" (no provider, or the provider failed — logged, not
+	// surfaced: discovery state is a debug read, never a gate).
+	ifaces := []string{}
+	if a.Net != nil {
+		lis, err := a.Net.LANInterfaces()
+		if err != nil {
+			slog.Warn("discovery state: LAN interfaces", "err", err)
+		}
+		for _, li := range lis {
+			ifaces = append(ifaces, li.Name)
+		}
+	}
 	writeJSON(w, http.StatusOK, protocol.DiscoveryState{
 		Publisher:  "avahi-fake",
 		HostName:   "molma",
 		RenamedTo:  nil,
 		Published:  names,
-		Interfaces: []string{"eth0"},
+		Interfaces: ifaces,
 	})
 }
 

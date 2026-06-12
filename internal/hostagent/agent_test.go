@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/molmaos/molma/internal/hostagent/netstate"
 	"github.com/molmaos/molma/internal/protocol"
 )
 
@@ -572,6 +573,28 @@ func TestSystemResources_ReturnsAllowlistedSample(t *testing.T) {
 	}
 	if len(s.Disk) != 1 || s.Disk[0].Dev != "sda" {
 		t.Errorf("disk: want one whole-disk device sda, got %+v", s.Disk)
+	}
+}
+
+func TestDiscoveryState_InterfacesEmptyWithoutProvider(t *testing.T) {
+	_, mux := newTestAgent(&stubVerifier{})
+	s := decodeBody[protocol.DiscoveryState](t, get(t, mux, "/v1/discovery/state"))
+	// Empty list, not null: "not measured" must still be valid JSON for the
+	// brain's decoder.
+	if s.Interfaces == nil || len(s.Interfaces) != 0 {
+		t.Errorf("want empty interfaces without a provider, got %#v", s.Interfaces)
+	}
+}
+
+func TestDiscoveryState_InterfacesFromNetState(t *testing.T) {
+	a, mux := newTestAgent(&stubVerifier{})
+	a.Net = NewFakeNetState(
+		netstate.LANInterface{Name: "eno1", Index: 2, IPv4: "192.168.2.160"},
+		netstate.LANInterface{Name: "wlp2s0", Index: 3, IPv4: "192.168.2.161"},
+	)
+	s := decodeBody[protocol.DiscoveryState](t, get(t, mux, "/v1/discovery/state"))
+	if len(s.Interfaces) != 2 || s.Interfaces[0] != "eno1" || s.Interfaces[1] != "wlp2s0" {
+		t.Errorf("want [eno1 wlp2s0], got %v", s.Interfaces)
 	}
 }
 

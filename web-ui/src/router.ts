@@ -34,6 +34,7 @@ const routes: RouteRecordRaw[] = [
       { path: "apps/:id", name: "settings-app", component: () => import("@/views/settings/InstalledAppDetailSection.vue") },
       { path: "activity", name: "settings-activity", component: () => import("@/views/settings/ActivitySection.vue") },
       { path: "users", name: "settings-users", component: () => import("@/views/settings/UsersSection.vue") },
+      { path: "mail", name: "settings-mail", component: () => import("@/views/settings/OutgoingEmailSection.vue") },
       { path: "about", name: "settings-about", component: () => import("@/views/settings/AboutSection.vue") },
     ],
   },

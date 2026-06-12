@@ -77,20 +77,38 @@ systemctl --root=/ mask systemd-firstboot.service >/dev/null 2>&1 || true
 mkdir -p /usr/lib/systemd/system-preset
 cat > /usr/lib/systemd/system-preset/99-molma-medium-test.preset <<'EOF'
 enable ssh.service
+enable NetworkManager.service
+enable avahi-daemon.service
+disable NetworkManager-wait-online.service
 disable host-agent.service
 EOF
 # Belt-and-suspenders: remove any enable symlink already created during build.
 systemctl --root=/ disable host-agent.service >/dev/null 2>&1 || true
 
-# Enable networkd and configure DHCP so the VM gets an IP and sshd is reachable.
-# virtio-net shows up as enp0s2 in the guest; the wildcard Match covers that
-# and any other ethernet-like name.
+# Networking is split by MAC between networkd and NetworkManager (#130):
+# the first NIC (52:54:00:6d:6c:01, pinned in run-medium-tests.sh) carries
+# SSH via networkd DHCP exactly as before and is marked NM-unmanaged so the
+# two daemons never fight over it. The other two NICs are NetworkManager's
+# — the network-state slice under test reads the LAN set from NM, and the
+# in-VM assertions flip their state without ever touching the SSH path.
+# MAC matching, not interface names: predictable names depend on PCI slot
+# assignment, MACs are pinned in the QEMU args.
 systemctl --root=/ enable systemd-networkd.service >/dev/null 2>&1 || true
 mkdir -p /etc/systemd/network
 cat > /etc/systemd/network/20-dhcp.network << 'EOF'
 [Match]
-Name=en* eth*
+MACAddress=52:54:00:6d:6c:01
 
 [Network]
 DHCP=yes
 EOF
+mkdir -p /etc/NetworkManager/conf.d
+cat > /etc/NetworkManager/conf.d/90-molma-medium-test.conf << 'EOF'
+[keyfile]
+unmanaged-devices=mac:52:54:00:6d:6c:01
+EOF
+systemctl --root=/ enable NetworkManager.service >/dev/null 2>&1 || true
+systemctl --root=/ enable avahi-daemon.service >/dev/null 2>&1 || true
+# Same posture as systemd-networkd-wait-online above: nothing in the image
+# orders against network-online.target, so don't let it slow the boot.
+systemctl --root=/ disable NetworkManager-wait-online.service >/dev/null 2>&1 || true

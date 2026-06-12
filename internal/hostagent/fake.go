@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/molmaos/molma/internal/hostagent/netstate"
 	"github.com/molmaos/molma/internal/protocol"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -69,6 +70,35 @@ func (f *FakePublisher) Publish(slug string) (string, error) {
 
 func (f *FakePublisher) Unpublish(_ string) error {
 	return nil
+}
+
+// FakeNetState implements NetState with a settable LAN set. cmd/host-agent
+// (the fake binary) wires one with a plausible fixed interface so the
+// dev-loop GET /v1/discovery/state shows a stable interfaces list without a
+// NetworkManager dependency; tests set specific sets.
+type FakeNetState struct {
+	mu     sync.Mutex
+	ifaces []netstate.LANInterface
+}
+
+// NewFakeNetState returns a state reporting the given interfaces.
+func NewFakeNetState(ifaces ...netstate.LANInterface) *FakeNetState {
+	return &FakeNetState{ifaces: ifaces}
+}
+
+// Set replaces the reported LAN set.
+func (f *FakeNetState) Set(ifaces ...netstate.LANInterface) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ifaces = append(f.ifaces[:0:0], ifaces...)
+}
+
+func (f *FakeNetState) LANInterfaces() ([]netstate.LANInterface, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]netstate.LANInterface, len(f.ifaces))
+	copy(out, f.ifaces)
+	return out, nil
 }
 
 // FakeHealthSource implements HealthSource with a settable findings list,
