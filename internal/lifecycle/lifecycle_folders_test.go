@@ -56,7 +56,7 @@ func installFolders(t *testing.T, e *testEnv, scope string, owner Owner, manYAML
 	e.writeCatalogApp(t, "filesapp", foldersCompose, manYAML)
 	e.docker.digests[testImage] = testDigest
 
-	inst, err := e.m.Install(context.Background(), "filesapp", owner, scope, mounts, nil)
+	inst, err := e.m.Install(context.Background(), "filesapp", owner, scope, mounts, "", nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestInstallFolders_DeletedOwnerRollsBack(t *testing.T) {
 
 	_, err := e.m.Install(context.Background(), "filesapp",
 		Owner{UserID: "u_ghost", Username: "ghost"}, store.ScopePersonal,
-		[]FolderMount{{Folder: "documents", Source: sourcePersonal}}, nil)
+		[]FolderMount{{Folder: "documents", Source: sourcePersonal}}, "", nil)
 	if err == nil {
 		t.Fatal("want install error for deleted owner, got nil")
 	}
@@ -151,7 +151,7 @@ func TestInstallFolders_FolderlessRunsAsBrainIdentity(t *testing.T) {
 	e.docker.digests[testImage] = testDigest
 
 	inst, err := e.m.Install(context.Background(), "whoami",
-		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, nil)
+		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
 	}

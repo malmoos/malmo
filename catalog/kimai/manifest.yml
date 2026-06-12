@@ -5,7 +5,7 @@ version: "2.59.0"
 description:
   short: "Time-tracking for freelancers and teams — log hours, manage projects, export invoices."
   long: |
-    Kimai is a professional time-tracker: log working hours against customers, projects, and activities, then turn them into reports, exports, and invoices. It supports multiple users with roles and team permissions, so a household or a small business can share one instance. molma provisions and manages the MySQL database Kimai requires automatically — nothing to set up. Sign in with username `admin` and password `changemeplease`, and change that password immediately — it is the same on every fresh install. Features that send email (password resets, scheduled reports) additionally need an outgoing mail server configured by an administrator; everything else works without one.
+    Kimai is a professional time-tracker: log working hours against customers, projects, and activities, then turn them into reports, exports, and invoices. It supports multiple users with roles and team permissions, so a household or a small business can share one instance. molma provisions and manages the MySQL database Kimai requires automatically — nothing to set up. Sign in with username `admin` and password `changemeplease`, and change that password immediately — it is the same on every fresh install. Features that send email (password resets, scheduled reports) work once an administrator adds an outgoing email account in Settings and connects Kimai to it; everything else works without one.
 icon: ./icon.png
 categories: [productivity]
 author:
@@ -50,6 +50,12 @@ services:
   database:
     type: mysql
     version: "8.4"
+
+# Kimai sends email (password resets, scheduled reports) when bound to an
+# outgoing-mail provider — compose maps MOLMA_MAIL_DSN/_FROM onto Symfony's
+# MAILER_URL/MAILER_FROM. Unbound, the null transport keeps email off.
+mail:
+  optional: true
 
 # internet: only for features an admin opts into later (outgoing mail via an
 # external provider, the in-app update check); core time-tracking needs no

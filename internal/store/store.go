@@ -165,6 +165,32 @@ func (s *Store) migrate() error {
 			PRIMARY KEY (instance_id, logical_name),
 			FOREIGN KEY (instance_id) REFERENCES instances(id) ON DELETE CASCADE
 		);
+		-- mail_providers: admin-registered outgoing SMTP providers (BYO outgoing
+		-- mail, SERVICE_PROVISIONING.md). The brain holds the credential and
+		-- injects it into bound apps as MOLMA_MAIL_*; there is no molma-run
+		-- relay. password is plaintext at rest (same trust model as
+		-- instance_secrets; hardening deferred, NEXT.md # App-secret injection
+		-- hardening).
+		CREATE TABLE IF NOT EXISTS mail_providers (
+			id           TEXT    PRIMARY KEY,
+			label        TEXT    NOT NULL UNIQUE,
+			host         TEXT    NOT NULL,
+			port         INTEGER NOT NULL,
+			username     TEXT    NOT NULL,
+			password     TEXT    NOT NULL,
+			from_address TEXT    NOT NULL,
+			encryption   TEXT    NOT NULL CHECK (encryption IN ('none','starttls','tls')),
+			created_at   INTEGER NOT NULL
+		);
+		-- instance_mail_bindings: which provider a mail-capable app sends
+		-- through — at most one per instance; an unbound instance gets no
+		-- MOLMA_MAIL_* vars at all. Cascades with the app instance, and with
+		-- the provider so deleting a provider unbinds its apps (never the
+		-- reverse — apps always survive provider deletion).
+		CREATE TABLE IF NOT EXISTS instance_mail_bindings (
+			instance_id TEXT PRIMARY KEY REFERENCES instances(id) ON DELETE CASCADE,
+			provider_id TEXT NOT NULL REFERENCES mail_providers(id) ON DELETE CASCADE
+		);
 		CREATE TABLE IF NOT EXISTS users (
 			id            TEXT PRIMARY KEY,
 			username      TEXT NOT NULL UNIQUE,
