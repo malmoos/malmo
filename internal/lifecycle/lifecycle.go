@@ -509,7 +509,7 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	// leaf is created. SHARED sources (/srv/malmo/shared/…) are deliberately
 	// skipped here — that tree is group-owned via malmo-shared and must NOT be
 	// chowned to a runtime UID; preparing shared subfolders is its own concern
-	// (tracked separately). Same privilege posture as the bind-dir loop above:
+	// (#156). Same privilege posture as the bind-dir loop above:
 	// hard-fail under the root production brain, warn-and-skip under the
 	// unprivileged dev brain (where iso.uid is the operator that owns its home).
 	for _, mt := range iso.mounts {
