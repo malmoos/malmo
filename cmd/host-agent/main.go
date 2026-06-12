@@ -24,6 +24,9 @@
 //	                    devices) in dev. Requires avahi-daemon running; runs
 //	                    unprivileged. `make dev` sets this. All other host ops
 //	                    stay fake — this only swaps the discovery publisher.
+//	MOLMA_FAKE_NO_GPU — when "1", GET /v1/system/gpu reports no usable GPU
+//	                    instead of the default synthetic Intel iGPU, so the
+//	                    `gpu: true` install refusal is exercisable in dev.
 package main
 
 import (
@@ -97,6 +100,16 @@ func main() {
 	// canned free/total (≈412 GiB free of a 1 TiB drive) — enough for the
 	// install plan's free_bytes to render a plausible figure natively.
 	a.Disk = hostagent.NewFakeDiskReporter(412<<30, 1<<40)
+	// No real /dev/dri in the dev loop, so GET /v1/system/gpu reports a
+	// synthetic Intel iGPU (render GID 104, Debian's usual `render` group) so
+	// a `gpu: true` install exercises the full override path natively.
+	// MOLMA_FAKE_NO_GPU=1 flips it to "no usable GPU" for the refusal path.
+	gpu := protocol.SystemGPU{Present: true, Vendor: "intel", RenderGID: 104}
+	if os.Getenv("MOLMA_FAKE_NO_GPU") == "1" {
+		gpu = protocol.SystemGPU{}
+		slog.Info("host-agent (fake) reporting no GPU (MOLMA_FAKE_NO_GPU=1)")
+	}
+	a.GPU = hostagent.NewFakeGPUReporter(gpu)
 	// No NetworkManager in the dev loop either: a fixed plausible LAN set
 	// keeps GET /v1/discovery/state's interfaces field stable regardless of
 	// the dev box's real network.

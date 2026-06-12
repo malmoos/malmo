@@ -286,6 +286,12 @@ type fakeHost struct {
 	systemStatus protocol.SystemStatus
 	statusErr    error
 
+	// gpu is returned by SystemGPU; the zero value reports no usable GPU, so
+	// the capacity-refusal test needs no setup and stanza tests set Present +
+	// RenderGID explicitly. gpuErr forces the host-error path.
+	gpu    protocol.SystemGPU
+	gpuErr error
+
 	// allocated counts app-service identities handed out (UIDs are band start +
 	// counter); released records every UID returned. allocErr forces the
 	// allocation host-failure path.
@@ -337,6 +343,16 @@ func (h *fakeHost) SystemStatus(_ context.Context) (protocol.SystemStatus, error
 		return protocol.SystemStatus{}, h.statusErr
 	}
 	return h.systemStatus, nil
+}
+
+func (h *fakeHost) SystemGPU(_ context.Context) (protocol.SystemGPU, error) {
+	h.mu.Lock()
+	h.calls = append(h.calls, call{method: "SystemGPU"})
+	h.mu.Unlock()
+	if h.gpuErr != nil {
+		return protocol.SystemGPU{}, h.gpuErr
+	}
+	return h.gpu, nil
 }
 
 // AllocateAppServiceIdentity hands out sequential UIDs from the band start,

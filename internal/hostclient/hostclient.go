@@ -173,6 +173,18 @@ func (c *Client) SystemResources(ctx context.Context) (protocol.SystemResources,
 	return out, err
 }
 
+// SystemGPU returns the host's GPU capability report — presence, vendor, and
+// the render group GID — behind GET /v1/system/gpu. The brain calls it once
+// per `gpu: true` install: Present false is the hard capacity refusal
+// (APP_ISOLATION.md # GPU) and RenderGID feeds the override's group_add. All
+// non-200 responses are generic host errors, propagated via the standard do
+// helper.
+func (c *Client) SystemGPU(ctx context.Context) (protocol.SystemGPU, error) {
+	var out protocol.SystemGPU
+	err := c.do(ctx, "GET", "/v1/system/gpu", nil, &out)
+	return out, err
+}
+
 // SystemHealth returns host-agent's locus-B findings report across categories
 // (HEALTH.md # Detector catalog, BRAIN_HOST_PROTOCOL.md). host-agent always
 // returns 200 with a parseable payload, so a transport error here is genuinely

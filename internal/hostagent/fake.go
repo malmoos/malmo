@@ -249,6 +249,34 @@ func (f *FakeDiskReporter) DataDisk() (int64, int64) {
 	return f.free, f.total
 }
 
+// FakeGPUReporter implements GPUReporter with a settable report. The fake
+// binary wires one reporting a synthetic Intel iGPU (present, vendor "intel",
+// a fixed dev render GID) so the `gpu: true` override path is exercisable
+// under make dev without real hardware; Set flips it to "no usable GPU" so
+// the capacity-refusal path is testable too.
+type FakeGPUReporter struct {
+	mu  sync.Mutex
+	gpu protocol.SystemGPU
+}
+
+// NewFakeGPUReporter returns a reporter serving the given report.
+func NewFakeGPUReporter(gpu protocol.SystemGPU) *FakeGPUReporter {
+	return &FakeGPUReporter{gpu: gpu}
+}
+
+// Set replaces the report. The zero value reports no usable GPU.
+func (f *FakeGPUReporter) Set(gpu protocol.SystemGPU) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.gpu = gpu
+}
+
+func (f *FakeGPUReporter) Read() protocol.SystemGPU {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.gpu
+}
+
 // FakeRebootReporter implements RebootReporter with a settable findings list,
 // used by brain integration tests that need to seed a reboot-required finding
 // and assert the brain raises the matching system-category issue.

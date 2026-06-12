@@ -609,6 +609,40 @@ func TestSystemResources_TimestampIsMonotonic(t *testing.T) {
 	}
 }
 
+// --- system gpu ---
+
+// No reporter wired → present: false, still a clean 200. "No detector" means
+// "no usable GPU", which the brain turns into the gpu: true install refusal.
+func TestSystemGPU_NoReporter_ReportsNoGPU(t *testing.T) {
+	_, mux := newTestAgent(&stubVerifier{})
+	w := get(t, mux, "/v1/system/gpu")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	g := decodeBody[protocol.SystemGPU](t, w)
+	if g.Present || g.Vendor != "" || g.RenderGID != 0 {
+		t.Errorf("want zero no-GPU report with no reporter wired, got %+v", g)
+	}
+}
+
+func TestSystemGPU_DelegatesToReporter(t *testing.T) {
+	a, mux := newTestAgent(&stubVerifier{})
+	fake := NewFakeGPUReporter(protocol.SystemGPU{Present: true, Vendor: "intel", RenderGID: 104})
+	a.GPU = fake
+
+	g := decodeBody[protocol.SystemGPU](t, get(t, mux, "/v1/system/gpu"))
+	if !g.Present || g.Vendor != "intel" || g.RenderGID != 104 {
+		t.Errorf("want synthetic intel iGPU report, got %+v", g)
+	}
+
+	// The toggle the capacity-refusal path tests against.
+	fake.Set(protocol.SystemGPU{})
+	g = decodeBody[protocol.SystemGPU](t, get(t, mux, "/v1/system/gpu"))
+	if g.Present {
+		t.Errorf("want present: false after Set to no-GPU, got %+v", g)
+	}
+}
+
 // --- system-resources sampler seam ---
 
 type stubSampler struct {

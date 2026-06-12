@@ -135,6 +135,20 @@ type DiskReporter interface {
 	DataDisk() (free, total int64)
 }
 
+// GPUReporter is a consumer-side interface for the host GPU capability report
+// behind GET /v1/system/gpu (BRAIN_HOST_PROTOCOL.md # GPU capability query):
+// presence + vendor + the render group GID the brain group_adds onto /dev/dri
+// for a `gpu: true` install. Provider packages return concrete types: the real
+// /dev/dri scanner lands with cmd/host-agent-real (#125), FakeGPUReporter
+// serves the fake binary and tests.
+//
+// Read always returns a usable report and never errors — a detection failure
+// reports Present: false, which the brain turns into the install refusal
+// (the safe side of the gate), never a half-wired override.
+type GPUReporter interface {
+	Read() protocol.SystemGPU
+}
+
 // RebootReporter is a consumer-side interface for the locus-B reboot-required
 // detector: it stats Debian's /var/run/reboot-required flag (+ .pkgs for the
 // package list) and emits a reboot-required finding when a pending reboot is
@@ -270,6 +284,13 @@ type Agent struct {
 	// so /etc/passwd + /etc/shadow + /etc/group become the source of truth.
 	UserMgr UserManager
 
+	// GPU, when non-nil, backs GET /v1/system/gpu. Swapped per binary: the real
+	// /dev/dri detector (cmd/host-agent-real, #125) vs FakeGPUReporter. When
+	// nil, the endpoint reports present: false — an agent with no detector
+	// wired has no usable GPU to offer, so a `gpu: true` install refuses
+	// rather than emitting an override against unknown hardware.
+	GPU GPUReporter
+
 	// System, when non-nil, backs GET /v1/system/resources with real kernel
 	// counters. Swapped per binary: procsource.Sampler (real /proc, Linux-only)
 	// in cmd/host-agent-real vs nil in the fake binary, which keeps the
@@ -316,6 +337,7 @@ func (a *Agent) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/discovery/state", a.discoveryState)
 	mux.HandleFunc("GET /v1/system/status", a.systemStatus)
 	mux.HandleFunc("GET /v1/system/resources", a.systemResources)
+	mux.HandleFunc("GET /v1/system/gpu", a.systemGPU)
 	mux.HandleFunc("POST /v1/auth/verify-password", a.verifyPassword)
 	mux.HandleFunc("POST /v1/auth/set-password", a.setPassword)
 	mux.HandleFunc("POST /v1/auth/set-role", a.setRole)
@@ -458,6 +480,19 @@ func (a *Agent) systemResources(w http.ResponseWriter, r *http.Request) {
 		},
 		UptimeS: int64(secs),
 	})
+}
+
+// systemGPU serves the host GPU capability report (BRAIN_HOST_PROTOCOL.md
+// # GPU capability query). With no reporter wired it reports present: false
+// rather than erroring: "no detector" means "no usable GPU", which the brain
+// turns into the specced `gpu: true` install refusal — the safe side of the
+// gate.
+func (a *Agent) systemGPU(w http.ResponseWriter, r *http.Request) {
+	if a.GPU != nil {
+		writeJSON(w, http.StatusOK, a.GPU.Read())
+		return
+	}
+	writeJSON(w, http.StatusOK, protocol.SystemGPU{})
 }
 
 // systemHealth returns the locus-B findings report across categories
