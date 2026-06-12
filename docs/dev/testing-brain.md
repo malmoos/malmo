@@ -138,7 +138,7 @@ The manual verifications we've redone four slices in a row, codified. A
 script in `dev/e2e/` that runs against `make run-brain`:
 
 1. Door-1 install whoami → assert override contains `@sha256:`, app reaches
-   `http://whoami.molma.local`.
+   `http://whoami.local`.
 2. Tamper catalog `images:` → reinstall fails at `resolving_digests` with
    mismatch message, no state.
 3. Door-2 paste compose → install + reachable.

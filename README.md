@@ -61,7 +61,7 @@ make ui           # dashboard (Vite, :5173)
 
 Then open <http://localhost:5173> and install **Whoami** from the catalog.
 
-> **Tip:** `make dev` runs all of the above in one terminal and additionally publishes each app's `<slug>.molma.local` name over real Avahi (`MOLMA_DEV_AVAHI=1`), so installed apps are reachable by their portless `.local` URL from this box and other LAN devices (non-Android). Requires `avahi-daemon` running and host port `:80` free.
+> **Tip:** `make dev` runs all of the above in one terminal and additionally publishes each app's `<slug>.local` name over real Avahi (`MOLMA_DEV_AVAHI=1`), so installed apps are reachable by their portless `.local` URL from this box and other LAN devices (non-Android). Requires `avahi-daemon` running and host port `:80` free.
 
 ## Documentation
 

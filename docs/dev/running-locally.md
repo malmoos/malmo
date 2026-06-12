@@ -76,7 +76,7 @@ behavior is required.
 - **Go 1.23+.** If `go` isn't on your `PATH`, the `Makefile` falls back to
   `~/.local/go/bin/go`.
 - **Host port `:80` free.** The dev Caddy binds `:80` (matching production) so
-  `<slug>.molma.local` URLs work portless. If something else holds `:80` (another
+  `<slug>.local` URLs work portless. If something else holds `:80` (another
   web server, a system service), stop it first or `make caddy` will fail to bind.
 - **`avahi-daemon` running** (Linux, for the `make dev` loop). `make dev` sets
   `MOLMA_DEV_AVAHI=1`, which publishes each app's `.local` name over the real
@@ -142,7 +142,7 @@ browser ──▶ Vite :5173 ──(proxy /api)──▶ brain :8080
                                            │  ├─ docker compose CLI ─▶ Docker
                                            │  ├─ UNIX socket ─────────▶ host-agent (fake)
                                            │  └─ admin API ───────────▶ Caddy :2019
-app HTTP:  http://<slug>.molma.local/ ─▶ Caddy :80 ─▶ app container
+app HTTP:  http://<slug>.local/ ─▶ Caddy :80 ─▶ app container
 ```
 
 - **Caddy listens on host `:80`** (free it first — see prerequisites) and exposes
@@ -151,13 +151,13 @@ app HTTP:  http://<slug>.molma.local/ ─▶ Caddy :80 ─▶ app container
 - **`.local` URLs resolve under `make dev`.** `make dev` runs the fake host-agent
   with `MOLMA_DEV_AVAHI=1`, which swaps the in-memory discovery publisher for the
   real Avahi DBus publisher (`internal/hostagent/avahipublisher`) — the same code
-  path `host-agent-real` uses. Each installed app's `<slug>.molma.local` is then
+  path `host-agent-real` uses. Each installed app's `<slug>.local` is then
   announced on the LAN, reachable by its portless URL from this box and other LAN
   devices. Requires `avahi-daemon` running; the publisher works unprivileged.
   Android browsers don't resolve `.local` (a production limitation too — see
   `DISCOVERY.md`); secure URLs are the Android path.
   ```bash
-  curl http://whoami.molma.local/        # under make dev, no Host header needed
+  curl http://whoami.local/        # under make dev, no Host header needed
   ```
 - **The multi-terminal path (`make run-agent`) stays pure-fake** — no Avahi, so
   `.local` won't resolve there. Use the `Host`-header recipe below, or run
@@ -218,10 +218,10 @@ will fail until real `useradd`/`passwd` integration lands — use
 ## Verifying routing
 
 molma uses **Host-header-based subdomain routing** — each installed app gets a
-virtual host (`<slug>.molma.local`), never a path prefix. This keeps apps in
+virtual host (`<slug>.local`), never a path prefix. This keeps apps in
 separate browser origins (same-origin policy enforcement — see `SPEC.md`).
 
-**Dev port:** Caddy listens on `:80` in dev (matching production), so `<slug>.molma.local`
+**Dev port:** Caddy listens on `:80` in dev (matching production), so `<slug>.local`
 resolves portless. Under `make dev` (real Avahi) the name is announced on the LAN and
 works from a browser on this box or another LAN device. With `make run-agent` (no Avahi)
 the name won't resolve — fall back to the `Host`-header / `--resolve` recipes below, which
@@ -231,13 +231,13 @@ work regardless of mDNS.
 
 ```bash
 # Under make dev — real Avahi, portless, no Host header
-curl http://whoami.molma.local/
+curl http://whoami.local/
 
 # Host-header method — works without Avahi (e.g. under make run-agent)
-curl -H "Host: whoami.molma.local" http://localhost:80/
+curl -H "Host: whoami.local" http://localhost:80/
 
 # --resolve variant — same effect, avoids quoting issues in scripts
-curl --resolve "whoami.molma.local:80:127.0.0.1" http://whoami.molma.local:80/
+curl --resolve "whoami.local:80:127.0.0.1" http://whoami.local:80/
 
 # Path-based — should NOT return 200 (route does not exist)
 curl -s -o /dev/null -w "%{http_code}" http://localhost:80/whoami/

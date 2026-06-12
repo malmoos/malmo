@@ -15,7 +15,7 @@ one is JavaScript, one is a container we don't write.
 | **`molma-brain`** | `cmd/brain/`, `internal/` | The control-plane daemon. Owns SQLite state, the REST+SSE API, the app lifecycle, and the Caddy config. One Go binary. | Real |
 | **`host-agent` (fake)** | `cmd/host-agent/` | Privileged side used in the inner dev loop. Speaks the real `BRAIN_HOST_PROTOCOL.md` wire format over a UNIX socket; the host operations themselves (Avahi, LUKS, PAM, apt) are stubbed in memory. | **Fake** (real wire, canned ops) |
 | **`host-agent-real`** | `cmd/host-agent-real/`, `internal/hostagent/` | The real privileged binary. Seam-injected reporters: PAM password verify (`pamverifier`), `/proc` system sampling (`procsource`), disk usage, RAM pressure, journal streaming, service health, reboot-required flag, user manager. Discovery is real: per-LAN-interface Avahi announcements (`avahipublisher`) driven by the NetworkManager LAN set (`netstate`), with an avahi-daemon.conf allowlist sync and IP-change replay. Host ops not yet wired: LUKS/TPM, apt, NM configuration (WiFi setup, `/v1/network/*`). | Partial — see "What is not built yet" |
-| **Caddy** | `dev/caddy.json`, `dev/docker-compose.yml` | Reverse proxy. Terminates `*.molma.local` and routes to app containers + the brain. Configured live by the brain via Caddy's admin API. | Real (container) |
+| **Caddy** | `dev/caddy.json`, `dev/docker-compose.yml` | Reverse proxy. Terminates `*.local` and routes to app containers + the brain. Configured live by the brain via Caddy's admin API. | Real (container) |
 | **`web-ui`** | `web-ui/` | Vue 3 + Vite + TanStack Query dashboard. Talks only to the brain. Tailwind 4 landed; shadcn-vue scaffolding present, components not yet copied in. Internal code architecture: [`dev/web-ui.md`](dev/web-ui.md). | Real |
 | **SQLite** | `$STATE_DIR/molma.db` | The brain's only persistent store. Schema + queries in `internal/store/`. | Real |
 
@@ -61,7 +61,7 @@ Plus the **Docker daemon** on the host, which the brain drives with the
   never rewrites it. Driver interface lives in `internal/lifecycle/` (the
   consumer), implementation in the same package.
 - **brain → Caddy:** the brain POSTs JSON to Caddy's admin API to add/remove
-  site blocks per app. A splash route covers `<slug>.molma.local` until the
+  site blocks per app. A splash route covers `<slug>.local` until the
   container's health check passes, then flips to the real upstream.
 - **brain → host-agent:** HTTP/JSON over `MOLMA_AGENT_SOCK`. Two patterns,
   sync request/response and SSE-streamed jobs (`internal/protocol/host.go`
