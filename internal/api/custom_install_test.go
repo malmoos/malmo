@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/molmaos/molma/internal/admission"
+	"github.com/malmoos/malmo/internal/admission"
 )
 
 // Door 2 (custom compose) is admin-only (APP_ISOLATION.md # Trust tiers,

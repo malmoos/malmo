@@ -5,7 +5,7 @@
 //
 // Requirements:
 //   - Must run as root (useradd/chpasswd touch /etc/passwd, /etc/shadow).
-//   - A `molma` group must exist (created by the box build, not by host-agent).
+//   - A `malmo` group must exist (created by the box build, not by host-agent).
 //   - Intended for the nspawn test lane; do NOT run on a developer laptop.
 //
 // Invoke with: `sudo go test -tags usermgrtest ./internal/hostagent/usermgr/`
@@ -20,7 +20,7 @@ import (
 	"testing"
 )
 
-const testUser = "molma-usermgrtest"
+const testUser = "malmo-usermgrtest"
 
 func TestUpsertPassword_CreateThenUpdate(t *testing.T) {
 	if os.Geteuid() != 0 {
@@ -152,17 +152,17 @@ func TestDeleteUser_CreateDeleteIdempotent(t *testing.T) {
 	}
 }
 
-// pickGroup returns a primary group that exists on the host. Prefers "molma"
+// pickGroup returns a primary group that exists on the host. Prefers "malmo"
 // (the real default), falls back to "nogroup" so the test still runs on a
-// stock Debian nspawn that hasn't been provisioned with the molma group yet.
+// stock Debian nspawn that hasn't been provisioned with the malmo group yet.
 func pickGroup(t *testing.T) string {
 	t.Helper()
-	for _, g := range []string{"molma", "nogroup", "users"} {
+	for _, g := range []string{"malmo", "nogroup", "users"} {
 		if _, err := user.LookupGroup(g); err == nil {
 			return g
 		}
 	}
-	t.Fatal("no usable primary group on this host (tried molma, nogroup, users)")
+	t.Fatal("no usable primary group on this host (tried malmo, nogroup, users)")
 	return ""
 }
 

@@ -18,7 +18,7 @@ Three account-facing surfaces, all UI:
 
 ### Routing the public recovery screen
 
-`App.vue` — not the router — is molma's auth gate: it picks Setup / AppShell / Login from auth state, and the `<router-view>` only mounts **inside** `AppShell` (i.e. once signed in). So a public route can't render through the router while logged out. The wiring:
+`App.vue` — not the router — is malmo's auth gate: it picks Setup / AppShell / Login from auth state, and the `<router-view>` only mounts **inside** `AppShell` (i.e. once signed in). So a public route can't render through the router while logged out. The wiring:
 
 - `router.ts` registers `/recover` so the catch-all (`/:pathMatch(.*)* → /`) doesn't redirect the path away and a deep-link/refresh keeps the URL.
 - `App.vue` gains a reactive `useRoute()` and renders `RecoverView` directly in its logged-out branch (`v-else-if="route.path === '/recover'"`, before the `Login` fallback). The router is installed app-wide in `main.ts`, so navigation updates the reactive route even with no `router-view` mounted.

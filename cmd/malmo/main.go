@@ -1,4 +1,4 @@
-// Command molma is the app-author's inner-loop CLI. v1 ships three `manifest`
+// Command malmo is the app-author's inner-loop CLI. v1 ships three `manifest`
 // subcommands, runnable on a dev box with no brain:
 //
 //   - `lint` validates a manifest.yml against the schema (APP_MANIFEST.md) and
@@ -30,11 +30,11 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/molmaos/molma/internal/admission"
-	"github.com/molmaos/molma/internal/manifest"
+	"github.com/malmoos/malmo/internal/admission"
+	"github.com/malmoos/malmo/internal/manifest"
 )
 
-const usage = "usage:\n  molma manifest lint    <path/to/manifest.yml>\n  molma manifest check   <path/to/manifest.yml>\n  molma manifest resolve <path/to/manifest.yml>"
+const usage = "usage:\n  malmo manifest lint    <path/to/manifest.yml>\n  malmo manifest check   <path/to/manifest.yml>\n  malmo manifest resolve <path/to/manifest.yml>"
 
 // errUsage signals a malformed invocation (wrong/missing subcommand or args),
 // as opposed to a lint failure. It maps to exit 2 (Unix convention for usage
@@ -49,7 +49,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
 	default:
-		fmt.Fprintln(os.Stderr, "molma: "+err.Error())
+		fmt.Fprintln(os.Stderr, "malmo: "+err.Error())
 		os.Exit(1)
 	}
 }

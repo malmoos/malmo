@@ -1,6 +1,6 @@
-# molma Control Plane
+# malmo Control Plane
 
-> Working spec for molma's control plane — the brain that orchestrates apps, routing, identity, storage, and the mesh. Companion to `SPEC.md`.
+> Working spec for malmo's control plane — the brain that orchestrates apps, routing, identity, storage, and the mesh. Companion to `SPEC.md`.
 >
 > **Topical specs that used to live here:**
 > - App lifecycle (install, run, update, uninstall, reconciler, slug allocation, Caddy timing) → **`APP_LIFECYCLE.md`**
@@ -18,8 +18,8 @@
 - **API + UI** — HTTP + SSE + (future) WebSocket API for the web UI; ships the UI. Wire spec in `BRAIN_UI_PROTOCOL.md`; client-side stack in `WEB_UI.md`.
 - **Identity** — user accounts, sessions, admin/root account, sharing/ACLs. See `AUTH.md`.
 - **Managed services** — runs shared Postgres / Redis / etc., provisions databases on app install, handles backups + upgrades. See `SERVICE_PROVISIONING.md`.
-- **Storage** — manages the data drive (mergerfs union, ext4+LUKS+TPM unlock), bind mounts for `/home/` and `/var/lib/molma/`, app data directories. See `STORAGE.md`.
-- **Mesh** — integrates with Headscale, registers the box, manages pairing tokens, surfaces people/devices UI. See `MOLMA_NETWORK.md`.
+- **Storage** — manages the data drive (mergerfs union, ext4+LUKS+TPM unlock), bind mounts for `/home/` and `/var/lib/malmo/`, app data directories. See `STORAGE.md`.
+- **Mesh** — integrates with Headscale, registers the box, manages pairing tokens, surfaces people/devices UI. See `MALMO_NETWORK.md`.
 - **Backups** — orchestrates app backup hooks, schedules, restores.
 - **Auto-updates** — apps, the OS itself, and the control plane. See `UPDATES.md`.
 
@@ -39,7 +39,7 @@
 │   │           Docker (containerd under)          │      │
 │   │                                              │      │
 │   │  ┌──────────────┐  ┌──────────────────────┐  │      │
-│   │  │ molma-brain  │  │ Caddy (reverse proxy)│  │      │
+│   │  │ malmo-brain  │  │ Caddy (reverse proxy)│  │      │
 │   │  │ (Go daemon)  │◄─┤ config via admin API │  │      │
 │   │  │  + SQLite    │  └──────────────────────┘  │      │
 │   │  │              │  ┌──────────────────────┐  │      │
@@ -70,7 +70,7 @@
 A small native Go binary running as a systemd service. **Does as little as possible.**
 
 - Bootstrap the system at boot — unlock and mount the data drive(s), assemble the mergerfs union, check disks, start Docker.
-- Pull and start the `molma-brain`.
+- Pull and start the `malmo-brain`.
 - Apply OS-level updates (today: `apt`; tomorrow: A/B image swaps).
 - Recover the brain if it crashes.
 
@@ -80,7 +80,7 @@ For v1, host-agent could be a few hundred lines of Go. Deliberately boring.
 
 The brain ↔ host-agent wire-level contract is specified in **`BRAIN_HOST_PROTOCOL.md`** (HTTP/JSON over UNIX socket, two API patterns, SSE for streams, lockstep versioning). Anything that crosses this boundary — mDNS publish/unpublish, OS updates, Tier-2 systemd/config ops — runs on that protocol.
 
-### Layer 2 — `molma-brain` (where 95% of logic lives)
+### Layer 2 — `malmo-brain` (where 95% of logic lives)
 
 A single Go process holding all orchestration logic. Internal packages:
 - App manager — install / lifecycle / updates (spec: `APP_LIFECYCLE.md`)
@@ -93,7 +93,7 @@ A single Go process holding all orchestration logic. Internal packages:
 - Backup orchestrator
 - **Health manager** — owns the typed set of active health issues, consults them to gate write/app/user operations, surfaces them via the API + SSE channel. The brain runs in *degraded mode* when any issue is active. Spec: `HEALTH.md`.
 
-Persists its own state in **SQLite** (single file, no separate DB process for molma's own data; managed Postgres is for *apps*, SQLite is for *molma*).
+Persists its own state in **SQLite** (single file, no separate DB process for malmo's own data; managed Postgres is for *apps*, SQLite is for *malmo*).
 
 **Why Go:** every adjacent tool is in Go (Docker, containerd, Headscale, Caddy, Traefik, Avahi bindings). Static binary, mature concurrency model, the lingua franca of the ecosystem.
 
@@ -112,7 +112,7 @@ The brain runs *next to* these and orchestrates them — not inside them.
 
 ### Locked: brain runs as a container
 
-- The `molma-brain` ships as a Docker image, run by Docker, supervised by `host-agent`.
+- The `malmo-brain` ships as a Docker image, run by Docker, supervised by `host-agent`.
 - **Why:** atomic production updates (pull new tag, recreate container, trivial rollback by reverting tag). No partial-install failure modes the way `apt`-based deploys produce. Same image runs in dev, staging, prod. Future migration to A/B immutable OS updates becomes a host-agent change, not a brain change — the brain doesn't move.
 - **Cost we accept:** marginally slower dev loop than `go run` on the host. Mitigated with bind-mount + `air` (or equivalent) hot-reload during development. Production wins are worth the dev tax.
 - Performance is a non-factor — container overhead for a long-running daemon is negligible.
@@ -127,9 +127,9 @@ The brain runs *next to* these and orchestrates them — not inside them.
 ### Locked: host-agent runs under systemd as `Type=notify`
 
 - Unit type **`Type=notify`**, not `simple`. host-agent calls `sd_notify(READY=1)` only after its UNIX socket is bound and accepting connections. Anything ordered `After=host-agent.service` (brain container, downstream services) sees a ready socket on first try — no startup races.
-- **`Restart=always`**, `RestartSec=2s`, `StartLimitBurst=5` / `StartLimitIntervalSec=60s`. Crash → restart fast, but a sustained crashloop (5 in 60s) stops and surfaces failure. On stop, `OnFailure=molma-recovery.target` routes the box into recovery boot — host-agent itself broken means the brain can't run, so the dashboard isn't reachable and a separate rescue page is the only option (see `BOOT.md` # Failure → recovery target — the narrow cases).
+- **`Restart=always`**, `RestartSec=2s`, `StartLimitBurst=5` / `StartLimitIntervalSec=60s`. Crash → restart fast, but a sustained crashloop (5 in 60s) stops and surfaces failure. On stop, `OnFailure=malmo-recovery.target` routes the box into recovery boot — host-agent itself broken means the brain can't run, so the dashboard isn't reachable and a separate rescue page is the only option (see `BOOT.md` # Failure → recovery target — the narrow cases).
 - **Watchdog enabled.** `WatchdogSec=30s`; host-agent pings `sd_notify(WATCHDOG=1)` every ~10s from a dedicated goroutine. Converts a hung process into a restart. Conservative interval avoids false positives during long legitimate operations (backup tarball walks, large image pulls).
-- **Ordering**: `After=molma-storage-ready.target docker.service network-online.target`, `Wants=network-online.target molma-storage-ready.target`, `Requires=docker.service`. host-agent starts even if storage assembly partially failed — it reads `/run/molma/health/storage.json` and forwards findings to the brain, which raises health issues per `HEALTH.md`. The brain is the single source of truth for "is it safe to write right now"; systemd ordering is best-effort, not strict-gate. Full boot-chain context in `BOOT.md`.
+- **Ordering**: `After=malmo-storage-ready.target docker.service network-online.target`, `Wants=network-online.target malmo-storage-ready.target`, `Requires=docker.service`. host-agent starts even if storage assembly partially failed — it reads `/run/malmo/health/storage.json` and forwards findings to the brain, which raises health issues per `HEALTH.md`. The brain is the single source of truth for "is it safe to write right now"; systemd ordering is best-effort, not strict-gate. Full boot-chain context in `BOOT.md`.
 - **Socket activation is deliberately deferred** — extra complexity with no win on an always-on appliance. Tracked in `NEXT.md` if we ever revisit.
 
 ### Locked: host-agent hardening directives
@@ -140,7 +140,7 @@ host-agent is root, but its filesystem and kernel reach is constrained by system
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/molma /etc/molma /run/molma
+ReadWritePaths=/var/lib/malmo /etc/malmo /run/malmo
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
@@ -158,14 +158,14 @@ Capability dropping (`CapabilityBoundingSet=`) is **not** used — host-agent's 
 - During its own startup, after Docker is ready, host-agent pulls (if needed) and starts the brain container with Docker restart policy `unless-stopped`. After that, Docker keeps brain alive across host-agent restarts; host-agent does not actively supervise brain during steady-state operation.
 - **One chain of custody.** host-agent owns every container on the box (apps, managed services, *and* brain). The reconciler pattern from `APP_LIFECYCLE.md` extends to brain naturally.
 - **Lockstep version check happens at launch.** host-agent refuses to start a brain whose major protocol version it doesn't speak (per `BRAIN_HOST_PROTOCOL.md`). One actor owns both endpoints' lifecycles, so the check is a function call, not an out-of-band reconciliation.
-- The alternative — a separate `molma-brain.service` systemd unit — was rejected because it splits the update flow (host-agent already owns the brain+UI update stream per `UPDATES.md`) and moves the lockstep version check out-of-band into first-request failure.
+- The alternative — a separate `malmo-brain.service` systemd unit — was rejected because it splits the update flow (host-agent already owns the brain+UI update stream per `UPDATES.md`) and moves the lockstep version check out-of-band into first-request failure.
 
-### Locked: Caddy is molma substrate, runs as a container
+### Locked: Caddy is malmo substrate, runs as a container
 
-- Caddy is **not a Tier-2 OS integration**. It needs no NET_ADMIN, no external auth flow, has no user-facing settings page; it's molma's own machinery, in the same bucket as the brain itself.
-- Runs as a container, started by the brain alongside other molma-managed containers. Joins the molma Docker network and publishes host ports 80 and 443.
+- Caddy is **not a Tier-2 OS integration**. It needs no NET_ADMIN, no external auth flow, has no user-facing settings page; it's malmo's own machinery, in the same bucket as the brain itself.
+- Runs as a container, started by the brain alongside other malmo-managed containers. Joins the malmo Docker network and publishes host ports 80 and 443.
 - Configured via Caddy's **admin API on `localhost:2019`** from inside the Docker network — no Caddyfile on disk, no `caddy reload` shell-out. Atomic reloads, no file I/O.
-- **Catch-all 404 invariant.** Caddy's `molma` server always has a final route at the end of `routes[]` with `@id=molma-catchall` and no matcher, returning HTML 404 ("No app at this hostname"). The brain inserts dynamic per-app routes at index 0 (`POST /config/apps/http/servers/molma/routes/0`) so the catch-all stays last. On startup the brain calls `EnsureCatchAll` which re-installs the catch-all if missing — survives Caddy state loss, hand-edits, or config drift. Returning 200 empty for unmatched routes is a UX failure and breaks tests that can't distinguish "routed" from "no-match".
+- **Catch-all 404 invariant.** Caddy's `malmo` server always has a final route at the end of `routes[]` with `@id=malmo-catchall` and no matcher, returning HTML 404 ("No app at this hostname"). The brain inserts dynamic per-app routes at index 0 (`POST /config/apps/http/servers/malmo/routes/0`) so the catch-all stays last. On startup the brain calls `EnsureCatchAll` which re-installs the catch-all if missing — survives Caddy state loss, hand-edits, or config drift. Returning 200 empty for unmatched routes is a UX failure and breaks tests that can't distinguish "routed" from "no-match".
 - **Updates ride the brain+UI stream**, not the Debian base stream — image tag in the release manifest, pulled and reconciled by host-agent + brain. Decouples Caddy version from Debian's release cadence.
 - **Performance is a non-issue for the household workload.** Docker bridge networking adds microseconds per connection — invisible at household scale. The heaviest "big file" path (SMB transfers of media to/from laptops) bypasses Caddy entirely: SMB is a Tier-2 host service on port 445. DLNA likewise. Caddy carries HTTP app traffic only (Jellyfin/Plex/Immich streaming, dashboards, app UIs); even a household of 4K streamers is well below containerized Caddy's ceiling.
 - **Memory overhead from containerization is negligible.** Containers are not VMs — same process, same RSS, no extra kernel or libc.
@@ -175,7 +175,7 @@ Capability dropping (`CapabilityBoundingSet=`) is **not** used — host-agent's 
 
 - **Language:** Go. Single binary. Static.
 - **Internal structure:** clean packages (app manager, proxy manager, mesh manager, service manager, storage manager, identity, API server, backup orchestrator). Single process — no microservices.
-- **State:** SQLite, single file in a persistent volume, for molma's own state. *Managed Postgres is for apps; SQLite is for molma.*
+- **State:** SQLite, single file in a persistent volume, for malmo's own state. *Managed Postgres is for apps; SQLite is for malmo.*
 - **Reverse proxy:** Caddy, controlled via its admin API.
 - **`host-agent` is and stays minimal** — bootstrap, brain supervision, OS-level updates. Anything that changes frequently lives in the brain, not here.
 

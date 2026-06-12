@@ -3,16 +3,16 @@
 package protocol
 
 // SocketPath is the production socket location. In dev the brain and the
-// fake host-agent agree on a path via MOLMA_AGENT_SOCK.
-const SocketPath = "/var/run/molma/agent.sock"
+// fake host-agent agree on a path via MALMO_AGENT_SOCK.
+const SocketPath = "/var/run/malmo/agent.sock"
 
 // AppHostSuffix is the LAN hostname suffix for app instances: an app with slug
 // <slug> is reachable at "<slug>" + AppHostSuffix, e.g. "photos.local".
 //
-// It is single-label on purpose. The earlier "<slug>.molma.local" shape was
+// It is single-label on purpose. The earlier "<slug>.malmo.local" shape was
 // multi-label relative to .local and is rejected outright by nss-mdns on Linux
 // (and is unreliable on other resolvers), so the no-cloud LAN URL never
-// resolved there. The ".molma" infix bought nothing in mDNS (no zones, no
+// resolved there. The ".malmo" infix bought nothing in mDNS (no zones, no
 // delegation, no wildcards — each name is published individually regardless),
 // so it was dropped. See DECISIONS.md (2026-05-31) and DISCOVERY.md.
 //
@@ -40,7 +40,7 @@ type UnpublishRequest struct {
 // SystemStatus is GET /v1/system/status.
 //
 // DataDiskFreeBytes / DataDiskTotalBytes are a statfs snapshot of the data
-// drive's mount (/srv/molma): free = available blocks × block size (Bavail ×
+// drive's mount (/srv/malmo): free = available blocks × block size (Bavail ×
 // Bsize, the space an unprivileged writer can actually use, already excluding
 // the root reserve), total = Blocks × Bsize. They back the install-plan's
 // free_bytes figure (BRAIN_UI_PROTOCOL.md # install-plan) so the install dialog
@@ -169,7 +169,7 @@ type DeleteUserRequest struct {
 }
 
 // SetRoleRequest is POST /v1/auth/set-role. Updates the user's Linux group
-// membership (molma-admin) to match the new role. Role must be "admin" or "member".
+// membership (malmo-admin) to match the new role. Role must be "admin" or "member".
 type SetRoleRequest struct {
 	User string `json:"user"`
 	Role string `json:"role"`
@@ -215,7 +215,7 @@ type SystemHealth struct {
 }
 
 // StorageHealth is the on-disk storage findings file
-// (/run/molma/health/storage.json) written by molma-storage-verify (BOOT.md
+// (/run/malmo/health/storage.json) written by malmo-storage-verify (BOOT.md
 // # The storage-ready target) and read by host-agent's storage source, which
 // folds the findings into SystemHealth's storage category. It is also the
 // boot reporter's wire shape.
@@ -259,18 +259,18 @@ type ResolveHomeResponse struct {
 // service-account identities the brain needs to emit correct user:/group_add
 // directives in compose overrides for household-scope app instances.
 //
-// MolmaAppUID/GID is the shared service identity (compose user:).
-// MolmaSharedGID is the GID of the molma-shared group (apps electing a shared
+// MalmoAppUID/GID is the shared service identity (compose user:).
+// MalmoSharedGID is the GID of the malmo-shared group (apps electing a shared
 // folder source are added to it via group_add).
 type WellKnownIdentityResponse struct {
-	MolmaAppUID    int `json:"molma_app_uid"`
-	MolmaAppGID    int `json:"molma_app_gid"`
-	MolmaSharedGID int `json:"molma_shared_gid"`
+	MalmoAppUID    int `json:"malmo_app_uid"`
+	MalmoAppGID    int `json:"malmo_app_gid"`
+	MalmoSharedGID int `json:"malmo_shared_gid"`
 }
 
 // AppServiceUIDMin/Max bound the reserved app-service identity band host-agent
 // allocates `service_user: true` instances from (APP_ISOLATION.md # Runtime
-// identity & data ownership): below the molma user floor (UID_MIN 3000,
+// identity & data ownership): below the malmo user floor (UID_MIN 3000,
 // FIRST_RUN.md # Identity), above the fixed well-known identities (2000/2001),
 // with 2002–2099 left unallocated as headroom for future fixed identities.
 // Both sides of the socket validate against the band — host-agent never

@@ -1,8 +1,8 @@
-# Gitea's rootless image is purpose-built for molma's sandbox: it starts as a
+# Gitea's rootless image is purpose-built for malmo's sandbox: it starts as a
 # plain non-root process (no s6 setup, no startup chown) and honors whatever
 # runtime UID it's given, so it runs clean under the brain-pinned service
 # identity with cap_drop ALL. Upstream's compose published 3000/2222 and used
-# named volumes; molma drops the host ports (the brain routes to main_port)
+# named volumes; malmo drops the host ports (the brain routes to main_port)
 # and binds the image's two declared volumes — /var/lib/gitea (repositories,
 # LFS, attachments, the SQLite database) and /etc/gitea (app.ini) — under
 # ./data.
@@ -18,7 +18,7 @@
 # image's environment-to-ini, so the two platform-owned settings can't drift:
 # - ROOT_URL: Gitea derives the HTTP clone URLs, redirects, and webhook
 #   targets it displays from this; the brain injects the routed URL.
-# - DISABLE_SSH: git-over-SSH needs a raw TCP port molma can't route (Caddy
+# - DISABLE_SSH: git-over-SSH needs a raw TCP port malmo can't route (Caddy
 #   proxies HTTP only and admission drops ports:), so the built-in SSH server
 #   stays off and the UI offers HTTP clone URLs only. Clone and push over
 #   HTTP(S) work fully.
@@ -28,7 +28,7 @@ services:
     restart: unless-stopped
     environment:
       USER: git
-      GITEA__server__ROOT_URL: ${MOLMA_APP_URL}
+      GITEA__server__ROOT_URL: ${MALMO_APP_URL}
       GITEA__server__DISABLE_SSH: "true"
     volumes:
       - ./data/gitea:/var/lib/gitea

@@ -3,7 +3,7 @@
 # /usr/local/bin/medium-assertions.sh by dev/test-qemu/bootstrap.sh.
 #
 # Driven over SSH by dev/test-qemu/run-medium-tests.sh after the VM
-# boots. Writes the verdict to /var/lib/molma-medium-result; the host
+# boots. Writes the verdict to /var/lib/malmo-medium-result; the host
 # driver scp's it back.
 #
 # Takes a phase argument (slice 0023 Stages 2/3); the harness runs the
@@ -27,7 +27,7 @@
 set -uo pipefail
 
 PHASE="${1:-combined}"
-RESULT=/var/lib/molma-medium-result
+RESULT=/var/lib/malmo-medium-result
 
 # Sentinel non-matching the host's ^(PASS|FAIL:) regex so the driver
 # doesn't tear us down before assertions complete.
@@ -47,8 +47,8 @@ echo "medium-assertions phase=$PHASE"
 
 # --- 1. real systemd userspace reached multi-user.
 # Poll, don't sample once: on first boot the run-once
-# molma-tpm-enroll.service is part of the boot transaction
-# (WantedBy=molma-storage-ready.target) and its Argon2 keyslot operation
+# malmo-tpm-enroll.service is part of the boot transaction
+# (WantedBy=malmo-storage-ready.target) and its Argon2 keyslot operation
 # takes a couple of seconds, during which is-system-running legitimately
 # reports 'starting'. sshd has no ordering against the enroll, so it can
 # win the race and let us in before the transaction settles — sampling
@@ -70,15 +70,15 @@ case "$state" in
 esac
 
 # --- 2. storage-verify ran end-to-end
-verify_state="$(systemctl is-active molma-storage-verify.service 2>&1 || true)"
+verify_state="$(systemctl is-active malmo-storage-verify.service 2>&1 || true)"
 [ "$verify_state" = "active" ] \
-    || fail "molma-storage-verify.service is '$verify_state' (expected active)"
+    || fail "malmo-storage-verify.service is '$verify_state' (expected active)"
 
 # --- 3. reporter output exists and is shaped correctly
-test -s /run/molma/health/storage.json \
-    || fail "/run/molma/health/storage.json missing or empty"
+test -s /run/malmo/health/storage.json \
+    || fail "/run/malmo/health/storage.json missing or empty"
 
-payload="$(cat /run/molma/health/storage.json)"
+payload="$(cat /run/malmo/health/storage.json)"
 compact="$(tr -d ' \n\t' <<<"$payload")"
 grep -q '"checked_at"' <<<"$compact" \
     || fail "storage.json missing checked_at: $payload"
@@ -155,14 +155,14 @@ assert_tpm2_pcr7_token() {
 
 # --- network-state slice (#130) -----------------------------------------
 # Second boot only (the steady-state boot, after the LUKS/TPM checks).
-# Drives /usr/lib/molma/molma-network-verify — the same netstate +
+# Drives /usr/lib/malmo/malmo-network-verify — the same netstate +
 # avahipublisher packages cmd/host-agent-real wires, minus PAM — against
 # the VM's real NetworkManager and avahi-daemon. The SSH NIC (MAC pinned
 # in run-medium-tests.sh, NM-unmanaged) is never touched.
 SSH_NIC_MAC="52:54:00:6d:6c:01"
-MNV=/usr/lib/molma/molma-network-verify
+MNV=/usr/lib/malmo/malmo-network-verify
 AVAHI_CONF=/etc/avahi/avahi-daemon.conf
-MNV_LOG=/var/log/molma-network-verify.log
+MNV_LOG=/var/log/malmo-network-verify.log
 
 nic_ipv4() {
     ip -o -4 addr show dev "$1" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1
@@ -199,7 +199,7 @@ assert_network_state() {
 
     # 1. netstate's LAN set == the NM set, SSH NIC excluded.
     local lan lan_names
-    lan="$("$MNV" lan 2>&1)" || fail "molma-network-verify lan: $lan"
+    lan="$("$MNV" lan 2>&1)" || fail "malmo-network-verify lan: $lan"
     lan_names="$(grep -oE '"Name":"[^"]*"' <<<"$lan" | cut -d'"' -f4 | sort)"
     [ "$lan_names" = "$nics" ] \
         || fail "netstate LAN set [$lan_names] != NM set [$nics] (raw: $lan)"
@@ -207,7 +207,7 @@ assert_network_state() {
     # 2. serve: the conf ships with no allow-interfaces, so the startup
     # sync exercises conf-change -> daemon restart -> republish; the
     # published name must then resolve to one of the LAN addresses.
-    "$MNV" serve -slug molmatest >"$MNV_LOG" 2>&1 &
+    "$MNV" serve -slug malmotest >"$MNV_LOG" 2>&1 &
     local mnv_pid=$!
     local want_allow="allow-interfaces=${nic_a},${nic_b}"
     local got=""
@@ -222,14 +222,14 @@ assert_network_state() {
     addr_a="$(nic_ipv4 "$nic_a")"
     addr_b="$(nic_ipv4 "$nic_b")"
     for _i in $(seq 1 30); do
-        resolved="$(avahi-resolve -4 -n molmatest.local 2>/dev/null | awk '{print $2}')"
+        resolved="$(avahi-resolve -4 -n malmotest.local 2>/dev/null | awk '{print $2}')"
         [ -n "$resolved" ] && break
         sleep 1
     done
-    [ -n "$resolved" ] || fail "molmatest.local never resolved: $(tail -5 "$MNV_LOG" 2>/dev/null)"
+    [ -n "$resolved" ] || fail "malmotest.local never resolved: $(tail -5 "$MNV_LOG" 2>/dev/null)"
     case "$resolved" in
         "$addr_a"|"$addr_b") ;;
-        *) fail "molmatest.local resolved to $resolved, want $addr_a or $addr_b" ;;
+        *) fail "malmotest.local resolved to $resolved, want $addr_a or $addr_b" ;;
     esac
 
     # 3. interface removal: disconnecting nic_b must rewrite the allowlist
@@ -256,7 +256,7 @@ assert_network_state() {
         || fail "nmcli connection up '$conn' failed"
     resolved=""
     for _i in $(seq 1 30); do
-        resolved="$(avahi-resolve -4 -n molmatest.local 2>/dev/null | awk '{print $2}')"
+        resolved="$(avahi-resolve -4 -n malmotest.local 2>/dev/null | awk '{print $2}')"
         [ "$resolved" = "10.0.9.99" ] && break
         sleep 1
     done
@@ -264,25 +264,25 @@ assert_network_state() {
         || fail "replay never re-announced 10.0.9.99 (last resolve: '$resolved'): $(tail -10 "$MNV_LOG" 2>/dev/null)"
 
     kill -0 "$mnv_pid" 2>/dev/null \
-        || fail "molma-network-verify serve died mid-test: $(tail -10 "$MNV_LOG" 2>/dev/null)"
+        || fail "malmo-network-verify serve died mid-test: $(tail -10 "$MNV_LOG" 2>/dev/null)"
     kill "$mnv_pid" 2>/dev/null
 }
 
 case "$PHASE" in
     first-boot)
-        # The run-once enrollment unit (molma-tpm-enroll.service) is
-        # ordered Before=molma-storage-ready.target but ssh.service has no
+        # The run-once enrollment unit (malmo-tpm-enroll.service) is
+        # ordered Before=malmo-storage-ready.target but ssh.service has no
         # ordering against it, so SSH can win the race and we may arrive
         # before enrollment finishes. Wait for the marker (written only on
         # a successful enroll); fail fast if the unit itself failed.
         for _i in $(seq 1 120); do
-            [ -f /var/lib/molma/.luks-tpm-enrolled ] && break
-            if systemctl is-failed --quiet molma-tpm-enroll.service; then
-                fail "molma-tpm-enroll.service failed: $(journalctl -u molma-tpm-enroll.service -b --no-pager 2>/dev/null | tail -20)"
+            [ -f /var/lib/malmo/.luks-tpm-enrolled ] && break
+            if systemctl is-failed --quiet malmo-tpm-enroll.service; then
+                fail "malmo-tpm-enroll.service failed: $(journalctl -u malmo-tpm-enroll.service -b --no-pager 2>/dev/null | tail -20)"
             fi
             sleep 1
         done
-        [ -f /var/lib/molma/.luks-tpm-enrolled ] \
+        [ -f /var/lib/malmo/.luks-tpm-enrolled ] \
             || fail "enrollment marker never appeared after 120s (enroll service stuck?)"
         assert_tpm2_pcr7_token
         ;;
@@ -293,7 +293,7 @@ case "$PHASE" in
         # keyslot was unusable — the only way root unlocked is the
         # PCR-7-bound TPM2 token enrolled on the first boot. Confirm the
         # token persisted and the enrollment marker survived the reboot.
-        [ -f /var/lib/molma/.luks-tpm-enrolled ] \
+        [ -f /var/lib/malmo/.luks-tpm-enrolled ] \
             || fail "enrollment marker missing on second boot (did first-boot enrollment not persist?)"
         assert_tpm2_pcr7_token
         # Best-effort, non-fatal: surface the initrd TPM2-unlock line into

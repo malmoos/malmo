@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/molmaos/molma/internal/notify"
+	"github.com/malmoos/malmo/internal/notify"
 )
 
 // --- harness helpers for the bell read surface ---------------------------

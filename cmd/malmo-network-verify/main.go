@@ -1,17 +1,17 @@
-// Command molma-network-verify exercises the network-state discovery slice
+// Command malmo-network-verify exercises the network-state discovery slice
 // end to end on a real Linux host: NetworkManager LAN enumeration, the
 // avahi-daemon.conf allow-interfaces sync, per-LAN-interface announcement,
 // and IP-change replay. It is the in-VM driver for the medium QEMU lane
 // (dev/test-qemu/), wiring the same packages cmd/host-agent-real does minus
 // PAM — CGO-free so the lane can bake it without cross-building libpam
-// (mirrors cmd/molma-storage-verify). Not part of a running molma.
+// (mirrors cmd/malmo-storage-verify). Not part of a running malmo.
 //
 // Usage:
 //
-//	molma-network-verify lan
+//	malmo-network-verify lan
 //	    Print the NM-derived LAN set as JSON to stdout and exit.
 //
-//	molma-network-verify serve [-slug name]
+//	malmo-network-verify serve [-slug name]
 //	    Sync the avahi allowlist (restarting avahi-daemon if it changed),
 //	    publish <slug>.local per LAN interface, then watch NetworkManager
 //	    and replay on every change until killed. Must run as root (conf
@@ -26,14 +26,14 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/molmaos/molma/internal/hostagent/avahipublisher"
-	"github.com/molmaos/molma/internal/hostagent/netstate"
-	"github.com/molmaos/molma/internal/protocol"
+	"github.com/malmoos/malmo/internal/hostagent/avahipublisher"
+	"github.com/malmoos/malmo/internal/hostagent/netstate"
+	"github.com/malmoos/malmo/internal/protocol"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: molma-network-verify lan | serve [-slug name]")
+		fmt.Fprintln(os.Stderr, "usage: malmo-network-verify lan | serve [-slug name]")
 		os.Exit(2)
 	}
 
@@ -51,7 +51,7 @@ func main() {
 		}
 	case "serve":
 		fs := flag.NewFlagSet("serve", flag.ExitOnError)
-		slug := fs.String("slug", "molmatest", "slug to publish as <slug>.local")
+		slug := fs.String("slug", "malmotest", "slug to publish as <slug>.local")
 		_ = fs.Parse(os.Args[2:])
 
 		pub := &avahipublisher.DBusPublisher{HostSuffix: protocol.AppHostSuffix, LAN: prov.LANInterfaces}

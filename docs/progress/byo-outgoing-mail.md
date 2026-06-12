@@ -1,10 +1,10 @@
-# BYO outgoing mail — SMTP providers, per-app bindings, MOLMA_MAIL_* injection
+# BYO outgoing mail — SMTP providers, per-app bindings, MALMO_MAIL_* injection
 
 - **Status:** done
 - **Date:** 2026-06-12
 - **Specs touched:** `SERVICE_PROVISIONING.md` (# BYO outgoing mail — new section, injection-family table, locked decisions), `APP_MANIFEST.md` (# D3 — new section, locked decisions), `SETTINGS.md` (panel inventory), `DASHBOARD.md` (consent dialog), `DECISIONS.md` 2026-06-12, `NEXT.md` (# Outgoing mail Tier-3 entry; mail passwords folded into # App-secret injection hardening), `docs/dev/catalog-import-gaps.md` (kimai/gitea `smtp-relay` flips)
 
-Closes #122, the `smtp-relay` gap-class the catalog import sprint kept hitting (ghost, kimai, gitea, docuseal). Apps that send email — password resets, reminders, invites — now have a molma story: the admin registers their own SMTP account(s) in Settings → Outgoing email, each mail-capable app binds to one (install-time picker, rebindable later), and the brain direct-injects the bound provider's credentials as `MOLMA_MAIL_*` env vars. No molma-run relay or smarthost — residential IPs can't deliver mail, so the app dials the admin's real provider itself over its declared `internet` permission.
+Closes #122, the `smtp-relay` gap-class the catalog import sprint kept hitting (ghost, kimai, gitea, docuseal). Apps that send email — password resets, reminders, invites — now have a malmo story: the admin registers their own SMTP account(s) in Settings → Outgoing email, each mail-capable app binds to one (install-time picker, rebindable later), and the brain direct-injects the bound provider's credentials as `MALMO_MAIL_*` env vars. No malmo-run relay or smarthost — residential IPs can't deliver mail, so the app dials the admin's real provider itself over its declared `internet` permission.
 
 ## What was done
 
@@ -20,8 +20,8 @@ Closes #122, the `smtp-relay` gap-class the catalog import sprint kept hitting (
 ### Lifecycle (`internal/lifecycle/mail.go`, `lifecycle.go`)
 
 - `Install` gains a `mailProviderID` param: a guard at the top rejects a mail election on a non-mail manifest before any state is written; step 5d (after service grants, before isolation) persists the binding with rollback on failure — a deleted provider is caught by the FK.
-- `writeEnv` appends `mailEnvLines` when bound: the discrete `MOLMA_MAIL_HOST/_PORT/_USER/_PASSWORD/_FROM/_ENCRYPTION` plus a Symfony-style `MOLMA_MAIL_DSN` (`smtps://` for implicit TLS, `smtp://` otherwise; credentials URL-escaped via `url.UserPassword`).
-- `RebindMail(ctx, id, providerID)` — providerID `""` unbinds. Per-instance lock, `ErrNoMailSupport` backstop (the API's 422), brain-commits-first: binding row → surgical `.env` rewrite → `compose up -d` only if running (env is read at container create; stopped instances pick the change up at next start). `rewriteEnvMail` re-stamps **only** the `MOLMA_MAIL_*` lines, leaving every other line byte-identical — a full `writeEnv` would need install-time isolation state (folder elections aren't persisted) and could never accidentally re-roll a stable secret.
+- `writeEnv` appends `mailEnvLines` when bound: the discrete `MALMO_MAIL_HOST/_PORT/_USER/_PASSWORD/_FROM/_ENCRYPTION` plus a Symfony-style `MALMO_MAIL_DSN` (`smtps://` for implicit TLS, `smtp://` otherwise; credentials URL-escaped via `url.UserPassword`).
+- `RebindMail(ctx, id, providerID)` — providerID `""` unbinds. Per-instance lock, `ErrNoMailSupport` backstop (the API's 422), brain-commits-first: binding row → surgical `.env` rewrite → `compose up -d` only if running (env is read at container create; stopped instances pick the change up at next start). `rewriteEnvMail` re-stamps **only** the `MALMO_MAIL_*` lines, leaving every other line byte-identical — a full `writeEnv` would need install-time isolation state (folder elections aren't persisted) and could never accidentally re-roll a stable secret.
 
 ### API (`internal/api/mail.go`, `api.go`, `install_plan.go`, `internal/audit`)
 
@@ -38,7 +38,7 @@ Closes #122, the `smtp-relay` gap-class the catalog import sprint kept hitting (
 
 ### Catalog: Kimai
 
-- `mail: {optional: true}`; compose maps `MAILER_URL: "${MOLMA_MAIL_DSN:-null://null}"` and `MAILER_FROM: "${MOLMA_MAIL_FROM:-kimai@example.com}"` — bound delivers, unbound keeps Symfony's null transport (upstream's documented "mail off" value) instead of a broken empty DSN. Description softened to point at the Settings flow.
+- `mail: {optional: true}`; compose maps `MAILER_URL: "${MALMO_MAIL_DSN:-null://null}"` and `MAILER_FROM: "${MALMO_MAIL_FROM:-kimai@example.com}"` — bound delivers, unbound keeps Symfony's null transport (upstream's documented "mail off" value) instead of a broken empty DSN. Description softened to point at the Settings flow.
 
 ## Verification
 
@@ -55,6 +55,6 @@ Closes #122, the `smtp-relay` gap-class the catalog import sprint kept hitting (
 
 ## What's next
 
-- Gitea re-import with the `MOLMA_MAIL_*` → `GITEA__mailer__*` mapping (ledger entry carries the recipe).
+- Gitea re-import with the `MALMO_MAIL_*` → `GITEA__mailer__*` mapping (ledger entry carries the recipe).
 - The `NEXT.md` # Outgoing mail ladder: box-default provider, brain-sent email riding the same registry (the `OUTGOING_MAIL.md` promotion trigger), re-stamp-on-edit as an explicit action.
 - At-rest encryption of `mail_providers.password` with the rest of the app-secret hardening bucket.

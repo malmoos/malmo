@@ -174,7 +174,7 @@ auth ops now hit the real system.
   the account between the two calls, `userdel` exits 6 ("user does not
   exist") and the handler surfaces it as a 500 instead of the
   idempotent-nil it promises. Safe today: host-agent is the only writer to
-  `/etc/passwd` on a molma box (CLAUDE.md "UI is the path"); revisit if
+  `/etc/passwd` on a malmo box (CLAUDE.md "UI is the path"); revisit if
   that invariant ever changes. Same shape as the demote pre-check TOCTOU
   noted in `0016`.
 - **Silent store-rollback failures fixed in `/setup`** (the `_ = s.store.DeleteUser(u.ID)`
@@ -196,7 +196,7 @@ auth ops now hit the real system.
   reassigns ownership of `/home/<slug>/` to a chosen admin before calling
   `host.DeleteUser`.
 - nspawn-lane wiring for `test-usermgr` (also called out by `0016`): run
-  under systemd-nspawn with the `molma` group pre-provisioned, instead of
+  under systemd-nspawn with the `malmo` group pre-provisioned, instead of
   host root.
 - Out-of-band reconciliation sweep (a brain → host "do any of these
   usernames have orphan Linux accounts?" probe) — only worth building if

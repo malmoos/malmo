@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/molmaos/molma/internal/manifest"
+	"github.com/malmoos/malmo/internal/manifest"
 )
 
 // fakeSizer stands in for the Docker daemon: canned refs by image, or a forced

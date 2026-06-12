@@ -1,13 +1,13 @@
 # Mealie keeps all of its state — the SQLite database, recipe images, and user
 # uploads — under /app/data. Upstream's compose published 9000 on a host port,
-# used a named volume, and built from source; molma drops the host port (the
+# used a named volume, and built from source; malmo drops the host port (the
 # brain routes to main_port 9000), binds the app state under ./data, and pulls
 # the published ghcr image. The default DB engine is SQLite, which upstream's own
 # docs call ideal for a single household, so no database service is needed.
 # ALLOW_SIGNUP stays false so accounts are created by the admin rather than via
-# open registration. BASE_URL is wired to the brain-injected MOLMA_APP_URL (the
+# open registration. BASE_URL is wired to the brain-injected MALMO_APP_URL (the
 # instance's routed URL, e.g. http://mealie.local) so Mealie generates correct
-# absolute links. PUID/PGID and the deploy memory limit are dropped: molma elects
+# absolute links. PUID/PGID and the deploy memory limit are dropped: malmo elects
 # the runtime UID (the entrypoint only self-drops privileges when started as root,
 # so it runs directly under the elected non-root user) and caps memory via the
 # manifest's resources block.
@@ -17,6 +17,6 @@ services:
     environment:
       ALLOW_SIGNUP: "false"
       DB_ENGINE: sqlite
-      BASE_URL: ${MOLMA_APP_URL}
+      BASE_URL: ${MALMO_APP_URL}
     volumes:
       - ./data:/app/data

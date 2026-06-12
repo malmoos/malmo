@@ -22,17 +22,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/molmaos/molma/internal/admission"
-	"github.com/molmaos/molma/internal/catalog"
-	"github.com/molmaos/molma/internal/events"
-	"github.com/molmaos/molma/internal/store"
+	"github.com/malmoos/malmo/internal/admission"
+	"github.com/malmoos/malmo/internal/catalog"
+	"github.com/malmoos/malmo/internal/events"
+	"github.com/malmoos/malmo/internal/store"
 )
 
 func TestLivePostgresProvisioning(t *testing.T) {
 	ctx := context.Background()
 	stateDir := t.TempDir()
 	catDir := t.TempDir()
-	s, err := store.Open(filepath.Join(stateDir, "molma.db"))
+	s, err := store.Open(filepath.Join(stateDir, "malmo.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -73,7 +73,7 @@ services:
   app:
     image: traefik/whoami:v1.10.3
     environment:
-      POSTGRES_URL: ${MOLMA_SERVICE_DATABASE_DSN}
+      POSTGRES_URL: ${MALMO_SERVICE_DATABASE_DSN}
 `
 	writeLiveCatalogApp(t, catDir, "liveapp", compose, man)
 
@@ -135,7 +135,7 @@ func TestLiveMySQLProvisioning(t *testing.T) {
 	ctx := context.Background()
 	stateDir := t.TempDir()
 	catDir := t.TempDir()
-	s, err := store.Open(filepath.Join(stateDir, "molma.db"))
+	s, err := store.Open(filepath.Join(stateDir, "malmo.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -172,7 +172,7 @@ services:
   app:
     image: traefik/whoami:v1.10.3
     environment:
-      DATABASE_URL: ${MOLMA_SERVICE_DATABASE_DSN}
+      DATABASE_URL: ${MALMO_SERVICE_DATABASE_DSN}
 `
 	writeLiveCatalogApp(t, catDir, "livemysql", compose, man)
 
@@ -232,7 +232,7 @@ func TestLiveServiceUserBootAndWrite(t *testing.T) {
 	ctx := context.Background()
 	stateDir := t.TempDir()
 	catDir := t.TempDir()
-	s, err := store.Open(filepath.Join(stateDir, "molma.db"))
+	s, err := store.Open(filepath.Join(stateDir, "malmo.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -286,7 +286,7 @@ services:
 	}
 	t.Cleanup(func() {
 		out, _ := exec.Command("docker", "ps", "-aq",
-			"--filter", "label=molma.instance_id="+inst.ID).Output()
+			"--filter", "label=malmo.instance_id="+inst.ID).Output()
 		for _, cid := range strings.Fields(string(out)) {
 			_ = exec.Command("docker", "rm", "-f", cid).Run()
 		}
@@ -305,7 +305,7 @@ services:
 
 	// The main container runs as the allocated identity…
 	cid, err := exec.Command("docker", "ps", "-q",
-		"--filter", "label=molma.instance_id="+inst.ID,
+		"--filter", "label=malmo.instance_id="+inst.ID,
 		"--filter", "label=com.docker.compose.service=app").Output()
 	if err != nil || strings.TrimSpace(string(cid)) == "" {
 		t.Fatalf("app container not found: %v", err)
@@ -391,7 +391,7 @@ func mysqlUserCanConnect(t *testing.T, user, password, dbName string) bool {
 func TestLiveKanBoot(t *testing.T) {
 	ctx := context.Background()
 	stateDir := t.TempDir()
-	s, err := store.Open(filepath.Join(stateDir, "molma.db"))
+	s, err := store.Open(filepath.Join(stateDir, "malmo.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

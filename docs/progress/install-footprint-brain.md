@@ -18,11 +18,11 @@ Closes issue #70 (the middle link of #68, "on-disk footprint before install"). #
 
 ### Free-disk bytes on the host protocol (`internal/protocol`, `internal/hostagent`)
 
-Free space on the data drive is a genuine host concern (`statfs` on `/srv/molma`) — the one piece of the footprint the brain can't compute itself. Rather than a new endpoint, the existing disk-summary carrier grew two fields:
+Free space on the data drive is a genuine host concern (`statfs` on `/srv/malmo`) — the one piece of the footprint the brain can't compute itself. Rather than a new endpoint, the existing disk-summary carrier grew two fields:
 
 - **`SystemStatus.DataDiskFreeBytes` / `DataDiskTotalBytes`** — advisory; `0` means "not measured". Doc comment ties them to `Bavail × Bsize` / `Blocks × Bsize`.
 - **`hostagent.DiskReporter` seam + `Agent.Disk` field** — consumer-side interface (CLAUDE.md), mirroring the `RAMReporter` pattern from #38. The system-status handler reads it nil-guarded.
-- **`internal/hostagent/diskusage`** — the real `linux`-tagged `syscall.Statfs` reporter on `/srv/molma`, **fails open** to `(0, 0)` + `slog.Error` so a missing data drive never bricks status. `FakeDiskReporter` (canned 412 GiB free / 1 TiB) wires the fake agent.
+- **`internal/hostagent/diskusage`** — the real `linux`-tagged `syscall.Statfs` reporter on `/srv/malmo`, **fails open** to `(0, 0)` + `slog.Error` so a missing data drive never bricks status. `FakeDiskReporter` (canned 412 GiB free / 1 TiB) wires the fake agent.
 
 ### `lifecycle.InstallFootprint` (`internal/lifecycle`)
 
@@ -49,11 +49,11 @@ The transaction owner computes the box-specific estimate (it owns both the Docke
 ## Known gaps & deviations
 
 - **Image-level, not layer-level subtraction.** Two *new* images sharing a base layer count that layer twice — a safe over-estimate. Layer-level would need per-layer catalog data (`docker manifest inspect` blob sizes), which #69 deliberately didn't carry.
-- **`free_bytes` from the fake agent is canned** (412 GiB / 1 TiB). The real `diskusage` reporter does `statfs` on `/srv/molma`, but that path only exists once the real host-agent + data-drive assembly land (still VM-deferred).
+- **`free_bytes` from the fake agent is canned** (412 GiB / 1 TiB). The real `diskusage` reporter does `statfs` on `/srv/malmo`, but that path only exists once the real host-agent + data-drive assembly land (still VM-deferred).
 - **Footprint sub-failures are silent to the user.** A Docker or host hiccup degrades the numbers to zeros (logged at the brain) rather than surfacing "couldn't estimate" — the consent screen just shows a conservative figure. Whether the UI should distinguish "0 because cached" from "0 because we couldn't measure" is a #71 question.
 - **No caching.** Each install-plan fetch re-inspects every image against Docker. Fine at this scale (install-plan is a deliberate user action, not a poll); revisit only if it shows up.
 
 ## What's next
 
 1. **#71 — done in PR #95** (`install-footprint-ui.md`). The store-card `~size` and the consent-dialog Storage block (download line, space line, not-enough-space warning) landed on this branch before this PR merged.
-2. **Real `diskusage` exercise** — once the VM host-agent + `/srv/molma` assembly exist, confirm the `statfs` reporter against a real data drive.
+2. **Real `diskusage` exercise** — once the VM host-agent + `/srv/malmo` assembly exist, confirm the `statfs` reporter against a real data drive.

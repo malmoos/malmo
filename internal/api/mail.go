@@ -19,10 +19,10 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/molmaos/molma/internal/audit"
-	"github.com/molmaos/molma/internal/auth"
-	"github.com/molmaos/molma/internal/lifecycle"
-	"github.com/molmaos/molma/internal/store"
+	"github.com/malmoos/malmo/internal/audit"
+	"github.com/malmoos/malmo/internal/auth"
+	"github.com/malmoos/malmo/internal/lifecycle"
+	"github.com/malmoos/malmo/internal/store"
 )
 
 // testMailTimeout bounds the whole synchronous test-send (dial, handshake,
@@ -117,7 +117,7 @@ func validateMailProviderBody(b *MailProviderBody) error {
 	case b.FromAddress == "" || !strings.Contains(b.FromAddress, "@"):
 		return huma.Error422UnprocessableEntity("from_address must be an email address")
 	}
-	// A newline in any of these reaches a MOLMA_MAIL_* .env line (one field per
+	// A newline in any of these reaches a MALMO_MAIL_* .env line (one field per
 	// line) and the test-send's SMTP commands / RFC 5322 headers, so a CRLF would
 	// let one field smuggle extra env lines, SMTP commands, or mail headers.
 	// Reject at the boundary — none of these fields legitimately span lines.
@@ -414,8 +414,8 @@ func sendTestMail(ctx context.Context, p store.MailProvider, to string) error {
 	if err != nil {
 		return fmt.Errorf("data: %w", err)
 	}
-	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: molma test email\r\nDate: %s\r\n\r\n"+
-		"This is a test email from your molma box — outgoing-mail provider %q is working.\r\n",
+	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: malmo test email\r\nDate: %s\r\n\r\n"+
+		"This is a test email from your malmo box — outgoing-mail provider %q is working.\r\n",
 		p.FromAddress, to, time.Now().Format(time.RFC1123Z), p.Label)
 	if _, err := w.Write([]byte(msg)); err != nil {
 		return fmt.Errorf("send body: %w", err)

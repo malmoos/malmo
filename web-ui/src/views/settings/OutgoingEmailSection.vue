@@ -2,7 +2,7 @@
 // Settings → Outgoing email — admin-only SMTP provider management
 // (SERVICE_PROVISIONING.md # BYO outgoing mail, issue #122). Apps that can send
 // email bind to one of these providers at install time (or later from their
-// detail page); the brain injects the credentials as MOLMA_MAIL_* env vars.
+// detail page); the brain injects the credentials as MALMO_MAIL_* env vars.
 // Mirrors UsersSection: admin redirect as defence in depth, every mutation
 // wrapped in withElevation, guard rejections surface as inline errors. The
 // test-send is the one non-elevated action (it changes nothing).

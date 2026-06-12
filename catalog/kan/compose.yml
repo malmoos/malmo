@@ -3,19 +3,19 @@ services:
     image: ghcr.io/kanbn/kan-migrate:0.5.6
     restart: "no"
     environment:
-      POSTGRES_URL: ${MOLMA_SERVICE_DATABASE_DSN}
+      POSTGRES_URL: ${MALMO_SERVICE_DATABASE_DSN}
 
   web:
     image: ghcr.io/kanbn/kan:0.5.6
     environment:
-      POSTGRES_URL: ${MOLMA_SERVICE_DATABASE_DSN}
+      POSTGRES_URL: ${MALMO_SERVICE_DATABASE_DSN}
       # A 32+ char random string used to sign auth tokens. Generated per-instance
       # by the brain (manifest `secrets: [{name: auth}]`) and injected as
-      # MOLMA_SECRET_AUTH; stable across restarts so sessions survive.
-      BETTER_AUTH_SECRET: ${MOLMA_SECRET_AUTH}
+      # MALMO_SECRET_AUTH; stable across restarts so sessions survive.
+      BETTER_AUTH_SECRET: ${MALMO_SECRET_AUTH}
       # The app's own public URL, used for auth redirects. The brain injects the
-      # instance's routed URL as MOLMA_APP_URL (e.g. http://kan.local).
-      NEXT_PUBLIC_BASE_URL: ${MOLMA_APP_URL}
+      # instance's routed URL as MALMO_APP_URL (e.g. http://kan.local).
+      NEXT_PUBLIC_BASE_URL: ${MALMO_APP_URL}
       # Required for cookie-based credential login on self-hosted installs.
       NEXT_PUBLIC_ALLOW_CREDENTIALS: "true"
       # Optional: Redis DSN for rate limiting (in-memory fallback if unset).

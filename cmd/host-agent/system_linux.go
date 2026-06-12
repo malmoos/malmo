@@ -3,8 +3,8 @@
 package main
 
 import (
-	"github.com/molmaos/molma/internal/hostagent"
-	"github.com/molmaos/molma/internal/hostagent/procsource"
+	"github.com/malmoos/malmo/internal/hostagent"
+	"github.com/malmoos/malmo/internal/hostagent/procsource"
 )
 
 // newSystemSampler returns a real /proc-backed sampler on Linux so make dev

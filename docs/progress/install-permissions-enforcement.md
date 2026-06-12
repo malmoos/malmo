@@ -18,9 +18,9 @@ The enforcement slice: `writeOverride`/`writeEnv` now act on the permission fiel
 ### Lifecycle — stamp identity + mounts (`internal/lifecycle`)
 
 - `Install`/`install` take `mounts []FolderMount`; `InstallCustom` passes `nil` (Door-2 compose owns its own `user:`).
-- When the manifest declares folders, `install` resolves an `isolation`: `WellKnownIdentity` (slice 4a) for the `molma-shared` GID always, plus the `molma-app` UID/GID for a household instance; `ResolveHome` (slice 2) for a personal instance's owner UID/GID + home. `ErrUnknownUser` (owner deleted between plan and commit) rolls the install back as a terminal error, not a retry. Folderless apps skip this entirely and keep today's network/cap_drop-only override (verified: no host identity calls).
-- `writeOverride` stamps, per service: `user: <uid>:<gid>`; one `volumes` entry per folder binding the elected host source (`<home>/<Folder>/` personal, `/srv/molma/shared/<Folder>/` shared, narrowed by subfolder) at `/molma/<folder>` with `:ro`/`:rw` from the manifest mode; `group_add: ["<molma-shared gid>"]` when any source is shared; and `devices` passthrough for `permissions.devices`.
-- `writeEnv` injects `MOLMA_FOLDER_<NAME>=/molma/<folder>` per folder (stable regardless of source).
+- When the manifest declares folders, `install` resolves an `isolation`: `WellKnownIdentity` (slice 4a) for the `malmo-shared` GID always, plus the `malmo-app` UID/GID for a household instance; `ResolveHome` (slice 2) for a personal instance's owner UID/GID + home. `ErrUnknownUser` (owner deleted between plan and commit) rolls the install back as a terminal error, not a retry. Folderless apps skip this entirely and keep today's network/cap_drop-only override (verified: no host identity calls).
+- `writeOverride` stamps, per service: `user: <uid>:<gid>`; one `volumes` entry per folder binding the elected host source (`<home>/<Folder>/` personal, `/srv/malmo/shared/<Folder>/` shared, narrowed by subfolder) at `/malmo/<folder>` with `:ro`/`:rw` from the manifest mode; `group_add: ["<malmo-shared gid>"]` when any source is shared; and `devices` passthrough for `permissions.devices`.
+- `writeEnv` injects `MALMO_FOLDER_<NAME>=/malmo/<folder>` per folder (stable regardless of source).
 
 ### Verification fixture
 
@@ -28,14 +28,14 @@ The enforcement slice: `writeOverride`/`writeEnv` now act on the permission fiel
 
 ## How it maps to the specs
 
-Realizes the enforcement half of `APP_ISOLATION.md` # User content (the toggle table's `folders` rows: personal source → home bind; shared source → shared bind + `group_add`) and `APP_MANIFEST.md` # `folders` (fixed `/molma/<folder>` mount + injected `MOLMA_FOLDER_<NAME>`). The household/personal `user:` split matches "personal instance runs as the owner; household runs as a shared service identity."
+Realizes the enforcement half of `APP_ISOLATION.md` # User content (the toggle table's `folders` rows: personal source → home bind; shared source → shared bind + `group_add`) and `APP_MANIFEST.md` # `folders` (fixed `/malmo/<folder>` mount + injected `MALMO_FOLDER_<NAME>`). The household/personal `user:` split matches "personal instance runs as the owner; household runs as a shared service identity."
 
 ## Verified
 
 Dev loop (real fake host-agent over the socket + real docker), per `feedback_verify_before_commit`:
 
-- **Household, default elections** — `user: 2000:2000`, `group_add: ["2001"]`, `/srv/molma/shared/Documents:/molma/documents:ro`, `MOLMA_FOLDER_DOCUMENTS=/molma/documents`; container came up healthy as the non-root UID under `cap_drop: ALL`.
-- **Personal, elect personal source** — `user: 3181:3181` (FNV-hashed owner UID in [3000,3999]), `/home/alex/Documents:/molma/documents:ro`, no `group_add`.
+- **Household, default elections** — `user: 2000:2000`, `group_add: ["2001"]`, `/srv/malmo/shared/Documents:/malmo/documents:ro`, `MALMO_FOLDER_DOCUMENTS=/malmo/documents`; container came up healthy as the non-root UID under `cap_drop: ALL`.
+- **Personal, elect personal source** — `user: 3181:3181` (FNV-hashed owner UID in [3000,3999]), `/home/alex/Documents:/malmo/documents:ro`, no `group_add`.
 - **Illegal elections** — household electing `personal` → 422 ("source \"personal\" is not allowed for a household install"); undeclared folder → 422. Both auditable.
 
 Unit tests: `internal/lifecycle/lifecycle_folders_test.go` (household-shared-write, personal-source-read-with-subfolder, deleted-owner rollback, folderless skip) and `internal/api/elections_test.go` (defaults, personal-may-elect-shared, subfolder override, seven rejection cases) + `instances_test.go` reject-and-audit HTTP test. All green under `-race`.

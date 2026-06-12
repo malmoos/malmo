@@ -1,11 +1,11 @@
 # Authoring catalog apps with an agent
 
-A reusable agent prompt that turns an upstream `docker-compose.yml` (or a GitHub repo) into a molma **Door-1** catalog app: it rewrites the compose to pass [admission](../specs/APP_LIFECYCLE.md), rewires env vars to molma's injected values, resolves image digests, and writes the `catalog/<id>/{manifest.yml, compose.yml}` pair. This is the author-side adaptation the app's developer would do to run on molma — the tool we use to grow the catalog.
+A reusable agent prompt that turns an upstream `docker-compose.yml` (or a GitHub repo) into a malmo **Door-1** catalog app: it rewrites the compose to pass [admission](../specs/APP_LIFECYCLE.md), rewires env vars to malmo's injected values, resolves image digests, and writes the `catalog/<id>/{manifest.yml, compose.yml}` pair. This is the author-side adaptation the app's developer would do to run on malmo — the tool we use to grow the catalog.
 
 ## How to use it
 
 0. **Work from a Catalog app issue.** Authoring starts from an issue filed with the **Catalog app** template (`.github/ISSUE_TEMPLATE/catalog-app.md`) — the template's duplicate-check is where you confirm the app isn't already requested or previously rejected, so don't repeat that search here. Read the issue first: if it's a re-attempt after a closed/rejected one, understand why the earlier try was closed before starting. (No issue yet? File one from the template before authoring — don't free-form it.)
-1. Open a fresh agent session **inside the molma repo** (the prompt reads on-disk sources — it does not rely on its own text being correct).
+1. Open a fresh agent session **inside the malmo repo** (the prompt reads on-disk sources — it does not rely on its own text being correct).
 2. Paste the prompt block below, then append the **inputs**: the app name, a pasted compose **or** a GitHub repo URL, and optionally a docs URL.
 3. Let it work, then **read its report and re-run `manifest check` yourself** before committing. The agent's job ends at a passing `manifest check` (schema + admission in one); the PR (`Closes #<N>`, progress entry if it's a slice) is yours.
 
@@ -13,7 +13,7 @@ One app per run. For a batch, run it once per app and review each `catalog/<id>/
 
 ## What the validator actually covers (read before trusting "it passed")
 
-**`go run ./cmd/molma manifest check <path>`** runs both checks in one pass — schema lint AND the compose admission policy — so a single green `check` is the bar:
+**`go run ./cmd/malmo manifest check <path>`** runs both checks in one pass — schema lint AND the compose admission policy — so a single green `check` is the bar:
 
 - **Schema** (`internal/manifest/manifest.go`): required fields, `manifest_version == 1`, kebab-case slugs, the `permissions` block (folder names / `mode` / `scope` / `default` / `target`), `health_probe` shape, that `compose_file` resolves + parses, and that `main_service` is one of the compose's services.
 - **Admission** (`internal/admission/admission.go`): syntax via `docker compose config -q`, then the structural compose rejections (ports, named volumes, absolute binds, `privileged`, `cap_add`, `build:`, `extends:`, host namespaces). The agent no longer hand-eyeballs these or reads `admission.go` — `check` enforces them and names the offending service + field.
@@ -29,27 +29,27 @@ The on-disk examples (`catalog/whoami/`, `catalog/files-demo/`) are intentionall
 ## The prompt
 
 ```text
-Adapt an upstream app into a molma Door-1 catalog app (molma = home-server OS, Umbrel/CasaOS category). Produce a `catalog/<id>/{manifest.yml, compose.yml}` pair that installs cleanly — the author-side adaptation the app's developer would do to run on molma.
+Adapt an upstream app into a malmo Door-1 catalog app (malmo = home-server OS, Umbrel/CasaOS category). Produce a `catalog/<id>/{manifest.yml, compose.yml}` pair that installs cleanly — the author-side adaptation the app's developer would do to run on malmo.
 
-You run inside the molma repo. Read these on-disk sources; don't rely on this prompt alone — if it disagrees with the code, the code wins:
+You run inside the malmo repo. Read these on-disk sources; don't rely on this prompt alone — if it disagrees with the code, the code wins:
 - `docs/specs/APP_MANIFEST.md` — manifest schema (fields, injection conventions, folder model). The "Complete sample manifest" section is the full author-grade shape.
 - `catalog/whoami/`, `catalog/files-demo/` — worked examples of the target output (minimal skeletons; the full schema lives in the spec).
-Do NOT pre-read `internal/admission/admission.go` or `internal/manifest/manifest.go` to learn the rules — `go run ./cmd/molma manifest check` enforces both the schema and the admission policy and names the exact field at fault. Draft, then run `check` and iterate on its messages (note: `check` is non-strict on unknown manifest fields — a green run does NOT prove the storage/services blocks are right, only the fields it knows). Consult `manifest.go` only if a `check` message is unclear.
+Do NOT pre-read `internal/admission/admission.go` or `internal/manifest/manifest.go` to learn the rules — `go run ./cmd/malmo manifest check` enforces both the schema and the admission policy and names the exact field at fault. Draft, then run `check` and iterate on its messages (note: `check` is non-strict on unknown manifest fields — a green run does NOT prove the storage/services blocks are right, only the fields it knows). Consult `manifest.go` only if a `check` message is unclear.
 
 INPUTS (appended below): app name; a pasted compose OR a GitHub repo URL; optionally a docs URL.
 
-ADAPT, DON'T FORCE (read first — this governs every step below). Your job is to adapt apps that *can* run as a molma Tier-3 Door-1 app, not to make every app pass at any cost. The admission rules in `admission.go` exist because molma's architecture genuinely cannot run what they reject — stripping a directive the app actually depends on produces a manifest that lints green and then fails or misbehaves at install. That is worse than no manifest. So:
+ADAPT, DON'T FORCE (read first — this governs every step below). Your job is to adapt apps that *can* run as a malmo Tier-3 Door-1 app, not to make every app pass at any cost. The admission rules in `admission.go` exist because malmo's architecture genuinely cannot run what they reject — stripping a directive the app actually depends on produces a manifest that lints green and then fails or misbehaves at install. That is worse than no manifest. So:
 - The legal adaptations are ONLY the ones documented in steps 3-6 (drop host port mappings, named volumes -> binds, content paths -> folder grants, credentials -> managed services). Anything beyond that is forcing.
 - If making the app pass would require removing or faking something the app genuinely needs to function, STOP. Do not invent flags, do not strip a required capability and hope, do not downgrade the app to a broken subset. Write no files.
-- When you bail, say so plainly in the report: name the exact blocker (the directive, capability, or assumption), point to the rule in `admission.go` or the spec that forbids it, explain why molma's architecture can't satisfy it, and state whether it's a Tier-2 candidate (needs capabilities/host access) or simply unsupportable in v1. A clear "can't, because X" is a successful run — a fabricated pass is a failed one.
+- When you bail, say so plainly in the report: name the exact blocker (the directive, capability, or assumption), point to the rule in `admission.go` or the spec that forbids it, explain why malmo's architecture can't satisfy it, and state whether it's a Tier-2 candidate (needs capabilities/host access) or simply unsupportable in v1. A clear "can't, because X" is a successful run — a fabricated pass is a failed one.
 
 Concrete bail triggers (non-exhaustive — when unsure whether an adaptation is legal or forcing, treat it as forcing and bail):
 - Needs `privileged`, `cap_add`, `network_mode: host`, `pid/ipc/userns_mode: host`, or device/kernel access beyond a declarable `devices:`/`gpu:` grant -> Tier-2 candidate, not Door-1.
-- Needs a fixed *host* port (not just an internal listen port molma can route to) — e.g. a VPN/DHCP/mDNS app that must own a specific host port or the host network.
+- Needs a fixed *host* port (not just an internal listen port malmo can route to) — e.g. a VPN/DHCP/mDNS app that must own a specific host port or the host network.
 - Ships only a `build:` with no published image, or requires `extends:` of a file you don't have.
-- Requires multiple replicas, swarm/k8s constructs, or an orchestrator molma's single-node `docker compose` driver doesn't run.
+- Requires multiple replicas, swarm/k8s constructs, or an orchestrator malmo's single-node `docker compose` driver doesn't run.
 - Insists on owning content in a way incompatible with the folder model AND can't fall back to `app_managed_user_content` cleanly.
-- Depends on a host-level service molma doesn't provide and won't add for one app.
+- Depends on a host-level service malmo doesn't provide and won't add for one app.
 
 STEPS
 
@@ -66,15 +66,15 @@ STEPS
 3. REWRITE THE COMPOSE TO PASS ADMISSION (verify the result with `manifest check`, step 10):
    - Drop every `ports:` mapping. From a mapping like `8080:80`, mine the container side (`80`) for `main_port`.
    - Convert named volumes to relative binds under `./data/` (e.g. `db_data:/var/lib/postgresql/data` -> `./data/db:/var/lib/postgresql/data`).
-   - Drop absolute host bind paths. If one was *user content* (a media library), don't bind it — grant it via `permissions.folders` (step 5) and point the app at `${MOLMA_FOLDER_<NAME>}`.
+   - Drop absolute host bind paths. If one was *user content* (a media library), don't bind it — grant it via `permissions.folders` (step 5) and point the app at `${MALMO_FOLDER_<NAME>}`.
    - Drop `privileged`, `cap_add`, `build:`, `extends:`, `network_mode`, `pid/ipc/userns_mode: host`. These are not adaptable: if the app genuinely needs any of them it is not a Tier-3 Door-1 app, so STOP per ADAPT, DON'T FORCE — report the blocker and write no files; do not fabricate a passing compose by stripping a directive the app depends on.
    - Keep `image:` as readable version tags; digests go in the manifest `images:` map, not the compose.
    - Prefer the app listen on a non-privileged port (>=1024). Tier-3 apps run as a non-root elected UID under `cap_drop: ALL`, so an app that only listens on :80 may need a flag/env to move (see files-demo's `--port=8080`).
 
-4. REWIRE ENV VARS — molma injects values; the compose maps them to the app's own names. The injected names use the MOLMA_ prefix (the project was renamed from "malmo"; never emit MALMO_):
-   - Content/library path -> `${MOLMA_FOLDER_<NAME>}` (+ a `permissions.folders` entry). E.g. `PHOTOPRISM_ORIGINALS_PATH: ${MOLMA_FOLDER_PHOTOS}`. The brain bind-mounts each declared folder at `/molma/<folder>` and injects its absolute path as `MOLMA_FOLDER_<NAME>`.
-   - App state dir -> a `./data/...` bind (use `${MOLMA_DATA_DIR}` if the app needs an absolute path).
-   - DB/cache credentials -> `${MOLMA_SERVICE_<NAME>_*}` + a `services:` block — only when the app maps cleanly to managed Postgres/Redis. If it ships its own DB, keep that (adapted to binds) instead.
+4. REWIRE ENV VARS — malmo injects values; the compose maps them to the app's own names. The injected names use the MALMO_ prefix (the project was renamed from "malmo"; never emit MALMO_):
+   - Content/library path -> `${MALMO_FOLDER_<NAME>}` (+ a `permissions.folders` entry). E.g. `PHOTOPRISM_ORIGINALS_PATH: ${MALMO_FOLDER_PHOTOS}`. The brain bind-mounts each declared folder at `/malmo/<folder>` and injects its absolute path as `MALMO_FOLDER_<NAME>`.
+   - App state dir -> a `./data/...` bind (use `${MALMO_DATA_DIR}` if the app needs an absolute path).
+   - DB/cache credentials -> `${MALMO_SERVICE_<NAME>_*}` + a `services:` block — only when the app maps cleanly to managed Postgres/Redis. If it ships its own DB, keep that (adapted to binds) instead.
 
 5. PERMISSIONS (least privilege). `internet`/`lan` only if actually used; `folders` with `mode` (default `read`; `write` is deliberate) and `scope` (`whole` | `pick-subfolder` + optional `default`); `devices` for `/dev/...`; `gpu: true` for hardware accel. Do NOT set a Door-2 `target:` on a folder — that field is for synthetic Door-2 manifests only.
 
@@ -82,23 +82,23 @@ STEPS
 
 7. HEALTH PROBE (recommended for real web apps). If the app exposes a cheap HTTP health/ready path, declare `health_probe` (e.g. `health_probe: /healthz`, or the full mapping with `healthy_status`/`start_period`). Omit it for apps with no such endpoint — omitting just means the app is never probed.
 
-8. IMAGE DIGESTS + SIZES. The `images:` map is object form — each `image:tag` maps to `{digest, download_bytes, disk_bytes}` (`APP_STORE.md` # Catalog schema). Don't hand-write these: once the files exist (step 9), run `go run ./cmd/molma manifest resolve catalog/<id>/manifest.yml`, which pulls each compose image via the Docker daemon and fills the map from the registry — pinned digest plus compressed/uncompressed sizes — keyed by the exact compose string, then prints the per-app footprint. It rewrites the `images:` block in place (preserving your comments) and fails loudly rather than writing a bogus zero. Never guess a digest; if the registry is unreachable the command errors — omit `images:` (valid — brain does trust-on-first-use) and say so.
+8. IMAGE DIGESTS + SIZES. The `images:` map is object form — each `image:tag` maps to `{digest, download_bytes, disk_bytes}` (`APP_STORE.md` # Catalog schema). Don't hand-write these: once the files exist (step 9), run `go run ./cmd/malmo manifest resolve catalog/<id>/manifest.yml`, which pulls each compose image via the Docker daemon and fills the map from the registry — pinned digest plus compressed/uncompressed sizes — keyed by the exact compose string, then prints the per-app footprint. It rewrites the `images:` block in place (preserving your comments) and fails loudly rather than writing a bogus zero. Never guess a digest; if the registry is unreachable the command errors — omit `images:` (valid — brain does trust-on-first-use) and say so.
 
 9. WRITE `catalog/<id>/manifest.yml`, `catalog/<id>/compose.yml` (`compose_file: compose.yml`), `catalog/<id>/icon.<ext>` (from step 1), and `catalog/<id>/screenshots/NN.<ext>` (from step 1, if any were downloaded).
 
 10. VALIDATE & ITERATE:
-   (a) `go run ./cmd/molma manifest check catalog/<id>/manifest.yml` — runs the schema lint AND the compose admission policy in one pass (slugs, permissions, health_probe shape, compose-exists/parses, `main_service` present, and the structural rejections: ports, named volumes, absolute binds, privileged, cap_add, build, extends, host namespaces). Iterate until it passes. It is non-strict on unknown fields, so it will NOT flag a malformed `storage:`/`services:` block — those you verify against the spec by eye.
-   (b) Semantic checks `check` can't make — confirm by hand: that `main_port` is the internal listen port (not a host mapping), that every `${MOLMA_SERVICE_*}` has a matching declared-and-used `services:` entry, and that every folder the app touches has a `permissions.folders` entry.
+   (a) `go run ./cmd/malmo manifest check catalog/<id>/manifest.yml` — runs the schema lint AND the compose admission policy in one pass (slugs, permissions, health_probe shape, compose-exists/parses, `main_service` present, and the structural rejections: ports, named volumes, absolute binds, privileged, cap_add, build, extends, host namespaces). Iterate until it passes. It is non-strict on unknown fields, so it will NOT flag a malformed `storage:`/`services:` block — those you verify against the spec by eye.
+   (b) Semantic checks `check` can't make — confirm by hand: that `main_port` is the internal listen port (not a host mapping), that every `${MALMO_SERVICE_*}` has a matching declared-and-used `services:` entry, and that every folder the app touches has a `permissions.folders` entry.
 
 11. REPORT: what you changed and why; env vars rewired; permissions + reasoning; data-vs-cache split; digest status; health-probe choice; whether it's files-first-class or app_managed_user_content; icon found or skipped; screenshot count or skipped; anything that needed judgment or blocks Door-1 (e.g. needs a capability -> Tier 2). If you bailed under ADAPT, DON'T FORCE, this report (naming the blocker, the forbidding rule, and the tier verdict) IS the deliverable — there are no files.
 
-12. CAPTURE PLATFORM GAPS. If the app *was* adaptable but something didn't fully translate because molma lacks a mechanism — an env var it can't inject, a public URL it can't supply, an auth secret it can't generate — add a **Platform gaps** section to the PR description, one entry per distinct gap. Each entry: gap-class tag, severity (`degrades` / `blocks-start`), trigger (the specific field/image/behavior), what breaks for the user, and why molma can't satisfy it. Reuse an existing gap-class tag when it's the same mechanism. Do NOT edit `NEXT.md` — that's the human's triage step, not yours. This is for platform gaps only; per-app judgment calls stay in the step-11 report.
+12. CAPTURE PLATFORM GAPS. If the app *was* adaptable but something didn't fully translate because malmo lacks a mechanism — an env var it can't inject, a public URL it can't supply, an auth secret it can't generate — add a **Platform gaps** section to the PR description, one entry per distinct gap. Each entry: gap-class tag, severity (`degrades` / `blocks-start`), trigger (the specific field/image/behavior), what breaks for the user, and why malmo can't satisfy it. Reuse an existing gap-class tag when it's the same mechanism. Do NOT edit `NEXT.md` — that's the human's triage step, not yours. This is for platform gaps only; per-app judgment calls stay in the step-11 report.
 
 13. RECORD STATUS. Add or update the app's row in `docs/dev/catalog-status.md`: `Full` / `None known` if it shipped clean, `Degraded` with a one-line user-visible limitation (linking the step-12 ledger entry) if a real feature is broken. If the app *runs but a feature degrades*, it still ships listed. If you wrote a manifest but discovered it can't run at all (crash-loops / never serves), mark it `Blocked` (re-shippable once a named gap closes) or `Rejected` (never), and set `listed: false` in its manifest so the store withdraws it — see `APP_STORE.md` # Listed apps. A fully bailed app (no files written, per step 11) gets no row.
 
 REFERENCE (verify against the on-disk sources — these are reminders, not the schema):
 - Required fields: id, manifest_version, name, version, compose_file, main_service, main_port. Rest optional.
-- Injection (MOLMA_ prefix): folders mount at `/molma/<folder>`, injected as `MOLMA_FOLDER_<NAME>`; managed services as `MOLMA_SERVICE_<NAME>_{HOST,USER,PASSWORD,NAME,DSN}`; app data dir as `MOLMA_DATA_DIR`.
+- Injection (MALMO_ prefix): folders mount at `/malmo/<folder>`, injected as `MALMO_FOLDER_<NAME>`; managed services as `MALMO_SERVICE_<NAME>_{HOST,USER,PASSWORD,NAME,DSN}`; app data dir as `MALMO_DATA_DIR`.
 - Folder taxonomy (only these): photos, documents, movies, music, notes, downloads.
 - Slug rule: `^[a-z0-9]+(-[a-z0-9]+)*$` — single internal hyphens, no leading/trailing hyphen, no `--` run (which also rules out the reserved `xn--` prefix).
 - `version: custom` is the Door-2 marker — never use it for a catalog app.

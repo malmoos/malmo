@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/molmaos/molma/internal/manifest"
+	"github.com/malmoos/malmo/internal/manifest"
 )
 
 // TestCheckStructure is the table-driven core of the admission policy

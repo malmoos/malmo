@@ -10,15 +10,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/molmaos/molma/internal/audit"
-	"github.com/molmaos/molma/internal/auth"
-	"github.com/molmaos/molma/internal/catalog"
-	"github.com/molmaos/molma/internal/events"
-	"github.com/molmaos/molma/internal/health"
-	"github.com/molmaos/molma/internal/hostagent"
-	"github.com/molmaos/molma/internal/hostclient"
-	"github.com/molmaos/molma/internal/protocol"
-	"github.com/molmaos/molma/internal/store"
+	"github.com/malmoos/malmo/internal/audit"
+	"github.com/malmoos/malmo/internal/auth"
+	"github.com/malmoos/malmo/internal/catalog"
+	"github.com/malmoos/malmo/internal/events"
+	"github.com/malmoos/malmo/internal/health"
+	"github.com/malmoos/malmo/internal/hostagent"
+	"github.com/malmoos/malmo/internal/hostclient"
+	"github.com/malmoos/malmo/internal/protocol"
+	"github.com/malmoos/malmo/internal/store"
 )
 
 // healthHarness wires a real hostagent.Agent (with FakeHealthSource) behind a

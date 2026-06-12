@@ -17,7 +17,7 @@ links:
   source: https://github.com/linuxserver/docker-calibre-web
 
 # Pulled from the store: the linuxserver.io image runs s6-overlay, which must
-# start as uid 0 to set up /run before dropping to PUID:PGID, but molma forces a
+# start as uid 0 to set up /run before dropping to PUID:PGID, but malmo forces a
 # non-root user and strips CAP_SETUID/CAP_SETGID — so it crash-loops on every
 # boot (preinit: "/run belongs to uid 0 instead of 3276"). Blocked, not Rejected:
 # unblocks when user-namespace remap lands or a janeczku/calibre-web swap is

@@ -34,7 +34,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/molmaos/molma/internal/protocol"
+	"github.com/malmoos/malmo/internal/protocol"
 )
 
 // issueRAMPressure is the registered issue ID raised under sustained pressure.

@@ -22,7 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/molmaos/molma/internal/hostagent/netstate"
+	"github.com/malmoos/malmo/internal/hostagent/netstate"
 )
 
 // DefaultConfPath is where Debian's avahi-daemon package puts its config.

@@ -1,16 +1,16 @@
 # App lifecycle
 
-> How the brain actually controls apps — install, run, update, uninstall — on top of Docker. Companion to `CONTROL_PLANE.md` (architecture context), `APP_MANIFEST.md` (the contract being installed), `APP_ISOLATION.md` (the runtime enforcement of permissions), `BRAIN_HOST_PROTOCOL.md` (the reconciler pattern's host-side surface), and `MOLMA_NETWORK.md` (Caddy route registration for `.molma.network`).
+> How the brain actually controls apps — install, run, update, uninstall — on top of Docker. Companion to `CONTROL_PLANE.md` (architecture context), `APP_MANIFEST.md` (the contract being installed), `APP_ISOLATION.md` (the runtime enforcement of permissions), `BRAIN_HOST_PROTOCOL.md` (the reconciler pattern's host-side surface), and `MALMO_NETWORK.md` (Caddy route registration for `.malmo.network`).
 
 ## Locked: an app instance is a Docker Compose project
 
 The brain's unit of management is a **compose project**, not an individual container.
 
-- Project name: `molma-<instance-id>`.
-- Every container the brain manages carries labels: `molma.managed=true`, `molma.instance_id=<id>`, `molma.manifest_id=<id>`.
+- Project name: `malmo-<instance-id>`.
+- Every container the brain manages carries labels: `malmo.managed=true`, `malmo.instance_id=<id>`, `malmo.manifest_id=<id>`.
 - `main_service` (from the manifest) is the service the brain routes to and watches for health. Other services in the compose are siblings managed by the same lifecycle ops.
 - Tier-3 per-user apps are N independent compose projects pointing at the same manifest+compose. Each has its own instance id, data dir, and slug.
-- **Slug derivation (locked, see `DASHBOARD.md` # instance naming):** the bare manifest slug `<slug>` is first-come for any scope — the first instance installed wins the clean name. On a collision, a personal instance appends the owner (`<slug>--<user>`, double-dash separator); a household instance (no owner to name) gets a numeric suffix (`<slug>-2`, `<slug>-3`). Flat and single-label so it fits the one wildcard cert `*.<box-id>.molma.network` and resolves cleanly over mDNS. Slugs and usernames may not contain `--` or produce an `xn--` label prefix.
+- **Slug derivation (locked, see `DASHBOARD.md` # instance naming):** the bare manifest slug `<slug>` is first-come for any scope — the first instance installed wins the clean name. On a collision, a personal instance appends the owner (`<slug>--<user>`, double-dash separator); a household instance (no owner to name) gets a numeric suffix (`<slug>-2`, `<slug>-3`). Flat and single-label so it fits the one wildcard cert `*.<box-id>.malmo.network` and resolves cleanly over mDNS. Slugs and usernames may not contain `--` or produce an `xn--` label prefix.
 
 Door-1 (store) and Door-2 (custom compose) converge here: both produce a manifest+compose pair that the brain installs identically. The Door-2 path just synthesizes the manifest first.
 
@@ -23,18 +23,18 @@ The Docker HTTP API (via the socket proxy) is used directly only for things the 
 - `/events` stream for crash detection and health changes.
 - Log streaming to the UI WebSocket.
 - Image GC.
-- Network creation (`molma-ingress` at brain startup, per-app `molma-app-<id>` on install).
+- Network creation (`malmo-ingress` at brain startup, per-app `malmo-app-<id>` on install).
 
 **Why CLI for v1:** fastest path to a working system. Compose semantics stay upstream's problem; we don't reimplement them. The dev-loop and behavior match what app authors run locally with `docker compose up`. We can swap in the SDK later for hot paths if profiling demands it.
 
 ## Locked: on-disk layout per instance
 
 ```
-/var/lib/molma/instances/<instance-id>/
+/var/lib/malmo/instances/<instance-id>/
 ├── manifest.yml              # author's, verbatim
 ├── compose.yml               # author's, verbatim
-├── compose.override.yml      # molma-generated, regenerated on update
-├── .env                      # molma-injected variables
+├── compose.override.yml      # malmo-generated, regenerated on update
+├── .env                      # malmo-injected variables
 ├── data/                     # bind-mount root for all app data
 │   └── ...                   # subdirs per the compose's bind mounts
 └── snapshots/                # pre-update tar(s) of data_volumes + managed-service DB dumps
@@ -47,17 +47,17 @@ The brain's install command is literally:
 docker compose \
   -f compose.yml -f compose.override.yml \
   --env-file .env \
-  -p molma-<instance-id> \
+  -p malmo-<instance-id> \
   up -d
 ```
 
-All app data lives under `data/` via bind mounts. **No Docker named volumes for app data.** Authors write `${MOLMA_DATA_DIR}/pgdata:/var/lib/postgresql/data` (or the equivalent relative path). One backup root, one disk-usage view, one mental model.
+All app data lives under `data/` via bind mounts. **No Docker named volumes for app data.** Authors write `${MALMO_DATA_DIR}/pgdata:/var/lib/postgresql/data` (or the equivalent relative path). One backup root, one disk-usage view, one mental model.
 
 ## Locked: reconciliation is imperative, with a startup pass
 
 The brain does **not** run a k8s-style reconciler loop. Each user action is a sequenced set of idempotent ops with explicit rollback. SQLite is the desired-state source of truth.
 
-On brain startup, a reconciliation pass walks SQLite, lists containers with `molma.managed=true`, and fixes drift:
+On brain startup, a reconciliation pass walks SQLite, lists containers with `malmo.managed=true`, and fixes drift:
 - `state=running` but no containers: `docker compose up -d`.
 - `state=stopped` but containers running: `docker compose stop`.
 - Orphan containers (labeled but no SQLite row, e.g. crash mid-install): tear them down.
@@ -110,13 +110,13 @@ absent → installing → running ⇄ stopped
 
 The brain-generated `compose.override.yml` applies isolation and appliance behavior. **Locked contents, for every service in the compose:**
 
-- Networks: attach to `molma-app-<instance-id>` (per-app bridge). `main_service` additionally attaches to `molma-ingress` so Caddy can reach it.
-- `container_name: molma-<instance-id>-<main-service>` pinned on `main_service` **only**. Without the pin compose names the running container with a replica suffix (`…-1`), and Docker's journald driver tags log lines with that suffixed name — breaking the per-app Logs tail's exact `CONTAINER_NAME` match (`LOGGING.md` # Per-app logs) while the network alias kept Caddy working. The pin makes the running container's name the same `molma-<id>-<service>` stem the brain already computes for the Caddy upstream and ingress alias. An explicit `container_name` makes the service unscalable; the main service is single-replica by design, and sidecars stay unpinned so the constraint never lands on an author's scalable workers. Same pattern as the managed services' fixed exec handle.
+- Networks: attach to `malmo-app-<instance-id>` (per-app bridge). `main_service` additionally attaches to `malmo-ingress` so Caddy can reach it.
+- `container_name: malmo-<instance-id>-<main-service>` pinned on `main_service` **only**. Without the pin compose names the running container with a replica suffix (`…-1`), and Docker's journald driver tags log lines with that suffixed name — breaking the per-app Logs tail's exact `CONTAINER_NAME` match (`LOGGING.md` # Per-app logs) while the network alias kept Caddy working. The pin makes the running container's name the same `malmo-<id>-<service>` stem the brain already computes for the Caddy upstream and ingress alias. An explicit `container_name` makes the service unscalable; the main service is single-replica by design, and sidecars stay unpinned so the constraint never lands on an author's scalable workers. Same pattern as the managed services' fixed exec handle.
 - `cap_drop: [ALL]`. No `cap_add` for Tier-3 apps, ever.
 - `security_opt: [no-new-privileges:true]`.
 - `restart: unless-stopped` (forced — this is a home appliance, apps must survive reboots), **except for author-declared terminating jobs**, whose `restart:` is preserved verbatim. A "terminating job" is detected from the union of two signals: (a) the author set `restart: "no"` or `restart: "on-failure"` on the service, or (b) the service is the target of another service's `depends_on: {condition: service_completed_successfully}` — which catches the common case where the author omitted `restart:` entirely (Compose's default is `no`) and signal (a) alone would miss. Forcing `unless-stopped` on a one-shot init/migrate/seed job is catastrophic: the job exits 0, Docker restarts it, it never reaches the "completed" terminal state, and a completion-gate `depends_on` blocks `docker compose up -d` forever (`DECISIONS.md` 2026-06-05). **`main_service` is always forced long-running** regardless of these signals — a paranoid or buggy author can't accidentally exempt the actual app. Every service not detected as a job still gets forced `unless-stopped`.
 - `devices:` mirroring `permissions.devices` from the manifest. Empty if not declared.
-- The `molma-app-<id>` network is created with `internal: true` if `permissions.internet: false`.
+- The `malmo-app-<id>` network is created with `internal: true` if `permissions.internet: false`.
 
 The override **does not** touch images, env, command, entrypoint, healthcheck, ports, depends_on. It is purely additive-isolation, not a rewrite.
 
@@ -132,7 +132,7 @@ Before install, brain runs `docker compose config` against the author's compose 
 - `volumes:` with absolute host paths. Only bind mounts under the instance's `data/` dir are allowed.
 - `build:` — apps ship images, not Dockerfiles.
 - `extends:` referencing files outside the manifest package.
-- `deploy.replicas` greater than 1 on any service. molma is a single-node appliance — a second replica buys no availability, Caddy routes to one upstream alias per instance, and the main service's `container_name` is pinned for the per-app Logs tail (# Locked: override file contents), which compose refuses to scale. Rejecting at admission names the field instead of failing opaquely at `up`.
+- `deploy.replicas` greater than 1 on any service. malmo is a single-node appliance — a second replica buys no availability, Caddy routes to one upstream alias per instance, and the main service's `container_name` is pinned for the per-app Logs tail (# Locked: override file contents), which compose refuses to scale. Rejecting at admission names the field instead of failing opaquely at `up`.
 
 Rejection messages name the exact field that failed. Catalog CI runs the same checks before publish.
 
@@ -142,19 +142,19 @@ Rejection messages name the exact field that failed. Catalog CI runs the same ch
 
 Brain writes a `.env` file in the instance dir; compose auto-loads it. MVP variable set:
 
-- `MOLMA_INSTANCE_ID` — opaque instance identifier.
-- `MOLMA_APP_URL` — the routable URL for this instance (e.g. `http://photos.local`).
-- `MOLMA_DATA_DIR` — absolute path to the instance's `data/` dir, for compose to reference in bind mounts.
+- `MALMO_INSTANCE_ID` — opaque instance identifier.
+- `MALMO_APP_URL` — the routable URL for this instance (e.g. `http://photos.local`).
+- `MALMO_DATA_DIR` — absolute path to the instance's `data/` dir, for compose to reference in bind mounts.
 
 The app's compose maps these to whatever variable names the app expects. No auto-rewrite.
 
-Managed-service variables (`MOLMA_SERVICE_*`) and per-instance secrets (`MOLMA_SECRET_*`) are deferred — see `SERVICE_PROVISIONING.md`.
+Managed-service variables (`MALMO_SERVICE_*`) and per-instance secrets (`MALMO_SECRET_*`) are deferred — see `SERVICE_PROVISIONING.md`.
 
 ## Locked: image digest pinning
 
 All app installs end up running against a `compose.override.yml` that pins every image as `image: name@sha256:...`. From the second `up` onward, the compose is byte-deterministic.
 
-**For store (Door-1) apps, the digest comes from the signed catalog** (`APP_STORE.md` # Trust model — catalog's `images` map). The brain refuses to install if the locally-resolved digest after `docker pull` doesn't match the catalog's promise — that's the binding from "the molma store promised this version" to specific bytes.
+**For store (Door-1) apps, the digest comes from the signed catalog** (`APP_STORE.md` # Trust model — catalog's `images` map). The brain refuses to install if the locally-resolved digest after `docker pull` doesn't match the catalog's promise — that's the binding from "the malmo store promised this version" to specific bytes.
 
 **For custom (Door-2) apps, the brain falls back to TOFU**: pull, resolve the digest via `docker inspect`, write it into the override. No external authority to compare against; the user pasted the compose themselves.
 
@@ -201,17 +201,17 @@ If step 7 or 8 fails: stop new container, **restore the snapshot from step 4** (
 
 ## Locked: stop, start, uninstall
 
-- **Stop:** `docker compose -p molma-<id> stop` (never `down` — containers, per-app network, Caddy route, and mDNS name all stay in place; only the running processes halt, freeing CPU/RAM). The Caddy route flips to the molma-styled "this app is stopped" splash. State: `stopped`. Legal only from `running`; any other state is a 409. Note this frees the *app's* footprint only — a shared Tier-1 managed service (Postgres/MySQL) the app uses stays running, since it's brain-owned and shared (`SERVICE_PROVISIONING.md`).
-- **Start:** `docker compose -p molma-<id> up -d`, **not** `compose start` (`DECISIONS.md` 2026-06-10). `start` only restarts the existing stopped containers — it re-runs already-completed one-shot jobs and ignores `depends_on` ordering; `up -d` is the same op the reconcile pass uses, so dependency ordering and completion-gate jobs (# override file contents) behave exactly as on install, and it's idempotent. State is written `running` **before** the docker op (brain-commits-first), so a crash mid-start leaves a `running` row the reconcile pass finishes — the same recovery path a reboot takes. The route flips to the "starting" splash, then to the real upstream once `main_service` is healthy; a start that comes up but never goes healthy lands in `failed` with the "failed" splash, exactly like an install health-timeout. Legal only from `stopped`; any other state is a 409.
+- **Stop:** `docker compose -p malmo-<id> stop` (never `down` — containers, per-app network, Caddy route, and mDNS name all stay in place; only the running processes halt, freeing CPU/RAM). The Caddy route flips to the malmo-styled "this app is stopped" splash. State: `stopped`. Legal only from `running`; any other state is a 409. Note this frees the *app's* footprint only — a shared Tier-1 managed service (Postgres/MySQL) the app uses stays running, since it's brain-owned and shared (`SERVICE_PROVISIONING.md`).
+- **Start:** `docker compose -p malmo-<id> up -d`, **not** `compose start` (`DECISIONS.md` 2026-06-10). `start` only restarts the existing stopped containers — it re-runs already-completed one-shot jobs and ignores `depends_on` ordering; `up -d` is the same op the reconcile pass uses, so dependency ordering and completion-gate jobs (# override file contents) behave exactly as on install, and it's idempotent. State is written `running` **before** the docker op (brain-commits-first), so a crash mid-start leaves a `running` row the reconcile pass finishes — the same recovery path a reboot takes. The route flips to the "starting" splash, then to the real upstream once `main_service` is healthy; a start that comes up but never goes healthy lands in `failed` with the "failed" splash, exactly like an install health-timeout. Legal only from `stopped`; any other state is a 409.
 - **Uninstall:** confirm dialog with a "keep data" checkbox (default: delete).
   - **Delete:** `compose down -v`, remove route + mDNS, `rm -rf` instance dir, then **reclaim images** — `docker rmi` each `repo@sha256:…` the instance ran, skipping any image another installed instance still references (cross-checked against the `instance_images` table *after* the SQLite row is deleted, so "still referenced" is just every remaining row). Best-effort: an image docker refuses to drop (held by another tag or a stopped container) is logged, never fatal — images stay pinned-and-tagged, so a plain `docker image prune` would not reclaim them, which is why the targeted `rmi`-by-digest is needed. Scope is the *uninstall* case only; a recurring sweep for **update**-orphaned images (the previous image kept 7 days under # update + rollback, `UPDATES.md`) needs a scheduler seam the brain lacks and stays deferred (`NEXT.md` # Container image cleanup).
-  - **Keep:** same, but move instance dir to `/var/lib/molma/archive/<id>-<timestamp>/` first. SQLite retains a tombstone row. Re-import path is a follow-up.
+  - **Keep:** same, but move instance dir to `/var/lib/malmo/archive/<id>-<timestamp>/` first. SQLite retains a tombstone row. Re-import path is a follow-up.
 
 ## Locked: crash detection
 
 Docker's own `restart: unless-stopped` (forced by the override) handles transient crashes — the brain does not intervene.
 
-The brain subscribes to Docker's `/events` stream filtered by `molma.managed=true`. Container die / health_status / restart events update the per-instance health view. If `main_service` dies more than 5 times in 60 seconds, the brain marks the instance `unhealthy` in the UI (state stays `running` — Docker will keep trying — but the dashboard shows a "needs attention" badge with a logs link).
+The brain subscribes to Docker's `/events` stream filtered by `malmo.managed=true`. Container die / health_status / restart events update the per-instance health view. If `main_service` dies more than 5 times in 60 seconds, the brain marks the instance `unhealthy` in the UI (state stays `running` — Docker will keep trying — but the dashboard shows a "needs attention" badge with a logs link).
 
 ## Locked: reboot behavior
 
@@ -221,7 +221,7 @@ Host reboots → Docker starts → containers with the forced `restart: unless-s
 
 The manifest lists `preferred_slugs` in priority order. The brain picks the first one that's free, where "free" means: not used by another installed instance, and not in the reserved list.
 
-Reserved (cannot be used by apps): `api`, `admin`, `dashboard`, `molma`, `host`, `setup`, plus any name the brain itself serves.
+Reserved (cannot be used by apps): `api`, `admin`, `dashboard`, `malmo`, `host`, `setup`, plus any name the brain itself serves.
 
 If every preferred slug is taken (rare — two apps both wanting `photos`), append a numeric suffix: `photos-2`, `photos-3`, … The chosen slug is persisted in SQLite and never changes for the lifetime of the instance.
 
@@ -243,7 +243,7 @@ Side benefit: host-agent already needs a brain-facing channel for OS updates and
 
 ## Locked: Caddy route registration timing — register early, with a splash
 
-When the install transaction reaches step 8, the brain registers the Caddy route immediately, pointing at a molma-served splash page ("Photos is starting up…", auto-refreshing). Once `main_service` is healthy, the brain flips the Caddy upstream from the splash to the real container (step 11).
+When the install transaction reaches step 8, the brain registers the Caddy route immediately, pointing at a malmo-served splash page ("Photos is starting up…", auto-refreshing). Once `main_service` is healthy, the brain flips the Caddy upstream from the splash to the real container (step 11).
 
 **Why:** registering only after the container is healthy leaves `photos.local` returning *connection refused* (or NXDOMAIN, since mDNS isn't published yet) for up to 120 seconds after the user clicks install. That looks broken; the splash looks intentional.
 
@@ -255,7 +255,7 @@ The same splash machinery serves three user-visible states with consistent vocab
 
 Mechanically: the brain owns two route variants in Caddy's config per instance and swaps between them on state transitions. mDNS publish happens at the same moment as the splash registration — both make the hostname reachable.
 
-If the box is enrolled with molma.network, the brain registers **two hostnames** per app (a `.local` HTTP route and a `<slug>.<box-id>.molma.network` HTTPS route). Both go through the same splash → real-upstream flip. Dashboard tile-clicks default to the `.local` URL; apps with `requires_https: true` in the manifest open the `.molma.network` URL instead. See `MOLMA_NETWORK.md` for why `.local` is the canonical user-facing URL.
+If the box is enrolled with malmo.network, the brain registers **two hostnames** per app (a `.local` HTTP route and a `<slug>.<box-id>.malmo.network` HTTPS route). Both go through the same splash → real-upstream flip. Dashboard tile-clicks default to the `.local` URL; apps with `requires_https: true` in the manifest open the `.malmo.network` URL instead. See `MALMO_NETWORK.md` for why `.local` is the canonical user-facing URL.
 
 ## Locked: concurrency
 

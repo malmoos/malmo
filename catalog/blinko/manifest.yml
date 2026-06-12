@@ -56,7 +56,7 @@ services:
 
 # Blinko signs auth tokens with NEXTAUTH_SECRET (the name survives from its
 # earlier Next.js stack). The brain generates it once at install and injects
-# MOLMA_SECRET_AUTH; the compose maps it across, stable across restarts so
+# MALMO_SECRET_AUTH; the compose maps it across, stable across restarts so
 # sessions survive.
 secrets:
   - name: auth
@@ -69,7 +69,7 @@ permissions:
   internet: true
   lan: false
 
-# Filled by `go run ./cmd/molma manifest resolve catalog/blinko/manifest.yml`.
+# Filled by `go run ./cmd/malmo manifest resolve catalog/blinko/manifest.yml`.
 images:
   blinkospace/blinko:1.8.7:
     digest: sha256:f7c1167f8c86db586599d849539a732929d89adb10977046e7b427813b2a84b4

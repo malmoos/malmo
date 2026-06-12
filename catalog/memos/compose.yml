@@ -1,9 +1,9 @@
 # Memos holds all of its state — the SQLite database and uploaded attachments —
 # under /var/opt/memos. Upstream's compose bound the host's ~/.memos there and
-# published 5230; molma drops the host port (the brain routes to main_port) and
+# published 5230; malmo drops the host port (the brain routes to main_port) and
 # binds the app state under ./data. The default driver is SQLite and the default
 # mode is prod, so no database service or extra env is needed. The image's
-# entrypoint runs the app directly under molma's elected non-root UID (it only
+# entrypoint runs the app directly under malmo's elected non-root UID (it only
 # self-drops privileges when started as root), so it needs no added capabilities.
 services:
   memos:

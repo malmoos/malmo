@@ -10,7 +10,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/molmaos/molma/internal/store"
+	"github.com/malmoos/malmo/internal/store"
 )
 
 // install a running whoami instance for the stop/start tests to act on.

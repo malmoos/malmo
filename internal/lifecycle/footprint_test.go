@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/molmaos/molma/internal/manifest"
-	"github.com/molmaos/molma/internal/protocol"
+	"github.com/malmoos/malmo/internal/manifest"
+	"github.com/malmoos/malmo/internal/protocol"
 )
 
 // twoImageManifest is the fixture for the footprint cases: two images with

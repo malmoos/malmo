@@ -92,11 +92,11 @@ HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$CADDY_PROXY/" 2>/dev/null) 
 
 echo "    OK: brain, Caddy admin, Caddy proxy all reachable"
 
-# --- defensive cleanup: remove stale molma-app-* routes from prior failed runs --
+# --- defensive cleanup: remove stale malmo-app-* routes from prior failed runs --
 
-echo "==> Cleanup: removing stale molma-app-* routes from prior failed runs..."
-existing_ids=$(curl -sf "$CADDY_ADMIN/config/apps/http/servers/molma/routes" \
-  | jq -r '.[] | select(.["@id"]? | test("^molma-app-")) | .["@id"]') || true
+echo "==> Cleanup: removing stale malmo-app-* routes from prior failed runs..."
+existing_ids=$(curl -sf "$CADDY_ADMIN/config/apps/http/servers/malmo/routes" \
+  | jq -r '.[] | select(.["@id"]? | test("^malmo-app-")) | .["@id"]') || true
 if [[ -n "$existing_ids" ]]; then
   for id in $existing_ids; do
     curl -sf -X DELETE "$CADDY_ADMIN/id/$id" >/dev/null \
@@ -109,9 +109,9 @@ fi
 # --- Test 0: catch-all 404 with zero apps installed --------------------------
 
 echo "==> [TEST 0] Catch-all: unmatched hostname → expect HTTP 404 + catch-all body"
-T0_CODE=$(curl -s -o /tmp/molma-catchall-body.txt -w "%{http_code}" \
+T0_CODE=$(curl -s -o /tmp/malmo-catchall-body.txt -w "%{http_code}" \
   -H "Host: nobody.local" "http://localhost:80/") || true
-T0_BODY=$(cat /tmp/molma-catchall-body.txt)
+T0_BODY=$(cat /tmp/malmo-catchall-body.txt)
 if [[ "$T0_CODE" != "404" ]]; then
   fail "Expected HTTP 404 for unmatched host, got $T0_CODE"
 fi
@@ -121,7 +121,7 @@ echo "    PASS: unmatched hostname returned 404 with catch-all body"
 
 # --- setup / login ----------------------------------------------------------
 
-COOKIE_JAR=$(mktemp /tmp/molma-caddy-test-cookies.XXXXXX)
+COOKIE_JAR=$(mktemp /tmp/malmo-caddy-test-cookies.XXXXXX)
 
 echo "==> Auth: setup or login..."
 
@@ -216,10 +216,10 @@ echo "    PASS: subdomain route works, body contains 'Hostname:'"
 # --- negative path-based test -----------------------------------------------
 
 echo "==> [TEST 2] Negative: path-based routing → expect exactly 404 with catch-all body"
-PATH_BODY=$(curl -s -o /tmp/molma-path-body.txt -w "%{http_code}" \
+PATH_BODY=$(curl -s -o /tmp/malmo-path-body.txt -w "%{http_code}" \
   "http://localhost:80/$SLUG/") || true
 PATH_CODE="$PATH_BODY"
-PATH_BODY=$(cat /tmp/molma-path-body.txt)
+PATH_BODY=$(cat /tmp/malmo-path-body.txt)
 if [[ "$PATH_CODE" == "200" ]]; then
   fail "ROUTING BUG: path-based request http://localhost:80/$SLUG/ returned 200 — subdomain-only routing is broken"
 fi
@@ -233,10 +233,10 @@ echo "    PASS: path-based request returned 404 with catch-all body — no path 
 # --- negative unrelated-Host test -------------------------------------------
 
 echo "==> [TEST 3] Negative: wrong Host header → expect exactly 404 with catch-all body"
-WRONG_BODY=$(curl -s -o /tmp/molma-wrong-body.txt -w "%{http_code}" \
+WRONG_BODY=$(curl -s -o /tmp/malmo-wrong-body.txt -w "%{http_code}" \
   -H "Host: nobody.local" "http://localhost:80/") || true
 WRONG_CODE="$WRONG_BODY"
-WRONG_BODY=$(cat /tmp/molma-wrong-body.txt)
+WRONG_BODY=$(cat /tmp/malmo-wrong-body.txt)
 if [[ "$WRONG_CODE" == "200" ]]; then
   fail "Wrong Host: nobody.local returned 200 — catch-all routing is leaking"
 fi
@@ -266,11 +266,11 @@ echo "    uninstall done"
 echo "==> [TEST 4] Verify route withdrawn after uninstall → expect exactly 404 with catch-all body"
 # Give Caddy a moment to process the route removal.
 sleep 1
-GONE_BODY=$(curl -s -o /tmp/molma-gone-body.txt -w "%{http_code}" \
+GONE_BODY=$(curl -s -o /tmp/malmo-gone-body.txt -w "%{http_code}" \
   --resolve "$SLUG.local:80:127.0.0.1" \
   "http://$SLUG.local:80/") || true
 GONE_CODE="$GONE_BODY"
-GONE_BODY=$(cat /tmp/molma-gone-body.txt)
+GONE_BODY=$(cat /tmp/malmo-gone-body.txt)
 if [[ "$GONE_CODE" == "200" ]]; then
   fail "Route for $SLUG.local still returns 200 after uninstall — Caddy route not removed"
 fi

@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/molmaos/molma/internal/manifest"
+	"github.com/malmoos/malmo/internal/manifest"
 )
 
 // InstallFootprint is the box-specific install estimate behind the install-plan

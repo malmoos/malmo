@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/molmaos/molma/internal/hostagent/netstate"
-	"github.com/molmaos/molma/internal/protocol"
+	"github.com/malmoos/malmo/internal/hostagent/netstate"
+	"github.com/malmoos/malmo/internal/protocol"
 	"golang.org/x/crypto/bcrypt"
 )
 

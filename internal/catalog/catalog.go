@@ -1,5 +1,5 @@
 // Package catalog loads app manifests from a directory tree. v1 catalog is
-// hand-curated by molma (APP_STORE.md); the signed-JSON remote catalog is a
+// hand-curated by malmo (APP_STORE.md); the signed-JSON remote catalog is a
 // follow-up. Layout: <root>/<manifest_id>/{manifest.yml, <compose_file>}.
 package catalog
 
@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/molmaos/molma/internal/manifest"
+	"github.com/malmoos/malmo/internal/manifest"
 )
 
 // ErrNotFound is returned by Load when no manifest exists for the id (the

@@ -4,7 +4,7 @@
 - **Date:** 2026-06-11
 - **Specs touched:** `BOOT.md` # What downstream services do (stale static-file mechanism + wrong restart-durability claim corrected), `DISCOVERY.md` # What we publish (host-record attribution corrected); everything else realized, not changed.
 
-Closes issue #129. Picks up the "local-IP detection" known gap from [avahi-dbus-publisher.md](avahi-dbus-publisher.md) (frozen — its gap list stands as written). App `.local` records could announce a Docker bridge address instead of the LAN address (verified live: `avahi-resolve memos.local` → `172.25.0.1`, a `br-*` bridge, while the LAN IP was `192.168.1.126`), making apps unreachable from every other device — iOS resolved the name fine but got an unroutable address. Root cause: `detectLocalIPv4()` returned the first non-loopback, non-link-local IPv4 from `net.InterfaceAddrs()`, and on any box running Docker (every molma box) a bridge can win by enumeration order. Not dev-only: `cmd/host-agent-real` uses the same `DBusPublisher`, so the bug was latent in production.
+Closes issue #129. Picks up the "local-IP detection" known gap from [avahi-dbus-publisher.md](avahi-dbus-publisher.md) (frozen — its gap list stands as written). App `.local` records could announce a Docker bridge address instead of the LAN address (verified live: `avahi-resolve memos.local` → `172.25.0.1`, a `br-*` bridge, while the LAN IP was `192.168.1.126`), making apps unreachable from every other device — iOS resolved the name fine but got an unroutable address. Root cause: `detectLocalIPv4()` returned the first non-loopback, non-link-local IPv4 from `net.InterfaceAddrs()`, and on any box running Docker (every malmo box) a bridge can win by enumeration order. Not dev-only: `cmd/host-agent-real` uses the same `DBusPublisher`, so the bug was latent in production.
 
 ## What was done
 
@@ -19,18 +19,18 @@ Closes issue #129. Picks up the "local-IP detection" known gap from [avahi-dbus-
 
 - **Test override split from the cache:** the `localIP` field doubled as both; it's replaced by a `detectIP func() (string, error)` field tests can stub. Production leaves it nil and gets the probe.
 - **Process-lifetime cache dropped:** the IP is re-detected on every `Publish`, so apps installed (or stopped/started — start re-publishes via the lifecycle start path) after a DHCP change announce the current address. **Honest limit:** entry groups committed *before* the change keep their old literal IP until the brain replays them at restart (mixed-announcement window); live IP-change replay is slice 2 (#130 carries the network-state surface).
-- Package comment documents the probe caveat: a full-tunnel VPN on a dev machine routes the probe through the tunnel and announces the VPN address. Molma installs don't run client VPNs.
+- Package comment documents the probe caveat: a full-tunnel VPN on a dev machine routes the probe through the tunnel and announces the VPN address. Malmo installs don't run client VPNs.
 
 ### Spec corrections (same PR, per the issue)
 
 - `BOOT.md` ~L95 still described the dead `/etc/avahi/services/` static-file mechanism (the 0012 false start) **and** claimed restart durability came "for free" from Avahi watching the directory. Replaced with the real mechanism: DBus entry groups, process-local, lost on host-agent restart, replayed by `lifecycle.Reconcile` at brain startup (`DISCOVERY.md` # Restart durability).
-- `DISCOVERY.md` # What we publish said all three record categories are "driven by the brain via host-agent" — the host record (`molma.local`) is avahi-daemon's native per-interface host record driven by the system hostname, not published by our code.
+- `DISCOVERY.md` # What we publish said all three record categories are "driven by the brain via host-agent" — the host record (`malmo.local`) is avahi-daemon's native per-interface host record driven by the system hostname, not published by our code.
 
 ## Verification
 
 - **Unit tests** (`localip_test.go`, no build tag): probe-wins / falls-back / both-fail composition with stubs; `probeLANIPv4` against the real routing table (skips if no default route).
 - **Integration tests** (`dbus_linux_test.go`, `avahitest` tag, run locally against the real avahi-daemon): `TestDBusPublisher_RedetectsIPPerPublish` (stub counts two detections for two publishes — no cache); `TestDBusPublisher_AnnouncesRouteProbedAddress` — the **#129 regression check**: publish, then `avahi-resolve -4 -n`, asserting the resolved address equals the route-probed one.
-- **Real-system done-when, on a box with six Docker bridges up** (`docker0` + five `br-*`, LAN on `eno1` 192.168.2.160): built `cmd/host-agent-real`, published `molmatest129` through `POST /v1/discovery/publish` over the UNIX socket, and `avahi-resolve -4 -n molmatest129.local` returned **`192.168.2.160`** — the LAN address, not `172.x`; unpublish withdrew the name (resolve times out after). Same steps as `dev/test-avahi-publisher.sh` (the script itself couldn't run unmodified because `.dev/` on this machine is root-owned from a past QEMU run — `make host-agent-real` can't write the binary there; built to `/tmp` instead, identical flow).
+- **Real-system done-when, on a box with six Docker bridges up** (`docker0` + five `br-*`, LAN on `eno1` 192.168.2.160): built `cmd/host-agent-real`, published `malmotest129` through `POST /v1/discovery/publish` over the UNIX socket, and `avahi-resolve -4 -n malmotest129.local` returned **`192.168.2.160`** — the LAN address, not `172.x`; unpublish withdrew the name (resolve times out after). Same steps as `dev/test-avahi-publisher.sh` (the script itself couldn't run unmodified because `.dev/` on this machine is root-owned from a past QEMU run — `make host-agent-real` can't write the binary there; built to `/tmp` instead, identical flow).
 - `make check` green.
 
 ## Known gaps & deviations

@@ -62,7 +62,7 @@ function done() {
 
 <template>
   <main class="auth">
-    <h1>molma</h1>
+    <h1>malmo</h1>
 
     <!-- Phase 1: redeem the recovery code -->
     <form v-if="!newCode" class="card" @submit.prevent="submit">

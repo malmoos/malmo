@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/molmaos/molma/internal/hostagent/procsource"
-	"github.com/molmaos/molma/internal/protocol"
+	"github.com/malmoos/malmo/internal/hostagent/procsource"
+	"github.com/malmoos/malmo/internal/protocol"
 )
 
 // End-to-end smoke for the real sampler through the HTTP handler: the same

@@ -1,4 +1,4 @@
-# Hermes Agent adapted for molma.
+# Hermes Agent adapted for malmo.
 #
 # Upstream changes:
 #   gateway service: build: . removed; published image used instead.
@@ -6,7 +6,7 @@
 #   Both services: ~/.hermes:/opt/data replaced with ./data:/opt/data (relative bind).
 #   dashboard service: --host changed from 127.0.0.1 to 0.0.0.0 so Caddy can reach it.
 #   dashboard service: --insecure added to disable the OAuth gate, acceptable on a
-#     LAN-only molma instance where the dashboard is not directly internet-exposed.
+#     LAN-only malmo instance where the dashboard is not directly internet-exposed.
 #
 # First boot: configure your LLM provider via the dashboard UI or by setting
 # OPENROUTER_API_KEY (or another provider key) in the environment. See

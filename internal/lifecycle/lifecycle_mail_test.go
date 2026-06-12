@@ -2,7 +2,7 @@ package lifecycle
 
 // BYO outgoing mail injection (SERVICE_PROVISIONING.md # BYO outgoing mail):
 // an install electing a registered provider binds it and writeEnv re-emits the
-// credentials as MOLMA_MAIL_*; an unbound install injects nothing.
+// credentials as MALMO_MAIL_*; an unbound install injects nothing.
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/molmaos/molma/internal/store"
+	"github.com/malmoos/malmo/internal/store"
 )
 
 const mailManifest = `
@@ -70,17 +70,17 @@ func TestInstallBoundInjectsMailVars(t *testing.T) {
 	inst, env := installMailApp(t, e, "mp_test")
 
 	want := map[string]string{
-		"MOLMA_MAIL_HOST":       "smtp.fastmail.com",
-		"MOLMA_MAIL_PORT":       "465",
-		"MOLMA_MAIL_USER":       "box@example.com",
-		"MOLMA_MAIL_PASSWORD":   "p@ss:word/2",
-		"MOLMA_MAIL_FROM":       "box@example.com",
-		"MOLMA_MAIL_ENCRYPTION": "tls",
+		"MALMO_MAIL_HOST":       "smtp.fastmail.com",
+		"MALMO_MAIL_PORT":       "465",
+		"MALMO_MAIL_USER":       "box@example.com",
+		"MALMO_MAIL_PASSWORD":   "p@ss:word/2",
+		"MALMO_MAIL_FROM":       "box@example.com",
+		"MALMO_MAIL_ENCRYPTION": "tls",
 		// tls ⇒ implicit-SSL flag set, STARTTLS flag clear.
-		"MOLMA_MAIL_USE_TLS": "false",
-		"MOLMA_MAIL_USE_SSL": "true",
+		"MALMO_MAIL_USE_TLS": "false",
+		"MALMO_MAIL_USE_SSL": "true",
 		// tls ⇒ smtps scheme; credentials URL-escaped so @ : / survive.
-		"MOLMA_MAIL_DSN": "smtps://box%40example.com:p%40ss%3Aword%2F2@smtp.fastmail.com:465",
+		"MALMO_MAIL_DSN": "smtps://box%40example.com:p%40ss%3Aword%2F2@smtp.fastmail.com:465",
 	}
 	for k, v := range want {
 		if got := envValue(env, k); got != v {
@@ -96,8 +96,8 @@ func TestInstallBoundInjectsMailVars(t *testing.T) {
 func TestInstallUnboundInjectsNothing(t *testing.T) {
 	e := newTestEnv(t)
 	_, env := installMailApp(t, e, "")
-	if strings.Contains(env, "MOLMA_MAIL_") {
-		t.Fatalf("unbound install must inject no MOLMA_MAIL_ vars, got:\n%s", env)
+	if strings.Contains(env, "MALMO_MAIL_") {
+		t.Fatalf("unbound install must inject no MALMO_MAIL_ vars, got:\n%s", env)
 	}
 }
 
@@ -152,24 +152,24 @@ func TestRebindMail(t *testing.T) {
 		t.Fatalf("rebind: %v", err)
 	}
 	raw, _ := os.ReadFile(envPath)
-	if got := envValue(string(raw), "MOLMA_MAIL_HOST"); got != "email-smtp.example.com" {
-		t.Fatalf("MOLMA_MAIL_HOST = %q, want email-smtp.example.com", got)
+	if got := envValue(string(raw), "MALMO_MAIL_HOST"); got != "email-smtp.example.com" {
+		t.Fatalf("MALMO_MAIL_HOST = %q, want email-smtp.example.com", got)
 	}
 	// Non-mail lines survive the surgical rewrite.
-	if got := envValue(string(raw), "MOLMA_INSTANCE_ID"); got != inst.ID {
-		t.Fatalf("MOLMA_INSTANCE_ID lost in rewrite, got %q", got)
+	if got := envValue(string(raw), "MALMO_INSTANCE_ID"); got != inst.ID {
+		t.Fatalf("MALMO_INSTANCE_ID lost in rewrite, got %q", got)
 	}
 	if ups := countCalls(e.docker.Calls(), "ComposeUp"); ups != upsBefore+1 {
 		t.Fatalf("running rebind must recreate containers: ComposeUp %d -> %d", upsBefore, ups)
 	}
 
-	// Rebind to None strips every MOLMA_MAIL_* line.
+	// Rebind to None strips every MALMO_MAIL_* line.
 	if err := e.m.RebindMail(context.Background(), inst.ID, ""); err != nil {
 		t.Fatalf("unbind: %v", err)
 	}
 	raw, _ = os.ReadFile(envPath)
-	if strings.Contains(string(raw), "MOLMA_MAIL_") {
-		t.Fatalf("unbind must strip MOLMA_MAIL_ vars, got:\n%s", raw)
+	if strings.Contains(string(raw), "MALMO_MAIL_") {
+		t.Fatalf("unbind must strip MALMO_MAIL_ vars, got:\n%s", raw)
 	}
 
 	// A non-mail app rejects a binding.

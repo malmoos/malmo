@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/molmaos/molma/internal/store"
+	"github.com/malmoos/malmo/internal/store"
 
 	"gopkg.in/yaml.v3"
 )

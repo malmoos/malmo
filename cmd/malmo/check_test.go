@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/molmaos/molma/internal/admission"
+	"github.com/malmoos/malmo/internal/admission"
 )
 
 // check is exercised with admission.CheckStructure (the daemon-free admission

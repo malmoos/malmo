@@ -10,12 +10,12 @@
   <section class="space-y-3">
     <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">About</h2>
     <div class="space-y-2 rounded-xl border border-border bg-card px-4 py-4">
-      <div class="text-base font-medium">molma</div>
+      <div class="text-base font-medium">malmo</div>
       <p class="text-sm text-muted-foreground">
         A home-server OS for people who want to own their data — not become sysadmins.
       </p>
       <a
-        href="https://github.com/molmaos/molma"
+        href="https://github.com/malmoos/malmo"
         target="_blank"
         rel="noopener noreferrer"
         class="inline-block text-sm text-accent hover:underline"

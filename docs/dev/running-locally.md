@@ -1,8 +1,8 @@
-# Running molma locally
+# Running malmo locally
 
-molma's dev model is **two loops**:
+malmo's dev model is **two loops**:
 
-- **Inner loop (seconds) — all native, no VM.** The product logic — `molma-brain`
+- **Inner loop (seconds) — all native, no VM.** The product logic — `malmo-brain`
   and the dashboard — runs directly on your machine against the local Docker
   socket. The host-agent is a **fake** that speaks the real protocol but stubs
   host ops. This is where ~90% of development happens.
@@ -14,7 +14,7 @@ This guide covers the inner loop.
 
 ## Who can contribute to what
 
-molma's dev model splits cleanly along the inner/outer loop boundary, and that
+malmo's dev model splits cleanly along the inner/outer loop boundary, and that
 boundary is also the **macOS/Windows ↔ Linux** boundary. The Go code is
 deliberately build-tagged so the cross-platform surface compiles and runs
 anywhere; the Linux-only parts are the *real host integration*, which by design
@@ -79,7 +79,7 @@ behavior is required.
   `<slug>.local` URLs work portless. If something else holds `:80` (another
   web server, a system service), stop it first or `make caddy` will fail to bind.
 - **`avahi-daemon` running** (Linux, for the `make dev` loop). `make dev` sets
-  `MOLMA_DEV_AVAHI=1`, which publishes each app's `.local` name over the real
+  `MALMO_DEV_AVAHI=1`, which publishes each app's `.local` name over the real
   Avahi DBus API so it resolves on the LAN. Without the daemon, the fake
   host-agent still starts but app installs fail at the publish step. Check with
   `systemctl is-active avahi-daemon`; the publisher itself needs no sudo.
@@ -126,7 +126,7 @@ group on signal.
 ```bash
 make caddy        # 1. dev reverse proxy (Caddy container, detached)
 make run-agent    # 2. fake host-agent (UNIX socket at .dev/agent.sock)
-make run-brain    # 3. molma-brain (:8080, native)
+make run-brain    # 3. malmo-brain (:8080, native)
 make ui           # 4. dashboard (Vite, :5173)
 ```
 
@@ -146,10 +146,10 @@ app HTTP:  http://<slug>.local/ ─▶ Caddy :80 ─▶ app container
 ```
 
 - **Caddy listens on host `:80`** (free it first — see prerequisites) and exposes
-  its admin API on `:2019`. App containers join the `molma-ingress` network so
+  its admin API on `:2019`. App containers join the `malmo-ingress` network so
   Caddy reaches them by per-instance alias.
 - **`.local` URLs resolve under `make dev`.** `make dev` runs the fake host-agent
-  with `MOLMA_DEV_AVAHI=1`, which swaps the in-memory discovery publisher for the
+  with `MALMO_DEV_AVAHI=1`, which swaps the in-memory discovery publisher for the
   real Avahi DBus publisher (`internal/hostagent/avahipublisher`) — the same code
   path `host-agent-real` uses. Each installed app's `<slug>.local` is then
   announced on the LAN, reachable by its portless URL from this box and other LAN
@@ -172,21 +172,21 @@ Everything dev-generated is under `.dev/` (git-ignored):
 ├── agent.sock                    # host-agent UNIX socket
 ├── brain  host-agent             # compiled binaries
 └── state/
-    ├── molma.db                  # brain SQLite (users, sessions, instances)
+    ├── malmo.db                  # brain SQLite (users, sessions, instances)
     ├── fake-shadow.json          # fake host-agent's passwords + roles (stands in for /etc/shadow)
     └── instances/<id>/           # per-app: manifest, compose, override, .env, data/
 ```
 
-Override defaults with env vars: `MOLMA_LISTEN`, `MOLMA_STATE_DIR`,
-`MOLMA_CATALOG_DIR`, `MOLMA_AGENT_SOCK`, `MOLMA_CADDY_ADMIN`,
-`MOLMA_CADDY_LISTEN`.
+Override defaults with env vars: `MALMO_LISTEN`, `MALMO_STATE_DIR`,
+`MALMO_CATALOG_DIR`, `MALMO_AGENT_SOCK`, `MALMO_CADDY_ADMIN`,
+`MALMO_CADDY_LISTEN`.
 
-**Why `fake-shadow.json` exists.** The password lives on the host-agent side, never in the brain (`AUTH.md` # Password storage — the brain calls `verify_password` on every login). The *real* host-agent persists it in `/etc/shadow`; the *fake* one used by `make dev` would otherwise keep it in an in-memory map that dies with the process. Because the brain's SQLite persists the user **and** session rows across a restart, that asymmetry produced a confusing bug: restart the stack, clear cookies, log in again, and the password was rejected even though the account still existed (the session cookie had masked it — a kept cookie skips the password re-check). Backing the fake maps with `fake-shadow.json` under `MOLMA_STATE_DIR` makes dev accounts survive a restart, matching the real agent. Set `MOLMA_STATE_DIR` and the fake agent picks it up automatically (the dev stack exports it); leave it unset and the fake stays purely in-memory.
+**Why `fake-shadow.json` exists.** The password lives on the host-agent side, never in the brain (`AUTH.md` # Password storage — the brain calls `verify_password` on every login). The *real* host-agent persists it in `/etc/shadow`; the *fake* one used by `make dev` would otherwise keep it in an in-memory map that dies with the process. Because the brain's SQLite persists the user **and** session rows across a restart, that asymmetry produced a confusing bug: restart the stack, clear cookies, log in again, and the password was rejected even though the account still existed (the session cookie had masked it — a kept cookie skips the password re-check). Backing the fake maps with `fake-shadow.json` under `MALMO_STATE_DIR` makes dev accounts survive a restart, matching the real agent. Set `MALMO_STATE_DIR` and the fake agent picks it up automatically (the dev stack exports it); leave it unset and the fake stays purely in-memory.
 
 ## Reset
 
 ```bash
-make clean        # stop the dev Caddy, remove molma app containers + networks,
+make clean        # stop the dev Caddy, remove malmo app containers + networks,
                   # wipe .dev/state
 ```
 
@@ -200,7 +200,7 @@ in-memory fakes (tracked in `docs/progress/host-agent-pam-verify.md`).
 
 ```bash
 apt install libpam0g-dev      # PAM headers for CGO
-sudo cp dev/pam/molma /etc/pam.d/molma
+sudo cp dev/pam/malmo /etc/pam.d/malmo
 ```
 
 **Build and run:**
@@ -210,14 +210,14 @@ go build ./cmd/host-agent-real
 sudo ./cmd/host-agent-real    # must run as root — pam_unix.so requires privilege
 ```
 
-Point the brain at it by setting `MOLMA_AGENT_SOCK` to the same path the real
+Point the brain at it by setting `MALMO_AGENT_SOCK` to the same path the real
 binary listens on. Note: because `set-password` is still fake, dashboard login
 will fail until real `useradd`/`passwd` integration lands — use
 `cmd/host-agent` (fake) for all normal dev work.
 
 ## Verifying routing
 
-molma uses **Host-header-based subdomain routing** — each installed app gets a
+malmo uses **Host-header-based subdomain routing** — each installed app gets a
 virtual host (`<slug>.local`), never a path prefix. This keeps apps in
 separate browser origins (same-origin policy enforcement — see `SPEC.md`).
 

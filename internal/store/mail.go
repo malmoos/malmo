@@ -2,8 +2,8 @@ package store
 
 // BYO outgoing mail (SERVICE_PROVISIONING.md # BYO outgoing mail). An admin
 // registers SMTP provider(s) in Settings; a mail-capable app binds to at most
-// one, and the lifecycle injects the bound provider as MOLMA_MAIL_* at .env
-// write time. No molma-run relay exists — unbound apps get nothing.
+// one, and the lifecycle injects the bound provider as MALMO_MAIL_* at .env
+// write time. No malmo-run relay exists — unbound apps get nothing.
 
 import (
 	"database/sql"

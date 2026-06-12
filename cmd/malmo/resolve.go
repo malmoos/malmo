@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/molmaos/molma/internal/manifest"
+	"github.com/malmoos/malmo/internal/manifest"
 )
 
 // imageSizer resolves the catalog ImageRef (pinned digest + download/disk
@@ -154,7 +154,7 @@ func renderImagesBlock(resolved map[string]manifest.ImageRef) string {
 // dockerSizer resolves sizes by driving the local Docker daemon: the registry
 // manifest for the compressed download size, a `--platform linux/amd64` pull
 // then a `docker save` decompress-count for the uncompressed on-disk size and
-// the pinned (index) digest. molma is x86-only (CLAUDE.md # Load-bearing
+// the pinned (index) digest. malmo is x86-only (CLAUDE.md # Load-bearing
 // decisions), so amd64 is the size that matters.
 type dockerSizer struct{}
 

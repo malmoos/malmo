@@ -12,13 +12,13 @@ This was a real divergence from `APP_ISOLATION.md` # Owner-scoped instances / # 
 
 ### Brain — `internal/lifecycle`
 
-- **Every instance now resolves a runtime identity** (`lifecycle.go`, install step 6). `iso` is always built: folder apps keep the owner UID/GID (personal) or molma-app identity (household) and their folder binds; a **folderless app runs as the brain's own effective UID/GID** (`os.Geteuid()/os.Getegid()`) — the creator and owner of the `data/` dir `writeInstanceDir` just made. Production brain → root (behavior-identical to before); native dev brain → the dev user, so the bind stays writable.
+- **Every instance now resolves a runtime identity** (`lifecycle.go`, install step 6). `iso` is always built: folder apps keep the owner UID/GID (personal) or malmo-app identity (household) and their folder binds; a **folderless app runs as the brain's own effective UID/GID** (`os.Geteuid()/os.Getegid()`) — the creator and owner of the `data/` dir `writeInstanceDir` just made. Production brain → root (behavior-identical to before); native dev brain → the dev user, so the bind stays writable.
 - **`writeOverride` stamps `user:` on every instance**, not just folder apps (the `iso` it receives is now always non-nil; the empty-`mounts` path makes folder binds / `group_add` no-ops). The `isolation` struct doc was updated — it is no longer nil for folderless apps.
 - **`data/` is chowned to the resolved identity** before `compose up`. No-op for folderless apps (already euid-owned); a real chown for folder apps under the production brain — which also closes a latent prod gap where a folder app writing private state into root-owned `data/` could not write it. The chown is **privilege-aware**: under the production brain (euid 0) a failure is a hard install error; under the unprivileged native dev brain it cannot chown to a host-agent-assigned UID it does not own, so that case is downgraded to a `slog.Warn` and the install proceeds (folder-apps-in-dev were already not faithfully runnable — no regression; folderless apps, the common dev path, are unaffected).
 
 ### Catalog + docs
 
-- `catalog/open-webui/compose.yml` header comment corrected — it no longer claims "runs as root, no `user:` override needed"; it now documents that molma pins `user:` to the `data/`-owning identity and that Open WebUI tolerates a non-root runtime user given a writable `data/` + injected `WEBUI_SECRET_KEY`.
+- `catalog/open-webui/compose.yml` header comment corrected — it no longer claims "runs as root, no `user:` override needed"; it now documents that malmo pins `user:` to the `data/`-owning identity and that Open WebUI tolerates a non-root runtime user given a writable `data/` + injected `WEBUI_SECRET_KEY`.
 - `APP_ISOLATION.md` # Volumes gained the explicit rule: every instance runs as a resolved `user:` and its `data/` dir is owned by that UID, with the folderless-app identity spelled out and the `cap_drop: [ALL]` / `CAP_DAC_OVERRIDE` reasoning.
 
 ### Tests

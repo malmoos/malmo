@@ -13,13 +13,13 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/molmaos/molma/internal/audit"
-	"github.com/molmaos/molma/internal/auth"
-	"github.com/molmaos/molma/internal/catalog"
-	"github.com/molmaos/molma/internal/events"
-	"github.com/molmaos/molma/internal/hostclient"
-	"github.com/molmaos/molma/internal/protocol"
-	"github.com/molmaos/molma/internal/store"
+	"github.com/malmoos/malmo/internal/audit"
+	"github.com/malmoos/malmo/internal/auth"
+	"github.com/malmoos/malmo/internal/catalog"
+	"github.com/malmoos/malmo/internal/events"
+	"github.com/malmoos/malmo/internal/hostclient"
+	"github.com/malmoos/malmo/internal/protocol"
+	"github.com/malmoos/malmo/internal/store"
 )
 
 // setupAdmin bootstraps an admin via the wire (POST /setup) and leaves a

@@ -52,7 +52,7 @@ permissions:
   internet: false
   lan: false
 
-# Filled by `go run ./cmd/molma manifest resolve catalog/jotty/manifest.yml`.
+# Filled by `go run ./cmd/malmo manifest resolve catalog/jotty/manifest.yml`.
 images:
   ghcr.io/fccview/jotty:1.24.0:
     digest: sha256:ddbb42ce61c8558c8178104ab12a99d40fbc8a0ab652b4087b28f03a9d8d011a

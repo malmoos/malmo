@@ -32,7 +32,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/molmaos/molma/internal/hostagent/netstate"
+	"github.com/malmoos/malmo/internal/hostagent/netstate"
 )
 
 // TestDBusPublisher_PublishAndUnpublish exercises the full Publish → Unpublish

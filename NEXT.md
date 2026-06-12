@@ -2,7 +2,7 @@
 
 Prioritized open design topics. The only place open items live — never add them to individual docs.
 
-## `molma resolve`: daemon-free registry sizer for `disk_bytes`
+## `malmo resolve`: daemon-free registry sizer for `disk_bytes`
 
 PR #120 (fix/117) fixed the containerd-store bug by streaming `docker save` and decompressing layer blobs locally. It works and is store-agnostic, but it is slow — a multi-GB image like open-webui takes ~a minute to stream and decompress just to count bytes.
 

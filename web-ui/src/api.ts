@@ -116,7 +116,7 @@ export interface CustomInspectResult {
 
 // CustomFolderGrant is one Door-2 folder grant: a use-case folder (Source
 // picker), the in-container destination the admin types (target — Door-2 has no
-// author to map MOLMA_FOLDER_<NAME>), and read/write.
+// author to map MALMO_FOLDER_<NAME>), and read/write.
 export interface CustomFolderGrant {
   folder: string;
   mode?: "read" | "write";

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/molmaos/molma/internal/protocol"
+	"github.com/malmoos/malmo/internal/protocol"
 )
 
 // call records one driver invocation across any fake. We keep it as a flat
@@ -332,7 +332,7 @@ func (h *fakeHost) WellKnownIdentity(_ context.Context) (protocol.WellKnownIdent
 	h.mu.Lock()
 	h.calls = append(h.calls, call{method: "WellKnownIdentity"})
 	h.mu.Unlock()
-	return protocol.WellKnownIdentityResponse{MolmaAppUID: 2000, MolmaAppGID: 2000, MolmaSharedGID: 2001}, nil
+	return protocol.WellKnownIdentityResponse{MalmoAppUID: 2000, MalmoAppGID: 2000, MalmoSharedGID: 2001}, nil
 }
 
 func (h *fakeHost) SystemStatus(_ context.Context) (protocol.SystemStatus, error) {

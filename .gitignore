@@ -7,10 +7,10 @@
 /host-agent
 /host-agent-real
 /brain
-/molma-storage-verify
-/molma
+/malmo-storage-verify
+/malmo
 
-# molma dev state (instance dirs, sqlite, generated compose)
+# malmo dev state (instance dirs, sqlite, generated compose)
 /.dev/
 
 # Node / Vite

@@ -17,19 +17,19 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
-	"github.com/molmaos/molma/internal/admission"
-	"github.com/molmaos/molma/internal/applog"
-	"github.com/molmaos/molma/internal/audit"
-	"github.com/molmaos/molma/internal/auth"
-	"github.com/molmaos/molma/internal/catalog"
-	"github.com/molmaos/molma/internal/events"
-	"github.com/molmaos/molma/internal/health"
-	"github.com/molmaos/molma/internal/hostclient"
-	"github.com/molmaos/molma/internal/lifecycle"
-	"github.com/molmaos/molma/internal/manifest"
-	"github.com/molmaos/molma/internal/protocol"
-	"github.com/molmaos/molma/internal/store"
-	"github.com/molmaos/molma/internal/systemlive"
+	"github.com/malmoos/malmo/internal/admission"
+	"github.com/malmoos/malmo/internal/applog"
+	"github.com/malmoos/malmo/internal/audit"
+	"github.com/malmoos/malmo/internal/auth"
+	"github.com/malmoos/malmo/internal/catalog"
+	"github.com/malmoos/malmo/internal/events"
+	"github.com/malmoos/malmo/internal/health"
+	"github.com/malmoos/malmo/internal/hostclient"
+	"github.com/malmoos/malmo/internal/lifecycle"
+	"github.com/malmoos/malmo/internal/manifest"
+	"github.com/malmoos/malmo/internal/protocol"
+	"github.com/malmoos/malmo/internal/store"
+	"github.com/malmoos/malmo/internal/systemlive"
 )
 
 type Server struct {
@@ -74,7 +74,7 @@ func NewServer(
 // OpenAPI document identity. Shared by Handler (live serving) and
 // OpenAPIDocument (build-time emission) so both describe the same surface.
 const (
-	openAPITitle   = "molma brain"
+	openAPITitle   = "malmo brain"
 	openAPIVersion = "0.0.1"
 )
 

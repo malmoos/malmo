@@ -4,7 +4,7 @@
 - **Date:** 2026-06-03
 - **Specs touched:** `docs/specs/BRAIN_UI_PROTOCOL.md` (# API discipline → # Codegen + the locked-decisions bullet: past-tensed the client-side split now that TS-type generation landed; recorded the reproducible server-less emission + freshness gate). No `DECISIONS.md`/`NEXT.md` change — the codegen direction was already locked (`DECISIONS.md` 2026-05-15) and the stale NEXT timing item was already removed.
 
-Closes issue #52. The brain↔UI API is molma's public surface, but the Go server types and the browser client types were maintained by hand on both sides — `web-ui/src/api.ts` carried ~15 hand-rolled wire interfaces, drifting silently on every brain DTO change. This lands the codegen pipeline the schema was always meant to feed: a reproducible, server-less OpenAPI emitter; a committed spec artifact with a CI freshness gate; and a generated TypeScript client that replaces the hand-rolled interfaces.
+Closes issue #52. The brain↔UI API is malmo's public surface, but the Go server types and the browser client types were maintained by hand on both sides — `web-ui/src/api.ts` carried ~15 hand-rolled wire interfaces, drifting silently on every brain DTO change. This lands the codegen pipeline the schema was always meant to feed: a reproducible, server-less OpenAPI emitter; a committed spec artifact with a CI freshness gate; and a generated TypeScript client that replaces the hand-rolled interfaces.
 
 ## What was done
 

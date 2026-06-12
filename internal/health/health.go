@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/molmaos/molma/internal/protocol"
+	"github.com/malmoos/malmo/internal/protocol"
 )
 
 // Severity is one of info | warning | error | critical per HEALTH.md.
@@ -479,7 +479,7 @@ func builtinDefinitions() []Definition {
 			ID: "data-drive-wrong", Category: CategoryStorage,
 			Severity: SeverityCritical, Tier: 2,
 			BlocksWrites: true, BlocksApps: true, BlocksUsers: true,
-			Summary: "A different drive is attached than the one molma expects.", ReportCategory: protocol.HealthCategoryStorage,
+			Summary: "A different drive is attached than the one malmo expects.", ReportCategory: protocol.HealthCategoryStorage,
 		},
 		// data-drive-readonly is pre-registered but not yet emitted by any
 		// detector. The findmnt-based device-backing + mount-flags check that
@@ -502,7 +502,7 @@ func builtinDefinitions() []Definition {
 			ID: "mergerfs-assembly-failed", Category: CategoryStorage,
 			Severity: SeverityError, Tier: 2,
 			BlocksWrites: true, BlocksApps: true,
-			Summary: "molma could not assemble the storage layout across your drives.", ReportCategory: protocol.HealthCategoryStorage,
+			Summary: "malmo could not assemble the storage layout across your drives.", ReportCategory: protocol.HealthCategoryStorage,
 		},
 		// Synthetic — host-agent's FilesystemHealthSource emits this when the
 		// report file is unparseable; the reporter emits it when its inputs are.
@@ -510,7 +510,7 @@ func builtinDefinitions() []Definition {
 			ID: "health-report-malformed", Category: CategoryStorage,
 			Severity: SeverityError, Tier: 2,
 			BlocksWrites: false, BlocksApps: false, BlocksUsers: false,
-			Summary: "molma's storage report is unreadable; storage state is unknown.", ReportCategory: protocol.HealthCategoryStorage,
+			Summary: "malmo's storage report is unreadable; storage state is unknown.", ReportCategory: protocol.HealthCategoryStorage,
 		},
 		// service-down is locus B — host-agent runs `systemctl is-active` over the
 		// core-unit allowlist and reports it under the system report's *services*
@@ -533,7 +533,7 @@ func builtinDefinitions() []Definition {
 			ID: "store-write-failed", Category: CategoryState,
 			Severity: SeverityError, Tier: 2,
 			BlocksWrites: false, BlocksApps: false, BlocksUsers: false,
-			Summary:   "molma can't save health state; issues won't survive a restart.",
+			Summary:   "malmo can't save health state; issues won't survive a restart.",
 			NoPersist: true,
 		},
 		// Version (HEALTH.md # Version). version-mismatch is a locus-C brain
@@ -545,7 +545,7 @@ func builtinDefinitions() []Definition {
 			ID: "version-mismatch", Category: CategoryVersion,
 			Severity: SeverityError, Tier: 2,
 			BlocksApps: true,
-			Summary:    "molma's system agent and dashboard are running mismatched versions.",
+			Summary:    "malmo's system agent and dashboard are running mismatched versions.",
 		},
 		// State (HEALTH.md # State). brain-db-corrupt is a locus-C brain check:
 		// PRAGMA integrity_check at boot + every 6h (cmd/brain checkBrainDBIntegrity).
@@ -560,7 +560,7 @@ func builtinDefinitions() []Definition {
 			ID: "brain-db-corrupt", Category: CategoryState,
 			Severity: SeverityCritical, Tier: 2,
 			BlocksWrites: true, BlocksApps: true, BlocksUsers: true,
-			Summary: "molma's database is damaged; some actions are turned off until it's fixed.",
+			Summary: "malmo's database is damaged; some actions are turned off until it's fixed.",
 		},
 		// Version/app-runtime (HEALTH.md # Version). container-restart-loop is a
 		// locus-D detector: the brain samples each managed container's cumulative

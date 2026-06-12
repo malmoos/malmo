@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/molmaos/molma/internal/protocol"
+	"github.com/malmoos/malmo/internal/protocol"
 )
 
 func TestRaise_NewIssueReturnsTrue(t *testing.T) {

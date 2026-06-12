@@ -19,7 +19,7 @@ that expected "non-200 for unmatched" could not distinguish "catch-all hit" from
 
 ### `dev/caddy.json` — seed catch-all
 
-`"routes": []` replaced with a single `molma-catchall` route — no matcher
+`"routes": []` replaced with a single `malmo-catchall` route — no matcher
 (matches everything), `static_response` handler, HTTP 404, HTML body linking
 back to the dashboard. Caddy starts with this in place so Test 0 works without
 waiting for brain startup.
@@ -29,13 +29,13 @@ waiting for brain startup.
 Three changes:
 
 1. **Insert at index 0.** `upsertRoute` now POSTs to
-   `/config/apps/http/servers/molma/routes/0` instead of appending, so each
+   `/config/apps/http/servers/malmo/routes/0` instead of appending, so each
    new per-app route is prepended and the catch-all stays at the tail.
 
 2. **`EnsureCatchAll(ctx)`** — idempotent startup call. GETs
-   `/id/molma-catchall`; if 200, logs "already present" and returns nil. If
+   `/id/malmo-catchall`; if 200, logs "already present" and returns nil. If
    absent (any non-200), appends the catch-all via
-   `POST /config/apps/http/servers/molma/routes`. Returns a wrapped error on
+   `POST /config/apps/http/servers/malmo/routes`. Returns a wrapped error on
    transport failure (caller logs and continues — best-effort posture).
 
 3. **`get(ctx, path) (int, error)`** helper — issues a GET to the admin API,
@@ -53,8 +53,8 @@ Calls `cd.EnsureCatchAll(ctx)` after `Reconcile` completes. Failure is
 Four changes:
 
 1. **Defensive cleanup** (after preflight, before setup): removes stale
-   `molma-app-*` routes from prior failed runs via jq + DELETE on each `@id`.
-   Does not touch `molma-catchall`.
+   `malmo-app-*` routes from prior failed runs via jq + DELETE on each `@id`.
+   Does not touch `malmo-catchall`.
 
 2. **[TEST 0]** (new, before install): unmatched hostname → expect exactly HTTP
    404 AND body contains "No app at this hostname". Proves the catch-all is
@@ -71,7 +71,7 @@ Four changes:
 ### `docs/specs/CONTROL_PLANE.md`
 
 Added a "Catch-all 404 invariant" bullet to the Caddy section documenting the
-`molma-catchall` route contract, the index-0 insert pattern, and
+`malmo-catchall` route contract, the index-0 insert pattern, and
 `EnsureCatchAll`.
 
 ## What was verified (automated)
@@ -90,19 +90,19 @@ In dev, `dev/docker-compose.yml` maps container `:80` → host `:8088` because
 host port 80 is taken on most laptops. In production Caddy listens on `:80`.
 The `:8088` indirection means:
 
-- `curl -H "Host: slug.molma.local" localhost:8088` works (correct Host header,
+- `curl -H "Host: slug.malmo.local" localhost:8088` works (correct Host header,
   port is just the TCP target).
-- `curl --resolve slug.molma.local:8088:127.0.0.1 http://slug.molma.local:8088/`
+- `curl --resolve slug.malmo.local:8088:127.0.0.1 http://slug.malmo.local:8088/`
   works (DNS override to loopback on the custom port).
 - Browser via LAN IP on another device does **not** work against the dev stack:
   the browser would try port 80, not 8088. The secure-URL path
-  (`MOLMA_NETWORK.md`) is the real-device compatibility path.
+  (`MALMO_NETWORK.md`) is the real-device compatibility path.
 
 ## Known gaps (loud)
 
 - **HTTPS / Let's Encrypt for `.network` URLs not covered.** TLS termination,
-  certificate provisioning, and the `<box-id>.molma.network` URL scheme are all
-  deferred to `MOLMA_NETWORK.md`. This slice is HTTP-only.
+  certificate provisioning, and the `<box-id>.malmo.network` URL scheme are all
+  deferred to `MALMO_NETWORK.md`. This slice is HTTP-only.
 - **Trust-proxy / X-Forwarded-For not validated.** Apps that depend on the
   real client IP see Caddy's container IP today. Not yet tested end-to-end.
 - **No nspawn-lane automated coverage.** This script is a manual gate run
@@ -115,7 +115,7 @@ The `:8088` indirection means:
 ## What's next
 
 - nspawn-lane: add a routing verification step once the lane is wired.
-- HTTPS routing: validate Let's Encrypt + `<box-id>.molma.network` routes when
-  `MOLMA_NETWORK.md` lands.
+- HTTPS routing: validate Let's Encrypt + `<box-id>.malmo.network` routes when
+  `MALMO_NETWORK.md` lands.
 - X-Forwarded-For: add an assertion in `test-caddy-routing.sh` that the
   `X-Forwarded-For` header in the whoami echo contains `127.0.0.1`.

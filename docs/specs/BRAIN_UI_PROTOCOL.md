@@ -6,7 +6,7 @@
 
 ## Scope
 
-Everything the dashboard, a future CLI, a future third-party app store, or any external integrator does against the brain. This is molma's **public API surface** from day one — there is no separate internal route table.
+Everything the dashboard, a future CLI, a future third-party app store, or any external integrator does against the brain. This is malmo's **public API surface** from day one — there is no separate internal route table.
 
 ## Transport
 
@@ -14,7 +14,7 @@ HTTPS via Caddy → brain. Browser-native fetch / EventSource / WebSocket. No be
 
 ## Wire format
 
-HTTP/1.1 + JSON. Versioned URL prefix `/api/v1/...`. The UI bundle declares its expected API version (`X-Molma-API-Version`); brain returns **426 Upgrade Required** on mismatch.
+HTTP/1.1 + JSON. Versioned URL prefix `/api/v1/...`. The UI bundle declares its expected API version (`X-Malmo-API-Version`); brain returns **426 Upgrade Required** on mismatch.
 
 ## API patterns
 
@@ -98,7 +98,7 @@ Returns everything the install-consent screen needs before the user confirms. Re
 
 #### Files (`/api/v1/files/*`)
 
-Back the in-dashboard file manager (`FILES.md`). Scoped per session to two roots — `home` (the caller's `/home/<user>/`) and `shared` (`/srv/molma/shared/`); there is no cross-user browse, for any role (`FILES.md` # Authorization). The brain validates session + root + path-containment (rejects `..`/absolute escapes) and forwards to host-agent's `/v1/files/*`, which does the real work **as the user's UID** (`BRAIN_HOST_PROTOCOL.md` # Files endpoints). `path` is `<relative>` within the named `root`.
+Back the in-dashboard file manager (`FILES.md`). Scoped per session to two roots — `home` (the caller's `/home/<user>/`) and `shared` (`/srv/malmo/shared/`); there is no cross-user browse, for any role (`FILES.md` # Authorization). The brain validates session + root + path-containment (rejects `..`/absolute escapes) and forwards to host-agent's `/v1/files/*`, which does the real work **as the user's UID** (`BRAIN_HOST_PROTOCOL.md` # Files endpoints). `path` is `<relative>` within the named `root`.
 
 - **Metadata ops are Pattern A:** `POST /api/v1/files/list` (returns `{entries:[{name, dir, size_bytes, mtime, hidden}]}`), `mkdir`, `move`, `copy`, `delete`. Standard `{code, message}` errors — `permission-denied`, `not-found`, `exists`, plus `blocked-by-health-issue` (`409`, when `data-drive-missing` blocks writes) and `507 Insufficient Storage` (ties to `disk-full`, `HEALTH.md`).
 - **Content ops are streaming endpoints, not jobs:** `GET /api/v1/files/content?root=&path=` streams a download; `PUT /api/v1/files/content?root=&path=` streams an upload body. The brain pipes bytes to/from host-agent without buffering whole files. This is the **deliberate ">5s = job" exception** — transport-native progress, no server-side job state — mirroring the SSE log-tail exemption. File ops are **not** audited and do **not** trigger the elevation re-prompt (`FILES.md` # Audit & elevation).
@@ -210,13 +210,13 @@ Reserved for the web terminal (`NEXT.md` Tier 3). HTTP upgrade on the same serve
 
 ## API discipline
 
-**Authentication.** Opaque `molma_session` cookie (per `AUTH.md`). No bearer tokens, no JWTs. The cookie carries the SSE handshake and the future WebSocket upgrade — no separate auth path. CSRF is handled by `SameSite=Strict` on the cookie plus an `Origin` check on state-changing requests.
+**Authentication.** Opaque `malmo_session` cookie (per `AUTH.md`). No bearer tokens, no JWTs. The cookie carries the SSE handshake and the future WebSocket upgrade — no separate auth path. CSRF is handled by `SameSite=Strict` on the cookie plus an `Origin` check on state-changing requests.
 
 **Versioning.** The API is **versioned and additive**, not lockstep. Brain serves under `/api/v1/...`. Minor versions are additive — fields are added, never removed or repurposed. The UI bundle declares the API minor it requires (in `version.json`); brain accepts any UI built against `v1.X` where `X ≤ current_minor`. Breaking changes go to `/api/v2`, which the brain serves alongside `/api/v1` during the deprecation window.
 
 This is deliberately *not* lockstep with the brain version. The UI and brain ship as separate images on a shared release channel (`WEB_UI.md` # "deploy + update flow") and iterate at independent cadences. Most UI ships don't move the brain; most brain ships don't move the UI.
 
-**The `426 Upgrade Required` path is the in-tab safety net.** When the user has a dashboard tab open and the UI container updates underneath them, the next API call from the stale tab may declare a `version` the brain no longer supports (or the inverse — the UI just updated to require an API minor the brain doesn't yet serve, during a coordinated ship between minor pull and brain restart). On `426`, the UI shows "molma updated — refresh to continue."
+**The `426 Upgrade Required` path is the in-tab safety net.** When the user has a dashboard tab open and the UI container updates underneath them, the next API call from the stale tab may declare a `version` the brain no longer supports (or the inverse — the UI just updated to require an API minor the brain doesn't yet serve, during a coordinated ship between minor pull and brain restart). On `426`, the UI shows "malmo updated — refresh to continue."
 
 **Public-API posture.** The API the dashboard uses **is** the API a future CLI, third-party app store, or external tool will hit. Concretely:
 
@@ -228,7 +228,7 @@ This is deliberately *not* lockstep with the brain version. The UI and brain shi
 
 ### CI enforcement
 
-The additive-minor discipline above is a *contract* — with in-flight UI tabs during a molma update, and with external callers (third-party stores, CLI, future tooling) per the public-API posture. The cost of breaking it is paid by callers, not the change author. Discipline-by-convention decays; CI is the mechanism that internalizes the cost so a breaking change can't merge silently.
+The additive-minor discipline above is a *contract* — with in-flight UI tabs during a malmo update, and with external callers (third-party stores, CLI, future tooling) per the public-API posture. The cost of breaking it is paid by callers, not the change author. Discipline-by-convention decays; CI is the mechanism that internalizes the cost so a breaking change can't merge silently.
 
 **Mechanism: generated OpenAPI + `oasdiff breaking`.**
 
@@ -257,23 +257,23 @@ On every PR, CI:
 **Debuggability is a first-class design constraint** (inherited from `BRAIN_HOST_PROTOCOL.md`). Anything the dashboard does is reproducible with `curl` and a session cookie:
 
 ```
-curl -b "molma_session=..." http://molma.local/api/v1/apps
-curl -b "molma_session=..." -N http://molma.local/api/v1/events
+curl -b "malmo_session=..." http://malmo.local/api/v1/apps
+curl -b "malmo_session=..." -N http://malmo.local/api/v1/events
 ```
 
 Future changes that would make the protocol harder to debug from `curl` need explicit justification.
 
 ## Rate limiting & abuse
 
-molma is closed-by-default, LAN + mesh only (`THREAT_MODEL.md` # B1) — there is no public-internet exposure in v1, so this is **not** internet-scale DoS defense (DoS is a named non-goal, `THREAT_MODEL.md` # Out of scope). The realistic threat is a **runaway or buggy client** — a dashboard tab in a reconnect loop, a CLI script polling tight, a third-party store with a bad retry config — or a compromised LAN device doing the same deliberately, grinding a modest single-node box (often an old laptop) into CPU/goroutine/memory pressure. The posture is **throttle, don't ban; in-memory state; resets on brain restart; log the source IP but never blacklist** — the same philosophy `AUTH.md` # Rate limiting set for the login path.
+malmo is closed-by-default, LAN + mesh only (`THREAT_MODEL.md` # B1) — there is no public-internet exposure in v1, so this is **not** internet-scale DoS defense (DoS is a named non-goal, `THREAT_MODEL.md` # Out of scope). The realistic threat is a **runaway or buggy client** — a dashboard tab in a reconnect loop, a CLI script polling tight, a third-party store with a bad retry config — or a compromised LAN device doing the same deliberately, grinding a modest single-node box (often an old laptop) into CPU/goroutine/memory pressure. The posture is **throttle, don't ban; in-memory state; resets on brain restart; log the source IP but never blacklist** — the same philosophy `AUTH.md` # Rate limiting set for the login path.
 
 Three orthogonal planes, plus the login throttle that already exists:
 
-1. **Per-session request rate** — a token bucket keyed on the `molma_session` token, governing all authenticated short requests (Pattern A, plus job create/poll/cancel). Default **120 req/min sustained, burst 60** — sized so a normal dashboard (TanStack Query + a few SSE streams + job polling) never trips it, but a runaway loop does. SSE streams and the streaming `/files/content` endpoints are **exempt** from this bucket — they are long-lived, not short requests.
+1. **Per-session request rate** — a token bucket keyed on the `malmo_session` token, governing all authenticated short requests (Pattern A, plus job create/poll/cancel). Default **120 req/min sustained, burst 60** — sized so a normal dashboard (TanStack Query + a few SSE streams + job polling) never trips it, but a runaway loop does. SSE streams and the streaming `/files/content` endpoints are **exempt** from this bucket — they are long-lived, not short requests.
 2. **Per-IP request rate** — a token bucket keyed on client IP, governing the **unauthenticated** allowlist only (`/login`, `/setup`, version probe). Default **30 req/min/IP**. This sits *above* the login throttle: `/login` keeps its stricter per-username exponential backoff + per-IP bucket (`AUTH.md` # Rate limiting); this plane is the backstop so the *other* unauthenticated routes can't be hammered to burn DB/CPU work. Logs the IP, does not ban (LAN reality).
 3. **SSE-stream concurrency** — the ≤16 concurrent-streams-per-session cap (# Stream cap, above). This is a **separate budget from request rate**: opening a stream consumes one of the 16 slots but does *not* draw from plane 1's bucket, so a tight EventSource reconnect loop is bounded by the slot cap + reconnect interval, not by req/min.
 
-**429 contract.** A throttled request gets HTTP `429` with the standard envelope `{ "code": "rate-limited", "message": "...", "details": { "scope": "session" | "ip", "retry_after_s": N } }` **and a `Retry-After` header** (seconds) so well-behaved external callers back off correctly. The `rate-limited` code is distinct from the login lockout's `login.lockout` (`AUTH.md`) — request throttling and account lockout are different events. The dashboard surfaces a non-alarming "molma is busy — retrying…" and auto-retries after `Retry-After` (TanStack Query backoff); this is a backstop, not a normal-operation banner.
+**429 contract.** A throttled request gets HTTP `429` with the standard envelope `{ "code": "rate-limited", "message": "...", "details": { "scope": "session" | "ip", "retry_after_s": N } }` **and a `Retry-After` header** (seconds) so well-behaved external callers back off correctly. The `rate-limited` code is distinct from the login lockout's `login.lockout` (`AUTH.md`) — request throttling and account lockout are different events. The dashboard surfaces a non-alarming "malmo is busy — retrying…" and auto-retries after `Retry-After` (TanStack Query backoff); this is a backstop, not a normal-operation banner.
 
 **Mechanism.** A middleware in the brain's chain, ordered **after** auth resolves the session but **before** handlers — so it keys on the session token when authenticated, or falls back to client IP on the unauthenticated allowlist. In-memory, mutex-guarded buckets with periodic GC of idle entries; no persistence (resets on restart, like the login throttle). Plane 3 reuses the # Stream cap counter.
 
@@ -284,9 +284,9 @@ Three orthogonal planes, plus the login throttle that already exists:
 - **Transport:** HTTPS via Caddy. No direct brain port exposure.
 - **Wire format:** HTTP/1.1 + JSON, versioned URL prefix `/api/v1/...`.
 - **API patterns:** sync request/response (A) for <5s; jobs (B) for longer or progress-reporting ops; SSE (C) for one-way streams; WebSocket (D) reserved for future bidirectional needs.
-- **Authentication:** opaque `molma_session` cookie. No bearer tokens. SSE/WS auth via the same cookie.
+- **Authentication:** opaque `malmo_session` cookie. No bearer tokens. SSE/WS auth via the same cookie.
 - **CSRF:** `SameSite=Strict` cookie + `Origin` check on state-changing requests.
-- **Versioning:** API-versioned, additive-minor. `/api/v1` minors only add fields; breaking changes go to `/api/v2`. UI and brain ship independently on a shared release channel (`WEB_UI.md`). UI declares `X-Molma-API-Version`; brain returns 426 if it can't serve that minor.
+- **Versioning:** API-versioned, additive-minor. `/api/v1` minors only add fields; breaking changes go to `/api/v2`. UI and brain ship independently on a shared release channel (`WEB_UI.md`). UI declares `X-Malmo-API-Version`; brain returns 426 if it can't serve that minor.
 - **Additive-minor discipline.** Fields in `/api/v1` are never removed or repurposed. New fields are always optional. Event `kind` values are added, never removed (deprecation = stop emitting). **CI enforces via generated OpenAPI + `oasdiff breaking`** (see # CI enforcement). Bypass is `/api/v2`, not a skip flag.
 - **Errors:** HTTP status + `{code, message, details?}` body. Codes are stable strings.
 - **Event `kind` values are enumerated in the schema.** Adding a new kind is an API-version-bumping change.
@@ -301,6 +301,6 @@ Three orthogonal planes, plus the login throttle that already exists:
 
 - `CONTROL_PLANE.md` — points to this doc as the authoritative spec for the brain↔UI boundary.
 - `BRAIN_HOST_PROTOCOL.md` — sibling protocol; SSE/jobs patterns deliberately identical.
-- `AUTH.md` — `molma_session` cookie semantics live there.
+- `AUTH.md` — `malmo_session` cookie semantics live there.
 - `WEB_UI.md` — client-side consumers of this protocol (`@tanstack/vue-query`, `useEvents()`, `useJob()`).
 - `NEXT.md` — carries the OpenAPI codegen-timing follow-up and the deferred per-session file-transfer concurrency cap.

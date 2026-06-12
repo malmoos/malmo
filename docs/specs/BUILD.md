@@ -1,6 +1,6 @@
-# molma Build & Boot Pipeline
+# malmo Build & Boot Pipeline
 
-> Working spec for how molma ships — from source to a USB stick to a running box. Companion to `SPEC.md`, `CONTROL_PLANE.md`, `FIRST_RUN.md`, `STORAGE.md`.
+> Working spec for how malmo ships — from source to a USB stick to a running box. Companion to `SPEC.md`, `CONTROL_PLANE.md`, `FIRST_RUN.md`, `STORAGE.md`.
 
 This doc is **draft / option-survey**. Most sections present alternatives with a recommendation; locked decisions are called out explicitly. The intent is to surface forks before committing.
 
@@ -10,7 +10,7 @@ This doc is **draft / option-survey**. Most sections present alternatives with a
 - ISO composition — tooling, layout, online vs. offline.
 - The installer — what runs between USB-boot and reboot-to-disk.
 - `host-agent` packaging and how it lands on disk.
-- `molma-brain` image build, distribution, first-boot pull.
+- `malmo-brain` image build, distribution, first-boot pull.
 - Versioning and release artifacts.
 
 What it does **not** cover: update mechanics post-install (separate doc), CI/CD specifics, signing infrastructure (deferred until we have a release to sign).
@@ -47,13 +47,13 @@ The installed GRUB config must set these kernel parameters (`GRUB_CMDLINE_LINUX`
 
 ### Preinstalled packages
 
-Minimum to be a molma box:
+Minimum to be a malmo box:
 
 - `systemd`, `systemd-cryptenroll`, `cryptsetup` — boot, encryption, TPM auto-unlock (`STORAGE.md`).
 - `docker-ce` (or `docker.io` from Debian; see below) — runtime for everything.
 - `avahi-daemon` — mDNS publishing for `*.local` app hostnames and SMB service discovery (`_smb._tcp`).
 - `caddy` — only if we ship it on host; if it runs as a container under the brain (per `CONTROL_PLANE.md`), skip on host.
-- `molma-host-agent` — our own `.deb`.
+- `malmo-host-agent` — our own `.deb`.
 - `openssh-server` — SSH daemon, scoped to LAN + mesh via nftables (see "SSH" below).
 - `samba` — SMB file shares for cross-device access (`STORAGE.md` # Cross-device access).
 - `mergerfs` — userspace union for data drives (`STORAGE.md` # Data drives). Activates whenever a data drive is present.
@@ -64,22 +64,22 @@ Minimum to be a molma box:
 
 ### SSH
 
-`openssh-server` is **installed and enabled at boot** — sshd listens on :22 from first boot. However, **no account can authenticate by default**: `sshd_config.d/molma-allowed.conf` carries an empty `AllowUsers` directive, so sshd rejects every account regardless of whether the password is valid. Per-account opt-in (Settings → My account → Enable SSH) adds the user to `AllowUsers` and reloads sshd. The user's molma password — the same one they use for the dashboard — is what authenticates them; SSH does not have its own password (`AUTH.md` # Device access).
+`openssh-server` is **installed and enabled at boot** — sshd listens on :22 from first boot. However, **no account can authenticate by default**: `sshd_config.d/malmo-allowed.conf` carries an empty `AllowUsers` directive, so sshd rejects every account regardless of whether the password is valid. Per-account opt-in (Settings → My account → Enable SSH) adds the user to `AllowUsers` and reloads sshd. The user's malmo password — the same one they use for the dashboard — is what authenticates them; SSH does not have its own password (`AUTH.md` # Device access).
 
 Why daemon-on-but-no-account instead of daemon-off-until-toggle:
 
 - The "turn on SSH" UX is a single toggle in Settings, with no host-level service restart visible to the user. The brain calls host-agent to edit the allowlist; the daemon was already running.
 - An attacker on the LAN sees an open :22, but no account is in the allowlist — sshd rejects connections at auth-name resolution, before evaluating credentials. Blast radius is bounded by `AUTH.md`'s opt-in mechanics.
-- `PermitRootLogin no`, `PasswordAuthentication yes` (sshd accepts the user's molma password; a public key can also be added to `~/.ssh/authorized_keys` for key-based login).
+- `PermitRootLogin no`, `PasswordAuthentication yes` (sshd accepts the user's malmo password; a public key can also be added to `~/.ssh/authorized_keys` for key-based login).
 
 **Network scope: LAN + mesh only, structurally.** An nftables rule on :22 default-denies and allows only:
 
 - RFC1918 source ranges: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` (the LAN).
-- The mesh interface (`tailscale0` / `headscale0`) when present — devices the user has paired via `MOLMA_NETWORK.md`.
+- The mesh interface (`tailscale0` / `headscale0`) when present — devices the user has paired via `MALMO_NETWORK.md`.
 
 SSH from the public internet is **structurally blocked**, not relying on per-account opt-in alone. A port scan from outside sees a closed port, not a refused-auth banner. The path to "SSH to my box from outside" is "pair the device on the mesh" — same trust model the user already learns for the dashboard. Interface-agnostic by design (nftables on source IP, not `ListenAddress` on a NIC name), so changing NICs / adding Wi-Fi doesn't break it.
 
-Implemented as a drop-in at `/etc/nftables.d/molma-ssh.conf`, owned by the `.deb`. Mesh interface name is templated at host-agent startup based on which mesh client is installed.
+Implemented as a drop-in at `/etc/nftables.d/malmo-ssh.conf`, owned by the `.deb`. Mesh interface name is templated at host-agent startup based on which mesh client is installed.
 
 ### What we deliberately do not preinstall
 
@@ -104,7 +104,7 @@ Debian's official meta-tool for building live + installer ISOs. Used by Kali, Ta
 The installer Debian ships on its own ISOs. Drive it via a preseed file (`preseed.cfg`).
 
 - **Pros:** The most boring, well-trodden path. Massive deployments use it.
-- **Cons:** Preseed is a key-value config file with awkward escape rules. Customizing the installer's *appearance* (molma branding, custom screens) means patching `cdebconf` themes and is genuinely painful. Conditional logic (e.g., "if no second disk, skip step 2") is a pre-script hack.
+- **Cons:** Preseed is a key-value config file with awkward escape rules. Customizing the installer's *appearance* (malmo branding, custom screens) means patching `cdebconf` themes and is genuinely painful. Conditional logic (e.g., "if no second disk, skip step 2") is a pre-script hack.
 - **Verdict:** Right for a sysadmin tool, wrong for a consumer appliance.
 
 ### Option C — `mkosi`
@@ -143,13 +143,13 @@ Reasoning:
 ### Three execution models
 
 - **Model 1 — Custom TUI** (text-mode, ncurses-style). Lightweight, ugly, fine for tinkerers, wrong for the long-term audience.
-- **Model 2 — Custom GUI in a minimal Xorg/Wayland session.** Boot a minimal desktop, run a molma-branded GTK/Qt app. Pretty, heavy on ISO size and dev work.
+- **Model 2 — Custom GUI in a minimal Xorg/Wayland session.** Boot a minimal desktop, run a malmo-branded GTK/Qt app. Pretty, heavy on ISO size and dev work.
 - **Model 3 — Web installer in a kiosk browser.** Boot a minimal compositor (`cage` or `weston --kiosk`), launch Chromium pointed at a local installer service (Go binary serving HTTP on `localhost`). The installer service does the actual work (partitioning, LUKS, TPM enrollment, file copy).
 
 ### Recommendation: Model 3 (kiosk web installer)
 
 - Reuses our web stack — same TypeScript framework, same components, same designers as the post-install dashboard. Visual consistency from USB-boot to dashboard.
-- The installer service is a sibling to `molma-brain` in shape: Go binary, HTTP API, but its job ends at first reboot. We can borrow patterns and even some packages.
+- The installer service is a sibling to `malmo-brain` in shape: Go binary, HTTP API, but its job ends at first reboot. We can borrow patterns and even some packages.
 - ISO cost: ~150–250 MB for compositor + Chromium. Acceptable on a multi-GB ISO.
 - The same UI language carries forward — no jarring "install looks like a 90s setup, then suddenly it's a polished web app."
 
@@ -182,17 +182,17 @@ Three options:
 - **B — Bake the binary directly into the live filesystem at ISO build time** (no `.deb`, just a file + a systemd unit). Simpler, but no apt-managed update path.
 - **C — Distribute as a container alongside the brain.** Inverts the architecture — host-agent is the *one* thing that should be on the host, not in a container (`CONTROL_PLANE.md`). Reject.
 
-**Recommendation: A.** Ship `molma-host-agent.deb` from our apt repo.
+**Recommendation: A.** Ship `malmo-host-agent.deb` from our apt repo.
 
 - Native package, native systemd unit, native logs.
 - apt is how host-agent updates until we move to A/B images. When we do, the `.deb` gets baked into the immutable image and the apt path retires. Cheap migration.
-- Our apt repo (`apt.molma.network` or similar) hosts this one package for v1. Adding more later is mechanical.
+- Our apt repo (`apt.malmo.network` or similar) hosts this one package for v1. Adding more later is mechanical.
 
 The repo is signed; the ISO build trusts our key. Key management is a release-infra concern, deferred to the release-infra doc.
 
 ---
 
-## 5. `molma-brain` image
+## 5. `malmo-brain` image
 
 Per `CONTROL_PLANE.md`: brain runs as a container, supervised by host-agent.
 
@@ -203,22 +203,22 @@ Per `CONTROL_PLANE.md`: brain runs as a container, supervised by host-agent.
 
 ### Distribution — three options
 
-- **A — Public registry (`ghcr.io/molma/brain` or Docker Hub).** Pull at first boot. Simple, no infra to run beyond a registry account. Requires internet at first boot.
-- **B — Self-hosted registry (`registry.molma.network`).** Same as A but we own the namespace and don't depend on GitHub/Docker policies. Modest VPS cost.
+- **A — Public registry (`ghcr.io/malmo/brain` or Docker Hub).** Pull at first boot. Simple, no infra to run beyond a registry account. Requires internet at first boot.
+- **B — Self-hosted registry (`registry.malmo.network`).** Same as A but we own the namespace and don't depend on GitHub/Docker policies. Modest VPS cost.
 - **C — Bundle the image in the ISO.** Image is loaded into Docker at install time via `docker load`. Works offline at first boot. ISO grows by the image size (~50–150 MB for a Go-based brain — small).
 
 ### Recommendation: B + C combined
 
 - **Bundle a pinned brain image in the ISO** so the box boots and is functional with zero internet.
-- **Self-hosted registry for ongoing updates.** host-agent (or the brain itself) pulls newer tags from `registry.molma.network` when online.
-- Self-hosted over public-registry-only because: (1) a `molma` namespace on Docker Hub is not guaranteed; (2) we already need `molma.network` infra for the mesh, adding a registry is incremental; (3) avoids dependency on a third party's pull-rate-limit policy.
+- **Self-hosted registry for ongoing updates.** host-agent (or the brain itself) pulls newer tags from `registry.malmo.network` when online.
+- Self-hosted over public-registry-only because: (1) a `malmo` namespace on Docker Hub is not guaranteed; (2) we already need `malmo.network` infra for the mesh, adding a registry is incremental; (3) avoids dependency on a third party's pull-rate-limit policy.
 - We can mirror to a public registry as a redundancy story, but it's not the source of truth.
 
 ### First-boot brain bootstrap
 
 1. host-agent starts (systemd, after Docker).
-2. host-agent checks `/var/lib/molma/brain-image.tar` (bundled in ISO) — if Docker doesn't already have the image, `docker load` it.
-3. host-agent pulls the latest tag from `registry.molma.network` if online and a newer version exists. (Behavior on offline: keep the bundled version. Behavior on update failure: keep current. Never break boot.)
+2. host-agent checks `/var/lib/malmo/brain-image.tar` (bundled in ISO) — if Docker doesn't already have the image, `docker load` it.
+3. host-agent pulls the latest tag from `registry.malmo.network` if online and a newer version exists. (Behavior on offline: keep the bundled version. Behavior on update failure: keep current. Never break boot.)
 4. host-agent starts the brain container with the configured pin.
 5. Brain takes over from there — Caddy, sidecars, etc. (`CONTROL_PLANE.md`).
 
@@ -228,13 +228,13 @@ Per `CONTROL_PLANE.md`: brain runs as a container, supervised by host-agent.
 
 ### Per-release artifacts
 
-- `molma-vX.Y.Z-amd64.iso` — the installer ISO.
-- `molma-host-agent_X.Y.Z_amd64.deb` — published to `apt.molma.network`.
-- `registry.molma.network/molma/brain:vX.Y.Z` — the brain image. `latest` tag advances on stable channel.
+- `malmo-vX.Y.Z-amd64.iso` — the installer ISO.
+- `malmo-host-agent_X.Y.Z_amd64.deb` — published to `apt.malmo.network`.
+- `registry.malmo.network/malmo/brain:vX.Y.Z` — the brain image. `latest` tag advances on stable channel.
 
 ### Channels
 
-- **Stable** — what `molma.com/download` points at. Default for all installs.
+- **Stable** — what `malmo.com/download` points at. Default for all installs.
 - **Beta** — opt-in via Settings. Same artifacts, different repo / tag suffix.
 - *(No nightly in v1. Internal CI builds exist but aren't a user-facing channel.)*
 
@@ -258,18 +258,18 @@ Not locking specifics, but the rough shape:
             ▼
        CI (build, test)
             │
-            ├──► host-agent .deb ──► apt.molma.network
-            ├──► brain image ─────► registry.molma.network
+            ├──► host-agent .deb ──► apt.malmo.network
+            ├──► brain image ─────► registry.malmo.network
             └──► UI bundle ───────► (deploy method TBD, see WEB_UI.md)
                                      │
                                      ▼
                           live-build ISO assembly
                                      │
                                      ▼
-                       molma-vX.Y.Z-amd64.iso
+                       malmo-vX.Y.Z-amd64.iso
                                      │
                                      ▼
-                              releases.molma.network
+                              releases.malmo.network
                                      │
                                      ▼
                         stable.json (+ minisig) — see RELEASE_MANIFEST.md
@@ -288,7 +288,7 @@ GitHub Actions or self-hosted CI — TBD, not architecturally interesting at thi
 - **Installer execution model: kiosk web installer.** Minimal compositor (`cage` / `weston --kiosk`) + Chromium pointed at a local installer service. Closest production reference: Fedora's Anaconda Web UI.
 - **Docker package source: `docker-ce` from Docker's official apt repo.** Revisit if Docker Inc. policy changes; swap to `docker.io` is a one-line apt source change.
 - **`host-agent` ships as a Debian package** from our own apt repo, not as a container.
-- **`molma-brain` ships as an OCI image**, distroless runtime, from our own registry, also bundled in the ISO for offline first-boot.
+- **`malmo-brain` ships as an OCI image**, distroless runtime, from our own registry, also bundled in the ISO for offline first-boot.
 - **Same squashfs serves both the live (installer) environment and the installed system.**
 - **SSH daemon enabled at boot; no account can authenticate until per-user opt-in** (`AUTH.md` # SSH access). Root login disabled.
 - **Channels: stable only in v1, no beta, no nightly.** Beta is additive when triggered (see `RELEASE_MANIFEST.md`).

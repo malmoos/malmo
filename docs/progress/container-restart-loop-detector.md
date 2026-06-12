@@ -10,7 +10,7 @@ Implements the `container-restart-loop` detector from `HEALTH.md` # Detector cat
 
 ### Docker seam — `internal/lifecycle/docker.go`
 
-Added `RestartCounts(ctx) (map[string]int, error)` to the `DockerDriver` interface and the production `cliDocker` impl, reusing the existing lifecycle Docker seam rather than opening a parallel client (issue #35: "do not add a parallel Docker client"). The impl lists managed containers (`docker ps -aq --filter label=molma.managed=true`) and one `docker inspect --format '{{index .Config.Labels "molma.instance_id"}} {{.RestartCount}}'` maps each container's cumulative `RestartCount` back to its owning `instance_id`. An instance with several containers takes the **max** across them — raise if any one container is crash-looping. The fake in `fakes_test.go` gained a matching `restartCounts` field + method.
+Added `RestartCounts(ctx) (map[string]int, error)` to the `DockerDriver` interface and the production `cliDocker` impl, reusing the existing lifecycle Docker seam rather than opening a parallel client (issue #35: "do not add a parallel Docker client"). The impl lists managed containers (`docker ps -aq --filter label=malmo.managed=true`) and one `docker inspect --format '{{index .Config.Labels "malmo.instance_id"}} {{.RestartCount}}'` maps each container's cumulative `RestartCount` back to its owning `instance_id`. An instance with several containers takes the **max** across them — raise if any one container is crash-looping. The fake in `fakes_test.go` gained a matching `restartCounts` field + method.
 
 ### Detector — `cmd/brain/main.go`
 
@@ -40,7 +40,7 @@ The issue left two constants/approaches to "pick conservatively and document; th
 - `HEALTH.md` # Detector catalog: realizes the locus-D `container-restart-loop` row (now marked *(built)*), keyed per-app by `instance_id`, warning + Tier-2 + no block flags as the # Issue catalog row specifies.
 - `HEALTH.md` # Cross-cutting detector policy: locus-D signals are **1-shot, no debounce**. The detector honours this — it raises on the first poll whose windowed delta crosses the threshold, with no "2 consecutive bad samples" requirement. (The sliding window is restart *accumulation*, not debounce: a single poll observing the condition is sufficient to raise.)
 - `CONTROL_PLANE.md`: reads Docker through the socket-proxy's `CONTAINERS` family only; no `EVENTS` grant added.
-- `APP_LIFECYCLE.md` / `internal/lifecycle/lifecycle.go`: maps loops to instances via the `molma.instance_id` label the lifecycle layer already stamps on every managed container, alongside `restart: unless-stopped` (the premise that makes a crash *loop* rather than a single exit).
+- `APP_LIFECYCLE.md` / `internal/lifecycle/lifecycle.go`: maps loops to instances via the `malmo.instance_id` label the lifecycle layer already stamps on every managed container, alongside `restart: unless-stopped` (the premise that makes a crash *loop* rather than a single exit).
 - CLAUDE.md # Go code discipline: consumer-side `restartCountReader` interface in `cmd/brain`; the new Docker method lives on the existing `lifecycle.DockerDriver` seam; `log/slog` with the standard `err` field on the docker-unreachable skip.
 
 ## Known gaps & deviations

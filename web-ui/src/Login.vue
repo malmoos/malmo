@@ -57,7 +57,7 @@ function glyphColor(username: string): string {
 
 <template>
   <main class="auth">
-    <h1>molma</h1>
+    <h1>malmo</h1>
 
     <!-- User picker -->
     <div v-if="!selected" class="card">

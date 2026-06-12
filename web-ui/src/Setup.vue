@@ -36,7 +36,7 @@ function acknowledge() {
 
 <template>
   <main class="auth">
-    <h1>molma</h1>
+    <h1>malmo</h1>
     <form v-if="!recoveryCode" @submit.prevent="submit">
       <h2>Set your password</h2>
       <p class="hint">This is the only account on the box — the admin.</p>

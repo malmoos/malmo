@@ -23,4 +23,4 @@ Closes the override bug the managed-services slice surfaced (`managed-services-p
 
 ## What's next
 
-- **Optional authoring-time lint** (parked, separate): `molma manifest check` could warn when `main_service` carries `restart: "no"`, or when a completion-gate target would have been force-restarted under the old rule — catching the mistake before publish rather than at install. Not built this slice.
+- **Optional authoring-time lint** (parked, separate): `malmo manifest check` could warn when `main_service` carries `restart: "no"`, or when a completion-gate target would have been force-restarted under the old rule — catching the mistake before publish rather than at install. Not built this slice.

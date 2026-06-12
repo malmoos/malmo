@@ -57,13 +57,13 @@ a.Mount(mux)
 
 Same socket setup. Imports `internal/hostagent/pamverifier` (the only binary that does so) and plugs it into the Verifier slot:
 ```go
-a := hostagent.New(&pamverifier.PAMVerifier{Service: "molma"})
+a := hostagent.New(&pamverifier.PAMVerifier{Service: "malmo"})
 ```
 The `passwords` map remains on the Agent and is still used by `setPassword`/`deleteUser` (fake). Logs a startup `slog.Warn` naming the three unimplemented ops and pointing to this doc.
 
-### `dev/pam/molma` — PAM service file
+### `dev/pam/malmo` — PAM service file
 
-`auth required pam_unix.so` + `account required pam_unix.so`. Installed to `/etc/pam.d/molma` by the host installer. Used by `PAMVerifier{Service: "molma"}`.
+`auth required pam_unix.so` + `account required pam_unix.so`. Installed to `/etc/pam.d/malmo` by the host installer. Used by `PAMVerifier{Service: "malmo"}`.
 
 ## The (b) vs (c) decision: separate binary
 
@@ -97,7 +97,7 @@ CGO_ENABLED=0 go test ./...
 
 ```bash
 apt install libpam0g-dev   # PAM headers for cgo
-sudo cp dev/pam/molma /etc/pam.d/molma
+sudo cp dev/pam/malmo /etc/pam.d/malmo
 go build ./cmd/host-agent-real
 sudo ./cmd/host-agent-real  # must run as root; pam_unix.so requires privilege
 ```
@@ -105,7 +105,7 @@ sudo ./cmd/host-agent-real  # must run as root; pam_unix.so requires privilege
 ## How it maps to the specs
 
 - `AUTH.md` # Brain ↔ host-agent in the auth path — "brain → host-agent `verify_password(user, password)` → PAM `authenticate()` → yes/no" is now real in `host-agent-real`.
-- `AUTH.md` # Brain ↔ host-agent — PAM service name `molma`, stack at `/etc/pam.d/molma`.
+- `AUTH.md` # Brain ↔ host-agent — PAM service name `malmo`, stack at `/etc/pam.d/malmo`.
 - `BRAIN_HOST_PROTOCOL.md` — wire shape unchanged; only the verification back-end swaps.
 - CLAUDE.md "consumer-side interfaces" — `PasswordVerifier` lives in `internal/hostagent`, not in any provider package.
 - CLAUDE.md "`internal/` for everything except `cmd/`" — all handler logic in `internal/hostagent`.
@@ -113,12 +113,12 @@ sudo ./cmd/host-agent-real  # must run as root; pam_unix.so requires privilege
 ## Known gaps (loud)
 
 - **`setPassword` is fake even in `host-agent-real`.** It writes a bcrypt hash to an in-memory map, not to `/etc/shadow`. Brain's bootstrap path (`POST /setup → SetPassword`) does NOT create a real Linux user. Real `useradd` + `passwd` integration is a Tier-B follow-up.
-- **`setRole` is fake even in `host-agent-real`.** Linux group membership (`molma-admin`) is not updated. Real `gpasswd` integration is a Tier-B follow-up.
+- **`setRole` is fake even in `host-agent-real`.** Linux group membership (`malmo-admin`) is not updated. Real `gpasswd` integration is a Tier-B follow-up.
 - **`deleteUser` is fake even in `host-agent-real`.** No `userdel` is called. Real account deletion is a Tier-B follow-up.
 - Because `setPassword` is fake, **the PAM verifier will reject passwords set via the dashboard on `host-agent-real`** — the PAM stack checks `/etc/shadow`, which was never updated. End-to-end login only works once real `setPassword` lands.
 
 ## What's next
 
 - Real `setPassword` / `setRole` / `deleteUser` in `host-agent-real` (Linux: `useradd`, `passwd`, `gpasswd`, `userdel`).
-- nspawn test fixture for PAM verify: provision `molma-pamtest` user, run `-tags pamtest` tests as root.
+- nspawn test fixture for PAM verify: provision `malmo-pamtest` user, run `-tags pamtest` tests as root.
 - Per-protocol opt-in (SSH/SMB) as service allowlists per account.

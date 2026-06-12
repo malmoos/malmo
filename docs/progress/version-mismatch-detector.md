@@ -15,7 +15,7 @@ Changes:
   - `const expectedAgentVersion = "0.0.1-fake"` — the brain-side constant the reported agent version is compared against (mirrors `internal/hostagent.AgentVersion`).
   - `agentStatusReader` — a one-method consumer-side interface (`SystemStatus(ctx)`), satisfied by `*hostclient.Client`, so the check is unit-testable with a fake host-agent.
   - `checkAgentVersion(...)` — reads `SystemStatus`, compares `AgentVersion` to `expectedAgentVersion`, raises/clears `version-mismatch`, and emits the per-issue audit + notification fan-out (mirrors `pullStorageHealth`).
-  - `versionCheckPollLoop(...)` — re-runs the check on the existing `MOLMA_HEALTH_POLL` cadence (60s default).
+  - `versionCheckPollLoop(...)` — re-runs the check on the existing `MALMO_HEALTH_POLL` cadence (60s default).
   - Wired into `main()`: one check at startup (the first handshake) + the poll loop, alongside the existing storage-health poll. Reuses `pollCtx`/`pollCancel`.
 
 ## How it maps to the specs

@@ -1,6 +1,6 @@
-# molma Release Manifest
+# malmo Release Manifest
 
-> How molma publishes a new brain + UI version to the fleet. Sibling to `UPDATES.md` (which covers the box-side update model) and `BUILD.md` (which covers ISO and `.deb` artifacts). This doc owns the **control-plane release manifest** — the JSON file that tells every box "the current molma is X.Y.Z."
+> How malmo publishes a new brain + UI version to the fleet. Sibling to `UPDATES.md` (which covers the box-side update model) and `BUILD.md` (which covers ISO and `.deb` artifacts). This doc owns the **control-plane release manifest** — the JSON file that tells every box "the current malmo is X.Y.Z."
 
 The scope here is brain + UI only. Debian base updates flow through `unattended-upgrades`; `host-agent` flows through our apt repo; both are described in `UPDATES.md` and `BUILD.md` and do not use this manifest.
 
@@ -9,13 +9,13 @@ The scope here is brain + UI only. Debian base updates flow through `unattended-
 A static JSON file served at:
 
 ```
-https://releases.molma.network/stable.json
-https://releases.molma.network/stable.json.minisig
+https://releases.malmo.network/stable.json
+https://releases.malmo.network/stable.json.minisig
 ```
 
-`host-agent` polls the manifest hourly. When the manifest names a version pair newer than what's installed, the dashboard surfaces an "Update available" prompt (admin-prompted per `UPDATES.md`). When the admin clicks Update, host-agent pulls the named brain and UI images from `registry.molma.network` and runs the changed-only transaction described in `UPDATES.md`.
+`host-agent` polls the manifest hourly. When the manifest names a version pair newer than what's installed, the dashboard surfaces an "Update available" prompt (admin-prompted per `UPDATES.md`). When the admin clicks Update, host-agent pulls the named brain and UI images from `registry.malmo.network` and runs the changed-only transaction described in `UPDATES.md`.
 
-The manifest names versions, not image URLs. The registry path is fixed (`registry.molma.network/molma/brain:vX.Y.Z`, `registry.molma.network/molma/ui:vX.Y.Z` — see `BUILD.md`). Keeping it implicit means we can move the registry later without re-cutting every prior manifest.
+The manifest names versions, not image URLs. The registry path is fixed (`registry.malmo.network/malmo/brain:vX.Y.Z`, `registry.malmo.network/malmo/ui:vX.Y.Z` — see `BUILD.md`). Keeping it implicit means we can move the registry later without re-cutting every prior manifest.
 
 ## Manifest schema (v1)
 
@@ -35,8 +35,8 @@ Fields:
 
 - **`manifest_version`** — schema version. Bumped only on breaking changes. host-agent ignores unknown fields, so additive evolution (new optional fields) does not bump this.
 - **`channel`** — the channel this manifest applies to. v1 only ships `"stable"`. Included from day one to make a future `"beta"` channel additive rather than a flag day.
-- **`brain`** — semver of the molma-brain image to run.
-- **`ui`** — semver of the molma-ui image to run.
+- **`brain`** — semver of the malmo-brain image to run.
+- **`ui`** — semver of the malmo-ui image to run.
 - **`minimum_host_agent`** — semver. If the box's host-agent is older, the manifest is ignored and the prompt does not surface. host-agent updates ride apt and roll out on their own cadence; this field is the safety belt.
 - **`released_at`** — RFC 3339 timestamp. Informational; not used for any gating in v1. (Phased rollouts would use it; see "Future work" below.)
 - **`rollback_to`** — the kill switch. `null` in steady state. When set to a prior `{"brain": "...", "ui": "..."}` pair, every box behaves as follows:
@@ -47,7 +47,7 @@ The schema is intentionally small. Anything not in the schema is implicit (regis
 
 ## Where it lives: git + CDN
 
-The source of truth is a git repository (`github.com/molma/releases` or similar). The CDN at `releases.molma.network` serves the contents of `main` as static files. A commit on `main` becomes the live manifest within seconds of CDN sync.
+The source of truth is a git repository (`github.com/malmo/releases` or similar). The CDN at `releases.malmo.network` serves the contents of `main` as static files. A commit on `main` becomes the live manifest within seconds of CDN sync.
 
 Why git as the source rather than direct uploads to object storage:
 
@@ -96,8 +96,8 @@ When beta returns (driven by either auto-apply landing post-A/B-images, or fleet
 
 Promoting a new version is a pull request that updates `stable.json` and `stable.json.minisig`. The flow:
 
-1. Maintainer cuts a release tag for the brain and UI images in their respective repositories. CI builds, tests, and publishes the images to `registry.molma.network`.
-2. Maintainer drafts the new manifest JSON locally, signs it with the offline key (`minisign -S -s ~/.molma/release.key -m stable.json`), and opens a PR against the `releases` repo with both files updated.
+1. Maintainer cuts a release tag for the brain and UI images in their respective repositories. CI builds, tests, and publishes the images to `registry.malmo.network`.
+2. Maintainer drafts the new manifest JSON locally, signs it with the offline key (`minisign -S -s ~/.malmo/release.key -m stable.json`), and opens a PR against the `releases` repo with both files updated.
 3. CI on the PR validates:
    - JSON parses against the schema (`manifest_version`, required fields, semver shape).
    - Signature verifies against the published pubkey.
@@ -118,7 +118,7 @@ This is the load-bearing protection in v1. It is independent of phased rollout �
 
 ## Failure modes
 
-- **Box can't reach `releases.molma.network`:** host-agent keeps the last-known manifest in `/var/lib/molma/manifest.json` (with its signature). Updates pause until connectivity returns. Consistent with `UPDATES.md`: an offline box stays current at its last-applied version.
+- **Box can't reach `releases.malmo.network`:** host-agent keeps the last-known manifest in `/var/lib/malmo/manifest.json` (with its signature). Updates pause until connectivity returns. Consistent with `UPDATES.md`: an offline box stays current at its last-applied version.
 - **Signature verification fails:** host-agent logs and ignores the manifest. The previous valid manifest stays in effect. A persistent signature failure surfaces as a dashboard warning after 24 hours (operator should investigate; could indicate a CDN/storage corruption or, very rarely, a compromised publishing path).
 - **`minimum_host_agent` not satisfied:** the manifest is honored as far as "this is the current release" but the prompt does not surface. The next host-agent update from apt resolves it; the prompt appears on the following poll.
 - **Image tag missing from registry at update time:** the update fails health-check and rolls back per `UPDATES.md`. The release was malformed (CI should have caught this — the missing-image precondition exists for that reason).

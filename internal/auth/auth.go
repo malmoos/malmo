@@ -14,11 +14,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/molmaos/molma/internal/store"
+	"github.com/malmoos/malmo/internal/store"
 )
 
 // CookieName is the dashboard's session cookie. AUTH.md # Sessions.
-const CookieName = "molma_session"
+const CookieName = "malmo_session"
 
 // tokenBytes is the entropy of one session token. 32 bytes = 256 bits;
 // base64url-encoded that's 43 chars. Server-side validated, so length here

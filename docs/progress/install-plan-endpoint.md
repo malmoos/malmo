@@ -35,5 +35,5 @@ Realizes the "read-only endpoint the consent screen calls before showing itself"
 
 ## What's next
 
-- **Slice 4** — `writeOverride` + `writeEnv` enforce permissions: `user:`, folder bind mounts from elected source, `group_add` for shared, devices, GPU, `MOLMA_FOLDER_*` injection. Calls `ResolveHome` (slice 2). Receives the user's elections from `POST /api/v1/apps` `config`. Decide whether `GET /v1/identity/well-known` belongs here or can use hard-coded defaults.
+- **Slice 4** — `writeOverride` + `writeEnv` enforce permissions: `user:`, folder bind mounts from elected source, `group_add` for shared, devices, GPU, `MALMO_FOLDER_*` injection. Calls `ResolveHome` (slice 2). Receives the user's elections from `POST /api/v1/apps` `config`. Decide whether `GET /v1/identity/well-known` belongs here or can use hard-coded defaults.
 - **Slice 5** — consent + config UI in `web-ui/src/views/StoreView.vue` consuming `InstallPlan` from this slice.

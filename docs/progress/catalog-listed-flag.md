@@ -4,7 +4,7 @@
 - **Date:** 2026-06-11
 - **Specs touched:** `APP_MANIFEST.md` (# A — new optional `listed` field), `APP_STORE.md` (# Listed apps — the enforcement contract), plus `docs/dev/catalog-status.md` (new per-app roster), `docs/dev/authoring-apps-with-an-agent.md` (status-recording step), `docs/dev/README` map.
 
-We started adding catalog apps that are degraded or completely non-functional (the trigger: `calibre-web` crash-loops on every boot — its linuxserver.io image runs s6-overlay, which must start as uid 0 to set up `/run` before dropping to `PUID:PGID`, but molma forces a non-root `user:` and strips `CAP_SETUID`/`CAP_SETGID`, so preinit aborts; gap-class `nonroot-data-ownership`). Two needs fell out: a **centralized record** of every app's state, and a way to **pull a broken app from the store without throwing away its adaptation work**. This slice delivers both — the roster doc, and the `listed: false` mechanism that enforces a `Blocked`/`Rejected` verdict.
+We started adding catalog apps that are degraded or completely non-functional (the trigger: `calibre-web` crash-loops on every boot — its linuxserver.io image runs s6-overlay, which must start as uid 0 to set up `/run` before dropping to `PUID:PGID`, but malmo forces a non-root `user:` and strips `CAP_SETUID`/`CAP_SETGID`, so preinit aborts; gap-class `nonroot-data-ownership`). Two needs fell out: a **centralized record** of every app's state, and a way to **pull a broken app from the store without throwing away its adaptation work**. This slice delivers both — the roster doc, and the `listed: false` mechanism that enforces a `Blocked`/`Rejected` verdict.
 
 ## What was done
 
@@ -13,7 +13,7 @@ We started adding catalog apps that are degraded or completely non-functional (t
 - `internal/manifest`: new optional `listed *bool` field. A pointer so absent is distinguishable from explicit `false`; read through the new `IsListed()` accessor, which defaults absent/`true` to listed. Back-compatible field add — every existing manifest stays listed with no change, `manifest_version` unchanged.
 - `internal/catalog`: the read surface is split by intent, asymmetrically.
   - **Store-facing, filtered:** `List()` (browse grid) skips unlisted apps; `Detail()` (detail page) returns `ErrNotFound` for an unlisted app — so the store treats it as nonexistent.
-  - **By-id, honest:** new `Entry(id)` returns the grid summary for one app *without* the visibility filter; `Load()` stays raw. This is the path used for installed-instance enrichment, reconciliation, icon/screenshot serving, and `molma manifest lint` — an app unlisted *after* install keeps its dashboard card and stays manageable.
+  - **By-id, honest:** new `Entry(id)` returns the grid summary for one app *without* the visibility filter; `Load()` stays raw. This is the path used for installed-instance enrichment, reconciliation, icon/screenshot serving, and `malmo manifest lint` — an app unlisted *after* install keeps its dashboard card and stays manageable.
 - `internal/api`: both install paths gate on `IsListed()` — `installApp` (`POST /api/v1/apps`) and `installPlan` (`GET …/install-plan`) return the same 404 as a missing manifest, so a stale store link or scripted call can't install a withdrawn app. `listApps`/`getApp` enrichment was moved off `List()`/`Detail()` onto the honest `Entry()` lookup, so the filter never strips an installed app's card.
 
 ### Calibre-web pulled

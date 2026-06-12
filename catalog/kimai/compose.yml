@@ -1,6 +1,6 @@
-# Kimai adapted for molma's Tier-3 sandbox (cap_drop: ALL, no-new-privileges,
+# Kimai adapted for malmo's Tier-3 sandbox (cap_drop: ALL, no-new-privileges,
 # brain-pinned user:). Upstream's documented compose runs kimai + its own
-# mysql container; molma drops the bundled database and declares a managed
+# mysql container; malmo drops the bundled database and declares a managed
 # MySQL in the manifest instead (#108) — Kimai speaks only the MySQL dialect
 # (no Postgres, no SQLite-prod mode), and a bundled mysql image cannot
 # initialize under the sandbox (see the managed-mysql ledger entries).
@@ -29,13 +29,13 @@ services:
   kimai:
     image: kimai/kimai2:2.59.0
     environment:
-      DATABASE_URL: "${MOLMA_SERVICE_DATABASE_DSN}?charset=utf8mb4&serverVersion=8.4"
-      # Outgoing mail (manifest `mail:` block): bound, MOLMA_MAIL_DSN is a
+      DATABASE_URL: "${MALMO_SERVICE_DATABASE_DSN}?charset=utf8mb4&serverVersion=8.4"
+      # Outgoing mail (manifest `mail:` block): bound, MALMO_MAIL_DSN is a
       # Symfony-style SMTP URL Kimai consumes directly; unbound, the vars are
       # absent and the defaults below keep email off via the null transport
       # (upstream's documented "no mail" value) instead of a broken empty DSN.
-      MAILER_URL: "${MOLMA_MAIL_DSN:-null://null}"
-      MAILER_FROM: "${MOLMA_MAIL_FROM:-kimai@example.com}"
+      MAILER_URL: "${MALMO_MAIL_DSN:-null://null}"
+      MAILER_FROM: "${MALMO_MAIL_FROM:-kimai@example.com}"
       ADMINMAIL: admin@kimai.local
       ADMINPASS: admin
       TRUSTED_PROXIES: "127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"

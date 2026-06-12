@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/molmaos/molma/internal/manifest"
+	"github.com/malmoos/malmo/internal/manifest"
 )
 
 // --- sumUnpackedLayers: pure save-stream parsing, no docker ----------------

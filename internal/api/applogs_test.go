@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/molmaos/molma/internal/store"
+	"github.com/malmoos/malmo/internal/store"
 )
 
 // TestLogVisibility pins the per-app-log authorization matrix. It is STRICTER

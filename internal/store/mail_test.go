@@ -9,8 +9,8 @@ import (
 func sampleProvider(id, label string) MailProvider {
 	return MailProvider{
 		ID: id, Label: label, Host: "smtp.example.com", Port: 587,
-		Username: "molma@example.com", Password: "hunter2",
-		FromAddress: "molma@example.com", Encryption: MailEncryptionSTARTTLS,
+		Username: "malmo@example.com", Password: "hunter2",
+		FromAddress: "malmo@example.com", Encryption: MailEncryptionSTARTTLS,
 		CreatedAt: time.Unix(1_700_000_000, 0),
 	}
 }

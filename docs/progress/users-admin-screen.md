@@ -27,7 +27,7 @@ The dev-phase "session unavailable" placeholder is replaced by the real `Login` 
 
 ### Public login-picker endpoint (`internal/api/auth.go`)
 
-`GET /api/v1/auth/users` (added to `publicPaths`) returns `{id, username}` only — the minimal set the picker needs, no role/hash. Public per `AUTH.md` # Login screen UX (the household trust model: the boundary is "authenticated to molma," not "who lives here"). Test `TestAuthUsersPublicPicker` asserts it's reachable with no session and that the payload carries no `role` field.
+`GET /api/v1/auth/users` (added to `publicPaths`) returns `{id, username}` only — the minimal set the picker needs, no role/hash. Public per `AUTH.md` # Login screen UX (the household trust model: the boundary is "authenticated to malmo," not "who lives here"). Test `TestAuthUsersPublicPicker` asserts it's reachable with no session and that the payload carries no `role` field.
 
 ### Plumbing
 

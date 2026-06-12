@@ -7,21 +7,21 @@ the same PR.
 
 ## Components
 
-Five real processes/artifacts make up a running molma right now. Three are Go,
+Five real processes/artifacts make up a running malmo right now. Three are Go,
 one is JavaScript, one is a container we don't write.
 
 | Component | Lives in | What it is | Status |
 |---|---|---|---|
-| **`molma-brain`** | `cmd/brain/`, `internal/` | The control-plane daemon. Owns SQLite state, the REST+SSE API, the app lifecycle, and the Caddy config. One Go binary. | Real |
+| **`malmo-brain`** | `cmd/brain/`, `internal/` | The control-plane daemon. Owns SQLite state, the REST+SSE API, the app lifecycle, and the Caddy config. One Go binary. | Real |
 | **`host-agent` (fake)** | `cmd/host-agent/` | Privileged side used in the inner dev loop. Speaks the real `BRAIN_HOST_PROTOCOL.md` wire format over a UNIX socket; the host operations themselves (Avahi, LUKS, PAM, apt) are stubbed in memory. | **Fake** (real wire, canned ops) |
 | **`host-agent-real`** | `cmd/host-agent-real/`, `internal/hostagent/` | The real privileged binary. Seam-injected reporters: PAM password verify (`pamverifier`), `/proc` system sampling (`procsource`), disk usage, RAM pressure, journal streaming, service health, reboot-required flag, user manager. Discovery is real: per-LAN-interface Avahi announcements (`avahipublisher`) driven by the NetworkManager LAN set (`netstate`), with an avahi-daemon.conf allowlist sync and IP-change replay. Host ops not yet wired: LUKS/TPM, apt, NM configuration (WiFi setup, `/v1/network/*`). | Partial — see "What is not built yet" |
 | **Caddy** | `dev/caddy.json`, `dev/docker-compose.yml` | Reverse proxy. Terminates `*.local` and routes to app containers + the brain. Configured live by the brain via Caddy's admin API. | Real (container) |
 | **`web-ui`** | `web-ui/` | Vue 3 + Vite + TanStack Query dashboard. Talks only to the brain. Tailwind 4 landed; shadcn-vue scaffolding present, components not yet copied in. Internal code architecture: [`dev/web-ui.md`](dev/web-ui.md). | Real |
-| **SQLite** | `$STATE_DIR/molma.db` | The brain's only persistent store. Schema + queries in `internal/store/`. | Real |
+| **SQLite** | `$STATE_DIR/malmo.db` | The brain's only persistent store. Schema + queries in `internal/store/`. | Real |
 
 Plus the **Docker daemon** on the host, which the brain drives with the
 `docker compose` CLI (`internal/lifecycle/docker.go`). App containers run on the
-`molma-ingress` Docker network so Caddy can reach them by service name.
+`malmo-ingress` Docker network so Caddy can reach them by service name.
 
 ## How the wires connect
 
@@ -33,13 +33,13 @@ Plus the **Docker daemon** on the host, which the brain drives with the
                                       │ HTTP + SSE
                                       ▼
                            ┌─────────────────────┐    docker compose CLI
-                           │     molma-brain     │ ──────────────────────► Docker daemon
+                           │     malmo-brain     │ ──────────────────────► Docker daemon
                            │                     │                                │
                            │  api / lifecycle    │ ─── Caddy admin API ──► Caddy ─┘
                            │  store / catalog    │                          │
                            │  auth / audit       │                          ▼
                            │  caddy / events     │                       app containers
-                           └──────────┬──────────┘                       (molma-ingress net)
+                           └──────────┬──────────┘                       (malmo-ingress net)
                                       │ HTTP/JSON over UNIX socket
                                       ▼
                            ┌─────────────────────┐
@@ -63,7 +63,7 @@ Plus the **Docker daemon** on the host, which the brain drives with the
 - **brain → Caddy:** the brain POSTs JSON to Caddy's admin API to add/remove
   site blocks per app. A splash route covers `<slug>.local` until the
   container's health check passes, then flips to the real upstream.
-- **brain → host-agent:** HTTP/JSON over `MOLMA_AGENT_SOCK`. Two patterns,
+- **brain → host-agent:** HTTP/JSON over `MALMO_AGENT_SOCK`. Two patterns,
   sync request/response and SSE-streamed jobs (`internal/protocol/host.go`
   defines the types; `internal/hostclient/` is the brain-side client). Today
   the routes are `/v1/discovery/{publish,unpublish,state}`, `/v1/system/status`,
@@ -81,7 +81,7 @@ are stated below.
 | `api` | HTTP handlers (huma), auth middleware, request/response shapes. The only package that knows about HTTP. | `cmd/brain` |
 | `lifecycle` | The install transaction: door-1 (catalog) and door-2 (paste-a-compose), digest pinning, reconcile pass, health-wait, Caddy timing, uninstall. Defines `DockerDriver` consumer-side. | `api`, `cmd/brain` |
 | `store` | SQLite schema + queries. Sole persistence boundary. `ErrNotFound` is the only typed error. | `api`, `lifecycle`, `auth`, `audit`, `cmd/brain` |
-| `catalog` | Loads + validates store-app manifests from `MOLMA_CATALOG_DIR`. Door-1 source. | `lifecycle`, `api`, `cmd/brain` |
+| `catalog` | Loads + validates store-app manifests from `MALMO_CATALOG_DIR`. Door-1 source. | `lifecycle`, `api`, `cmd/brain` |
 | `manifest` | `manifest.yml` schema (parse + validate), and the synthesizer that wraps a pasted compose into a door-2 manifest. | `catalog`, `lifecycle`, `api` |
 | `admission` | The single compose admission policy applied to both doors (image pinning rules, forbidden constructs, etc.). | `lifecycle` |
 | `caddy` | Client for Caddy's admin API. Site-block JSON generation lives here. | `lifecycle`, `cmd/brain` |
@@ -110,7 +110,7 @@ are stated below.
 .dev/
   agent.sock          UNIX socket the brain dials the fake host-agent on
   state/
-    molma.db          brain's SQLite (schema in internal/store)
+    malmo.db          brain's SQLite (schema in internal/store)
     instances/        per-app state (compose file, .env, digests)
   host-agent          built binary
   brain               built binary
@@ -118,10 +118,10 @@ catalog/
   whoami/             sample manifest (door-1 source)
 dev/
   caddy.json          Caddy bootstrap config (replaced live via admin API)
-  docker-compose.yml  brings up the dev Caddy + molma-ingress network
+  docker-compose.yml  brings up the dev Caddy + malmo-ingress network
 ```
 
-`MOLMA_STATE_DIR` and `MOLMA_AGENT_SOCK` are set by the Makefile so the brain
+`MALMO_STATE_DIR` and `MALMO_AGENT_SOCK` are set by the Makefile so the brain
 and host-agent agree on paths.
 
 ## Dev orchestration
@@ -137,8 +137,8 @@ for the full inner loop. The VM-based outer loop for host-integrated parts
 So this doc isn't read as a claim about the finished product:
 
 - **Full real host-agent.** `cmd/host-agent-real` is partially real: PAM password verify, `/proc` system sampling, disk usage, RAM pressure, journal streaming, service health, reboot-required, and discovery (per-LAN-interface Avahi announcements from the NetworkManager LAN set, allowlist sync, IP-change replay) are wired. LUKS/TPM, apt, and the NM configuration surface (WiFi setup, `/v1/network/*`) are not yet wired — those ops are still no-ops or stubs.
-- **Storage subsystem.** No `/srv/molma`, no mergerfs, no LUKS-unlock flow,
-  no `molma-storage-ready.target`. Apps write to wherever Docker puts volumes.
+- **Storage subsystem.** No `/srv/malmo`, no mergerfs, no LUKS-unlock flow,
+  no `malmo-storage-ready.target`. Apps write to wherever Docker puts volumes.
 - **Boot, install ISO, updates.** `live-build`, the release manifest, and the
   five update streams are all spec-only.
 - **Health / notifications / telemetry / time / discovery beyond stubs.** The
@@ -148,7 +148,7 @@ So this doc isn't read as a claim about the finished product:
   but not routed (single-user dev phase). Cookie sessions and the underlying
   auth pipeline are real.
 - **App store / multi-catalog / signing.** `catalog/` is a hand-written local
-  directory; no signed `store.molma.network/catalog.json` fetch.
+  directory; no signed `store.malmo.network/catalog.json` fetch.
 
 For where each of these is planned, see the matching `specs/` doc.
 

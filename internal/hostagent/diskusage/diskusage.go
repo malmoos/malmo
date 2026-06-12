@@ -2,7 +2,7 @@
 
 // Package diskusage is host-agent's data-drive free/total reporter behind GET
 // /v1/system/status (DataDiskFreeBytes/DataDiskTotalBytes). It is a thin
-// syscall.Statfs wrapper over the data-drive mount (/srv/molma) — pure Go, no
+// syscall.Statfs wrapper over the data-drive mount (/srv/malmo) — pure Go, no
 // cgo — backing the install-plan free_bytes figure (BRAIN_UI_PROTOCOL.md #
 // install-plan) so the install dialog can warn before a download that won't fit.
 //
@@ -19,7 +19,7 @@ import (
 
 // dataDiskMount is the data-drive mount point (STORAGE.md). Free space for an
 // app install is measured here, not on the OS drive.
-const dataDiskMount = "/srv/molma"
+const dataDiskMount = "/srv/malmo"
 
 // Reporter implements hostagent.DiskReporter. path is a field so tests can point
 // it at a real temp dir without a fake syscall.
@@ -27,7 +27,7 @@ type Reporter struct {
 	path string
 }
 
-// New returns a Reporter measuring the data-drive mount (/srv/molma).
+// New returns a Reporter measuring the data-drive mount (/srv/malmo).
 func New() *Reporter {
 	return &Reporter{path: dataDiskMount}
 }

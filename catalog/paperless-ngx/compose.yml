@@ -1,4 +1,4 @@
-# Paperless-ngx adapted for molma's Tier-3 sandbox (cap_drop: ALL,
+# Paperless-ngx adapted for malmo's Tier-3 sandbox (cap_drop: ALL,
 # no-new-privileges, brain-pinned user:). Rootless operation is supported
 # upstream (docs "Rootless" section): the init scripts detect a non-root uid
 # and skip their privilege remapping. It is mandatory here — the webserver
@@ -11,14 +11,14 @@
 # warning, harmless); exec is required or /init crashes after preinit.
 # Re-verify on version bumps.
 #
-# broker: Paperless requires Redis for its Celery task queue. molma's managed
+# broker: Paperless requires Redis for its Celery task queue. malmo's managed
 # services don't provision redis yet (internal/lifecycle/services.go
 # provisionedKinds is postgres/mysql/mariadb), so it ships as a sandboxed
 # sidecar — a deliberate deviation from issue #140's managed-service note.
 # The database IS managed Postgres, declared in the manifest.
 #
 # The consume directory is the granted Documents subfolder: the brain mounts
-# it at /molma/documents and injects MOLMA_FOLDER_DOCUMENTS, so no bind for
+# it at /malmo/documents and injects MALMO_FOLDER_DOCUMENTS, so no bind for
 # it appears here. Consumed originals are deleted from the folder after
 # import (hence the write grant) and archived into ./data/media.
 #
@@ -52,33 +52,33 @@ services:
     environment:
       PAPERLESS_REDIS: redis://broker:6379
       PAPERLESS_DBENGINE: postgresql
-      PAPERLESS_DBHOST: ${MOLMA_SERVICE_DATABASE_HOST}
-      PAPERLESS_DBPORT: ${MOLMA_SERVICE_DATABASE_PORT}
-      PAPERLESS_DBNAME: ${MOLMA_SERVICE_DATABASE_NAME}
-      PAPERLESS_DBUSER: ${MOLMA_SERVICE_DATABASE_USER}
-      PAPERLESS_DBPASS: ${MOLMA_SERVICE_DATABASE_PASSWORD}
-      PAPERLESS_SECRET_KEY: ${MOLMA_SECRET_KEY}
-      PAPERLESS_URL: ${MOLMA_APP_URL}
-      PAPERLESS_CONSUMPTION_DIR: ${MOLMA_FOLDER_DOCUMENTS}
+      PAPERLESS_DBHOST: ${MALMO_SERVICE_DATABASE_HOST}
+      PAPERLESS_DBPORT: ${MALMO_SERVICE_DATABASE_PORT}
+      PAPERLESS_DBNAME: ${MALMO_SERVICE_DATABASE_NAME}
+      PAPERLESS_DBUSER: ${MALMO_SERVICE_DATABASE_USER}
+      PAPERLESS_DBPASS: ${MALMO_SERVICE_DATABASE_PASSWORD}
+      PAPERLESS_SECRET_KEY: ${MALMO_SECRET_KEY}
+      PAPERLESS_URL: ${MALMO_APP_URL}
+      PAPERLESS_CONSUMPTION_DIR: ${MALMO_FOLDER_DOCUMENTS}
       PAPERLESS_ADMIN_USER: admin
       PAPERLESS_ADMIN_PASSWORD: changemeplease
       PAPERLESS_TIKA_ENABLED: 1
       PAPERLESS_TIKA_GOTENBERG_ENDPOINT: http://gotenberg:3000
       PAPERLESS_TIKA_ENDPOINT: http://tika:9998
       # Outgoing mail (manifest `mail:` block). Bound, the brain injects the
-      # discrete MOLMA_MAIL_* fields and Paperless's Django backend consumes
+      # discrete MALMO_MAIL_* fields and Paperless's Django backend consumes
       # them; the USE_TLS/USE_SSL booleans are the brain's projection of the
       # provider's encryption mode (STARTTLS vs implicit TLS). Unbound, the
       # vars are absent and these defaults leave the host empty, so Django
       # sends nothing instead of erroring — email features stay off until the
       # admin binds a provider.
-      PAPERLESS_EMAIL_HOST: "${MOLMA_MAIL_HOST:-}"
-      PAPERLESS_EMAIL_PORT: "${MOLMA_MAIL_PORT:-25}"
-      PAPERLESS_EMAIL_HOST_USER: "${MOLMA_MAIL_USER:-}"
-      PAPERLESS_EMAIL_HOST_PASSWORD: "${MOLMA_MAIL_PASSWORD:-}"
-      PAPERLESS_EMAIL_FROM: "${MOLMA_MAIL_FROM:-}"
-      PAPERLESS_EMAIL_USE_TLS: "${MOLMA_MAIL_USE_TLS:-false}"
-      PAPERLESS_EMAIL_USE_SSL: "${MOLMA_MAIL_USE_SSL:-false}"
+      PAPERLESS_EMAIL_HOST: "${MALMO_MAIL_HOST:-}"
+      PAPERLESS_EMAIL_PORT: "${MALMO_MAIL_PORT:-25}"
+      PAPERLESS_EMAIL_HOST_USER: "${MALMO_MAIL_USER:-}"
+      PAPERLESS_EMAIL_HOST_PASSWORD: "${MALMO_MAIL_PASSWORD:-}"
+      PAPERLESS_EMAIL_FROM: "${MALMO_MAIL_FROM:-}"
+      PAPERLESS_EMAIL_USE_TLS: "${MALMO_MAIL_USE_TLS:-false}"
+      PAPERLESS_EMAIL_USE_SSL: "${MALMO_MAIL_USE_SSL:-false}"
     volumes:
       - ./data/data:/usr/src/paperless/data
       - ./data/media:/usr/src/paperless/media

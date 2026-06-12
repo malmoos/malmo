@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/molmaos/molma/internal/manifest"
-	"github.com/molmaos/molma/internal/store"
+	"github.com/malmoos/malmo/internal/manifest"
+	"github.com/malmoos/malmo/internal/store"
 )
 
 func TestRepoOf(t *testing.T) {
@@ -77,7 +77,7 @@ func TestServicePinPinnedRef(t *testing.T) {
 func TestAllocateSlug(t *testing.T) {
 	newMgr := func(t *testing.T) *Manager {
 		t.Helper()
-		s, err := store.Open(filepath.Join(t.TempDir(), "molma.db"))
+		s, err := store.Open(filepath.Join(t.TempDir(), "malmo.db"))
 		if err != nil {
 			t.Fatalf("open store: %v", err)
 		}

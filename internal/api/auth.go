@@ -15,9 +15,9 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/molmaos/molma/internal/audit"
-	"github.com/molmaos/molma/internal/auth"
-	"github.com/molmaos/molma/internal/store"
+	"github.com/malmoos/malmo/internal/audit"
+	"github.com/malmoos/malmo/internal/auth"
+	"github.com/malmoos/malmo/internal/store"
 )
 
 // publicPaths lists routes the auth middleware lets through without a

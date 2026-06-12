@@ -28,9 +28,9 @@ Three pieces:
 
 - `dev/test-nspawn/bootstrap.sh` — produces the rootfs. Sources from
   `docker export debian:bookworm` (rationale below), then runs
-  `apt-get install sudo libpam-modules` and `groupadd -g 3000 molma`
+  `apt-get install sudo libpam-modules` and `groupadd -g 3000 malmo`
   inside the rootfs via `systemd-nspawn`. Canary file
-  (`.molma-nspawn-ready`) makes it idempotent.
+  (`.malmo-nspawn-ready`) makes it idempotent.
 - `dev/test-nspawn/run-usermgr-tests.sh` — wrapper. Bootstrap-if-absent
   → `go test -c -tags usermgrtest` (CGO disabled, statically linked
   binary) → `systemd-nspawn --ephemeral --bind-ro=<binary>:/usermgr.test`
@@ -84,8 +84,8 @@ tests that the host-only lane already runs:
   asserts `user.Lookup` returns `UnknownUserError` after delete and
   second delete returns nil.
 
-`pickGroup()` falls back to `nogroup` / `users` when `molma` is absent;
-the rootfs has `molma` (GID 3000) pre-provisioned per `FIRST_RUN.md`,
+`pickGroup()` falls back to `nogroup` / `users` when `malmo` is absent;
+the rootfs has `malmo` (GID 3000) pre-provisioned per `FIRST_RUN.md`,
 so the test exercises the real path.
 
 ## How it maps to the specs
@@ -101,7 +101,7 @@ so the test exercises the real path.
   baked into chpasswd that differs between Debian versions) only
   surface against real `/etc/passwd`. The host-only `test-usermgr`
   caught them too; the nspawn lane catches them on any contributor's
-  box, not just the molma OS itself.
+  box, not just the malmo OS itself.
 
 ## Known gaps & deviations (loud)
 
@@ -127,13 +127,13 @@ so the test exercises the real path.
   deviation — the lane is still systemd-nspawn with a Debian rootfs.
   Documented here; not promoting to `DECISIONS.md` because the choice
   is reversible per-host via an environment variable
-  (`MOLMA_NSPAWN_IMAGE` is honored).
-- **`molma-pamtest` user not provisioned.** `TESTING.md` # Fast lane
-  notes that the `pam_linux_test.go` skeleton needs `/etc/pam.d/molma`
-  installed plus a `molma-pamtest` user in the rootfs. This slice does
+  (`MALMO_NSPAWN_IMAGE` is honored).
+- **`malmo-pamtest` user not provisioned.** `TESTING.md` # Fast lane
+  notes that the `pam_linux_test.go` skeleton needs `/etc/pam.d/malmo`
+  installed plus a `malmo-pamtest` user in the rootfs. This slice does
   not wire that — pam tests still skip. When that work happens, it's a
-  small extension to `bootstrap.sh` (`COPY /etc/pam.d/molma`,
-  `useradd molma-pamtest && chpasswd`), not a separate lane.
+  small extension to `bootstrap.sh` (`COPY /etc/pam.d/malmo`,
+  `useradd malmo-pamtest && chpasswd`), not a separate lane.
 - **Build artifact (`.dev/nspawn/usermgr.test`) is root-owned** because
   the build is invoked via `sudo -u $CALLER env ...` from a root
   script — `env` runs under the target uid but the file's parent dir

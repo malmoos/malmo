@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/molmaos/molma/internal/catalog"
+	"github.com/malmoos/malmo/internal/catalog"
 )
 
 // richManifestYML is a metadata-complete catalog fixture: icon, screenshots, and

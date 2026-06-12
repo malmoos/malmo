@@ -19,7 +19,7 @@
 
 ## Platform gaps
 
-<!-- Catalog PRs only. If the app shipped with a feature that molma can't fully support, list each gap here: gap-class tag, severity (degrades / blocks-start), trigger, what breaks for the user, and why molma can't satisfy it. Omit this section (or write "None") for non-catalog PRs. -->
+<!-- Catalog PRs only. If the app shipped with a feature that malmo can't fully support, list each gap here: gap-class tag, severity (degrades / blocks-start), trigger, what breaks for the user, and why malmo can't satisfy it. Omit this section (or write "None") for non-catalog PRs. -->
 
 ## Definition of done
 

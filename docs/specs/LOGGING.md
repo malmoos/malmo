@@ -1,10 +1,10 @@
-# molma Logging & Audit
+# malmo Logging & Audit
 
-> Working spec for how molma logs operational events and audit events, where each lives, who reads them, and what the dashboard surfaces. Companion to `CONTROL_PLANE.md` (the brain owns audit writes), `AUTH.md` (login events feed the audit log), `BRAIN_HOST_PROTOCOL.md` (host-agent is the bridge between brain and journald), `STORAGE.md` (where the journal physically lives).
+> Working spec for how malmo logs operational events and audit events, where each lives, who reads them, and what the dashboard surfaces. Companion to `CONTROL_PLANE.md` (the brain owns audit writes), `AUTH.md` (login events feed the audit log), `BRAIN_HOST_PROTOCOL.md` (host-agent is the bridge between brain and journald), `STORAGE.md` (where the journal physically lives).
 
 ## Stance
 
-molma's logging is **appliance-grade**, not minimalist. The Umbrel/CasaOS pattern (Docker container logs in a webview, no system-wide view, no audit log) almost works for tinkerers and fails the "did someone unauthorized access my stuff?" test for non-technical users. The Synology/Windows pattern (separate concepts for system health vs. who-did-what, each with its own retention and UI) is the right reference shape — just built on Linux-native primitives at appliance scale.
+malmo's logging is **appliance-grade**, not minimalist. The Umbrel/CasaOS pattern (Docker container logs in a webview, no system-wide view, no audit log) almost works for tinkerers and fails the "did someone unauthorized access my stuff?" test for non-technical users. The Synology/Windows pattern (separate concepts for system health vs. who-did-what, each with its own retention and UI) is the right reference shape — just built on Linux-native primitives at appliance scale.
 
 Three use cases drive the design:
 
@@ -80,7 +80,7 @@ Persistent journal at `/var/log/journal/` on the OS drive root. The same logic t
 
 Two drop-ins.
 
-journald itself, at `/etc/systemd/journald.conf.d/molma.conf`:
+journald itself, at `/etc/systemd/journald.conf.d/malmo.conf`:
 
 ```
 [Journal]
@@ -95,7 +95,7 @@ RateLimitBurst=10000
 - **128 MB volatile cap** for the pre-`/var/log/journal/`-ready early-boot window.
 - **Rate limit: 10000 messages / 30s per systemd unit.** Generous burst for system services. Caps `sshd` brute-force spam, runaway daemons, anything attributed to a real systemd unit.
 
-Docker is the deliberate exception, at `/etc/systemd/system/docker.service.d/molma-logging.conf`:
+Docker is the deliberate exception, at `/etc/systemd/system/docker.service.d/malmo-logging.conf`:
 
 ```
 [Service]
@@ -113,15 +113,15 @@ Brain's own logs are JSON-structured (via Go's `log/slog` with the JSON handler)
 
 ### Apps are expected to log to stdout
 
-molma never rewrites an app's compose file (`APP_MANIFEST.md`), so we can't force the logging driver per-container. Three layers instead:
+malmo never rewrites an app's compose file (`APP_MANIFEST.md`), so we can't force the logging driver per-container. Three layers instead:
 
 - **Store apps (Door 1) — manifest review.** Curation criterion: app must log to stdout/stderr; no per-service `logging.driver:` override in compose; no `command:` redirects to files. Folds into the third-party manifest curation criteria entry in `NEXT.md`.
-- **Custom compose (Door 2) — detect and warn at install.** Brain parses (never rewrites) the compose. If it sees a `logging.driver` set to anything other than `journald`, or obvious file-redirect patterns in `command:`, the install screen surfaces a yellow banner: *"This app is configured to log to a file. Its logs won't appear in the molma dashboard — access them via SMB or SSH."* User installs anyway.
+- **Custom compose (Door 2) — detect and warn at install.** Brain parses (never rewrites) the compose. If it sees a `logging.driver` set to anything other than `journald`, or obvious file-redirect patterns in `command:`, the install screen surfaces a yellow banner: *"This app is configured to log to a file. Its logs won't appear in the malmo dashboard — access them via SMB or SSH."* User installs anyway.
 - **Runtime, all apps.** If a running container produces zero journal entries over a sliding window, its app card shows: *"No logs received. This app may be logging to a file."* Cheap signal; helps "why is the Logs tab empty?" answer itself.
 
 ### Caddy access logs are off by default
 
-Caddy on a busy household box can emit thousands of access-log entries per hour, which would dominate the 1 GB journal cap. molma ships Caddy with **access logging disabled** — Caddy's error log (warnings, config reloads, cert events) still goes to journald, but per-request access lines do not. An admin can toggle access logging on from Settings → System for short troubleshooting windows. v1 has no UI for permanent-on (a deliberate omission — surface when a real use case appears).
+Caddy on a busy household box can emit thousands of access-log entries per hour, which would dominate the 1 GB journal cap. malmo ships Caddy with **access logging disabled** — Caddy's error log (warnings, config reloads, cert events) still goes to journald, but per-request access lines do not. An admin can toggle access logging on from Settings → System for short troubleshooting windows. v1 has no UI for permanent-on (a deliberate omission — surface when a real use case appears).
 
 ## Audit log (brain SQLite)
 
@@ -279,7 +279,7 @@ This means a new section in `BRAIN_HOST_PROTOCOL.md` for journal operations. The
 - **`json-file` driver + per-container files** (the Umbrel default): no unified timeline, two stores (host services in journald, containers in files), per-container rotation is fiddly, the dashboard has to know about two query paths forever. Cheaper to set up by ~one line of daemon config; more expensive every other day.
 - **Loki / Vector / Fluentd** (centralized aggregator): 50–300 MB resident *idle*. Disqualified for a home appliance where the entire workload doesn't justify it. Rich query and log-shipping features we'd never use.
 - **rsyslog / classic syslog**: legacy, weaker structured-data story than journald, no real advantage on a modern Debian box.
-- **Audit-in-journald with `MOLMA_AUDIT=1` tag**: doable, but defeats every reason for the split — retention, query, backups, tamper-evidence all fight the medium. Considered and rejected.
+- **Audit-in-journald with `MALMO_AUDIT=1` tag**: doable, but defeats every reason for the split — retention, query, backups, tamper-evidence all fight the medium. Considered and rejected.
 
 ## Privacy posture
 

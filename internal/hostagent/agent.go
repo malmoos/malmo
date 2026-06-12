@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/molmaos/molma/internal/hostagent/netstate"
-	"github.com/molmaos/molma/internal/protocol"
+	"github.com/malmoos/malmo/internal/hostagent/netstate"
+	"github.com/malmoos/malmo/internal/protocol"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -51,11 +51,11 @@ type NetState interface {
 }
 
 // HealthSource is a consumer-side interface for reading the latest storage
-// findings written by molma-storage-verify (BOOT.md # The storage-ready
+// findings written by malmo-storage-verify (BOOT.md # The storage-ready
 // target). It backs the storage category of GET /v1/health/system. Provider
 // packages return concrete types: FakeHealthSource for the fake binary,
 // healthsource.FilesystemHealthSource (which reads
-// /run/molma/health/storage.json) for cmd/host-agent-real.
+// /run/malmo/health/storage.json) for cmd/host-agent-real.
 //
 // Read must always return a usable StorageHealth — missing report = empty
 // findings, malformed report = a single "health-report-malformed" finding.
@@ -125,7 +125,7 @@ type RAMReporter interface {
 // space behind GET /v1/system/status (DataDiskFreeBytes/DataDiskTotalBytes).
 // It backs the install-plan free_bytes figure (BRAIN_UI_PROTOCOL.md #
 // install-plan). Provider packages return concrete types: diskusage.Reporter
-// (real syscall.Statfs on /srv/molma) for cmd/host-agent-real, FakeDiskReporter
+// (real syscall.Statfs on /srv/malmo) for cmd/host-agent-real, FakeDiskReporter
 // for the fake binary and tests.
 //
 // DataDisk always returns usable levels and never errors — a statfs failure
@@ -172,7 +172,7 @@ type RebootReporter interface {
 // (admin → in `sudo`, member → not in `sudo`); idempotent. ResolveHome returns
 // the user's home directory path and POSIX UID/GID; returns ErrUnknownUser when
 // the user does not exist. WellKnownIdentity returns the fixed service-account
-// UIDs/GIDs for molma-app and molma-shared. AllocateAppService reserves a
+// UIDs/GIDs for malmo-app and malmo-shared. AllocateAppService reserves a
 // fresh UID/GID pair from the app-service band [protocol.AppServiceUIDMin,
 // protocol.AppServiceUIDMax] for a `service_user: true` instance;
 // ReleaseAppService returns one to the band (idempotent — releasing an
@@ -264,7 +264,7 @@ type Agent struct {
 
 	// Disk, when non-nil, backs the data-drive free/total fields of GET
 	// /v1/system/status. Swapped per binary: diskusage.Reporter (real statfs on
-	// /srv/molma) vs FakeDiskReporter. When nil, both fields report 0 ("not
+	// /srv/malmo) vs FakeDiskReporter. When nil, both fields report 0 ("not
 	// measured"), which the brain surfaces as "free space unknown" in the
 	// install plan rather than a misleading empty disk.
 	Disk DiskReporter
@@ -414,7 +414,7 @@ func (a *Agent) discoveryState(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, protocol.DiscoveryState{
 		Publisher:  "avahi-fake",
-		HostName:   "molma",
+		HostName:   "malmo",
 		RenamedTo:  nil,
 		Published:  names,
 		Interfaces: ifaces,
@@ -430,7 +430,7 @@ func (a *Agent) systemStatus(w http.ResponseWriter, r *http.Request) {
 		free, total = a.Disk.DataDisk()
 	}
 	writeJSON(w, http.StatusOK, protocol.SystemStatus{
-		Hostname:           "molma-dev",
+		Hostname:           "malmo-dev",
 		UptimeS:            int64(time.Since(a.startedAt).Seconds()),
 		DiskPressure:       false,
 		AgentVersion:       AgentVersion,
@@ -816,7 +816,7 @@ func (a *Agent) resolveHome(w http.ResponseWriter, r *http.Request) {
 }
 
 // wellKnownIdentity returns the fixed service-account UIDs/GIDs for the
-// molma-app system user and the molma-shared group.
+// malmo-app system user and the malmo-shared group.
 //
 // When UserMgr is wired (cmd/host-agent-real), delegates to WellKnownIdentity
 // which resolves the real system user/group via os/user.Lookup. When nil
@@ -831,9 +831,9 @@ func (a *Agent) wellKnownIdentity(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, protocol.WellKnownIdentityResponse{
-			MolmaAppUID:    appUID,
-			MolmaAppGID:    appGID,
-			MolmaSharedGID: sharedGID,
+			MalmoAppUID:    appUID,
+			MalmoAppGID:    appGID,
+			MalmoSharedGID: sharedGID,
 		})
 		return
 	}
@@ -842,9 +842,9 @@ func (a *Agent) wellKnownIdentity(w http.ResponseWriter, r *http.Request) {
 	// 2000/2001 sit below the per-user FNV hash range [3000, 3999] so service
 	// identities don't collide with hashed user UIDs in the fake host-agent.
 	writeJSON(w, http.StatusOK, protocol.WellKnownIdentityResponse{
-		MolmaAppUID:    2000,
-		MolmaAppGID:    2000,
-		MolmaSharedGID: 2001,
+		MalmoAppUID:    2000,
+		MalmoAppGID:    2000,
+		MalmoSharedGID: 2001,
 	})
 }
 
@@ -855,7 +855,7 @@ func (a *Agent) wellKnownIdentity(w http.ResponseWriter, r *http.Request) {
 // already holds a reservation returns the same pair.
 //
 // When UserMgr is wired (cmd/host-agent-real), the reservation is a real
-// system account (molma-svc-<uid> in /etc/passwd, durable across restarts).
+// system account (malmo-svc-<uid> in /etc/passwd, durable across restarts).
 // When nil (cmd/host-agent fake), it's an in-memory map — see svcIdents.
 func (a *Agent) allocateAppService(w http.ResponseWriter, r *http.Request) {
 	var req protocol.AllocateAppServiceIdentityRequest

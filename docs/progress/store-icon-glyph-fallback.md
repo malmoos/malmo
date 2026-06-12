@@ -10,7 +10,7 @@ Sibling of [store-browse-filters.md](store-browse-filters.md) on the same store-
 
 ### Manifest + brain (the contract)
 
-- `internal/manifest`: new optional `icon_glyph` field (Lucide icon name, kebab-case, e.g. `notebook-pen`). Shape-validated with the existing `kebabSlug` regex — the brain **can't** confirm the name exists (the 1700+ icon set lives in the UI, not Go), so a well-formed-but-unknown name passes validation and degrades to the generic glyph client-side. A non-kebab name is rejected at parse time (and by `molma manifest check`).
+- `internal/manifest`: new optional `icon_glyph` field (Lucide icon name, kebab-case, e.g. `notebook-pen`). Shape-validated with the existing `kebabSlug` regex — the brain **can't** confirm the name exists (the 1700+ icon set lives in the UI, not Go), so a well-formed-but-unknown name passes validation and degrades to the generic glyph client-side. A non-kebab name is rejected at parse time (and by `malmo manifest check`).
 - `internal/catalog`: `Entry` gains `icon_glyph` (omitempty), populated verbatim from the manifest. Flows into OpenAPI + the generated TS types automatically (the `/catalog` + `/catalog/:id` handlers serialize `catalog.Entry`/`Detail` directly).
 - Curated `icon_glyph` onto the four currently icon-less catalog apps: `calibre-web` → `book-open`, `hermes-agent` → `bot`, `files-demo` → `folder`, `whoami` → `flask-conical`.
 

@@ -22,7 +22,7 @@ func TestDataDiskRealStatfs(t *testing.T) {
 // nonexistent path returns (0, 0), which the brain reads as "not measured"
 // rather than an error or a scary empty disk.
 func TestDataDiskMissingPathFailsOpen(t *testing.T) {
-	r := &Reporter{path: "/nonexistent/molma/data-drive-xyz"}
+	r := &Reporter{path: "/nonexistent/malmo/data-drive-xyz"}
 	free, total := r.DataDisk()
 	if free != 0 || total != 0 {
 		t.Fatalf("want (0, 0) on statfs error, got (%d, %d)", free, total)

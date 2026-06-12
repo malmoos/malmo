@@ -16,7 +16,7 @@ converges Docker + routing to the SQLite desired state:
 
 - **`running` but no containers** → `docker compose up -d`.
 - **`stopped` but containers up** → `docker compose stop`.
-- **Orphan containers** (carry `molma.managed=true` but no SQLite row) → torn
+- **Orphan containers** (carry `malmo.managed=true` but no SQLite row) → torn
   down (compose down if the dir survived, else `docker rm` by label + drop the
   per-app network).
 - For every `running` instance it **re-asserts the Caddy route + mDNS**.
@@ -24,7 +24,7 @@ converges Docker + routing to the SQLite desired state:
 This fixes "a brain restart loses routes": `EnsureServer` now resets the Caddy
 route list to empty at startup (PATCH `…/routes` → `[]`), and the reconcile pass
 rebuilds it from desired state. The override now stamps every container with
-`molma.managed` / `molma.instance_id` / `molma.manifest_id` labels so the
+`malmo.managed` / `malmo.instance_id` / `malmo.manifest_id` labels so the
 reconciler can find and map managed containers.
 
 **Verified:** wiping the live Caddy route while the brain was down, then
@@ -37,7 +37,7 @@ a container behind the brain's back, then restarting → reconcile logged
 The install transaction now:
 
 - **Step 8** — registers the Caddy route immediately, pointing at a
-  molma-served **splash page** (`static_response`, auto-refresh) so the hostname
+  malmo-served **splash page** (`static_response`, auto-refresh) so the hostname
   never returns connection-refused. Three states: `starting`, `stopped`,
   `failed`.
 - **Step 10** — `waitHealthy` polls the `main_service` container until it's
@@ -71,7 +71,7 @@ a brain bug.)
   wired.
 - **No stop/start API endpoints** — the `stopped` splash state exists but
   nothing drives an instance into it via the UI yet.
-- **Production Caddy server creation** — `EnsureServer` assumes the `molma`
+- **Production Caddy server creation** — `EnsureServer` assumes the `malmo`
   server already exists (dev `caddy.json`); creating it when Caddy is
   brain-managed is deferred.
 - **Health-wait reads Docker via the CLI** (`docker ps`/`inspect`); the spec's

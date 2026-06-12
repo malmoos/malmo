@@ -1,10 +1,10 @@
-# molma App Manifest
+# malmo App Manifest
 
-> Working spec for the `manifest.yml` schema — the contract between an app and the molma OS. Companion to `SPEC.md`, `CONTROL_PLANE.md`, and `APP_LIFECYCLE.md`.
+> Working spec for the `manifest.yml` schema — the contract between an app and the malmo OS. Companion to `SPEC.md`, `CONTROL_PLANE.md`, and `APP_LIFECYCLE.md`.
 
 ## Core design principle: one model, two doors
 
-The brain only ever knows about manifests. *Everything* installed on a molma box has one. The user-facing UX has two entry points:
+The brain only ever knows about manifests. *Everything* installed on a malmo box has one. The user-facing UX has two entry points:
 
 - **Door 1 — App store.** App author wrote a complete `manifest.yml` + `docker-compose.yml`. One-click install. Full integration (managed services, backup hooks, declared permissions).
 - **Door 2 — Custom container.** User pastes/uploads a raw `docker-compose.yml`. The brain **generates a synthetic manifest** with sensible defaults. The app is a first-class citizen — it gets a subdomain, shows in the dashboard, integrates as much as the synthetic manifest allows.
@@ -16,12 +16,12 @@ This unification matters because:
 
 ## Author philosophy
 
-App authors **adapt their app to run on molma.** This is an explicit design choice, not an accident.
+App authors **adapt their app to run on malmo.** This is an explicit design choice, not an accident.
 
 - We provide thorough, friendly docs and examples.
-- We expect authors to make small, well-defined changes — pointing env vars at molma's injected values, splitting cache from data volumes, declaring permissions honestly.
+- We expect authors to make small, well-defined changes — pointing env vars at malmo's injected values, splitting cache from data volumes, declaring permissions honestly.
 - We do **not** auto-rewrite the compose file or guess at things. The manifest is the author's contract; if it lies, the app misbehaves and it's on the author.
-- For popular OSS apps that don't know molma exists, we maintain manifests ourselves in the official catalog repo. Same schema, same rules.
+- For popular OSS apps that don't know malmo exists, we maintain manifests ourselves in the official catalog repo. Same schema, same rules.
 
 ## Format
 
@@ -81,7 +81,7 @@ listed: true                      # optional, default true; `false` pulls the ap
 The minimum to actually launch the thing.
 
 ```yaml
-compose_file: docker-compose.yml      # standard compose; never modified by molma
+compose_file: docker-compose.yml      # standard compose; never modified by malmo
 main_service: photoprism              # which compose service is "the app"
 main_port: 2342                       # port the main service listens on internally
 preferred_slugs: [photos, photoprism] # subdomain priority list; OS picks first free
@@ -95,20 +95,20 @@ service_user: false                   # optional; default false. Dedicated non-r
 
 **`timezone`** controls the container's TZ. Default `system` — the brain bind-mounts `/etc/localtime` and sets `TZ=<system_tz>`, so timestamps in app UIs match the user's wall clock. Set `utc` for apps that prefer UTC internally (databases, queues, anything that explicitly normalizes on UTC). Full model in `TIME.md`. Most apps should leave this unset.
 
-The compose file is held **verbatim**. Authors test it with `docker compose up` and it behaves identically inside molma. Molma configures the surrounding environment; it does not edit the compose file.
+The compose file is held **verbatim**. Authors test it with `docker compose up` and it behaves identically inside malmo. Malmo configures the surrounding environment; it does not edit the compose file.
 
-**Image references in compose use version tags, not digests.** Authors write `image: photoprism/photoprism:2.4.1` — readable, portable, the same line that runs outside molma. For **store apps**, molma's catalog CI resolves each `image:tag` to a specific `sha256:` digest at publish time and writes it into the signed catalog (`APP_STORE.md` # Trust model). The brain pulls by digest derived from the catalog — the version tag is the author's API, the digest is the bytes-binding. For **Door-2 custom apps**, the brain falls back to trust-on-first-use: pull, resolve digest, pin in the override.
+**Image references in compose use version tags, not digests.** Authors write `image: photoprism/photoprism:2.4.1` — readable, portable, the same line that runs outside malmo. For **store apps**, malmo's catalog CI resolves each `image:tag` to a specific `sha256:` digest at publish time and writes it into the signed catalog (`APP_STORE.md` # Trust model). The brain pulls by digest derived from the catalog — the version tag is the author's API, the digest is the bytes-binding. For **Door-2 custom apps**, the brain falls back to trust-on-first-use: pull, resolve digest, pin in the override.
 
 **`needs_secure_context`** signals that the app relies on browser APIs gated on a [secure context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts) (camera, mic, clipboard, service workers, PWA install, secure cookies, WebAuthn). It's an **author-provided hint**, used by the brain to warn the user at install time — not a routing instruction.
 
 - `needs_secure_context: false` (default): no special treatment.
 - `needs_secure_context: true`: at install time, if the user's current URL scheme is `.local` (toggle off or not enrolled), the install dialog warns *"This app uses features that need HTTPS — they may not work at the `.local` URL. Turn on secure URLs in Settings → Network."* The user can install anyway.
 
-The field is **never a routing override.** The URL each app gets is determined entirely by the global "Use secure URLs" toggle in Settings — see `MOLMA_NETWORK.md`. App authors should set this honestly: many apps work fine on HTTP and shouldn't set it; apps that genuinely depend on a secure-context API should.
+The field is **never a routing override.** The URL each app gets is determined entirely by the global "Use secure URLs" toggle in Settings — see `MALMO_NETWORK.md`. App authors should set this honestly: many apps work fine on HTTP and shouldn't set it; apps that genuinely depend on a secure-context API should.
 
 Previously this field was named `requires_https` and gated install on un-enrolled boxes. Changed 2026-05-14 — see `DECISIONS.md`.
 
-**`health_probe`** opts the app into molma's *"up but not responding"* detection. It is **not** Docker `HEALTHCHECK`: molma holds the compose file verbatim and cannot add a healthcheck for the author, so the probe is declared here, in molma's contract, and executed by the brain. Absent (the default), the app is never probed and the `app-unresponsive` health issue is never raised for it — least surprise for the bulk of the catalog. Shorthand `health_probe: /healthz` expands to `{ path: /healthz }`; the full form:
+**`health_probe`** opts the app into malmo's *"up but not responding"* detection. It is **not** Docker `HEALTHCHECK`: malmo holds the compose file verbatim and cannot add a healthcheck for the author, so the probe is declared here, in malmo's contract, and executed by the brain. Absent (the default), the app is never probed and the `app-unresponsive` health issue is never raised for it — least surprise for the bulk of the catalog. Shorthand `health_probe: /healthz` expands to `{ path: /healthz }`; the full form:
 
 ```yaml
 health_probe:
@@ -125,9 +125,9 @@ When set, the brain probes the app on its health-poll tick and raises the **non-
 
 Door-2 synthetic manifests omit it; a power user can add it later by editing the manifest, same as any other optional field.
 
-**`service_user`** declares that the app writes its data as a **non-root** user and should run under a dedicated, molma-allocated service identity rather than the folderless default (the brain's euid — root in production). Set it for nginx+php-fpm / LinuxServer-style images whose processes drop to a service user and so can't write molma's root-owned `data/` dir. When `true`, the brain allocates a stable per-instance UID/GID from its reserved app-service band, pins the container `user:`, and chowns the instance `data/` dir to it (`APP_ISOLATION.md` # Runtime identity & data ownership).
+**`service_user`** declares that the app writes its data as a **non-root** user and should run under a dedicated, malmo-allocated service identity rather than the folderless default (the brain's euid — root in production). Set it for nginx+php-fpm / LinuxServer-style images whose processes drop to a service user and so can't write malmo's root-owned `data/` dir. When `true`, the brain allocates a stable per-instance UID/GID from its reserved app-service band, pins the container `user:`, and chowns the instance `data/` dir to it (`APP_ISOLATION.md` # Runtime identity & data ownership).
 
-The field is a **boolean intent, never a number** — you cannot name a UID; molma owns the value, precisely so a manifest can't alias a host principal (a numeric `user:` is an admission rejection). It is meaningful only for **folderless** apps: an app with `folders` already runs as a managed non-root identity (the owner, or the shared molma-app identity), so combining `service_user: true` with a folder grant is rejected. It does **not** help an image that hardcodes a *different* internal UID and ignores the runtime user (a php-fpm pool pinned to `www-data`, an entrypoint that `setuid`-drops to a fixed user) — that class waits on user-namespace remap (`APP_ISOLATION.md` # Not in v1).
+The field is a **boolean intent, never a number** — you cannot name a UID; malmo owns the value, precisely so a manifest can't alias a host principal (a numeric `user:` is an admission rejection). It is meaningful only for **folderless** apps: an app with `folders` already runs as a managed non-root identity (the owner, or the shared malmo-app identity), so combining `service_user: true` with a folder grant is rejected. It does **not** help an image that hardcodes a *different* internal UID and ignores the runtime user (a php-fpm pool pinned to `www-data`, an entrypoint that `setuid`-drops to a fixed user) — that class waits on user-namespace remap (`APP_ISOLATION.md` # Not in v1).
 
 ### B2. Resources (recommended, never a limit)
 
@@ -148,7 +148,7 @@ Two distinct kinds of storage in every app — user content and app state. See `
 
 **User content** is what the user owns — photos, music, notes, documents. Lives at `/home/<user>/Photos/`, `~/Music/`, etc. Apps reach it by **bind-mounting use-case folders**, declared in `permissions.folders` (next section). Survives app uninstall.
 
-**App state** is the app's own working data — indexes, caches, databases, configs. Lives at `/var/lib/molma/instances/<id>/data/`. Opaque to the user. Deleted on uninstall (or archived if the user picks "keep data").
+**App state** is the app's own working data — indexes, caches, databases, configs. Lives at `/var/lib/malmo/instances/<id>/data/`. Opaque to the user. Deleted on uninstall (or archived if the user picks "keep data").
 
 The `storage:` block configures app state only.
 
@@ -167,13 +167,13 @@ storage:
 
 **`data_volumes` vs `cache_volumes`** — the backup system uses this. Cache is regeneratable; data isn't. Without this distinction, we'd back up thumbnail caches. A `cache_volumes` path **may be nested inside a `data_volume`** — the common shape is a single `./data` bind with a `cache/` subdirectory (e.g. a downloaded model or an embeddings store the app re-fetches on demand): list `./data` under `data_volumes` and `./data/cache` under `cache_volumes`, and backup is the data tree **minus** the cache subtrees. Paths that don't nest must not otherwise overlap. (Note both lists are author-grade declarations: v1 parses neither into the Go struct yet — see `docs/dev/authoring-apps-with-an-agent.md` — so they document intent for the backup system that will consume them.)
 
-**`estimated_size` is the *app-state baseline at install* — measured, not a usage projection.** It is the size of the app's own working data (indexes, databases, configs) under `/var/lib/molma/instances/<id>/data/` **as it stands the moment install completes** (the main service first reports healthy), on a clean install. It is deliberately *not* a guess at how big the app might grow with use: if the app later downloads another model or the user uploads a 2 GB library, that growth is **not** counted here — that's a runtime disk-pressure concern (`HEALTH.md` # `disk-full`), not a pre-install figure. The goal is a number close to the real on-disk cost of *having installed* the app; undercounting (a first-boot download still in flight when the health probe passes) is acceptable, overcounting by speculating about use is not. It is **not** the container-image size and **not** the user's content (Photos/Music/Documents the app bind-mounts — that is first-class, unbounded, and survives uninstall, so it is never attributed to the app). Image size is **not** author-declared: the catalog build resolves it from the actual pinned images at publish time (`APP_STORE.md` # Catalog schema). The brain combines the two — image size + `estimated_size` — into the **on-disk footprint** it shows before install (store card + consent dialog; `BRAIN_UI_PROTOCOL.md` # GET /api/v1/catalog/:id/install-plan, `DASHBOARD.md` # Install authorization). It stays advisory: warn on a tight disk, never block.
+**`estimated_size` is the *app-state baseline at install* — measured, not a usage projection.** It is the size of the app's own working data (indexes, databases, configs) under `/var/lib/malmo/instances/<id>/data/` **as it stands the moment install completes** (the main service first reports healthy), on a clean install. It is deliberately *not* a guess at how big the app might grow with use: if the app later downloads another model or the user uploads a 2 GB library, that growth is **not** counted here — that's a runtime disk-pressure concern (`HEALTH.md` # `disk-full`), not a pre-install figure. The goal is a number close to the real on-disk cost of *having installed* the app; undercounting (a first-boot download still in flight when the health probe passes) is acceptable, overcounting by speculating about use is not. It is **not** the container-image size and **not** the user's content (Photos/Music/Documents the app bind-mounts — that is first-class, unbounded, and survives uninstall, so it is never attributed to the app). Image size is **not** author-declared: the catalog build resolves it from the actual pinned images at publish time (`APP_STORE.md` # Catalog schema). The brain combines the two — image size + `estimated_size` — into the **on-disk footprint** it shows before install (store card + consent dialog; `BRAIN_UI_PROTOCOL.md` # GET /api/v1/catalog/:id/install-plan, `DASHBOARD.md` # Install authorization). It stays advisory: warn on a tight disk, never block.
 
 **How to measure it (authoring).** Don't estimate — measure. The import smoke-test already boots the app on a clean install and waits for the health probe; at that point `du -sb` the instance's `data/` volumes and record the result. Apps with a live-boot test can assert the figure against drift on version bumps. Full per-app CI measurement isn't required (some apps need managed services to boot); the author-time measurement during import is the source.
 
-**`app_managed_user_content: true`** is the opt-in for apps that genuinely can't expose user content via use-case folders (legacy apps with opaque libraries). Triggers an install-time warning to the user: *"This app stores your files in its own folder, not your molma Photos/Music/Documents. You'll need this app to access them."* The molma store prefers apps that don't set this; curation policy may reject third-party manifests that do (TBD, `NEXT.md`).
+**`app_managed_user_content: true`** is the opt-in for apps that genuinely can't expose user content via use-case folders (legacy apps with opaque libraries). Triggers an install-time warning to the user: *"This app stores your files in its own folder, not your malmo Photos/Music/Documents. You'll need this app to access them."* The malmo store prefers apps that don't set this; curation policy may reject third-party manifests that do (TBD, `NEXT.md`).
 
-**Bind mounts only — no Docker named volumes.** All app state lives under the instance's `data/` directory via bind mounts. Compose uses `${MOLMA_DATA_DIR}/foo:/foo` (absolute) or `./data/foo:/foo` (relative to the project dir). One backup root, one disk-usage view, one mental model. See `APP_LIFECYCLE.md` # on-disk layout per instance.
+**Bind mounts only — no Docker named volumes.** All app state lives under the instance's `data/` directory via bind mounts. Compose uses `${MALMO_DATA_DIR}/foo:/foo` (absolute) or `./data/foo:/foo` (relative to the project dir). One backup root, one disk-usage view, one mental model. See `APP_LIFECYCLE.md` # on-disk layout per instance.
 
 ### D. Managed services
 
@@ -194,15 +194,15 @@ The brain provisions the resource (e.g., creates a database in the shared Postgr
 
 Available types and versions (`SERVICE_PROVISIONING.md` # Catalog (v1)): `postgres` (15, 16), `mysql` (8.0, 8.4), `mariadb` (10.11, 11.4), `redis` (7 — schema-valid, provisioning staged). A type/version outside this set is rejected at manifest parse time. The MySQL family injects port 3306 and a `mysql://` DSN for both engines (one wire protocol).
 
-**Naming convention: app-defined.** The molma brain exposes the credentials under stable, documented variable names (e.g., `MOLMA_SERVICE_DATABASE_HOST`, `MOLMA_SERVICE_DATABASE_USER`, `MOLMA_SERVICE_DATABASE_PASSWORD`, `MOLMA_SERVICE_DATABASE_NAME`, `MOLMA_SERVICE_DATABASE_DSN`). The app's compose file maps these to whatever variables the app actually expects:
+**Naming convention: app-defined.** The malmo brain exposes the credentials under stable, documented variable names (e.g., `MALMO_SERVICE_DATABASE_HOST`, `MALMO_SERVICE_DATABASE_USER`, `MALMO_SERVICE_DATABASE_PASSWORD`, `MALMO_SERVICE_DATABASE_NAME`, `MALMO_SERVICE_DATABASE_DSN`). The app's compose file maps these to whatever variables the app actually expects:
 
 ```yaml
 # inside the app's docker-compose.yml
 environment:
-  PHOTOPRISM_DATABASE_DSN: ${MOLMA_SERVICE_DATABASE_DSN}
+  PHOTOPRISM_DATABASE_DSN: ${MALMO_SERVICE_DATABASE_DSN}
 ```
 
-This means the app is the one doing the wiring. The app remains portable (still runs outside molma with a manually-set env var). It's a small adaptation — well-documented, explicit, no magic.
+This means the app is the one doing the wiring. The app remains portable (still runs outside malmo with a manually-set env var). It's a small adaptation — well-documented, explicit, no magic.
 
 Apps that don't trust managed services can simply ship their own database in their own compose file. **Both paths work**; the manifest path is encouraged but not enforced.
 
@@ -212,17 +212,17 @@ Many apps require a random, app-specific secret to sign auth tokens, sessions, o
 
 ```yaml
 secrets:
-  - name: auth          # → injected as MOLMA_SECRET_AUTH
+  - name: auth          # → injected as MALMO_SECRET_AUTH
   - name: session_key
     bytes: 64           # entropy drawn before encoding; default 32, floor 16
 ```
 
-At install the brain draws each secret from a CSPRNG, base64url-encodes it (32 bytes → a 43-char string, past the "32+ char" bar most libraries want), and injects it as `MOLMA_SECRET_<NAME>` (uppercased). The app's compose maps that to whatever variable the app actually expects — the same app-defined wiring as `MOLMA_SERVICE_*` and `MOLMA_FOLDER_*`:
+At install the brain draws each secret from a CSPRNG, base64url-encodes it (32 bytes → a 43-char string, past the "32+ char" bar most libraries want), and injects it as `MALMO_SECRET_<NAME>` (uppercased). The app's compose maps that to whatever variable the app actually expects — the same app-defined wiring as `MALMO_SERVICE_*` and `MALMO_FOLDER_*`:
 
 ```yaml
 # inside the app's docker-compose.yml
 environment:
-  BETTER_AUTH_SECRET: ${MOLMA_SECRET_AUTH}
+  BETTER_AUTH_SECRET: ${MALMO_SECRET_AUTH}
 ```
 
 **The value is generated once and stays stable** for the life of the instance — it is persisted and re-emitted on every restart, never re-rolled, because a token-signing secret that changed underneath the app would invalidate every live session. `name` is lowercase snake_case (so the uppercased env-var suffix is unambiguous); names are unique within a manifest. See `SERVICE_PROVISIONING.md` # Env-var injection.
@@ -236,13 +236,13 @@ mail:
   optional: true       # the app must run fine unbound (email features off)
 ```
 
-When the instance is bound to a provider, the brain injects `MOLMA_MAIL_HOST/_PORT/_USER/_PASSWORD/_FROM/_ENCRYPTION` plus a Symfony-style `MOLMA_MAIL_DSN`; unbound, **nothing is injected**. The compose maps the vars app-defined as usual, with a default for the unbound case so absence degrades to the app's own "email off" mode:
+When the instance is bound to a provider, the brain injects `MALMO_MAIL_HOST/_PORT/_USER/_PASSWORD/_FROM/_ENCRYPTION` plus a Symfony-style `MALMO_MAIL_DSN`; unbound, **nothing is injected**. The compose maps the vars app-defined as usual, with a default for the unbound case so absence degrades to the app's own "email off" mode:
 
 ```yaml
 # inside the app's docker-compose.yml (Kimai)
 environment:
-  MAILER_URL: "${MOLMA_MAIL_DSN:-null://null}"
-  MAILER_FROM: "${MOLMA_MAIL_FROM:-kimai@example.com}"
+  MAILER_URL: "${MALMO_MAIL_DSN:-null://null}"
+  MAILER_FROM: "${MALMO_MAIL_FROM:-kimai@example.com}"
 ```
 
 v1 admits only `optional: true` — an app that *can't* run unbound (`optional: false` or a bare `mail: {}`) is rejected at parse, because a box with no registered providers couldn't install it. Required-mail semantics (blocking install until a provider is picked) is a possible later loosening; declare-and-degrade is the v1 contract.
@@ -293,30 +293,30 @@ permissions:
 - **`scope: whole`** (default) — brain bind-mounts the entire folder (e.g., all of the chosen `Photos/`) into the container.
 - **`scope: pick-subfolder`** — install screen prompts the user: "Which folder should this app manage?" Default is the manifest's `default` (auto-created if absent), user can choose any path under the folder. Used for notes apps (one vault per "context"), media apps that should manage a subset of a library, etc.
 
-**Source is the installer's choice, not the author's.** The manifest declares *what* content the app touches and *how* (`mode`/`scope`); it deliberately does **not** declare whether the folder is the user's **personal** `~/<Folder>/` or the **household-shared** `/srv/molma/shared/<Folder>/`. The author can't know a given household's intent — "I want *my own* Jellyfin on *my* movies" and "I want it on the *family* library" are both valid and the app code is identical. So source is elected per folder at install (`DASHBOARD.md` # install authorization, `DECISIONS.md` 2026-05-30):
+**Source is the installer's choice, not the author's.** The manifest declares *what* content the app touches and *how* (`mode`/`scope`); it deliberately does **not** declare whether the folder is the user's **personal** `~/<Folder>/` or the **household-shared** `/srv/malmo/shared/<Folder>/`. The author can't know a given household's intent — "I want *my own* Jellyfin on *my* movies" and "I want it on the *family* library" are both valid and the app code is identical. So source is elected per folder at install (`DASHBOARD.md` # install authorization, `DECISIONS.md` 2026-05-30):
 
-- **Personal instance** — the install screen offers, per folder, **your `<Folder>`** (default) or the **household Shared `<Folder>`**. Choosing shared adds the container to the `molma-shared` group; it reaches exactly what the owner can already reach as a household member.
+- **Personal instance** — the install screen offers, per folder, **your `<Folder>`** (default) or the **household Shared `<Folder>`**. Choosing shared adds the container to the `malmo-shared` group; it reaches exactly what the owner can already reach as a household member.
 - **Household instance** — always the household Shared `<Folder>` (a shared instance has no single owner whose `~/` it could bind). No per-folder toggle.
 
 This supersedes the earlier `user_folders` / `shared_folders` split, where the author picked the source by choosing the key.
 
-**How it's mounted — fixed path + injected env var.** The brain bind-mounts each declared folder at a stable, documented path — `/molma/<folder>` (e.g. `/molma/photos`) — and injects the absolute path as `MOLMA_FOLDER_<NAME>` (e.g. `MOLMA_FOLDER_PHOTOS=/molma/photos`). The app's compose maps that variable to whatever the app actually expects:
+**How it's mounted — fixed path + injected env var.** The brain bind-mounts each declared folder at a stable, documented path — `/malmo/<folder>` (e.g. `/malmo/photos`) — and injects the absolute path as `MALMO_FOLDER_<NAME>` (e.g. `MALMO_FOLDER_PHOTOS=/malmo/photos`). The app's compose maps that variable to whatever the app actually expects:
 
 ```yaml
 # inside the app's docker-compose.yml
 environment:
-  PHOTOPRISM_ORIGINALS_PATH: ${MOLMA_FOLDER_PHOTOS}
+  PHOTOPRISM_ORIGINALS_PATH: ${MALMO_FOLDER_PHOTOS}
 ```
 
-This is the same injection convention as managed services (`MOLMA_SERVICE_*`) and `MOLMA_DATA_DIR` — the manifest stays declarative about *intent*, the app does the wiring, and the app stays portable. The in-container mount path and the env var are stable regardless of the elected source or subfolder; only the **host source** varies (personal `~/<Folder>/` vs shared `/srv/molma/shared/<Folder>/`, narrowed further by a `pick-subfolder` choice). The source side is resolved by the brain at install time — it learns the owner's home path and UID from host-agent (`BRAIN_HOST_PROTOCOL.md`), never declared by the author.
+This is the same injection convention as managed services (`MALMO_SERVICE_*`) and `MALMO_DATA_DIR` — the manifest stays declarative about *intent*, the app does the wiring, and the app stays portable. The in-container mount path and the env var are stable regardless of the elected source or subfolder; only the **host source** varies (personal `~/<Folder>/` vs shared `/srv/malmo/shared/<Folder>/`, narrowed further by a `pick-subfolder` choice). The source side is resolved by the brain at install time — it learns the owner's home path and UID from host-agent (`BRAIN_HOST_PROTOCOL.md`), never declared by the author.
 
 #### External-storage convention for popular apps
 
-The molma-tuned manifest for an app whose upstream supports external libraries (Immich, Photoprism, Jellyfin, Nextcloud, Navidrome, ...) declares `folders` and configures the app via env vars or post-install steps to **point its internal "library path" at the bind-mounted use-case folder**. The user's files stay at `~/Photos/`, the app indexes them there, uninstalling the app keeps the files. This is the path that earns the manifest a "files first-class" badge in the store.
+The malmo-tuned manifest for an app whose upstream supports external libraries (Immich, Photoprism, Jellyfin, Nextcloud, Navidrome, ...) declares `folders` and configures the app via env vars or post-install steps to **point its internal "library path" at the bind-mounted use-case folder**. The user's files stay at `~/Photos/`, the app indexes them there, uninstalling the app keeps the files. This is the path that earns the manifest a "files first-class" badge in the store.
 
-Apps that don't support external libraries fall back to `storage.app_managed_user_content: true` (`STORAGE.md` # Files are first-class). For v1, the store catalog is hand-curated by molma — we write manifests that follow the external-storage pattern wherever upstream supports it.
+Apps that don't support external libraries fall back to `storage.app_managed_user_content: true` (`STORAGE.md` # Files are first-class). For v1, the store catalog is hand-curated by malmo — we write manifests that follow the external-storage pattern wherever upstream supports it.
 
-**No `cap_add` for store (Tier-3) apps.** The brain's override drops ALL capabilities and adds none. Apps that genuinely need Linux capabilities (VPN clients, FUSE mounts, raw sockets) belong in Tier 2 — OS integrations curated by molma with a separate install path. See `SERVICE_PROVISIONING.md`. If a Tier-3 compose declares `cap_add`, the brain refuses to install it.
+**No `cap_add` for store (Tier-3) apps.** The brain's override drops ALL capabilities and adds none. Apps that genuinely need Linux capabilities (VPN clients, FUSE mounts, raw sockets) belong in Tier 2 — OS integrations curated by malmo with a separate install path. See `SERVICE_PROVISIONING.md`. If a Tier-3 compose declares `cap_add`, the brain refuses to install it.
 
 ### F. Lifecycle hooks — deferred from MVP
 
@@ -418,9 +418,9 @@ permissions:
 
 **The `permissions` block is admin-elected in the form, not hardcoded.** `internet` (default on), `lan`, `gpu`, and any `folders` rows are authored through the install screen's permission controls; `devices` and managed `services` are the long tail, reached through the form's **Edit as YAML** escape hatch rather than dedicated fields (`DASHBOARD.md` # Form is a projection of the synthetic manifest). The form is a friendly projection of *this* manifest; the YAML toggle edits the same overlay raw. No managed services by default; best-effort backup of all volumes (we can't tell cache from data without the author's input); scope (household vs. personal) is the installer's election, not a manifest field (# G). The richer-manifest *graduate-in-place* path — editing an already-installed instance's manifest — is the intended future shape but **deferred past v1** (`DASHBOARD.md` # Edit-after-install is deferred); install-time authoring (form + YAML toggle) is not that deferred feature.
 
-**Door-2 folder grants carry an explicit `target`.** Store-app folder grants declare no in-container path — the brain mounts each at `/molma/<folder>` + injects `MOLMA_FOLDER_<NAME>`, and the author maps that env var (# Locked: folders mount at a fixed path). A Door-2 paste has no author to adapt: the verbatim third-party compose hardcodes its data path, so the synthetic manifest's folder entry carries an explicit `target` (the destination the admin typed) and the brain binds the elected source straight there. The `target` field is **Door-2-only** — store manifests omit it and keep the fixed-path + env-var convention (`DECISIONS.md` 2026-06-02). The *source* (personal vs. household) stays the installer's per-folder election, exactly as for store apps.
+**Door-2 folder grants carry an explicit `target`.** Store-app folder grants declare no in-container path — the brain mounts each at `/malmo/<folder>` + injects `MALMO_FOLDER_<NAME>`, and the author maps that env var (# Locked: folders mount at a fixed path). A Door-2 paste has no author to adapt: the verbatim third-party compose hardcodes its data path, so the synthetic manifest's folder entry carries an explicit `target` (the destination the admin typed) and the brain binds the elected source straight there. The `target` field is **Door-2-only** — store manifests omit it and keep the fixed-path + env-var convention (`DECISIONS.md` 2026-06-02). The *source* (personal vs. household) stays the installer's per-folder election, exactly as for store apps.
 
-**What the brain infers vs. asks (Door-2 paste).** `main_service` is **autodetected** when the compose has exactly one service, and **asked** otherwise (a dropdown of the compose's services). `main_port` is the *container-internal* port Caddy routes to — **best-effort inferred** from every signal the compose carries: a single `expose:` value, or the *container side* of a published `ports:` mapping (`8080:80` ⇒ `80`), mined out for the prefill before the mapping itself is rejected. It is **asked** only when the compose is silent (molma can't read the image's `EXPOSE` without pulling it) and is always editable. A published `ports:` is never *honored* (it's an admission rejection — Caddy fronts every app on internal networks); its container side is only read to prefill `main_port`. The full screen UX — where the flow lives, the permission controls and YAML escape hatch, inline admission-error coaching, the live URL preview, and the deferred edit-after-install path — is locked in `DASHBOARD.md` # Door-2 custom container install flow.
+**What the brain infers vs. asks (Door-2 paste).** `main_service` is **autodetected** when the compose has exactly one service, and **asked** otherwise (a dropdown of the compose's services). `main_port` is the *container-internal* port Caddy routes to — **best-effort inferred** from every signal the compose carries: a single `expose:` value, or the *container side* of a published `ports:` mapping (`8080:80` ⇒ `80`), mined out for the prefill before the mapping itself is rejected. It is **asked** only when the compose is silent (malmo can't read the image's `EXPOSE` without pulling it) and is always editable. A published `ports:` is never *honored* (it's an admission rejection — Caddy fronts every app on internal networks); its container side is only read to prefill `main_port`. The full screen UX — where the flow lives, the permission controls and YAML escape hatch, inline admission-error coaching, the live URL preview, and the deferred edit-after-install path — is locked in `DASHBOARD.md` # Door-2 custom container install flow.
 
 **Custom apps may request managed services.** Allowed, not encouraged. A power user pasting compose can manually add `services: { database: { type: postgres, version: "15" } }` and gets the same managed Postgres treatment. We document the path; we don't gate it.
 
@@ -429,31 +429,31 @@ permissions:
 - **Format: YAML.** `manifest.yml`.
 - **Schema versioned from day one.** `manifest_version: 1`. Backward compatible for at least the previous two majors.
 - **Most fields optional with sensible defaults.** Required: `id`, `manifest_version`, `name`, `version`, `compose_file`, `main_service`, `main_port`.
-- **Compose file is verbatim.** Molma doesn't rewrite it.
+- **Compose file is verbatim.** Malmo doesn't rewrite it.
 - **`resources.recommended` is advice, never a cap.** No `limit` field exists in the manifest; authors can't see the user's hardware. Default runtime is uncapped burst; user-set memory caps and control-plane OOM protection live in `APP_ISOLATION.md` # Resource limits.
 - **Permissions are declared and enforced.** Not just metadata.
-- **User content vs. app state are separate stores.** User content (`/home/<user>/Photos/`, etc.) accessed by manifest-declared bind mounts of use-case folders; app state in `/var/lib/molma/instances/<id>/data/`. Apps reach user content by reference, never by copy.
+- **User content vs. app state are separate stores.** User content (`/home/<user>/Photos/`, etc.) accessed by manifest-declared bind mounts of use-case folders; app state in `/var/lib/malmo/instances/<id>/data/`. Apps reach user content by reference, never by copy.
 - **`scope: pick-subfolder`** for `folders` — install-time prompt for apps that should manage a subset (notes apps, media subsets). Default is provided by the manifest; user can override.
-- **Folder source (personal vs household-shared) is installer-elected, not a manifest field.** The manifest declares only the folder + `mode` + `scope`; whether it binds the owner's `~/<Folder>/` or the household `/srv/molma/shared/<Folder>/` is the installer's per-folder choice (personal instances pick, defaulting to personal; household instances are always shared). Replaces the old `user_folders` / `shared_folders` keys. See `DECISIONS.md` 2026-05-30.
-- **`folders` mount at a fixed path + injected env var (store apps).** A store manifest declares folder + `mode` + `scope` but no in-container path; the brain mounts each at `/molma/<folder>` and injects `MOLMA_FOLDER_<NAME>`. The app's compose maps that variable to its own library path. `mode` defaults to `read`. Same injection pattern as `MOLMA_SERVICE_*` / `MOLMA_DATA_DIR`. **Door-2 custom apps diverge:** their verbatim compose has no author to map the env var, so a Door-2 folder grant carries an explicit `target` (the destination path the admin types) and the brain binds straight there. `target` is Door-2-only; store grants omit it (# Custom container — synthetic manifest, `DECISIONS.md` 2026-06-02).
+- **Folder source (personal vs household-shared) is installer-elected, not a manifest field.** The manifest declares only the folder + `mode` + `scope`; whether it binds the owner's `~/<Folder>/` or the household `/srv/malmo/shared/<Folder>/` is the installer's per-folder choice (personal instances pick, defaulting to personal; household instances are always shared). Replaces the old `user_folders` / `shared_folders` keys. See `DECISIONS.md` 2026-05-30.
+- **`folders` mount at a fixed path + injected env var (store apps).** A store manifest declares folder + `mode` + `scope` but no in-container path; the brain mounts each at `/malmo/<folder>` and injects `MALMO_FOLDER_<NAME>`. The app's compose maps that variable to its own library path. `mode` defaults to `read`. Same injection pattern as `MALMO_SERVICE_*` / `MALMO_DATA_DIR`. **Door-2 custom apps diverge:** their verbatim compose has no author to map the env var, so a Door-2 folder grant carries an explicit `target` (the destination path the admin types) and the brain binds straight there. `target` is Door-2-only; store grants omit it (# Custom container — synthetic manifest, `DECISIONS.md` 2026-06-02).
 - **`gpu` is its own field, separate from `devices`.** `devices` passes through explicit `/dev/...` paths; `gpu: true` selects the platform GPU runtime. No-GPU box fails at the capacity check.
 - **`app_managed_user_content: true`** is the opt-in for apps that don't expose user content via use-case folders. Triggers an install-time warning. Curated store prefers apps without it.
-- **`service_user: true`** opts a *folderless* app into a dedicated, molma-allocated non-root runtime identity — stable per instance, drawn from a reserved app-service band below the 3000 user floor; the brain pins `user:` and chowns `data/` to it. The manifest declares **intent only — no numeric UID is namable** (a host-namespace UID could alias a real principal under molma's no-userns-remap model); a numeric `user:`, or `service_user: true` alongside a `folders` grant, is an admission rejection. Does not cover images that hardcode a *different* non-root internal UID (deferred to userns-remap, `NEXT.md`). `APP_ISOLATION.md` # Runtime identity & data ownership, `DECISIONS.md` 2026-06-10.
+- **`service_user: true`** opts a *folderless* app into a dedicated, malmo-allocated non-root runtime identity — stable per instance, drawn from a reserved app-service band below the 3000 user floor; the brain pins `user:` and chowns `data/` to it. The manifest declares **intent only — no numeric UID is namable** (a host-namespace UID could alias a real principal under malmo's no-userns-remap model); a numeric `user:`, or `service_user: true` alongside a `folders` grant, is an admission rejection. Does not cover images that hardcode a *different* non-root internal UID (deferred to userns-remap, `NEXT.md`). `APP_ISOLATION.md` # Runtime identity & data ownership, `DECISIONS.md` 2026-06-10.
 - **Scope (household vs. personal) is installer-elected, not a manifest field.** No `multi_user.mode`. Admins choose household or personal; members install personal only (`DASHBOARD.md`, `DECISIONS.md` 2026-05-29). Guest-sharing and household visibility are deferred and not manifest fields.
 - **No added Linux capabilities for store apps.** Override is `cap_drop: [ALL]`, adds none; admission rejects `cap_add`. Capability / `privileged` / Docker-socket needs go through Door-2 or Tier 2. A reviewed `permissions.capabilities` escape hatch is not in the v1 store schema (open in `NEXT.md`).
 - **Bind mounts only — no Docker named volumes for app data.** All data lives under the instance's `data/` dir.
 - **Hooks deferred from MVP.** When reintroduced, they will be one-shot container images, not in-container scripts.
-- **`health_probe` is opt-in and molma-executed, not Docker `HEALTHCHECK`.** Optional `path` (+ `healthy_status`, `start_period`); the brain probes the app *through its Caddy route* on the health-poll tick and raises the non-blocking `app-unresponsive` warning (`HEALTH.md`) when it fails. Absent → no probe, issue never raised. Default healthy = any status < 500. Probing through Caddy (not by dialing the container) keeps the control plane off app-reachable networks. See `DECISIONS.md` 2026-06-02.
+- **`health_probe` is opt-in and malmo-executed, not Docker `HEALTHCHECK`.** Optional `path` (+ `healthy_status`, `start_period`); the brain probes the app *through its Caddy route* on the health-poll tick and raises the non-blocking `app-unresponsive` warning (`HEALTH.md`) when it fails. Absent → no probe, issue never raised. Default healthy = any status < 500. Probing through Caddy (not by dialing the container) keeps the control plane off app-reachable networks. See `DECISIONS.md` 2026-06-02.
 - **`needs_secure_context` is an install-time warning, not a routing override or install block.** Apps declare it honestly; the brain warns the user if the current URL scheme is HTTP. The URL each app uses is determined by the global toggle in Settings, not the manifest.
 - **Public, versioned spec.** Third-party stores depend on it.
-- **Env-var injection: app-defined naming.** App's compose maps molma's stable `MOLMA_SERVICE_*` variables to whatever names the app expects. No auto-rewrite. Authors adapt; we document.
-- **Generated secrets are declared, brain-generated, and stable.** A manifest declares `secrets: [{name, bytes?}]`; the brain draws each from a CSPRNG once at install, persists it, and injects it as `MOLMA_SECRET_<NAME>` — re-emitted verbatim on every restart so token-signing secrets don't rotate underneath live sessions. Same app-defined wiring as `MOLMA_SERVICE_*` (# D2). Security hardening (delivery surface, at-rest, rotation) is tracked open in `NEXT.md` # App-secret injection hardening.
-- **Outgoing mail is declared optional-only (`mail: {optional: true}`).** The declaration unlocks the install-time provider picker and per-instance `MOLMA_MAIL_*` injection (# D3, `SERVICE_PROVISIONING.md` # BYO outgoing mail); unbound apps get nothing injected and must run with email off. `optional: false` (and a bare `mail: {}`) is rejected at parse in v1.
+- **Env-var injection: app-defined naming.** App's compose maps malmo's stable `MALMO_SERVICE_*` variables to whatever names the app expects. No auto-rewrite. Authors adapt; we document.
+- **Generated secrets are declared, brain-generated, and stable.** A manifest declares `secrets: [{name, bytes?}]`; the brain draws each from a CSPRNG once at install, persists it, and injects it as `MALMO_SECRET_<NAME>` — re-emitted verbatim on every restart so token-signing secrets don't rotate underneath live sessions. Same app-defined wiring as `MALMO_SERVICE_*` (# D2). Security hardening (delivery surface, at-rest, rotation) is tracked open in `NEXT.md` # App-secret injection hardening.
+- **Outgoing mail is declared optional-only (`mail: {optional: true}`).** The declaration unlocks the install-time provider picker and per-instance `MALMO_MAIL_*` injection (# D3, `SERVICE_PROVISIONING.md` # BYO outgoing mail); unbound apps get nothing injected and must run with email off. `optional: false` (and a bare `mail: {}`) is rejected at parse in v1.
 - **Permissions granularity: medium for v1.** Internet, LAN, shared storage, devices, privileged, network isolation. Not coarse-only, not fine-grained Kubernetes-style.
 - **Custom apps can request managed services.** Allowed, not encouraged.
 - **No inter-app dependencies in v1.** Apps are self-contained. If they need multiple services, they go in the same compose. Cross-app sharing only via shared use-case folders (two of the same user's apps both binding the same `folders` entry; the installer points each at the same personal or shared source).
-- **Manifest can live in-repo or in molma's catalog repo.** Both patterns supported indefinitely. Schema is identical in both cases. We bootstrap by writing manifests for popular apps; over time, upstreams ship their own.
-- **Image references use version tags; the store catalog resolves digests.** Authors write `image: foo/bar:1.2.3`; molma's CI pins the bytes via a `sha256:` digest in the signed catalog (`APP_STORE.md`). Door-2 custom apps fall back to TOFU digest pinning in the brain.
+- **Manifest can live in-repo or in malmo's catalog repo.** Both patterns supported indefinitely. Schema is identical in both cases. We bootstrap by writing manifests for popular apps; over time, upstreams ship their own.
+- **Image references use version tags; the store catalog resolves digests.** Authors write `image: foo/bar:1.2.3`; malmo's CI pins the bytes via a `sha256:` digest in the signed catalog (`APP_STORE.md`). Door-2 custom apps fall back to TOFU digest pinning in the brain.
 
 ## Open questions
 

@@ -1,14 +1,14 @@
-# molma resolve: store-agnostic disk_bytes (containerd image store fix)
+# malmo resolve: store-agnostic disk_bytes (containerd image store fix)
 
 - **Status:** done
 - **Date:** 2026-06-10
 - **Specs touched:** No design change — `APP_STORE.md` # Catalog schema already defines `disk_bytes` as the sum of the image's uncompressed layer sizes; this fixes the resolver to actually compute that on every Docker store.
 
-Closes issue #117, the review flag from #113. `dockerSizer` (`cmd/molma/resolve.go`, built in [catalog-image-footprint.md](catalog-image-footprint.md)) derived `disk_bytes` from `docker image inspect --format '{{.Size}}'`. Under the classic overlay2 graph driver that is the unpacked layer total — the number the install-plan disk-space math wants. Under the **containerd image store** (`io.containerd.snapshotter.v1`), `.Size` reports the *compressed content size* instead, so `disk_bytes` came out ≈ `download_bytes` and the install plan undercounted the real footprint 2–4×. Kimai (#113) and Ghost (#112) caught it at review with hand-corrected values; memos and open-webui were already merged with the bad numbers.
+Closes issue #117, the review flag from #113. `dockerSizer` (`cmd/malmo/resolve.go`, built in [catalog-image-footprint.md](catalog-image-footprint.md)) derived `disk_bytes` from `docker image inspect --format '{{.Size}}'`. Under the classic overlay2 graph driver that is the unpacked layer total — the number the install-plan disk-space math wants. Under the **containerd image store** (`io.containerd.snapshotter.v1`), `.Size` reports the *compressed content size* instead, so `disk_bytes` came out ≈ `download_bytes` and the install plan undercounted the real footprint 2–4×. Kimai (#113) and Ghost (#112) caught it at review with hand-corrected values; memos and open-webui were already merged with the bad numbers.
 
 ## What was done
 
-### Store-agnostic sizer (`cmd/molma/savesize.go`)
+### Store-agnostic sizer (`cmd/malmo/savesize.go`)
 
 `disk_bytes` is now computed by streaming `docker save <image>` and **decompress-counting the layer blobs** — the save stream carries the original blobs on both stores (gzip registry blobs under containerd, already-unpacked `layer.tar` files under the graph drivers), so the decompressed sum is the same number everywhere:
 
@@ -30,7 +30,7 @@ Re-resolved with the fixed sizer on a containerd-store machine (digests and `dow
 
 ### Verification
 
-- Unit tests (`cmd/molma/savesize_test.go`): synthetic save streams in both formats — containerd gzip blobs (sum must be decompressed sizes, the exact #117 confusion), classic raw `layer.tar`, stream-order independence, and the loud-error paths (no `manifest.json`, layer missing from stream, multi-image stream, zstd layer) + the zstd-non-layer ignore + a `lowExpansion` table built from #117's real Kimai numbers.
+- Unit tests (`cmd/malmo/savesize_test.go`): synthetic save streams in both formats — containerd gzip blobs (sum must be decompressed sizes, the exact #117 confusion), classic raw `layer.tar`, stream-order independence, and the loud-error paths (no `manifest.json`, layer missing from stream, multi-image stream, zstd layer) + the zstd-non-layer ignore + a `lowExpansion` table built from #117's real Kimai numbers.
 - **Cross-store check:** resolving `traefik/whoami:v1.10.3` on this containerd-store machine gives 7,006,720 vs the committed 6,581,646 resolved on an overlay2 machine — ~6% apart (tar-stream headers vs the graph driver's content-sum; see gaps), versus the old code which would have recorded ≈2,850,040 (the compressed size). The bug signature is gone; expansion reads 2.46×.
 - Full non-PAM Go suite + gofmt + vet green.
 

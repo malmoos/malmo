@@ -1,6 +1,6 @@
-# molma Update Model
+# malmo Update Model
 
-> Working spec for how a running molma box stays current. Companion to `SPEC.md`, `CONTROL_PLANE.md`, `BUILD.md`, `SERVICE_PROVISIONING.md`, `APP_MANIFEST.md`.
+> Working spec for how a running malmo box stays current. Companion to `SPEC.md`, `CONTROL_PLANE.md`, `BUILD.md`, `SERVICE_PROVISIONING.md`, `APP_MANIFEST.md`.
 
 This doc is **draft / option-survey**. Most sections present alternatives with a recommendation; locked decisions are pulled out at the bottom. The intent is to surface forks before committing.
 
@@ -10,7 +10,7 @@ A box has **five independent update streams**, each with its own cadence, risk p
 
 1. **Debian base** — kernel, system libraries, firmware. Slow.
 2. **`host-agent`** — Debian package from our apt repo. Rare.
-3. **Control plane (`molma-brain` + `molma-ui`)** — two container images sharing one release manifest. Frequent. UI usually moves more often than brain; only what changed recreates.
+3. **Control plane (`malmo-brain` + `malmo-ui`)** — two container images sharing one release manifest. Frequent. UI usually moves more often than brain; only what changed recreates.
 4. **Apps** — Docker images + manifest versions, per app. Frequent and varied.
 5. **Managed services** — Postgres/Redis container versions. Triggered by app manifests, not by us.
 
@@ -54,8 +54,8 @@ Tiny native binary, supervises the brain (`CONTROL_PLANE.md`). Updates are rare 
 ### Options
 
 - **A — Auto-update via `unattended-upgrades` from our apt repo.** Same mechanism as the Debian base, just one more source list.
-- **B — Brain orchestrates host-agent updates.** Brain detects a new version on `apt.molma.network`, downloads, calls a host-agent self-update endpoint.
-- **C — Admin-triggered only.** Settings → "Update molma system."
+- **B — Brain orchestrates host-agent updates.** Brain detects a new version on `apt.malmo.network`, downloads, calls a host-agent self-update endpoint.
+- **C — Admin-triggered only.** Settings → "Update malmo system."
 
 ### Recommendation: A — `unattended-upgrades` from our apt repo
 
@@ -72,31 +72,31 @@ Cons:
 
 ---
 
-## 3. Control plane — `molma-brain` + `molma-ui`
+## 3. Control plane — `malmo-brain` + `malmo-ui`
 
-The control plane ships as **two container images** on **one release manifest**: `molma-brain` (the daemon) and `molma-ui` (the dashboard, per `WEB_UI.md`). Most weeks the UI moves and the brain doesn't; occasionally the brain moves and the UI doesn't; occasionally they move together (coordinated change requiring a new brain endpoint that the UI consumes).
+The control plane ships as **two container images** on **one release manifest**: `malmo-brain` (the daemon) and `malmo-ui` (the dashboard, per `WEB_UI.md`). Most weeks the UI moves and the brain doesn't; occasionally the brain moves and the UI doesn't; occasionally they move together (coordinated change requiring a new brain endpoint that the UI consumes).
 
-This is the most user-visible update stream because the brain + UI together *are* molma from the user's perspective.
+This is the most user-visible update stream because the brain + UI together *are* malmo from the user's perspective.
 
-**One channel, two artifacts.** The user sees a single "auto-update molma" affordance. The updater pulls and recreates only what changed — UI-only ship recreates only `molma-ui`; brain-only ship recreates only `molma-brain`; coordinated ship recreates both as one transaction (pull both, recreate both, verify both healthy, commit; on failure, revert both).
+**One channel, two artifacts.** The user sees a single "auto-update malmo" affordance. The updater pulls and recreates only what changed — UI-only ship recreates only `malmo-ui`; brain-only ship recreates only `malmo-brain`; coordinated ship recreates both as one transaction (pull both, recreate both, verify both healthy, commit; on failure, revert both).
 
 ### Options on update trigger
 
 - **A — Auto-pull `latest` tag continuously.** Box polls registry, pulls when tag advances.
-- **B — Release manifest.** Box polls a JSON manifest at `releases.molma.network/stable.json` that lists the *current* stable version. Gives us a kill switch (retract a bad release) and a place to gate rollouts if we later need pacing. See `RELEASE_MANIFEST.md` for the full schema + publishing pipeline.
-- **C — Periodic prompt.** Box checks for updates, surfaces "molma X.Y.Z available — update now?" in the UI.
+- **B — Release manifest.** Box polls a JSON manifest at `releases.malmo.network/stable.json` that lists the *current* stable version. Gives us a kill switch (retract a bad release) and a place to gate rollouts if we later need pacing. See `RELEASE_MANIFEST.md` for the full schema + publishing pipeline.
+- **C — Periodic prompt.** Box checks for updates, surfaces "malmo X.Y.Z available — update now?" in the UI.
 - **D — Fully manual.** Admin clicks update.
 
 ### Decision: B — release manifest, admin-prompted
 
 - Release manifest (not raw `latest` tag) because we need a kill switch. If we ship a bad version and 5% of boxes start crashlooping, we want to flip the manifest back and stop *availability* of that version *now*, before more boxes prompt their admin to install it.
-- Admin-prompted (not auto-applied) because v1 has no A/B rollback at the OS level. Phone-OS-style auto-apply assumes hardware-backed rollback we don't have until A/B images land. Surfacing "molma X.Y.Z is available" and waiting for the admin is the honest posture.
+- Admin-prompted (not auto-applied) because v1 has no A/B rollback at the OS level. Phone-OS-style auto-apply assumes hardware-backed rollback we don't have until A/B images land. Surfacing "malmo X.Y.Z is available" and waiting for the admin is the honest posture.
 - The manifest names both `brain` and `ui` versions, plus `minimum_host_agent` and `rollback_to`. Full schema, signing (minisign / Ed25519), and publishing pipeline live in `RELEASE_MANIFEST.md`. v1 ships a single `stable` channel with no phased rollout — admin-prompting provides natural pacing at v1 scale.
 
 The updater compares each named version against what's currently installed:
 
-- `brain` unchanged + `ui` advanced → recreate only `molma-ui`. Brain keeps running; no API interruption.
-- `brain` advanced + `ui` unchanged → recreate only `molma-brain`. UI keeps serving; brief API gap during brain restart (the in-tab `426` safety net per `BRAIN_UI_PROTOCOL.md` covers stale tabs).
+- `brain` unchanged + `ui` advanced → recreate only `malmo-ui`. Brain keeps running; no API interruption.
+- `brain` advanced + `ui` unchanged → recreate only `malmo-brain`. UI keeps serving; brief API gap during brain restart (the in-tab `426` safety net per `BRAIN_UI_PROTOCOL.md` covers stale tabs).
 - Both advanced → coordinated transaction: pull both, recreate both, verify both healthy, commit. On failure of either, revert both to the previous pair.
 
 `rollback_to` is a *paired* rollback (brain + UI both revert together when fired), since brain/UI version pairs are tested together before publication. If set, the offer for the bad version is retracted from all boxes that haven't yet applied it; already-updated boxes see a "downgrade available" prompt that recommends reverting (using the kept-for-7-days snapshot). Cheap insurance. Full rollback semantics in `RELEASE_MANIFEST.md`.
@@ -113,10 +113,10 @@ Both are deferred from v1 with explicit triggers documented in `RELEASE_MANIFEST
 ### Update mechanics
 
 1. host-agent polls the release manifest hourly.
-2. If a newer manifest applies to this box (channel, host-agent compat), host-agent surfaces a "molma update available — vX.Y.Z" notification in the dashboard. Current versions keep running.
+2. If a newer manifest applies to this box (channel, host-agent compat), host-agent surfaces a "malmo update available — vX.Y.Z" notification in the dashboard. Current versions keep running.
 3. When the admin clicks **Update**, host-agent runs the changed-only transaction:
-   a. Pull each image whose version moved (`molma-brain`, `molma-ui`, or both).
-   b. **If brain moved:** snapshot the brain's SQLite database to `/var/lib/molma/brain-snapshots/<old-version>.db`. Cheap (SQLite is one file, single-digit MB at v1 scale).
+   a. Pull each image whose version moved (`malmo-brain`, `malmo-ui`, or both).
+   b. **If brain moved:** snapshot the brain's SQLite database to `/var/lib/malmo/brain-snapshots/<old-version>.db`. Cheap (SQLite is one file, single-digit MB at v1 scale).
    c. Recreate the changed containers in order: brain first (if changed), then UI. Brain restart is fast (~5–10s); UI container restart is faster.
    d. Wait up to 60s for `/healthz` on the brain and a simple HTTP probe on the UI.
 4. **On health-check failure of either:** host-agent reverts **both** to the previous pair (revert images, restore SQLite snapshot if brain was changed), restarts. Surfaces the failure in the UI with a "rollback succeeded" status.
@@ -191,7 +191,7 @@ The single biggest gap in image-only rollback is **app-managed schema migrations
 
 Until lifecycle hooks return (`APP_MANIFEST.md` # F, `APP_LIFECYCLE.md` # Deferred: lifecycle hooks), the brain takes a brute-force snapshot before every app update:
 
-1. **Tar the manifest's declared `data_volumes`** to `/var/lib/molma/instances/<id>/snapshots/pre-update-<old-version>.tar`. `cache_volumes` are excluded — that's literally what the data/cache split is for (`APP_MANIFEST.md` # C).
+1. **Tar the manifest's declared `data_volumes`** to `/var/lib/malmo/instances/<id>/snapshots/pre-update-<old-version>.tar`. `cache_volumes` are excluded — that's literally what the data/cache split is for (`APP_MANIFEST.md` # C).
 2. **If the app uses a managed service**, `pg_dump` (or equivalent for the service type) the app's logical database into the same snapshot dir. Cheap, well-bounded, runs in the 03:00 window when nothing else is going on. Applies whether or not the service version moved — protects against app-driven schema changes inside the same major.
 3. **Retain alongside the previous image for 7 days**, then GC.
 
@@ -293,7 +293,7 @@ No other UX-driven manifest fields in v1.
 When multiple streams have updates pending in the same window:
 
 ```
-host-agent  →  molma-brain  →  apps & managed services  →  Debian base
+host-agent  →  malmo-brain  →  apps & managed services  →  Debian base
 ```
 
 Reasoning:
@@ -307,7 +307,7 @@ Debian base updates set `/var/run/reboot-required` when applicable. Policy:
 
 - **Reboot opportunistically in the update window** if the marker is set and no app is mid-update.
 - **Otherwise wait.** Don't reboot during the day.
-- After 7 days of a pending reboot, surface "your molma needs to restart" in the dashboard, but never force.
+- After 7 days of a pending reboot, surface "your malmo needs to restart" in the dashboard, but never force.
 
 Reboot at v1 means roughly 30–60s of full unavailability. Acceptable nightly, hostile mid-day.
 
@@ -315,7 +315,7 @@ Reboot at v1 means roughly 30–60s of full unavailability. Acceptable nightly, 
 
 The release manifest (#3) carries `minimum_host_agent`. The brain carries `minimum_manifest_version` and `maximum_manifest_version` for apps. host-agent carries `minimum_brain_version`.
 
-If an app update wants a manifest_version newer than the running brain supports, the brain refuses the update and surfaces "molma needs to update first" in the UI. The next brain update should resolve it; if it doesn't, the app stays pinned.
+If an app update wants a manifest_version newer than the running brain supports, the brain refuses the update and surfaces "malmo needs to update first" in the UI. The next brain update should resolve it; if it doesn't, the app stays pinned.
 
 This means a misalignment never silently breaks something — it parks the update with a clear reason.
 
@@ -340,7 +340,7 @@ Telemetry is a **signal that accelerates our reaction time**, not a gate. Boxes 
 |---|---|
 | Debian base | None in v1; A/B images later |
 | `host-agent` | apt revert (manual, rare path) |
-| `molma-brain` + `molma-ui` | Previous image pair + SQLite snapshot; revert as a pair, automatic on health-check fail of either |
+| `malmo-brain` + `malmo-ui` | Previous image pair + SQLite snapshot; revert as a pair, automatic on health-check fail of either |
 | App | Previous image + pre-update tar of `data_volumes` (+ `pg_dump` of managed-service DB if any), automatic on health-check fail; keep 7 days |
 | Managed service (patch) | Previous image; data is shared so this is a tag-flip |
 | Managed service (major migration) | Pre-migration dump, automatic on app-update fail |
@@ -355,7 +355,7 @@ The Debian-base "no rollback" is the v1 hole we accept. Everything else has a de
 - **Two-track posture, modeled after Android:** silent auto-apply for security patches; admin-prompted for anything that changes meaningful surface (brain, app permissions, OS major upgrades).
 - **Debian base: `unattended-upgrades` security-only.** Full upgrades and Debian point-releases stay admin-triggered until A/B images.
 - **`host-agent`: `unattended-upgrades` from our apt repo.**
-- **Control plane (`molma-brain` + `molma-ui`): release-manifest-driven, admin-prompted.** Manifest carries `brain`, `ui`, `minimum_host_agent`, and `rollback_to` (full schema + signing + publishing pipeline in `RELEASE_MANIFEST.md`). v1 ships a single `stable` channel; phased rollout and beta channel are deferred (additive when triggers fire — see `RELEASE_MANIFEST.md` # Future work). Telemetry is a halt-fast signal, not a rollout gate. Updater recreates only what changed; brain+UI revert as a pair on failure.
+- **Control plane (`malmo-brain` + `malmo-ui`): release-manifest-driven, admin-prompted.** Manifest carries `brain`, `ui`, `minimum_host_agent`, and `rollback_to` (full schema + signing + publishing pipeline in `RELEASE_MANIFEST.md`). v1 ships a single `stable` channel; phased rollout and beta channel are deferred (additive when triggers fire — see `RELEASE_MANIFEST.md` # Future work). Telemetry is a halt-fast signal, not a rollout gate. Updater recreates only what changed; brain+UI revert as a pair on failure.
 - **Apps: auto-update by default** (per `SPEC.md`); **prompt the instance owner only when the manifest's `permissions:` block expands** (new key or widened value). Permission-neutral updates of any size auto-apply. Different users on the same box may temporarily run different versions of the same app — by design, since instances are already per-user isolated. Tier-2 apps prompt the admin (box-wide).
 - **Pre-update snapshot of `data_volumes` (plus `pg_dump` of any managed-service DB)** is taken before every app update. Restored on health-check failure alongside the image revert. Hooks remain deferred; the snapshot is the v1 safety net for app-driven schema migrations. Kept 7 days.
 - **Permission-expansion prompt surfaces on next login of the instance owner**, modal on first dashboard load, two buttons (Allow & update / Keep current version). Accept applies immediately, not at 03:00. Admin sees per-user pending-update facts in Settings → Users; cannot accept on another user's behalf.

@@ -19,8 +19,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/molmaos/molma/internal/audit"
-	"github.com/molmaos/molma/internal/store"
+	"github.com/malmoos/malmo/internal/audit"
+	"github.com/malmoos/malmo/internal/store"
 )
 
 // providerBody returns a valid create/update request body.
@@ -389,7 +389,7 @@ func TestTestMailProviderDeliversThroughSink(t *testing.T) {
 
 	resp := h.do("POST", "/api/v1/mail-providers", map[string]any{
 		"label": "sink", "host": host, "port": port,
-		"from_address": "molma@example.com", "encryption": "none",
+		"from_address": "malmo@example.com", "encryption": "none",
 	})
 	p := decodeJSON[MailProviderDTO](t, resp)
 
@@ -404,13 +404,13 @@ func TestTestMailProviderDeliversThroughSink(t *testing.T) {
 	sink.mu.Lock()
 	from, rcpt, data := sink.from, sink.rcpt, sink.data
 	sink.mu.Unlock()
-	if !strings.Contains(from, "molma@example.com") {
-		t.Errorf("sink MAIL FROM = %q; want molma@example.com", from)
+	if !strings.Contains(from, "malmo@example.com") {
+		t.Errorf("sink MAIL FROM = %q; want malmo@example.com", from)
 	}
 	if !strings.Contains(rcpt, "admin@example.com") {
 		t.Errorf("sink RCPT TO = %q; want admin@example.com", rcpt)
 	}
-	if !strings.Contains(data, "molma test email") {
+	if !strings.Contains(data, "malmo test email") {
 		t.Errorf("sink DATA missing subject: %q", data)
 	}
 	if !h.hasAuditEvent(audit.ActionMailProviderTest, p.ID, true) {
@@ -433,7 +433,7 @@ func TestTestMailProviderUnreachable502(t *testing.T) {
 
 	resp := h.do("POST", "/api/v1/mail-providers", map[string]any{
 		"label": "dead", "host": host, "port": port,
-		"from_address": "molma@example.com", "encryption": "none",
+		"from_address": "malmo@example.com", "encryption": "none",
 	})
 	p := decodeJSON[MailProviderDTO](t, resp)
 

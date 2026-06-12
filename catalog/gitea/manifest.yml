@@ -5,7 +5,7 @@ version: "1.26.2"
 description:
   short: "A lightweight, self-hosted Git service — your repositories, issues, and pull requests on your own hardware."
   long: |
-    Gitea gives you the full code-hosting experience at home: Git repositories with issues, pull requests, a wiki, and releases, served by a single small binary that stays fast on modest hardware. Keep personal projects, dotfiles, and household scripts versioned on a machine you own, and bring existing repositories home with the built-in migrator for GitHub, GitLab, and friends. On first visit Gitea shows its install screen with every setting already filled in — just create your administrator account and finish. Cloning and pushing work over HTTP at the app's molma address; git-over-SSH is disabled because molma routes web traffic only. Email notifications (password resets, issue mentions) are silently dropped until molma ships its outgoing-mail relay.
+    Gitea gives you the full code-hosting experience at home: Git repositories with issues, pull requests, a wiki, and releases, served by a single small binary that stays fast on modest hardware. Keep personal projects, dotfiles, and household scripts versioned on a machine you own, and bring existing repositories home with the built-in migrator for GitHub, GitLab, and friends. On first visit Gitea shows its install screen with every setting already filled in — just create your administrator account and finish. Cloning and pushing work over HTTP at the app's malmo address; git-over-SSH is disabled because malmo routes web traffic only. Email notifications (password resets, issue mentions) are silently dropped until malmo ships its outgoing-mail relay.
 icon: ./icon.png
 screenshots: [./screenshots/01.png]
 categories: [developer-tools]
@@ -59,7 +59,7 @@ permissions:
   internet: true
   lan: false
 
-# Filled by `go run ./cmd/molma manifest resolve catalog/gitea/manifest.yml`.
+# Filled by `go run ./cmd/malmo manifest resolve catalog/gitea/manifest.yml`.
 
 images:
   gitea/gitea:1.26.2-rootless:

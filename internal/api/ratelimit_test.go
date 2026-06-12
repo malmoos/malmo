@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/molmaos/molma/internal/auth"
-	"github.com/molmaos/molma/internal/store"
+	"github.com/malmoos/malmo/internal/auth"
+	"github.com/malmoos/malmo/internal/store"
 )
 
 // --- token-bucket unit tests (deterministic, fake clock) -----------------

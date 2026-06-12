@@ -41,7 +41,7 @@ permissions:
   internet: false
   lan: false
 
-# Filled by `go run ./cmd/molma manifest resolve catalog/memos/manifest.yml`.
+# Filled by `go run ./cmd/malmo manifest resolve catalog/memos/manifest.yml`.
 images:
   neosmemo/memos:0.29.1:
     digest: sha256:3e1253477066eb2aefa91145f7f9038bb931ed88c8a3ee05310a933594cdba7d

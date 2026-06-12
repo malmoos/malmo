@@ -9,9 +9,9 @@ description:
 
     ## First sign-in
 
-    On the login screen, enter the one-time setup token `molma-setup` and choose a password. That password is how you sign in from now on, and it works straight away.
+    On the login screen, enter the one-time setup token `malmo-setup` and choose a password. That password is how you sign in from now on, and it works straight away.
 
-    **Then restart the app once** — open its page in Settings and use Stop, then Start. Your password already works without this; the restart's only job is to switch off the `molma-setup` setup token, which otherwise stays valid as a second way in until the app is next restarted (any later update or reboot also closes it).
+    **Then restart the app once** — open its page in Settings and use Stop, then Start. Your password already works without this; the restart's only job is to switch off the `malmo-setup` setup token, which otherwise stays valid as a second way in until the app is next restarted (any later update or reboot also closes it).
 
     To change your password later, open a Terminal inside Jupyter, run `jupyter server password`, and restart the app the same way.
 
@@ -79,7 +79,7 @@ permissions:
       scope: pick-subfolder
       default: Notebooks
 
-# Filled by `go run ./cmd/molma manifest resolve catalog/jupyter/manifest.yml`.
+# Filled by `go run ./cmd/malmo manifest resolve catalog/jupyter/manifest.yml`.
 images:
   quay.io/jupyter/scipy-notebook:2026-06-08:
     digest: sha256:7901fffcb245325b08495588a4cb5bc248e6a820c4d8455d73507b1e0c8b529a

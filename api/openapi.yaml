@@ -1345,7 +1345,7 @@ components:
         - created_at
       type: object
 info:
-  title: molma brain
+  title: malmo brain
   version: 0.0.1
 openapi: 3.1.0
 paths:

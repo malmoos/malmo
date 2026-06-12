@@ -4,4 +4,4 @@ services:
     volumes:
       - ./data/app:/data/docuseal
     environment:
-      DATABASE_URL: ${MOLMA_SERVICE_DATABASE_DSN}
+      DATABASE_URL: ${MALMO_SERVICE_DATABASE_DSN}

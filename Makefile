@@ -1,4 +1,4 @@
-# molma dev orchestration. The fast inner loop runs everything natively on the
+# malmo dev orchestration. The fast inner loop runs everything natively on the
 # host (no VM): host-agent + brain as Go processes, Caddy as a container, the
 # UI on Vite. The VM is the outer loop for host-integrated parts (boot, LUKS,
 # systemd) and is not wired here yet.
@@ -11,9 +11,9 @@ DEV_DIR := .dev
 STATE_DIR := $(DEV_DIR)/state
 AGENT_SOCK := $(abspath $(DEV_DIR)/agent.sock)
 
-export MOLMA_AGENT_SOCK := $(AGENT_SOCK)
-export MOLMA_STATE_DIR := $(STATE_DIR)
-export MOLMA_CATALOG_DIR := ./catalog
+export MALMO_AGENT_SOCK := $(AGENT_SOCK)
+export MALMO_STATE_DIR := $(STATE_DIR)
+export MALMO_CATALOG_DIR := ./catalog
 
 .PHONY: build host-agent brain host-agent-real check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-netstate test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev stop openapi openapi-check clean check-state-owner help
 
@@ -28,7 +28,7 @@ help:
 	@echo "make fmt         - rewrite Go sources into gofmt-canonical form (autofix)"
 	@echo "make dev         - all three foreground procs in one terminal (recommended)"
 	@echo "make build       - compile brain + host-agent"
-	@echo "make net         - create the molma-ingress docker network"
+	@echo "make net         - create the malmo-ingress docker network"
 	@echo "make caddy       - start the dev Caddy reverse proxy (container)"
 	@echo "make run-agent   - run the fake host-agent (foreground)"
 	@echo "make run-brain   - run the brain (foreground)"
@@ -155,7 +155,7 @@ test-health:
 	./dev/test-health.sh
 
 net:
-	@docker network inspect molma-ingress >/dev/null 2>&1 || docker network create molma-ingress
+	@docker network inspect malmo-ingress >/dev/null 2>&1 || docker network create malmo-ingress
 
 caddy: net
 	docker compose -f dev/docker-compose.yml up -d
@@ -198,7 +198,7 @@ dev: check-state-owner build caddy
 	@mkdir -p $(STATE_DIR)
 	@cd web-ui && [ -d node_modules ] || npm install
 	@trap 'kill 0' INT TERM EXIT; \
-	  (MOLMA_DEV_AVAHI=1 $(DEV_DIR)/host-agent 2>&1 | sed -u 's/^/[agent] /') & \
+	  (MALMO_DEV_AVAHI=1 $(DEV_DIR)/host-agent 2>&1 | sed -u 's/^/[agent] /') & \
 	  ($(DEV_DIR)/brain      2>&1 | sed -u 's/^/[brain] /') & \
 	  (cd web-ui && npm run dev 2>&1 | sed -u 's/^/[ui]    /') & \
 	  wait
@@ -226,14 +226,14 @@ openapi-check:
 
 # Stop the native dev stack (`make dev` runs brain/host-agent/vite outside
 # Docker). Without this, `clean` leaves the brain running with the deleted
-# molma.db still open (deleted-but-open inode), so it keeps serving the old
+# malmo.db still open (deleted-but-open inode), so it keeps serving the old
 # state and the wiped DB silently comes back — `clean` looks like a no-op.
 # Best-effort: pkill exits non-zero when nothing matches, hence the `-` prefix.
-# The supervisor is matched by its MOLMA_DEV_AVAHI env prefix; the binaries by
+# The supervisor is matched by its MALMO_DEV_AVAHI env prefix; the binaries by
 # their $(DEV_DIR) path; vite by this repo's absolute path so we don't reap an
 # unrelated Vite on the box.
 stop:
-	-@pkill -f 'MOLMA_DEV_AVAHI=1' 2>/dev/null
+	-@pkill -f 'MALMO_DEV_AVAHI=1' 2>/dev/null
 	-@pkill -f '$(DEV_DIR)/brain' 2>/dev/null
 	-@pkill -f '$(DEV_DIR)/host-agent' 2>/dev/null
 	-@pkill -f '$(CURDIR)/web-ui/node_modules/.bin/vite' 2>/dev/null
@@ -243,8 +243,8 @@ stop:
 # container (caddy-down), remove app containers/networks, then wipe dev state.
 # stop must run before the rm or the live brain keeps the DB inode alive.
 clean: stop caddy-down
-	-@docker ps -aq --filter "label=com.docker.compose.project" --filter "name=molma-" | xargs -r docker rm -f
-	-@docker network ls -q --filter "name=molma-app-" | xargs -r docker network rm
+	-@docker ps -aq --filter "label=com.docker.compose.project" --filter "name=malmo-" | xargs -r docker rm -f
+	-@docker network ls -q --filter "name=malmo-app-" | xargs -r docker network rm
 	@# App containers (Postgres et al.) write their data as root inside bind
 	@# mounts, so instances/<id>/data is root-owned on the host — same as prod,
 	@# where the privileged uninstall path removes it. A plain `rm` as the dev

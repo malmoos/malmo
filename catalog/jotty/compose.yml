@@ -1,19 +1,19 @@
-# Adapted from the upstream docker-compose.yml (howto/DOCKER.md). molma changes:
+# Adapted from the upstream docker-compose.yml (howto/DOCKER.md). malmo changes:
 #  - Host port mapping (1122:3000) dropped — Caddy routes to the internal port.
-#  - container_name / restart / platform dropped — molma's override owns naming,
+#  - container_name / restart / platform dropped — malmo's override owns naming,
 #    restart policy, and networking.
 #  - entrypoint bypassed and the user pinned to root. The image's
 #    docker-entrypoint.sh su-execs from root down to PUID:PGID, and su-exec calls
-#    setgroups(), which needs CAP_SETGID — stripped by molma's cap_drop: ALL
+#    setgroups(), which needs CAP_SETGID — stripped by malmo's cap_drop: ALL
 #    (verified: the container exits with "su-exec: setgroups(0): Operation not
 #    permitted"). The entrypoint also self-patches its bundled node_modules, which
 #    the image owns as uid 1000 and the capability-stripped container can't write.
-#    So we run the Node server directly as root: molma pre-creates the instance
-#    ./data dir owned by root, and a folderless app gets no `user:` from molma's
+#    So we run the Node server directly as root: malmo pre-creates the instance
+#    ./data dir owned by root, and a folderless app gets no `user:` from malmo's
 #    override (APP_ISOLATION.md # User content), so root is the identity that owns
 #    and can write the data bind. Pinned to 1.24.0 — the startup command is
 #    re-checked on each version bump.
-#  - APP_URL mapped to ${MOLMA_APP_URL}: Jotty sits behind Caddy, and its docs note
+#  - APP_URL mapped to ${MALMO_APP_URL}: Jotty sits behind Caddy, and its docs note
 #    reverse-proxy logins may need the forced base URL (howto/ENV-VARIABLES.md).
 #  - STOP_CHECK_UPDATES=yes: a notes app needs no network, so the outbound GitHub
 #    update check is disabled (permissions.internet is false).
@@ -27,7 +27,7 @@ services:
     entrypoint: ["node", "server.js"]
     environment:
       NODE_ENV: production
-      APP_URL: ${MOLMA_APP_URL}
+      APP_URL: ${MALMO_APP_URL}
       STOP_CHECK_UPDATES: "yes"
     volumes:
       - ./data:/app/data

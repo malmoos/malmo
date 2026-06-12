@@ -3,7 +3,7 @@ package lifecycle
 // Managed-service provisioning (SERVICE_PROVISIONING.md # Tier 1): an app that
 // declares `services.database: {type: postgres}` gets a per-app database+role in
 // the shared Postgres instance, with credentials injected as
-// MOLMA_SERVICE_DATABASE_*. Driven against the fake docker driver (whose Exec
+// MALMO_SERVICE_DATABASE_*. Driven against the fake docker driver (whose Exec
 // default succeeds — pg_isready ready, psql CREATE ok).
 
 import (
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/molmaos/molma/internal/store"
+	"github.com/malmoos/malmo/internal/store"
 )
 
 const dbManifest = `
@@ -39,7 +39,7 @@ services:
   app:
     image: traefik/whoami:v1.10.3
     environment:
-      POSTGRES_URL: ${MOLMA_SERVICE_DATABASE_DSN}
+      POSTGRES_URL: ${MALMO_SERVICE_DATABASE_DSN}
 `
 
 // installDBApp installs dbapp (manifest id overridable so two can coexist in one
@@ -116,21 +116,21 @@ func TestInstallProvisionsPostgres(t *testing.T) {
 
 	// The .env carries the injected credential family.
 	env := readInstanceEnv(t, e, inst.ID)
-	dsn := envValue(env, "MOLMA_SERVICE_DATABASE_DSN")
-	wantHost := "postgres-15.molma.internal"
+	dsn := envValue(env, "MALMO_SERVICE_DATABASE_DSN")
+	wantHost := "postgres-15.malmo.internal"
 	if !strings.HasPrefix(dsn, "postgres://") || !strings.Contains(dsn, wantHost) {
 		t.Fatalf("DSN = %q, want postgres:// … %s", dsn, wantHost)
 	}
-	if got := envValue(env, "MOLMA_SERVICE_DATABASE_HOST"); got != wantHost {
+	if got := envValue(env, "MALMO_SERVICE_DATABASE_HOST"); got != wantHost {
 		t.Fatalf("HOST = %q, want %q", got, wantHost)
 	}
-	if got := envValue(env, "MOLMA_SERVICE_DATABASE_NAME"); got != g.DBName {
+	if got := envValue(env, "MALMO_SERVICE_DATABASE_NAME"); got != g.DBName {
 		t.Fatalf("NAME = %q, want %q", got, g.DBName)
 	}
 
 	// The app service is attached to the service network in the override.
 	override := readInstanceFile(t, e, inst.ID, "compose.override.yml")
-	if !strings.Contains(override, "molma-svc-postgres-15") {
+	if !strings.Contains(override, "malmo-svc-postgres-15") {
 		t.Fatalf("override missing service network:\n%s", override)
 	}
 }
@@ -201,20 +201,20 @@ func TestInstallProvisionsMySQLFamily(t *testing.T) {
 			// The injected family carries the dot-folded host, port 3306, and a
 			// mysql:// DSN for both engines (one wire protocol).
 			env := readInstanceEnv(t, e, inst.ID)
-			wantHost := tc.stem + ".molma.internal"
-			if got := envValue(env, "MOLMA_SERVICE_DATABASE_HOST"); got != wantHost {
+			wantHost := tc.stem + ".malmo.internal"
+			if got := envValue(env, "MALMO_SERVICE_DATABASE_HOST"); got != wantHost {
 				t.Fatalf("HOST = %q, want %q", got, wantHost)
 			}
-			if got := envValue(env, "MOLMA_SERVICE_DATABASE_PORT"); got != "3306" {
+			if got := envValue(env, "MALMO_SERVICE_DATABASE_PORT"); got != "3306" {
 				t.Fatalf("PORT = %q, want 3306", got)
 			}
-			dsn := envValue(env, "MOLMA_SERVICE_DATABASE_DSN")
+			dsn := envValue(env, "MALMO_SERVICE_DATABASE_DSN")
 			if !strings.HasPrefix(dsn, "mysql://") || !strings.Contains(dsn, wantHost+":3306/"+g.DBName) {
 				t.Fatalf("DSN = %q, want mysql:// … %s:3306/%s", dsn, wantHost, g.DBName)
 			}
 
 			override := readInstanceFile(t, e, inst.ID, "compose.override.yml")
-			if !strings.Contains(override, "molma-svc-"+tc.stem) {
+			if !strings.Contains(override, "malmo-svc-"+tc.stem) {
 				t.Fatalf("override missing service network:\n%s", override)
 			}
 		})

@@ -4,7 +4,7 @@
 // useradd+chpasswd for set-password (POST /v1/auth/set-password), gpasswd
 // for set-role (POST /v1/auth/set-role), userdel -r -f for delete-user
 // (POST /v1/auth/delete-user), and serves GET /v1/health/system from
-// /run/molma/health/storage.json (storage category) plus `systemctl is-active`
+// /run/malmo/health/storage.json (storage category) plus `systemctl is-active`
 // over the core-unit allowlist (services category, service-down). All host ops
 // now hit the real system.
 //
@@ -18,7 +18,7 @@
 //   - Linux only
 //   - CGO enabled (for PAM)
 //   - libpam0g-dev installed (apt install libpam0g-dev)
-//   - /etc/pam.d/molma present (copy dev/pam/molma)
+//   - /etc/pam.d/malmo present (copy dev/pam/malmo)
 //   - avahi-daemon running with the system DBus accessible
 //   - Must run as root (pam_unix.so requires privilege)
 //
@@ -33,20 +33,20 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/molmaos/molma/internal/hostagent"
-	"github.com/molmaos/molma/internal/hostagent/avahipublisher"
-	"github.com/molmaos/molma/internal/hostagent/clockhealth"
-	"github.com/molmaos/molma/internal/hostagent/diskusage"
-	"github.com/molmaos/molma/internal/hostagent/healthsource"
-	"github.com/molmaos/molma/internal/hostagent/journalsource"
-	"github.com/molmaos/molma/internal/hostagent/netstate"
-	"github.com/molmaos/molma/internal/hostagent/pamverifier"
-	"github.com/molmaos/molma/internal/hostagent/procsource"
-	"github.com/molmaos/molma/internal/hostagent/rampressure"
-	"github.com/molmaos/molma/internal/hostagent/rebootrequired"
-	"github.com/molmaos/molma/internal/hostagent/servicehealth"
-	"github.com/molmaos/molma/internal/hostagent/usermgr"
-	"github.com/molmaos/molma/internal/protocol"
+	"github.com/malmoos/malmo/internal/hostagent"
+	"github.com/malmoos/malmo/internal/hostagent/avahipublisher"
+	"github.com/malmoos/malmo/internal/hostagent/clockhealth"
+	"github.com/malmoos/malmo/internal/hostagent/diskusage"
+	"github.com/malmoos/malmo/internal/hostagent/healthsource"
+	"github.com/malmoos/malmo/internal/hostagent/journalsource"
+	"github.com/malmoos/malmo/internal/hostagent/netstate"
+	"github.com/malmoos/malmo/internal/hostagent/pamverifier"
+	"github.com/malmoos/malmo/internal/hostagent/procsource"
+	"github.com/malmoos/malmo/internal/hostagent/rampressure"
+	"github.com/malmoos/malmo/internal/hostagent/rebootrequired"
+	"github.com/malmoos/malmo/internal/hostagent/servicehealth"
+	"github.com/malmoos/malmo/internal/hostagent/usermgr"
+	"github.com/malmoos/malmo/internal/protocol"
 )
 
 func main() {
@@ -59,7 +59,7 @@ func main() {
 	pub := &avahipublisher.DBusPublisher{HostSuffix: protocol.AppHostSuffix, LAN: prov.LANInterfaces}
 	avahiSync := &avahipublisher.Sync{Publisher: pub, LAN: prov.LANInterfaces}
 
-	sockPath := os.Getenv("MOLMA_AGENT_SOCK")
+	sockPath := os.Getenv("MALMO_AGENT_SOCK")
 	if sockPath == "" {
 		sockPath = protocol.SocketPath
 	}
@@ -75,7 +75,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer ln.Close()
-	// 0660 root:molma — brain's container UID is in the molma group.
+	// 0660 root:malmo — brain's container UID is in the malmo group.
 	_ = os.Chmod(sockPath, 0o660)
 
 	// verifyPassword uses real PAM; Avahi A records are published via DBus;
@@ -83,7 +83,7 @@ func main() {
 	// flips sudo group membership via gpasswd; delete-user shells out to
 	// userdel -r -f (see docs/progress/host-agent-delete-user.md).
 	a := hostagent.New(
-		&pamverifier.PAMVerifier{Service: "molma"},
+		&pamverifier.PAMVerifier{Service: "malmo"},
 		pub,
 	)
 	a.UserMgr = &usermgr.LinuxUserManager{}

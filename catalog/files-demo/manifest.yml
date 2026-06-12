@@ -14,9 +14,9 @@ permissions:
   internet: false
   lan: false
   # Declares read access to the Documents folder. An install resolves the source
-  # (personal ~/Documents or household /srv/molma/shared/Documents) and the
-  # override gets user:, a bind mount at /molma/documents, group_add for a shared
-  # source, and an injected MOLMA_FOLDER_DOCUMENTS. whoami ignores the mount; the
+  # (personal ~/Documents or household /srv/malmo/shared/Documents) and the
+  # override gets user:, a bind mount at /malmo/documents, group_add for a shared
+  # source, and an injected MALMO_FOLDER_DOCUMENTS. whoami ignores the mount; the
   # app exists to exercise the enforcement path end-to-end (APP_ISOLATION.md #
   # User content). Listens on 8080 (not 80) so it runs cleanly as a non-root
   # elected UID under cap_drop: ALL.

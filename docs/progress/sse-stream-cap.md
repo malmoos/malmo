@@ -19,7 +19,7 @@ The slot is freed by the deferred `release()` when the handler returns, which ha
 
 - `BRAIN_UI_PROTOCOL.md` # Stream cap (line 170, locked at line 261): "Brain enforces ≤16 concurrent SSE streams per session … Excess connections receive `429 Too Many Requests`." Realized exactly: the 17th concurrent stream on a session is refused with `429`.
 - `BRAIN_UI_PROTOCOL.md:188` — "[`system/live`] still counts against the ≤16-stream cap." Both `/api/v1/events` and `/api/v1/system/live` increment one shared per-session count, so the cap is a per-session budget, not per-endpoint.
-- Auth is the `molma_session` cookie (`AUTH.md`): the cap keys on `Identity.Session.Token` from `auth.FromContext`, the same identity the middleware attaches. A second session has its own budget.
+- Auth is the `malmo_session` cookie (`AUTH.md`): the cap keys on `Identity.Session.Token` from `auth.FromContext`, the same identity the middleware attaches. A second session has its own budget.
 - CLAUDE.md # Go code discipline: small self-contained type for one concern, no premature abstraction (the limit is a const, injectable only so a test can shrink it); no new dependency; the `429` body is hand-written to match the sibling raw-handler error, not a new error framework.
 
 ## Known gaps & deviations

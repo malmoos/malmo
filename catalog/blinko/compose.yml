@@ -1,6 +1,6 @@
-# Blinko adapted for molma's Tier-3 sandbox (cap_drop: ALL, no-new-privileges,
+# Blinko adapted for malmo's Tier-3 sandbox (cap_drop: ALL, no-new-privileges,
 # brain-pinned user:). Upstream's compose runs blinko + its own postgres:14 and
-# publishes 1111; molma drops the host port (the brain routes to main_port),
+# publishes 1111; malmo drops the host port (the brain routes to main_port),
 # drops the bundled database and declares managed Postgres in the manifest
 # instead, and binds the app's state dir (/app/.blinko) under ./data.
 #
@@ -17,9 +17,9 @@ services:
       NODE_ENV: production
       # Auth-token signing secret (the NEXTAUTH_ name survives from Blinko's
       # earlier Next.js stack). Generated per-instance by the brain (manifest
-      # `secrets: [{name: auth}]`) and injected as MOLMA_SECRET_AUTH; stable
+      # `secrets: [{name: auth}]`) and injected as MALMO_SECRET_AUTH; stable
       # across restarts so sessions survive.
-      NEXTAUTH_SECRET: ${MOLMA_SECRET_AUTH}
-      DATABASE_URL: ${MOLMA_SERVICE_DATABASE_DSN}
+      NEXTAUTH_SECRET: ${MALMO_SECRET_AUTH}
+      DATABASE_URL: ${MALMO_SERVICE_DATABASE_DSN}
     volumes:
       - ./data:/app/.blinko

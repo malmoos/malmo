@@ -3,7 +3,7 @@ package lifecycle
 // Managed data services — Tier 1 (SERVICE_PROVISIONING.md). The brain runs one
 // shared container per service type+version (lazy spinup), and provisions a
 // per-app database+role inside it. Credentials are injected back into the app
-// as MOLMA_SERVICE_<NAME>_*. v1 supports Postgres and the MySQL family
+// as MALMO_SERVICE_<NAME>_*. v1 supports Postgres and the MySQL family
 // (mysql, mariadb — one code path, per-engine deltas only); Redis is staged
 // after.
 //
@@ -29,8 +29,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/molmaos/molma/internal/manifest"
-	"github.com/molmaos/molma/internal/store"
+	"github.com/malmoos/malmo/internal/manifest"
+	"github.com/malmoos/malmo/internal/store"
 )
 
 // serviceReadyTimeout bounds the lazy-spinup readiness wait (a cold database
@@ -45,7 +45,7 @@ var servicePort = map[string]int{"postgres": 5432, "mysql": 3306, "mariadb": 330
 // tag. v1 pins by tag (digest-pinning the service image is deferred, NEXT.md).
 var serviceImageRepo = map[string]string{"postgres": "postgres", "mysql": "mysql", "mariadb": "mariadb"}
 
-// serviceDSNScheme is the URL scheme writeEnv stamps into MOLMA_SERVICE_*_DSN.
+// serviceDSNScheme is the URL scheme writeEnv stamps into MALMO_SERVICE_*_DSN.
 // MariaDB speaks the MySQL wire protocol, so both family members use mysql://.
 var serviceDSNScheme = map[string]string{"postgres": "postgres", "mysql": "mysql", "mariadb": "mysql"}
 
@@ -66,26 +66,26 @@ var mysqlTools = map[string]struct{ client, admin, rootPWVar string }{
 // serviceName is the "<kind>-<version>" stem used for the container name, the
 // Docker network, the compose project, and the in-network DNS alias. Dots in a
 // version (mysql "8.0") fold to dashes — compose project names reject dots —
-// so mysql 8.0 names mysql-8-0 / molma-svc-mysql-8-0 / mysql-8-0.molma.internal.
+// so mysql 8.0 names mysql-8-0 / malmo-svc-mysql-8-0 / mysql-8-0.malmo.internal.
 func serviceName(kind, version string) string {
 	return kind + "-" + strings.ReplaceAll(version, ".", "-")
 }
 
 // serviceContainerName is the brain's docker-exec management handle.
 func serviceContainerName(kind, version string) string {
-	return "molma-svc-" + serviceName(kind, version)
+	return "malmo-svc-" + serviceName(kind, version)
 }
 
 // serviceNetworkName is the dedicated internal network apps attach to in order
 // to reach this service; no declaration → no membership → no reachability.
 func serviceNetworkName(kind, version string) string {
-	return "molma-svc-" + serviceName(kind, version)
+	return "malmo-svc-" + serviceName(kind, version)
 }
 
 // serviceDNSAlias is the host apps put in their DSN. Matches the name
-// SERVICE_PROVISIONING.md states verbatim (e.g. postgres-15.molma.internal).
+// SERVICE_PROVISIONING.md states verbatim (e.g. postgres-15.malmo.internal).
 func serviceDNSAlias(kind, version string) string {
-	return serviceName(kind, version) + ".molma.internal"
+	return serviceName(kind, version) + ".malmo.internal"
 }
 
 func (m *Manager) serviceDir(kind, version string) string {
@@ -325,7 +325,7 @@ func (m *Manager) dropServiceGrants(ctx context.Context, instanceID string, gran
 // startup. `restart: unless-stopped` already keeps them alive across a daemon
 // restart; this covers the case where the whole host (or Docker) was reset and
 // the brain comes back first. Best-effort. Service containers carry the
-// molma.service label (not molma.managed=true), so the app-orphan reaper in
+// malmo.service label (not malmo.managed=true), so the app-orphan reaper in
 // Reconcile never touches them.
 func (m *Manager) reconcileServices(ctx context.Context) {
 	instances, err := m.store.ListServiceInstances()
@@ -367,7 +367,7 @@ func (m *Manager) writeServiceDir(kind, version, superuserPW string) error {
 
 // postgresServiceCompose renders the shared-Postgres compose. The network is
 // external (the brain creates it `--internal` before `up`); the service joins it
-// under the postgres-<version>.molma.internal alias apps use in their DSN, and
+// under the postgres-<version>.malmo.internal alias apps use in their DSN, and
 // pg_isready backs the healthcheck. container_name is the brain's exec handle.
 func postgresServiceCompose(version string) string {
 	container := serviceContainerName("postgres", version)
@@ -394,7 +394,7 @@ func postgresServiceCompose(version string) string {
       timeout: 3s
       retries: 10
     labels:
-      molma.service: %s
+      malmo.service: %s
 networks:
   svc:
     name: %s
@@ -432,7 +432,7 @@ func mysqlServiceCompose(kind, version string) string {
       timeout: 3s
       retries: 10
     labels:
-      molma.service: %s
+      malmo.service: %s
 networks:
   svc:
     name: %s

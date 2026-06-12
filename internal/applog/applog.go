@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/molmaos/molma/internal/protocol"
+	"github.com/malmoos/malmo/internal/protocol"
 )
 
 // follower is the consumer-side slice of hostclient.Client the registry needs:

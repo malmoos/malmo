@@ -62,7 +62,7 @@ type Manifest struct {
 	// schema — the `images` object). Keyed by the exact `image:` reference used
 	// in the compose (e.g. `traefik/whoami:v1.10.3`); the value carries the
 	// pinned `sha256:…` digest plus the display-only download/disk sizes the
-	// store renders before install. CI (`molma manifest resolve`) resolves all
+	// store renders before install. CI (`malmo manifest resolve`) resolves all
 	// three from the registry at catalog-build time. Absent ⇒ TOFU at install
 	// (Door-2 always, Door-1 until the catalog publishes a digest).
 	Images map[string]ImageRef `yaml:"images,omitempty"`
@@ -78,7 +78,7 @@ type Manifest struct {
 	// manifests omit it.
 	HealthProbe *HealthProbe `yaml:"health_probe,omitempty"`
 
-	// ServiceUser opts a folderless app into a dedicated, molma-allocated
+	// ServiceUser opts a folderless app into a dedicated, malmo-allocated
 	// non-root runtime identity instead of the folderless default (the brain's
 	// euid — root in production). Boolean intent only: no UID is namable in a
 	// manifest (APP_MANIFEST.md # B, APP_ISOLATION.md # Runtime identity & data
@@ -87,10 +87,10 @@ type Manifest struct {
 	ServiceUser bool `yaml:"service_user,omitempty"`
 
 	// Secrets declares per-app random secrets the brain generates once at install
-	// and injects as `MOLMA_SECRET_<NAME>` env vars (APP_MANIFEST.md # secrets,
+	// and injects as `MALMO_SECRET_<NAME>` env vars (APP_MANIFEST.md # secrets,
 	// SERVICE_PROVISIONING.md # Env-var injection). Each name maps in the compose
 	// to whatever the app actually expects (e.g. BETTER_AUTH_SECRET) — same
-	// app-defined mapping convention as MOLMA_SERVICE_*. The value is generated
+	// app-defined mapping convention as MALMO_SERVICE_*. The value is generated
 	// from a CSPRNG, persisted, and re-emitted stably across restarts so
 	// token-signing secrets don't rotate underneath live sessions.
 	Secrets []Secret `yaml:"secrets,omitempty"`
@@ -99,17 +99,17 @@ type Manifest struct {
 	// # D, SERVICE_PROVISIONING.md # Tier 1). The map key is the app's logical name
 	// for the dependency (`database`, `cache`); the brain provisions a per-app
 	// database+role in the shared instance of that type+version and injects the
-	// credentials as `MOLMA_SERVICE_<KEY>_*` (uppercased key). The app's compose
+	// credentials as `MALMO_SERVICE_<KEY>_*` (uppercased key). The app's compose
 	// maps those to whatever it expects — same app-defined convention as
-	// MOLMA_SECRET_*. Absent ⇒ the app brings its own datastore in its compose.
+	// MALMO_SECRET_*. Absent ⇒ the app brings its own datastore in its compose.
 	Services map[string]ServiceDep `yaml:"services,omitempty"`
 
 	// Mail declares the app can send outgoing email through an admin-registered
 	// SMTP provider (APP_MANIFEST.md # D, SERVICE_PROVISIONING.md # BYO outgoing
 	// mail). Presence of the block makes the install dialog offer the provider
-	// picker; when bound, the brain injects MOLMA_MAIL_* into the app's .env and
+	// picker; when bound, the brain injects MALMO_MAIL_* into the app's .env and
 	// the compose maps those to whatever the app expects — same app-defined
-	// convention as MOLMA_SECRET_* / MOLMA_SERVICE_*. Absent ⇒ no picker, never
+	// convention as MALMO_SECRET_* / MALMO_SERVICE_*. Absent ⇒ no picker, never
 	// injected. nil-able so "no block" and "block present" are distinguishable.
 	Mail *Mail `yaml:"mail,omitempty"`
 }
@@ -337,7 +337,7 @@ type Permissions struct {
 	// (APP_MANIFEST.md # folders). The manifest declares *what* content the app
 	// touches (folder + mode + subfolder granularity); it does NOT declare the
 	// source. Source — the owner's personal `~/<Folder>/` vs the household
-	// `/srv/molma/shared/<Folder>/` — is the installer's per-folder election at
+	// `/srv/malmo/shared/<Folder>/` — is the installer's per-folder election at
 	// install time, because the author can't know whether a given household
 	// wants "my own Jellyfin on my movies" or "on the family library"
 	// (DECISIONS.md 2026-05-30 — folder source is installer-elected). Supersedes
@@ -368,15 +368,15 @@ type Folder struct {
 	// Target is the explicit in-container destination path, set ONLY by Door-2
 	// synthetic manifests (DASHBOARD.md # Folder grants carry an explicit
 	// destination path). A pasted third-party compose has no author to map
-	// MOLMA_FOLDER_<NAME>, so the admin types where the app reads its data and
+	// MALMO_FOLDER_<NAME>, so the admin types where the app reads its data and
 	// the brain binds the elected source straight there. Store manifests omit it
-	// and keep the fixed `/molma/<folder>` + env-var convention.
+	// and keep the fixed `/malmo/<folder>` + env-var convention.
 	Target string `yaml:"target,omitempty"`
 }
 
 // Secret is one declared per-app generated secret (APP_MANIFEST.md # secrets).
-// Name is lowercase snake_case; the injected env var is `MOLMA_SECRET_` + the
-// uppercased name (so `auth` → `MOLMA_SECRET_AUTH`). Bytes is the entropy drawn
+// Name is lowercase snake_case; the injected env var is `MALMO_SECRET_` + the
+// uppercased name (so `auth` → `MALMO_SECRET_AUTH`). Bytes is the entropy drawn
 // from the CSPRNG before base64url encoding; it defaults to DefaultSecretBytes
 // and is floored at MinSecretBytes so a manifest can't request a weak secret.
 type Secret struct {
@@ -536,7 +536,7 @@ func (m *Manifest) validateSecrets() error {
 
 // validateServices checks each managed-service declaration (APP_MANIFEST.md #
 // D). The map key must be snake_case (it becomes the uppercased env-var suffix
-// `MOLMA_SERVICE_<KEY>_*`, so the same rule as a secret name); the type must be
+// `MALMO_SERVICE_<KEY>_*`, so the same rule as a secret name); the type must be
 // a known managed kind and the version one this build runs for that kind. Absent
 // ⇒ no-op.
 func (m *Manifest) validateServices() error {

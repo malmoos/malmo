@@ -52,7 +52,7 @@ permissions:
   internet: true
   lan: false
 
-# Filled by `go run ./cmd/molma manifest resolve catalog/mealie/manifest.yml`.
+# Filled by `go run ./cmd/malmo manifest resolve catalog/mealie/manifest.yml`.
 images:
   ghcr.io/mealie-recipes/mealie:v3.19.2:
     digest: sha256:f68e959bf66f4f458893ea58facac71690fe6f2ac7a31466b5cecb41b4e99c02
