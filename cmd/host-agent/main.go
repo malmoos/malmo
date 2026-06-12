@@ -36,6 +36,7 @@ import (
 	"github.com/molmaos/molma/internal/hostagent"
 	"github.com/molmaos/molma/internal/hostagent/avahipublisher"
 	"github.com/molmaos/molma/internal/hostagent/healthsource"
+	"github.com/molmaos/molma/internal/hostagent/netstate"
 	"github.com/molmaos/molma/internal/protocol"
 )
 
@@ -96,6 +97,10 @@ func main() {
 	// canned free/total (≈412 GiB free of a 1 TiB drive) — enough for the
 	// install plan's free_bytes to render a plausible figure natively.
 	a.Disk = hostagent.NewFakeDiskReporter(412<<30, 1<<40)
+	// No NetworkManager in the dev loop either: a fixed plausible LAN set
+	// keeps GET /v1/discovery/state's interfaces field stable regardless of
+	// the dev box's real network.
+	a.Net = hostagent.NewFakeNetState(netstate.LANInterface{Name: "eth0", Index: 2, IPv4: "192.168.1.20"})
 
 	mux := http.NewServeMux()
 	a.Mount(mux)
