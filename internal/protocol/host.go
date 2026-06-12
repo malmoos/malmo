@@ -112,6 +112,20 @@ type DiskCounters struct {
 	WriteBytes int64  `json:"write_bytes"`
 }
 
+// SystemGPU is GET /v1/system/gpu: the host's GPU capability report
+// (BRAIN_HOST_PROTOCOL.md # GPU capability query). The brain asks once per
+// `gpu: true` install, for two facts: Present (false → the hard capacity
+// refusal, APP_ISOLATION.md # GPU) and RenderGID (the render group the
+// container joins via group_add so a cap_drop:ALL app can open /dev/dri).
+// Vendor is "intel" in v1 — the only supported runtime; "amd" and "nvidia"
+// are reserved for the follow-on runtimes and not emitted yet. Vendor is
+// empty and RenderGID 0 when Present is false.
+type SystemGPU struct {
+	Present   bool   `json:"present"`
+	Vendor    string `json:"vendor"`
+	RenderGID int    `json:"render_gid"`
+}
+
 // PublishedName is one entry in the discovery state.
 type PublishedName struct {
 	Slug  string `json:"slug"`

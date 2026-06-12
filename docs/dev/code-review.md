@@ -11,6 +11,20 @@ Read these before looking at a single line of diff — familiarity with the spec
 3. **The spec section(s) named in the progress entry** — the binding contract for the behavior. Read the full section, not just a keyword search.
 4. **`CLAUDE.md`** — the coding conventions and load-bearing decisions every PR is held to.
 
+When reviewing an already-open PR, also read the existing review comments first — see [Prior review comments](#prior-review-comments).
+
+## Prior review comments
+
+When the PR already carries review comments — from a human or from an AI code reviewer (Greptile, Copilot, CodeRabbit, and similar) — read them before writing your own findings. Read both the conversation thread *and* the inline review comments left on specific lines. Fetch them with `gh pr view <N> --comments` for the thread and `gh api repos/{owner}/{repo}/pulls/<N>/comments` for the line-level review comments.
+
+For each prior comment, do one of three things:
+
+- **Confirm and reinforce** — the issue is real and still present in the latest diff. Cite that a reviewer already flagged it, and raise the severity if it has been ignored across commits: an unaddressed repeat finding is a stronger signal than a fresh one.
+- **Dismiss** — it's a false positive or was already addressed in a later commit. Say so in one line with the reason, so the maintainer doesn't have to re-adjudicate it.
+- **Extend** — it points at a real problem but missed the full scope. Take it further and cover what it left out.
+
+Never silently re-state a finding another reviewer already made, and never silently drop one. AI-reviewer comments are input, not authority: verify each against the actual diff and the spec rather than deferring to it.
+
 ## Severity levels
 
 **Block** — the PR must not merge as-is. A correctness bug, security issue, spec deviation, or convention violation that will cause real harm or future debt. Always include a fix or a path to one.

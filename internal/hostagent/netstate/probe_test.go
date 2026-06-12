@@ -1,5 +1,6 @@
-// Package avahipublisher — local-IP detection tests (no build tag, no DBus).
-package avahipublisher
+// Package netstate — route-probe detection tests (no build tag, no DBus).
+// Moved from avahipublisher with the probe itself (#130).
+package netstate
 
 import (
 	"errors"

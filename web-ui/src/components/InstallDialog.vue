@@ -9,6 +9,7 @@
 // Write-mode folder warnings are visually distinct (warning/red) per spec
 // (APP_MANIFEST.md:218, APP_ISOLATION.md # User content).
 import { computed, ref } from "vue";
+import { RouterLink } from "vue-router";
 import type { InstallPlan, InstallPlanFolder, InstallRequest, FolderElection, Scope } from "../api";
 import { useAuth } from "../auth";
 import { formatSize } from "../utils";
@@ -19,7 +20,7 @@ const props = defineProps<{
   submitError?: string | null;
 }>();
 
-const { singleUserMode } = useAuth();
+const { currentUser, singleUserMode } = useAuth();
 
 const emit = defineEmits<{
   submit: [req: InstallRequest];
@@ -96,6 +97,16 @@ function initFolderDefaults(scope: Scope) {
 
 initFolderDefaults(props.scope);
 
+// ── Outgoing-email election (SERVICE_PROVISIONING.md # BYO outgoing mail) ─────
+// Present only when the manifest declares mail support. "" = None (nothing
+// injected; the app runs with email features off). When exactly one provider is
+// registered it's the obvious intent, so it's preselected; with several the
+// admin must choose.
+const mailProviders = computed(() => props.plan.mail?.providers ?? []);
+const mailProviderId = ref<string>(mailProviders.value.length === 1 ? (mailProviders.value[0]?.id ?? "") : "");
+// Members can't register providers, so the add link is admin-only.
+const canAddProvider = computed(() => currentUser.value?.role === "admin");
+
 // ── Human-readable helpers ────────────────────────────────────────────────────
 
 function capitalize(s: string): string {
@@ -136,6 +147,9 @@ function handleSubmit() {
     scope: props.scope,
     config: { folders: folderElections },
   };
+  if (props.plan.mail && mailProviderId.value) {
+    req.config!.mail_provider_id = mailProviderId.value;
+  }
 
   emit("submit", req);
 }
@@ -258,6 +272,39 @@ function handleSubmit() {
               />
             </div>
           </div>
+        </div>
+
+        <!-- Outgoing-email picker (mail-capable apps only). None is always a
+             valid choice — the app installs with email features off. -->
+        <div v-if="plan.mail" class="space-y-1.5">
+          <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Outgoing email</p>
+          <p class="text-sm text-muted-foreground">
+            {{ plan.name }} can send email — things like password resets and reminders. Pick the account it should send from.
+          </p>
+          <div class="flex flex-col gap-1">
+            <label
+              class="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-2.5 py-1.5 text-sm hover:bg-muted"
+              :class="mailProviderId === '' ? 'border-accent bg-muted' : ''"
+            >
+              <input type="radio" name="mail-provider" value="" v-model="mailProviderId" class="accent-accent" />
+              None — email features stay off
+            </label>
+            <label
+              v-for="p in mailProviders"
+              :key="p.id"
+              class="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-2.5 py-1.5 text-sm hover:bg-muted"
+              :class="mailProviderId === p.id ? 'border-accent bg-muted' : ''"
+            >
+              <input type="radio" name="mail-provider" :value="p.id" v-model="mailProviderId" class="accent-accent" />
+              {{ p.label }}
+            </label>
+          </div>
+          <p v-if="canAddProvider" class="text-xs text-muted-foreground">
+            <RouterLink to="/settings/mail" class="underline hover:text-foreground">
+              {{ mailProviders.length === 0 ? "Add an email account in Settings" : "Manage email accounts" }}
+            </RouterLink>
+            <template v-if="mailProviders.length === 0"> — you can also bind one later from the app's page.</template>
+          </p>
         </div>
 
         <!-- Storage footprint — what installing costs the box (DASHBOARD.md #

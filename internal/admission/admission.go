@@ -39,6 +39,9 @@ type rawService struct {
 	Volumes     []any  `yaml:"volumes"`
 	Extends     any    `yaml:"extends"`
 	User        any    `yaml:"user"` // string or bare YAML int
+	Deploy      struct {
+		Replicas *int `yaml:"replicas"`
+	} `yaml:"deploy"`
 }
 
 type composeDoc struct {
@@ -115,6 +118,14 @@ func checkService(name string, svc rawService) error {
 		return reject("service %q declares build: — apps must ship a prebuilt image, not a Dockerfile", name)
 	case svc.Extends != nil:
 		return reject("service %q uses extends: — apps must be self-contained in one compose file", name)
+	case svc.Deploy.Replicas != nil && *svc.Deploy.Replicas > 1:
+		// molma is a single-node appliance: a second replica buys no
+		// availability and Caddy routes to one upstream alias per instance.
+		// The main service additionally has its container_name pinned for the
+		// per-app Logs tail (APP_LIFECYCLE.md # Locked: override file contents),
+		// which compose refuses to scale — so reject the unsupported config at
+		// admission, naming the field, instead of failing opaquely at `up`.
+		return reject("service %q sets deploy.replicas: %d — molma is a single-node appliance and runs one replica per service; remove deploy.replicas", name, *svc.Deploy.Replicas)
 	}
 	if m := svc.NetworkMode; m == "host" || m == "none" || strings.HasPrefix(m, "container:") {
 		return reject("service %q sets network_mode: %s — not allowed; molma manages app networking", name, m)

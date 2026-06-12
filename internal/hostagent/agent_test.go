@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/molmaos/molma/internal/hostagent/netstate"
 	"github.com/molmaos/molma/internal/protocol"
 )
 
@@ -575,6 +576,28 @@ func TestSystemResources_ReturnsAllowlistedSample(t *testing.T) {
 	}
 }
 
+func TestDiscoveryState_InterfacesEmptyWithoutProvider(t *testing.T) {
+	_, mux := newTestAgent(&stubVerifier{})
+	s := decodeBody[protocol.DiscoveryState](t, get(t, mux, "/v1/discovery/state"))
+	// Empty list, not null: "not measured" must still be valid JSON for the
+	// brain's decoder.
+	if s.Interfaces == nil || len(s.Interfaces) != 0 {
+		t.Errorf("want empty interfaces without a provider, got %#v", s.Interfaces)
+	}
+}
+
+func TestDiscoveryState_InterfacesFromNetState(t *testing.T) {
+	a, mux := newTestAgent(&stubVerifier{})
+	a.Net = NewFakeNetState(
+		netstate.LANInterface{Name: "eno1", Index: 2, IPv4: "192.168.2.160"},
+		netstate.LANInterface{Name: "wlp2s0", Index: 3, IPv4: "192.168.2.161"},
+	)
+	s := decodeBody[protocol.DiscoveryState](t, get(t, mux, "/v1/discovery/state"))
+	if len(s.Interfaces) != 2 || s.Interfaces[0] != "eno1" || s.Interfaces[1] != "wlp2s0" {
+		t.Errorf("want [eno1 wlp2s0], got %v", s.Interfaces)
+	}
+}
+
 // The brain diffs successive samples, so two reads must not go backwards in time
 // (a negative ts_ns delta would null every rate).
 func TestSystemResources_TimestampIsMonotonic(t *testing.T) {
@@ -583,6 +606,40 @@ func TestSystemResources_TimestampIsMonotonic(t *testing.T) {
 	second := decodeBody[protocol.SystemResources](t, get(t, mux, "/v1/system/resources"))
 	if second.TsNs < first.TsNs {
 		t.Errorf("ts_ns went backwards: first=%d second=%d", first.TsNs, second.TsNs)
+	}
+}
+
+// --- system gpu ---
+
+// No reporter wired → present: false, still a clean 200. "No detector" means
+// "no usable GPU", which the brain turns into the gpu: true install refusal.
+func TestSystemGPU_NoReporter_ReportsNoGPU(t *testing.T) {
+	_, mux := newTestAgent(&stubVerifier{})
+	w := get(t, mux, "/v1/system/gpu")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	g := decodeBody[protocol.SystemGPU](t, w)
+	if g.Present || g.Vendor != "" || g.RenderGID != 0 {
+		t.Errorf("want zero no-GPU report with no reporter wired, got %+v", g)
+	}
+}
+
+func TestSystemGPU_DelegatesToReporter(t *testing.T) {
+	a, mux := newTestAgent(&stubVerifier{})
+	fake := NewFakeGPUReporter(protocol.SystemGPU{Present: true, Vendor: "intel", RenderGID: 104})
+	a.GPU = fake
+
+	g := decodeBody[protocol.SystemGPU](t, get(t, mux, "/v1/system/gpu"))
+	if !g.Present || g.Vendor != "intel" || g.RenderGID != 104 {
+		t.Errorf("want synthetic intel iGPU report, got %+v", g)
+	}
+
+	// The toggle the capacity-refusal path tests against.
+	fake.Set(protocol.SystemGPU{})
+	g = decodeBody[protocol.SystemGPU](t, get(t, mux, "/v1/system/gpu"))
+	if g.Present {
+		t.Errorf("want present: false after Set to no-GPU, got %+v", g)
 	}
 }
 

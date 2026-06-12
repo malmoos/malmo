@@ -12,7 +12,7 @@ import { computed, ref, watch } from "vue";
 import { useRoute, useRouter, RouterLink } from "vue-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/vue-query";
 import { AppWindow, ChevronDown } from "lucide-vue-next";
-import { api, waitForJob, type Instance, type CatalogDetail, type Job } from "@/api";
+import { api, waitForJob, type Instance, type CatalogDetail, type Job, type MailProviderOption } from "@/api";
 import { useAuth } from "@/auth";
 import AppLogs from "@/components/AppLogs.vue";
 
@@ -94,6 +94,23 @@ const uninstall = useMutation({
 const busy = computed(
   () => stop.isPending.value || start.isPending.value || uninstall.isPending.value,
 );
+
+// ── Outgoing email (SERVICE_PROVISIONING.md # BYO outgoing mail) ─────────────
+// Shown only for mail-capable apps (mail_supported comes from GET /apps/{id}).
+// The options endpoint is id+label and readable by any signed-in user, so a
+// member can rebind their own personal app. A rebind recreates the app's
+// containers (env is read at container create), hence the job + hint below.
+const mailOptions = useQuery({
+  queryKey: ["mail-provider-options"],
+  queryFn: () => api.get<{ providers: MailProviderOption[] }>("/mail-providers/options"),
+  enabled: computed(() => !!app.value?.mail_supported && canControl.value),
+});
+
+const rebindMail = useMutation({
+  mutationFn: async (providerId: string) =>
+    awaitJob(await api.put<Job>(`/apps/${id.value}/mail-binding`, { provider_id: providerId })),
+  onSettled: invalidate,
+});
 </script>
 
 <template>
@@ -200,6 +217,33 @@ const busy = computed(
       <p v-if="uninstall.isError.value" class="text-sm text-destructive">
         Couldn't uninstall: {{ (uninstall.error.value as Error)?.message }}
       </p>
+
+      <!-- Outgoing email — provider binding for mail-capable apps. -->
+      <section v-if="app.mail_supported && canControl" class="space-y-2">
+        <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Outgoing email</h2>
+        <div class="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card px-4 py-3">
+          <div class="min-w-0 flex-1">
+            <div class="text-sm font-medium">Send email as</div>
+            <div class="text-xs text-muted-foreground">
+              {{ rebindMail.isPending.value ? "Applying — the app restarts briefly." : "Changing this restarts the app briefly." }}
+            </div>
+          </div>
+          <select
+            :value="app.mail_provider_id ?? ''"
+            class="rounded-lg border border-border bg-background px-2 py-1 text-sm outline-none focus:border-accent disabled:opacity-50"
+            :disabled="rebindMail.isPending.value || busy"
+            @change="(e) => rebindMail.mutate((e.target as HTMLSelectElement).value)"
+          >
+            <option value="">None — email features off</option>
+            <option v-for="p in (mailOptions.data.value?.providers ?? [])" :key="p.id" :value="p.id">
+              {{ p.label }}
+            </option>
+          </select>
+        </div>
+        <p v-if="rebindMail.isError.value" class="text-sm text-destructive">
+          Couldn't change the email account: {{ (rebindMail.error.value as Error)?.message }}
+        </p>
+      </section>
 
       <!-- Logs — collapsed by default; a full-width accordion row (styled like
            the Installed apps list rows) that expands the log panel on click. The
