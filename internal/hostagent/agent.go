@@ -8,9 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -805,14 +805,21 @@ func (a *Agent) resolveHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fake branch: deterministic home path and UID/GID from the username.
-	uid := fakeUID(username)
-	slog.Info("resolve-home (fake)", "username", username, "uid", uid)
-	writeJSON(w, http.StatusOK, protocol.ResolveHomeResponse{
-		HomePath: "/home/" + username,
-		UID:      uid,
-		GID:      uid,
-	})
+	// Fake branch: the dev loop runs the brain and this agent as the same
+	// unprivileged operator, so resolve-home returns that operator's *own*
+	// uid/gid and home dir — not a synthetic fakeUID + /home/<user> the brain
+	// can't chown to. The brain (same operator) then already owns every private
+	// bind dir it creates, so the per-dir chowns are no-op successes needing no
+	// privilege (#147). The home dir is ensured to exist + operator-owned so the
+	// use-case folder bind source is writable too.
+	home, uid, gid, err := devIdentity()
+	if err != nil {
+		slog.Error("resolve-home (fake): resolve operator identity", "err", err)
+		writeErr(w, http.StatusInternalServerError, "resolve-home-failed", "resolve-home failed")
+		return
+	}
+	slog.Info("resolve-home (fake)", "username", username, "home", home, "uid", uid)
+	writeJSON(w, http.StatusOK, protocol.ResolveHomeResponse{HomePath: home, UID: uid, GID: gid})
 }
 
 // wellKnownIdentity returns the fixed service-account UIDs/GIDs for the
@@ -838,13 +845,22 @@ func (a *Agent) wellKnownIdentity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fake branch: fixed dev constants.
-	// 2000/2001 sit below the per-user FNV hash range [3000, 3999] so service
-	// identities don't collide with hashed user UIDs in the fake host-agent.
+	// Fake branch: resolve the malmo-app service identity to the dev operator's
+	// own uid/gid (not fixed 2000/2001) for the same reason as resolve-home — a
+	// household-scope folder app then runs as an identity the unprivileged dev
+	// brain owns, so Part A's bind-dir chowns are no-op successes (#147). The
+	// shared GID is the operator's egid, a group the operator is actually in, so
+	// the group_add on shared-source mounts is valid in dev.
+	_, uid, gid, err := devIdentity()
+	if err != nil {
+		slog.Error("well-known-identity (fake): resolve operator identity", "err", err)
+		writeErr(w, http.StatusInternalServerError, "well-known-identity-failed", "well-known-identity failed")
+		return
+	}
 	writeJSON(w, http.StatusOK, protocol.WellKnownIdentityResponse{
-		MalmoAppUID:    2000,
-		MalmoAppGID:    2000,
-		MalmoSharedGID: 2001,
+		MalmoAppUID:    uid,
+		MalmoAppGID:    gid,
+		MalmoSharedGID: gid,
 	})
 }
 
@@ -940,13 +956,21 @@ func (a *Agent) releaseAppService(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// fakeUID returns a stable UID in the range [3000, 3999] for the given username
-// using FNV-32a so the fake host-agent's resolve-home responses are coherent
-// across calls without persisting state.
-func fakeUID(username string) int {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(username))
-	return 3000 + int(h.Sum32()%1000)
+// devIdentity returns the operator identity the fake host-agent hands out for
+// resolve-home and well-known-identity: the process's own uid/gid (the dev
+// brain runs as this same operator, so everything it creates is already
+// chownable) and its home dir, ensured to exist so the use-case folder bind
+// source is writable (#147). os.UserHomeDir reads $HOME — set in every dev
+// shell — and the dir is the operator's, so MkdirAll is operator-owned.
+func devIdentity() (home string, uid, gid int, err error) {
+	home, err = os.UserHomeDir()
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("resolve home dir: %w", err)
+	}
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		return "", 0, 0, fmt.Errorf("ensure home dir %q: %w", home, err)
+	}
+	return home, os.Getuid(), os.Getgid(), nil
 }
 
 // --- HTTP helpers ---
