@@ -96,6 +96,10 @@ func main() {
 	// `docker logs -f --timestamps`. The compose replica suffix (-1) is probed
 	// automatically; falls back to the bare stem for standalone containers.
 	a.Logs = &dockerLogSource{}
+	// On Linux, wire real /proc counters so make dev shows live CPU and RAM.
+	// On other platforms newSystemSampler returns nil and the agent falls back
+	// to synthetic monotonic counters (agent.go:447).
+	a.System = newSystemSampler()
 	// No real data drive in the dev loop, so GET /v1/system/status reports a
 	// canned free/total (≈412 GiB free of a 1 TiB drive) — enough for the
 	// install plan's free_bytes to render a plausible figure natively.
