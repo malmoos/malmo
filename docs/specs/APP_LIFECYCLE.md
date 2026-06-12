@@ -132,6 +132,7 @@ Before install, brain runs `docker compose config` against the author's compose 
 - `volumes:` with absolute host paths. Only bind mounts under the instance's `data/` dir are allowed.
 - `build:` — apps ship images, not Dockerfiles.
 - `extends:` referencing files outside the manifest package.
+- `deploy.replicas` greater than 1 on any service. molma is a single-node appliance — a second replica buys no availability, Caddy routes to one upstream alias per instance, and the main service's `container_name` is pinned for the per-app Logs tail (# Locked: override file contents), which compose refuses to scale. Rejecting at admission names the field instead of failing opaquely at `up`.
 
 Rejection messages name the exact field that failed. Catalog CI runs the same checks before publish.
 
