@@ -12,6 +12,8 @@ assignees: ''
 
 <!-- One sentence: what the app does. -->
 
+> **Before you open this:** search **open AND closed** issues for the same app first (`gh issue list --search "<AppName>" --state all`, and check the `catalog` label). If one already exists — even closed/rejected — comment there instead of filing a duplicate.
+
 ---
 
 **How to do this:** follow [Authoring catalog apps with an agent](/molmaos/molma/blob/main/docs/dev/authoring-apps-with-an-agent.md#the-prompt). Paste the prompt, append the inputs above, run it inside the molma repo.

@@ -4,6 +4,7 @@ A reusable agent prompt that turns an upstream `docker-compose.yml` (or a GitHub
 
 ## How to use it
 
+0. **Work from a Catalog app issue.** Authoring starts from an issue filed with the **Catalog app** template (`.github/ISSUE_TEMPLATE/catalog-app.md`) — the template's duplicate-check is where you confirm the app isn't already requested or previously rejected, so don't repeat that search here. Read the issue first: if it's a re-attempt after a closed/rejected one, understand why the earlier try was closed before starting. (No issue yet? File one from the template before authoring — don't free-form it.)
 1. Open a fresh agent session **inside the molma repo** (the prompt reads on-disk sources — it does not rely on its own text being correct).
 2. Paste the prompt block below, then append the **inputs**: the app name, a pasted compose **or** a GitHub repo URL, and optionally a docs URL.
 3. Let it work, then **read its report and re-run `manifest check` yourself** before committing. The agent's job ends at a passing `manifest check` (schema + admission in one); the PR (`Closes #<N>`, progress entry if it's a slice) is yours.
