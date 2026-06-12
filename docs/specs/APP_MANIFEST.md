@@ -71,7 +71,10 @@ links:
   source: https://github.com/photoprism/photoprism
   support: https://docs.photoprism.app
 changelog_url: https://github.com/photoprism/photoprism/releases  # optional; used by the "What's new" panel after an update
+listed: true                      # optional, default true; `false` pulls the app from the store (hidden from browse + uninstallable) while keeping its manifest in the catalog
 ```
+
+**`listed`** controls store visibility. Omitted (or `true`) ⇒ the app appears in the browse grid, has a detail page, and can be installed — the normal case. Setting `listed: false` **pulls the app from the store**: it's hidden from browse, its detail page and install paths return 404, but the manifest stays in the catalog directory — it still parses, lints, and serves its icons/screenshots, and an already-installed instance keeps its dashboard card and stays reconcilable (visibility is resolved by id, not via the filtered browse). This is how a `Blocked` or `Rejected` app (`dev/catalog-status.md`) is withdrawn without throwing away its adaptation work — e.g. an image that can't yet run under the sandbox, parked until the platform gap or upstream fix lands. It is a curation control, not a per-user or per-role one; there is no "show me unlisted apps" path in v1.
 
 ### B. Runtime
 
@@ -224,6 +227,26 @@ environment:
 
 **The value is generated once and stays stable** for the life of the instance — it is persisted and re-emitted on every restart, never re-rolled, because a token-signing secret that changed underneath the app would invalidate every live session. `name` is lowercase snake_case (so the uppercased env-var suffix is unambiguous); names are unique within a manifest. See `SERVICE_PROVISIONING.md` # Env-var injection.
 
+### D3. Outgoing mail
+
+Apps that can *send* email — password resets, reminders, invites — declare it, and the admin decides at install (or later) which of the box's registered SMTP providers the app sends through (`SERVICE_PROVISIONING.md` # BYO outgoing mail).
+
+```yaml
+mail:
+  optional: true       # the app must run fine unbound (email features off)
+```
+
+When the instance is bound to a provider, the brain injects `MOLMA_MAIL_HOST/_PORT/_USER/_PASSWORD/_FROM/_ENCRYPTION` plus a Symfony-style `MOLMA_MAIL_DSN`; unbound, **nothing is injected**. The compose maps the vars app-defined as usual, with a default for the unbound case so absence degrades to the app's own "email off" mode:
+
+```yaml
+# inside the app's docker-compose.yml (Kimai)
+environment:
+  MAILER_URL: "${MOLMA_MAIL_DSN:-null://null}"
+  MAILER_FROM: "${MOLMA_MAIL_FROM:-kimai@example.com}"
+```
+
+v1 admits only `optional: true` — an app that *can't* run unbound (`optional: false` or a bare `mail: {}`) is rejected at parse, because a box with no registered providers couldn't install it. Required-mail semantics (blocking install until a provider is picked) is a possible later loosening; declare-and-degrade is the v1 contract.
+
 ### E. Permissions and capabilities
 
 What the app is allowed to touch. Default is "very little"; manifest opts in to specific things.
@@ -289,7 +312,7 @@ This is the same injection convention as managed services (`MOLMA_SERVICE_*`) an
 
 #### External-storage convention for popular apps
 
-The molma-tuned manifest for an app whose upstream supports external libraries (Immich, Photoprism, Jellyfin, Nextcloud, Paperless-ngx, Navidrome, ...) declares `folders` and configures the app via env vars or post-install steps to **point its internal "library path" at the bind-mounted use-case folder**. The user's files stay at `~/Photos/`, the app indexes them there, uninstalling the app keeps the files. This is the path that earns the manifest a "files first-class" badge in the store.
+The molma-tuned manifest for an app whose upstream supports external libraries (Immich, Photoprism, Jellyfin, Nextcloud, Navidrome, ...) declares `folders` and configures the app via env vars or post-install steps to **point its internal "library path" at the bind-mounted use-case folder**. The user's files stay at `~/Photos/`, the app indexes them there, uninstalling the app keeps the files. This is the path that earns the manifest a "files first-class" badge in the store.
 
 Apps that don't support external libraries fall back to `storage.app_managed_user_content: true` (`STORAGE.md` # Files are first-class). For v1, the store catalog is hand-curated by molma — we write manifests that follow the external-storage pattern wherever upstream supports it.
 
@@ -425,6 +448,7 @@ permissions:
 - **Public, versioned spec.** Third-party stores depend on it.
 - **Env-var injection: app-defined naming.** App's compose maps molma's stable `MOLMA_SERVICE_*` variables to whatever names the app expects. No auto-rewrite. Authors adapt; we document.
 - **Generated secrets are declared, brain-generated, and stable.** A manifest declares `secrets: [{name, bytes?}]`; the brain draws each from a CSPRNG once at install, persists it, and injects it as `MOLMA_SECRET_<NAME>` — re-emitted verbatim on every restart so token-signing secrets don't rotate underneath live sessions. Same app-defined wiring as `MOLMA_SERVICE_*` (# D2). Security hardening (delivery surface, at-rest, rotation) is tracked open in `NEXT.md` # App-secret injection hardening.
+- **Outgoing mail is declared optional-only (`mail: {optional: true}`).** The declaration unlocks the install-time provider picker and per-instance `MOLMA_MAIL_*` injection (# D3, `SERVICE_PROVISIONING.md` # BYO outgoing mail); unbound apps get nothing injected and must run with email off. `optional: false` (and a bare `mail: {}`) is rejected at parse in v1.
 - **Permissions granularity: medium for v1.** Internet, LAN, shared storage, devices, privileged, network isolation. Not coarse-only, not fine-grained Kubernetes-style.
 - **Custom apps can request managed services.** Allowed, not encouraged.
 - **No inter-app dependencies in v1.** Apps are self-contained. If they need multiple services, they go in the same compose. Cross-app sharing only via shared use-case folders (two of the same user's apps both binding the same `folders` entry; the installer points each at the same personal or shared source).

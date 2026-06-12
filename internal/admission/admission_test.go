@@ -81,6 +81,28 @@ services:
 			wantErr: true, wantSub: []string{`"web"`, "extends"},
 		},
 		{
+			name: "deploy.replicas > 1 rejected",
+			yaml: `
+services:
+  web:
+    image: nginx
+    deploy:
+      replicas: 3
+`,
+			wantErr: true, wantSub: []string{`"web"`, "deploy.replicas"},
+		},
+		{
+			name: "deploy.replicas 1 allowed",
+			yaml: `
+services:
+  web:
+    image: nginx
+    deploy:
+      replicas: 1
+`,
+			wantErr: false,
+		},
+		{
 			name: "network_mode host rejected",
 			yaml: `
 services:

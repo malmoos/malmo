@@ -23,11 +23,11 @@ We also accept up-front that **`.local` is a desktop story.** Android browsers d
 
 ## What we publish
 
-Three categories of records, all driven by the brain via host-agent:
+Three categories of records:
 
 ### 1. The host record
 
-`molma.local A <lan-ip>` — the box itself. Published once at boot, re-announced on link-up and IP change. The dashboard at `https://molma.local` (or `http://molma.local` pre-toggle) resolves through this.
+`molma.local A <lan-ip>` — the box itself. This is avahi-daemon's native per-interface host record, driven by the system hostname — not published by molma code. Avahi announces it at startup and re-announces on link-up and IP change. The dashboard at `https://molma.local` (or `http://molma.local` pre-toggle) resolves through this.
 
 ### 2. Per-app A records
 
@@ -37,11 +37,7 @@ For each installed app instance with slug `<slug>`: `<slug>.local A <lan-ip>`. T
 
 **Collision fallback.** Single-label names share the flat `.local` namespace with every other device on the LAN, so `photos.local` could clash with, say, a printer. On an Avahi name collision the publisher retries once with a box-qualified name `<slug>-<box>.local` (e.g. `photos-molma.local`, where `<box>` is the box's hostname label). The publish call returns the name that actually won; the reconciler uses *that* returned name for both the Caddy route and the URL shown in the dashboard, so the route and the announcement never disagree. If both the primary and the fallback collide, publish fails and the install surfaces the error (rare; same class as the box `hostname-conflict` issue below).
 
-**Mechanism: Avahi DBus `EntryGroup.AddAddress`.** The install reconciler calls
-`org.freedesktop.Avahi.Server.EntryGroupNew`, then
-`org.freedesktop.Avahi.EntryGroup.AddAddress` with the slug hostname and the
-box's local IPv4, then `Commit`. Uninstall calls `EntryGroup.Free`, which
-withdraws the announcement.
+**Mechanism: Avahi DBus `EntryGroup.AddAddress`, per LAN interface.** The install reconciler calls `org.freedesktop.Avahi.Server.EntryGroupNew`, then `org.freedesktop.Avahi.EntryGroup.AddAddress` once per LAN interface — each call scoped to that interface's index and carrying that interface's own IPv4 (the set comes from NetworkManager; see # Interface scoping) — then `Commit`. Announcing each interface's address on that interface mirrors what avahi-daemon does natively for the box's own host record, and makes "announced a bridge or mesh IP on the LAN" structurally impossible. Uninstall calls `EntryGroup.Free`, which withdraws the announcement. When NetworkManager is unavailable (the dev inner loop), the publisher falls back to a single all-interfaces announcement with one route-probed IPv4.
 
 Static service files (`/etc/avahi/services/*.service`) were the original plan
 but were verified not to work for this use case on 2026-05-24: Avahi static
@@ -93,11 +89,10 @@ By default Avahi advertises on every interface. We restrict it to **LAN interfac
 Configured in `/etc/avahi/avahi-daemon.conf`:
 
 ```
-allow-interfaces=eth0,wlan0  # actual names resolved at boot
-deny-interfaces=tailscale0,docker0,br-*
+allow-interfaces=eno1,wlp2s0  # actual names resolved at boot
 ```
 
-host-agent computes the allow-list at boot from NetworkManager's connection state and writes the config fragment. Re-computed on interface add/remove. Spec'd in `BRAIN_HOST_PROTOCOL.md` as part of the network-state surface.
+host-agent computes the allow-list from NetworkManager's connection state (active ethernet/WiFi connections) at boot and re-computes it on interface add/remove. Avahi has no conf.d include mechanism, so host-agent rewrites the `allow-interfaces` key inside the main conf in place (atomic temp-file + rename; every other line preserved). An allowlist already implies deny-everything-else, so no `deny-interfaces` is written. avahi-daemon reads its conf only at startup — SIGHUP/`--reload` re-reads only static service files — so an allowlist change requires a daemon restart, and a restart destroys every committed DBus entry group, so host-agent always re-publishes all app names afterwards. The allowlist is complementary to per-interface `AddAddress` (see # Per-app A records), not redundant: it also keeps avahi-daemon's *native* host record and the SMB advertisement off the mesh and Docker bridges, which per-app entry groups can't influence. Spec'd in `BRAIN_HOST_PROTOCOL.md` as part of the network-state surface.
 
 ## Why subdomains can't be wildcarded — and what we do instead
 
@@ -140,7 +135,7 @@ These are not bugs we can fix in molma's code, but support-load realities to ant
 - **VLAN segmentation.** Multicast doesn't cross VLAN boundaries by default. Box on one VLAN, clients on another, no discovery. User-network-design issue; out of scope for v1 to detect.
 - **IPv6 link-local.** Avahi publishes both A and AAAA by default. Some older clients get confused. We leave the default on; if reports surface, we have the `use-ipv6=no` knob.
 - **Multiple `.local` responders on the LAN.** A second molma box, a Synology, a printer — all happily coexist (each owns its own names). The only collision case is two devices claiming `molma.local`; Avahi's RFC 6762 §9 conflict-resolution renames the loser to `molma-2.local`. This is correct behavior but produces a confusing URL change. The dashboard surfaces a typed health issue (`hostname-conflict`) when Avahi reports a rename; admin can pick a different hostname from Settings → System → Network.
-- **IP change without link-down.** Rare (manual DHCP server change, router swap). Avahi's announce-on-link-up doesn't fire. host-agent watches NetworkManager state and pokes Avahi (`avahi-daemon --reload`) on IP change.
+- **IP change without link-down.** Rare (manual DHCP server change, router swap). Avahi's announce-on-link-up doesn't fire, and committed DBus entry groups hold the literal old address — `avahi-daemon --reload` fixes neither (it only re-reads static service files). host-agent watches NetworkManager over DBus and re-publishes every entry group with the current per-interface addresses on any network change (debounced ~2s).
 
 ## What we explicitly don't do
 

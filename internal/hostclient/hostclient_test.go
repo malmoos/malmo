@@ -134,6 +134,10 @@ func startFakeAuthAgent(t *testing.T) string {
 		})
 	})
 
+	mux.HandleFunc("GET /v1/system/gpu", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(protocol.SystemGPU{Present: true, Vendor: "intel", RenderGID: 104})
+	})
+
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() {
@@ -167,6 +171,17 @@ func TestSystemResources(t *testing.T) {
 	}
 	if resp.LoadAvg != [3]float64{0.42, 0.51, 0.48} {
 		t.Errorf("loadavg: want [0.42 0.51 0.48], got %v", resp.LoadAvg)
+	}
+}
+
+func TestSystemGPU(t *testing.T) {
+	c := New(startFakeAuthAgent(t))
+	resp, err := c.SystemGPU(context.Background())
+	if err != nil {
+		t.Fatalf("SystemGPU: %v", err)
+	}
+	if !resp.Present || resp.Vendor != "intel" || resp.RenderGID != 104 {
+		t.Errorf("want {present:true intel 104}, got %+v", resp)
 	}
 }
 

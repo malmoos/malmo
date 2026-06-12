@@ -36,6 +36,23 @@ type InstallPlanDTO struct {
 	ScopeDefault string                 `json:"scope_default"`
 	Footprint    InstallPlanFootprint   `json:"footprint"`
 	Permissions  InstallPlanPermissions `json:"permissions"`
+	Mail         *InstallPlanMail       `json:"mail,omitempty"`
+}
+
+// InstallPlanMail is the outgoing-mail picker block, present only when the
+// manifest declares mail support (SERVICE_PROVISIONING.md # BYO outgoing
+// mail). Providers carry id+label only — the full provider settings (host,
+// username) stay on the admin-only CRUD surface; any installer just picks a
+// name. Empty Providers ⇒ the UI renders the picker with only "None".
+type InstallPlanMail struct {
+	Optional  bool                 `json:"optional"`
+	Providers []MailProviderOption `json:"providers"`
+}
+
+// MailProviderOption is one picker entry: the binding handle plus its label.
+type MailProviderOption struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
 }
 
 // InstallPlanFootprint is the box-specific on-disk estimate the install dialog
@@ -256,11 +273,30 @@ func (s *Server) installPlan(ctx context.Context, in *struct {
 		slog.Error("install-plan: catalog entry failed to load", "manifest_id", in.ID, "err", err)
 		return nil, huma.Error500InternalServerError("catalog entry is malformed")
 	}
+	// Unlisted app (`listed: false`) is pulled from the store — no install plan,
+	// same 404 as a missing manifest. Mirrors the gate in installApp.
+	if !man.IsListed() {
+		return nil, huma.Error404NotFound("no such catalog app")
+	}
 	// buildInstallPlan stays pure (permissions + scope menus); the box-specific
 	// footprint is attached here because it queries Docker + the host (read-only,
 	// advisory — see InstallFootprint). A footprint sub-failure degrades to zeros
 	// inside InstallFootprint rather than failing the plan.
 	plan := buildInstallPlan(man, id.IsAdmin())
 	plan.Footprint = toInstallPlanFootprint(s.life.InstallFootprint(ctx, man))
+	// The mail picker menu is attached here (not in pure buildInstallPlan) for
+	// the same reason as the footprint: it reads box state. Advisory like the
+	// folder menus — installApp re-validates the election authoritatively.
+	if man.Mail != nil {
+		providers, err := s.store.ListMailProviders()
+		if err != nil {
+			return nil, huma.Error500InternalServerError("list mail providers failed", err)
+		}
+		mail := &InstallPlanMail{Optional: man.Mail.Optional, Providers: []MailProviderOption{}}
+		for _, p := range providers {
+			mail.Providers = append(mail.Providers, MailProviderOption{ID: p.ID, Label: p.Label})
+		}
+		plan.Mail = mail
+	}
 	return &struct{ Body InstallPlanDTO }{Body: plan}, nil
 }

@@ -108,6 +108,12 @@ type HostDriver interface {
 	// the install-plan footprint reports as free_bytes (BRAIN_UI_PROTOCOL.md #
 	// install-plan). Read-only; advisory, so InstallFootprint swallows its error.
 	SystemStatus(ctx context.Context) (protocol.SystemStatus, error)
+	// SystemGPU is the host GPU capability report (presence + vendor + render
+	// group GID) behind the `gpu: true` install path: Present false is the
+	// hard capacity refusal (ErrNoGPU) raised before any Docker work, and
+	// RenderGID feeds the override's /dev/dri group_add (APP_ISOLATION.md #
+	// GPU). Queried only when the manifest declares gpu: true.
+	SystemGPU(ctx context.Context) (protocol.SystemGPU, error)
 }
 
 // Admitter validates a verbatim compose. Default impl is admission.Check; tests

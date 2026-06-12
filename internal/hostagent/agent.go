@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/molmaos/molma/internal/hostagent/netstate"
 	"github.com/molmaos/molma/internal/protocol"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -39,6 +40,14 @@ type PasswordVerifier interface {
 type Publisher interface {
 	Publish(slug string) (name string, err error)
 	Unpublish(slug string) error
+}
+
+// NetState is a consumer-side interface for the LAN interface set reported by
+// GET /v1/discovery/state (DISCOVERY.md # Interface scoping). Provider
+// packages export concrete types: netstate.NMProvider (NetworkManager over
+// DBus) for cmd/host-agent-real, FakeNetState for the fake binary and tests.
+type NetState interface {
+	LANInterfaces() ([]netstate.LANInterface, error)
 }
 
 // HealthSource is a consumer-side interface for reading the latest storage
@@ -124,6 +133,20 @@ type RAMReporter interface {
 // scary empty disk.
 type DiskReporter interface {
 	DataDisk() (free, total int64)
+}
+
+// GPUReporter is a consumer-side interface for the host GPU capability report
+// behind GET /v1/system/gpu (BRAIN_HOST_PROTOCOL.md # GPU capability query):
+// presence + vendor + the render group GID the brain group_adds onto /dev/dri
+// for a `gpu: true` install. Provider packages return concrete types: the real
+// /dev/dri scanner lands with cmd/host-agent-real (#125), FakeGPUReporter
+// serves the fake binary and tests.
+//
+// Read always returns a usable report and never errors — a detection failure
+// reports Present: false, which the brain turns into the install refusal
+// (the safe side of the gate), never a half-wired override.
+type GPUReporter interface {
+	Read() protocol.SystemGPU
 }
 
 // RebootReporter is a consumer-side interface for the locus-B reboot-required
@@ -261,12 +284,25 @@ type Agent struct {
 	// so /etc/passwd + /etc/shadow + /etc/group become the source of truth.
 	UserMgr UserManager
 
+	// GPU, when non-nil, backs GET /v1/system/gpu. Swapped per binary: the real
+	// /dev/dri detector (cmd/host-agent-real, #125) vs FakeGPUReporter. When
+	// nil, the endpoint reports present: false — an agent with no detector
+	// wired has no usable GPU to offer, so a `gpu: true` install refuses
+	// rather than emitting an override against unknown hardware.
+	GPU GPUReporter
+
 	// System, when non-nil, backs GET /v1/system/resources with real kernel
 	// counters. Swapped per binary: procsource.Sampler (real /proc, Linux-only)
 	// in cmd/host-agent-real vs nil in the fake binary, which keeps the
 	// synthetic monotonically-climbing counters so the inner dev loop needs no
 	// host /proc.
 	System SystemSampler
+
+	// Net, when non-nil, backs the interfaces field of GET /v1/discovery/state
+	// with the LAN set. Swapped per binary: netstate.NMProvider (NetworkManager
+	// over DBus) vs FakeNetState. When nil, interfaces reports empty — "not
+	// measured", matching the other nil-able reporters.
+	Net NetState
 }
 
 // SystemSampler is a consumer-side interface for the raw system-resources
@@ -301,6 +337,7 @@ func (a *Agent) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/discovery/state", a.discoveryState)
 	mux.HandleFunc("GET /v1/system/status", a.systemStatus)
 	mux.HandleFunc("GET /v1/system/resources", a.systemResources)
+	mux.HandleFunc("GET /v1/system/gpu", a.systemGPU)
 	mux.HandleFunc("POST /v1/auth/verify-password", a.verifyPassword)
 	mux.HandleFunc("POST /v1/auth/set-password", a.setPassword)
 	mux.HandleFunc("POST /v1/auth/set-role", a.setRole)
@@ -362,12 +399,25 @@ func (a *Agent) discoveryState(w http.ResponseWriter, r *http.Request) {
 		names = append(names, n)
 	}
 	a.mu.Unlock()
+	// Interfaces is the live LAN set when a netstate provider is wired; empty
+	// means "not measured" (no provider, or the provider failed — logged, not
+	// surfaced: discovery state is a debug read, never a gate).
+	ifaces := []string{}
+	if a.Net != nil {
+		lis, err := a.Net.LANInterfaces()
+		if err != nil {
+			slog.Warn("discovery state: LAN interfaces", "err", err)
+		}
+		for _, li := range lis {
+			ifaces = append(ifaces, li.Name)
+		}
+	}
 	writeJSON(w, http.StatusOK, protocol.DiscoveryState{
 		Publisher:  "avahi-fake",
 		HostName:   "molma",
 		RenamedTo:  nil,
 		Published:  names,
-		Interfaces: []string{"eth0"},
+		Interfaces: ifaces,
 	})
 }
 
@@ -430,6 +480,19 @@ func (a *Agent) systemResources(w http.ResponseWriter, r *http.Request) {
 		},
 		UptimeS: int64(secs),
 	})
+}
+
+// systemGPU serves the host GPU capability report (BRAIN_HOST_PROTOCOL.md
+// # GPU capability query). With no reporter wired it reports present: false
+// rather than erroring: "no detector" means "no usable GPU", which the brain
+// turns into the specced `gpu: true` install refusal — the safe side of the
+// gate.
+func (a *Agent) systemGPU(w http.ResponseWriter, r *http.Request) {
+	if a.GPU != nil {
+		writeJSON(w, http.StatusOK, a.GPU.Read())
+		return
+	}
+	writeJSON(w, http.StatusOK, protocol.SystemGPU{})
 }
 
 // systemHealth returns the locus-B findings report across categories

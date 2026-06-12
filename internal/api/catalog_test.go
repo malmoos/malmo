@@ -99,6 +99,86 @@ func TestGetCatalogApp_RequiresAuth(t *testing.T) {
 	resp.Body.Close()
 }
 
+// unlistedManifestYML is pulled from the store via `listed: false`.
+const unlistedManifestYML = `id: pulled
+manifest_version: 1
+name: Pulled App
+version: "1.0"
+listed: false
+compose_file: compose.yml
+main_service: app
+main_port: 80
+`
+
+// TestListCatalog_HidesUnlisted: an app with `listed: false` is absent from the
+// store browse grid; a listed sibling is present.
+func TestListCatalog_HidesUnlisted(t *testing.T) {
+	h := newHarness(t)
+	writeManifestFixture(t, h.catalogDir, "rich", richManifestYML)
+	writeManifestFixture(t, h.catalogDir, "pulled", unlistedManifestYML)
+	h.setupAdmin("alice", "pass1")
+
+	resp := h.do("GET", "/api/v1/catalog", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	out := decodeJSON[struct {
+		Apps []catalog.Entry `json:"apps"`
+	}](t, resp)
+	for _, e := range out.Apps {
+		if e.ID == "pulled" {
+			t.Fatalf("unlisted app leaked into store browse: %+v", out.Apps)
+		}
+	}
+	var sawRich bool
+	for _, e := range out.Apps {
+		if e.ID == "rich" {
+			sawRich = true
+		}
+	}
+	if !sawRich {
+		t.Fatalf("listed app missing from store browse: %+v", out.Apps)
+	}
+}
+
+// TestGetCatalogApp_UnlistedIs404: the detail page of a pulled app is unreachable
+// through the store — same 404 as a missing manifest.
+func TestGetCatalogApp_UnlistedIs404(t *testing.T) {
+	h := newHarness(t)
+	writeManifestFixture(t, h.catalogDir, "pulled", unlistedManifestYML)
+	h.setupAdmin("alice", "pass1")
+
+	resp := h.do("GET", "/api/v1/catalog/pulled", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+// TestInstall_UnlistedIs404: a pulled app can't be installed even by direct
+// manifest_id (stale store link / scripted call) — the install action and its
+// advisory install-plan both 404, matching a missing manifest.
+func TestInstall_UnlistedIs404(t *testing.T) {
+	h := newHarness(t)
+	writeManifestFixture(t, h.catalogDir, "pulled", unlistedManifestYML)
+	h.setupAdmin("alice", "pass1")
+
+	plan := h.do("GET", "/api/v1/catalog/pulled/install-plan", nil)
+	if plan.StatusCode != http.StatusNotFound {
+		t.Errorf("install-plan: want 404, got %d", plan.StatusCode)
+	}
+	plan.Body.Close()
+
+	inst := h.do("POST", "/api/v1/apps", map[string]any{
+		"manifest_id": "pulled",
+		"scope":       "household",
+	})
+	if inst.StatusCode != http.StatusNotFound {
+		t.Errorf("install: want 404, got %d", inst.StatusCode)
+	}
+	inst.Body.Close()
+}
+
 // TestCatalogIcon: the icon route serves the on-disk bytes.
 func TestCatalogIcon(t *testing.T) {
 	h := newHarness(t)
