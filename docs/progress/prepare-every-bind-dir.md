@@ -18,7 +18,11 @@ Folder apps — and any app that binds more than the single `./data` dir — cou
 
 ### Part B — dev seam resolves a chownable identity (`internal/hostagent`)
 
-- **The fake `resolveHome` and `wellKnownIdentity` branches** (`UserMgr == nil`) now return the operator's *own* uid/gid (`os.Getuid()/os.Getgid()`) and home dir via a new `devIdentity` helper, instead of `fakeUID(username)` + `/home/<user>` / fixed 2000/2001. The dev brain runs as that same operator, so it already owns every bind dir it creates and Part A's chowns are no-op successes needing no privilege. `devIdentity` ensures the home dir exists (operator-owned) so the use-case folder bind source is writable too. `fakeUID` (and its `hash/fnv` import) is removed — its only caller is gone.
+- **All three fake identity sources** (`UserMgr == nil`) now resolve to the operator's *own* uid/gid (`os.Getuid()/os.Getgid()`), the only identity the unprivileged dev brain can chown to:
+  - **`resolveHome`** returns the operator uid/gid + home dir via a new `devIdentity` helper (instead of `fakeUID(username)` + `/home/<user>`); `devIdentity` ensures the home dir exists (operator-owned) so the use-case folder bind source is writable too.
+  - **`wellKnownIdentity`** returns the operator uid/gid for `MalmoAppUID/GID` + `MalmoSharedGID` (instead of fixed 2000/2001), so household-scope folder apps resolve to a chownable identity.
+  - **`allocateAppService`** returns the operator uid/gid (instead of a band UID ≥ 2100), so **`service_user: true` apps** (gitea, the first multi-bind service_user app tested in dev) get a chownable identity too — without this their bind dirs stayed operator-owned while the container ran as the un-chownable band UID and crash-looped (`/var/lib/gitea/git is not writable`). The fake no longer tracks a `svcIdents` reservation map; `releaseAppService` is an unconditional 200 no-op and the band guard moved into the real (`UserMgr != nil`) branch, where the userdel it protects actually lives.
+- `fakeUID` (and its `hash/fnv` import) is removed — its only caller is gone.
 - The prod/dev split stays entirely behind the host-agent seam; the brain is identical across prod and dev.
 
 ### Docs
@@ -30,7 +34,7 @@ Folder apps — and any app that binds more than the single `./data` dir — cou
 
 - **`TestInstallPreparesAllRelativeBindDirs`** (`lifecycle_folders_test.go`): a folderless multi-dir app (runs as the brain euid) — asserts every declared relative bind dir (`data`, `data/media`, `data/export`, `config`, `data/redis`) exists and is owned by the runtime UID, not just `data/`. Fails before the fix, passes after — the regression guard.
 - **`TestRelativeBindDirs`**: the filter directly — relative sources kept (deduped, sorted), absolute + named + anonymous excluded.
-- **`TestResolveHome_FakeBranch_ReturnsOperatorIdentity`** and **`TestWellKnownIdentity_FakeBranch_ReturnsOperatorIdentity`** (`agent_test.go`): the fake branches now return `os.Getuid()/os.Getgid()` and the operator home, replacing the old fixed-constant assertions.
+- **`TestResolveHome_FakeBranch_ReturnsOperatorIdentity`**, **`TestWellKnownIdentity_FakeBranch_ReturnsOperatorIdentity`**, and **`TestAllocateAppService_FakeBranch_ReturnsOperatorIdentity`** (`agent_test.go`): the three fake identity branches now return `os.Getuid()/os.Getgid()` (and the operator home), replacing the old fixed-constant / band assertions; the release-band test now wires a `UserMgr` (the guard's new home), and the fake release test asserts the unconditional no-op.
 - `make check` green (gofmt, vet, OpenAPI freshness, full Go suite).
 
 ## What's next

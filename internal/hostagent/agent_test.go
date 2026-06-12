@@ -1041,45 +1041,28 @@ func release(t *testing.T, mux *http.ServeMux, uid int) *httptest.ResponseRecord
 		protocol.ReleaseAppServiceIdentityRequest{UID: uid})
 }
 
-func TestAllocateAppService_FakeBranch_InBandAndStablePerInstance(t *testing.T) {
+// The fake branch resolves a service_user app's identity to the dev operator's
+// own uid/gid (not a band UID), so the unprivileged dev brain — running as the
+// same operator — owns the bind dirs it creates and Part A's chowns are no-op
+// successes (#147). A band UID would be un-chownable in dev and crash-loop the
+// app.
+func TestAllocateAppService_FakeBranch_ReturnsOperatorIdentity(t *testing.T) {
 	_, mux := newTestAgent(&stubVerifier{})
 
 	w := allocate(t, mux, "inst_a")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", w.Code)
 	}
-	first := decodeBody[protocol.AllocateAppServiceIdentityResponse](t, w)
-	if first.UID < protocol.AppServiceUIDMin || first.UID > protocol.AppServiceUIDMax {
-		t.Errorf("uid %d outside band [%d, %d]", first.UID, protocol.AppServiceUIDMin, protocol.AppServiceUIDMax)
+	resp := decodeBody[protocol.AllocateAppServiceIdentityResponse](t, w)
+	if resp.UID != os.Getuid() || resp.GID != os.Getgid() {
+		t.Errorf("identity: want operator %d:%d, got %d:%d",
+			os.Getuid(), os.Getgid(), resp.UID, resp.GID)
 	}
-	if first.GID != first.UID {
-		t.Errorf("gid %d != uid %d", first.GID, first.UID)
-	}
-
-	// Idempotent per instance: re-allocating returns the same pair.
-	again := decodeBody[protocol.AllocateAppServiceIdentityResponse](t, allocate(t, mux, "inst_a"))
-	if again != first {
-		t.Errorf("re-allocate for same instance: got %+v, want %+v", again, first)
-	}
-
-	// Distinct across instances.
+	// Every instance resolves to the same operator in dev (no per-instance band
+	// reservation to track).
 	other := decodeBody[protocol.AllocateAppServiceIdentityResponse](t, allocate(t, mux, "inst_b"))
-	if other.UID == first.UID {
-		t.Errorf("second instance got the same uid %d", other.UID)
-	}
-}
-
-func TestAllocateAppService_FakeBranch_ReleaseReturnsUIDToBand(t *testing.T) {
-	_, mux := newTestAgent(&stubVerifier{})
-
-	first := decodeBody[protocol.AllocateAppServiceIdentityResponse](t, allocate(t, mux, "inst_a"))
-	if w := release(t, mux, first.UID); w.Code != http.StatusOK {
-		t.Fatalf("release: want 200, got %d", w.Code)
-	}
-	// The freed number is allocatable again (a NEW instance may receive it).
-	reused := decodeBody[protocol.AllocateAppServiceIdentityResponse](t, allocate(t, mux, "inst_c"))
-	if reused.UID != first.UID {
-		t.Errorf("freed uid not reused: got %d, want %d", reused.UID, first.UID)
+	if other != resp {
+		t.Errorf("second instance: got %+v, want operator %+v", other, resp)
 	}
 }
 
@@ -1111,12 +1094,9 @@ func TestReleaseAppService_OutOfBandUID_Returns400(t *testing.T) {
 func TestReleaseAppService_FakeBranch_Idempotent(t *testing.T) {
 	_, mux := newTestAgent(&stubVerifier{})
 
-	// Never-allocated in-band UID: 200 no-op.
-	if w := release(t, mux, protocol.AppServiceUIDMin); w.Code != http.StatusOK {
-		t.Fatalf("never-allocated: want 200, got %d", w.Code)
-	}
-
-	// Allocate then release twice: second release must also be 200.
+	// The fake release is an unconditional 200 no-op (no band guard, no
+	// reservation): the operator identity it hands out is not a reservation, so
+	// releasing it — or any UID, repeatedly — is harmless.
 	first := decodeBody[protocol.AllocateAppServiceIdentityResponse](t, allocate(t, mux, "inst_idem"))
 	if w := release(t, mux, first.UID); w.Code != http.StatusOK {
 		t.Fatalf("first release: want 200, got %d", w.Code)
