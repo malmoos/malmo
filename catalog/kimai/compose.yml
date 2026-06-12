@@ -21,8 +21,8 @@
 #
 # ADMINMAIL/ADMINPASS seed the initial super-admin on first boot (Kimai has
 # no setup wizard; this is upstream's documented quickstart mechanism). The
-# credentials are fixed and public — the app description tells the user to
-# change the password immediately after first login. TRUSTED_PROXIES covers
+# credentials are fixed and public (admin/admin) — the app description tells
+# the user to change the password immediately after first login. TRUSTED_PROXIES covers
 # the private ranges Caddy can proxy from, so forwarded Host/proto headers
 # are honored when secure URLs are on.
 services:
@@ -37,7 +37,7 @@ services:
       MAILER_URL: "${MOLMA_MAIL_DSN:-null://null}"
       MAILER_FROM: "${MOLMA_MAIL_FROM:-kimai@example.com}"
       ADMINMAIL: admin@kimai.local
-      ADMINPASS: changemeplease
+      ADMINPASS: admin
       TRUSTED_PROXIES: "127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
     volumes:
       - ./data:/opt/kimai/var
