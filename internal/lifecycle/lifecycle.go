@@ -994,12 +994,8 @@ func (m *Manager) InstanceManifest(id string) (*manifest.Manifest, error) {
 // "molma-<id>-<MainService>", the same project+service stem used for the Caddy
 // upstream alias. The per-app Logs tail keys on it (the brain hands it to
 // host-agent's journal follow, which matches Docker's journald CONTAINER_NAME).
-//
-// Known gap (docs/progress/per-app-logs.md): compose names the *running*
-// container with a replica suffix ("…-<MainService>-1"), and Docker's journald
-// driver tags lines with that suffixed name. The replica-qualified match is a
-// documented follow-up; this returns the unsuffixed stem the rest of the brain
-// already uses.
+// writeOverride pins the running container to exactly this name (no compose
+// replica suffix), so the exact match holds on a real host.
 func (m *Manager) MainContainerName(id string) (string, error) {
 	man, err := m.loadInstanceManifest(id)
 	if err != nil {
@@ -1125,6 +1121,19 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 				"molma.instance_id": id,
 				"molma.manifest_id": man.ID,
 			},
+		}
+		// Pin the main service's *running* container name to the same
+		// molma-<id>-<service> stem as the ingress alias above — without the
+		// pin compose appends a replica suffix ("-1"), and Docker's journald
+		// driver tags log lines with that suffixed name, so the per-app Logs
+		// tail's exact CONTAINER_NAME match (MainContainerName → journalsource)
+		// finds nothing on a real host (#83). An explicit container_name makes
+		// the service unscalable, which the single-replica main service already
+		// is by design; sidecars stay unpinned so the constraint never lands on
+		// an author's scalable workers. Same pattern as the managed services'
+		// fixed exec handle (services.go).
+		if svc == man.MainService {
+			entry["container_name"] = fmt.Sprintf("molma-%s-%s", id, man.MainService)
 		}
 		// Forced restart, EXCEPT for author-declared terminating jobs and
 		// completion-gate targets (#92). main_service is always forced — a paranoid

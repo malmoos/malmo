@@ -564,3 +564,43 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+// --- override: main-service container_name pin (#83) ----------------------
+
+// Docker's journald driver tags log lines with the *running* container's
+// name; without a pin, compose appends a replica suffix ("-1") and the Logs
+// tail's exact CONTAINER_NAME match finds nothing. The override must pin the
+// main service to the molma-<id>-<service> stem MainContainerName returns,
+// and must leave sidecars unpinned (an explicit container_name forbids
+// scaling, which only the main service guarantees).
+func TestOverridePinsMainContainerName(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeCatalogApp(t, "jobapp", migrateJobCompose, migrateJobManifest)
+	e.docker.digests[testImage] = testDigest
+
+	inst, err := e.m.Install(context.Background(), "jobapp",
+		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	var doc struct {
+		Services map[string]map[string]any `yaml:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(readInstanceFile(t, e, inst.ID, "compose.override.yml")), &doc); err != nil {
+		t.Fatalf("parse override: %v", err)
+	}
+	want := "molma-" + inst.ID + "-web"
+	if got := doc.Services["web"]["container_name"]; got != want {
+		t.Fatalf("main service container_name = %v, want %q", got, want)
+	}
+	for _, svc := range []string{"migrate", "seed"} {
+		if v, present := doc.Services[svc]["container_name"]; present {
+			t.Fatalf("%s container_name = %v, want unpinned (only the main service is)", svc, v)
+		}
+	}
+	// The pinned name and the name the Logs tail queries must be the same string.
+	if name, err := e.m.MainContainerName(inst.ID); err != nil || name != want {
+		t.Fatalf("MainContainerName = %q, %v; want %q", name, err, want)
+	}
+}
