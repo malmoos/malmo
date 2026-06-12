@@ -123,7 +123,7 @@ App state (indexes, configs, the app's own DB) lives under the instance dir at `
 
 **Bind mounts to arbitrary host paths are forbidden for both doors.** Only relative bind mounts under the instance's `data/` dir are allowed; an absolute host source is an admission rejection (store or custom alike).
 
-**Every instance runs as a resolved `user:`, and its `data/` dir is owned by that same UID.** A Tier-3 container has `cap_drop: [ALL]`, which removes `CAP_DAC_OVERRIDE` — so even a root-UID container can only write `data/` when it is that dir's actual owner. The brain therefore pins `user:` on every instance and chowns `data/` to match: a **folder app** runs as the owner's UID (personal) or the malmo-app identity (household); a **folderless app** runs as the brain's own effective UID/GID, which is the creator and owner of the freshly-made `data/` dir (root under the production brain, the operator's user under the native dev brain), or — when it declares `service_user: true` — a dedicated allocated non-root identity. The full source-of-identity table and the `service_user` rule are in # Runtime identity & data ownership. This is why a folderless app does not "just run as root by default" — relying on the image's default user breaks the moment the brain is not itself root (the native inner loop) or the image's default user is non-root.
+**Every instance runs as a resolved `user:`, and every private bind dir it declares is owned by that same UID.** A Tier-3 container has `cap_drop: [ALL]`, which removes `CAP_DAC_OVERRIDE` — so even a root-UID container can only write a bind dir when it is that dir's actual owner. The brain therefore pins `user:` on every instance and, before `compose up`, creates **and** chowns *every* declared relative (`./…`) bind source — not just the top-level `data/`, but each `./data/media`, `./config`, … the compose declares — to match. This is load-bearing: the docker daemon creates a missing bind source as **root:root** regardless of its parent's owner, so any private bind dir the brain doesn't pre-create is unwritable to the non-root runtime UID and crash-loops the app (the failure mode #147 fixed). Identity by app shape: a **folder app** runs as the owner's UID (personal) or the malmo-app identity (household); a **folderless app** runs as the brain's own effective UID/GID, which is the creator and owner of the freshly-made bind dirs (root under the production brain, the operator's user under the native dev brain), or — when it declares `service_user: true` — a dedicated allocated non-root identity. Absolute bind sources are never created or chowned here: the only absolute binds are the use-case folder sources the override injects, which are user-owned and managed by the election logic (# User content). The full source-of-identity table and the `service_user` rule are in # Runtime identity & data ownership. This is why a folderless app does not "just run as root by default" — relying on the image's default user breaks the moment the brain is not itself root (the native inner loop) or the image's default user is non-root.
 
 ### User content (use-case folders)
 
@@ -183,13 +183,13 @@ The OS-image media stack (`/dev/dri` + mesa + `intel-media-va-driver`, the `rend
 
 ## Runtime identity & data ownership
 
-Every Tier-3 instance runs as a **resolved, malmo-managed UID/GID** (the compose `user:` field), and its private `data/` dir is chowned to match — the invariant that lets a `cap_drop: [ALL]` container, which has no `CAP_DAC_OVERRIDE`, write its own state (# Volumes). The identity is never the image's choice; it is one of four malmo-owned sources:
+Every Tier-3 instance runs as a **resolved, malmo-managed UID/GID** (the compose `user:` field), and every private bind dir it declares is created + chowned to match — the invariant that lets a `cap_drop: [ALL]` container, which has no `CAP_DAC_OVERRIDE`, write its own state (# Volumes). The identity is never the image's choice; it is one of four malmo-owned sources:
 
 | App shape | Runtime identity | Drawn from |
 |---|---|---|
 | Folder app, personal source | the **owner's** UID/GID | the malmo user range (≥ 3000, `STORAGE.md` # Permissions) |
 | Folder app, shared source | the **malmo-app** shared service identity (+ `malmo-shared` group) | fixed well-known (`/v1/identity/well-known`: 2000/2001) |
-| Folderless app (default) | the **brain's own euid/gid** — root in production, the operator's user in the native dev brain | n/a (it is the creator of `data/`) |
+| Folderless app (default) | the **brain's own euid/gid** — root in production, the operator's user in the native dev brain | n/a (it is the creator of the bind dirs) |
 | Folderless app, `service_user: true` | a **dedicated per-instance service identity** | the malmo-reserved app-service band (below 3000, distinct from the fixed 2000/2001) |
 
 ### `service_user` — a dedicated non-root identity for folderless apps
@@ -198,7 +198,7 @@ The default folderless identity is the brain's euid, which is **root** in produc
 
 - **allocates a UID/GID from a reserved app-service band** — below the 3000 user floor and above the fixed 2000/2001 well-known identities; host-agent owns the exact range and the allocation, a sibling of `/v1/identity/well-known`,
 - **persists it on the instance row and reuses it across container recreations** — the identity is *stable for the life of the instance*, never re-rolled on update or restart (a transient UID would orphan the data it owns),
-- **pins the container `user:` to it and chowns `data/` to it**, exactly as the folder cases already do.
+- **pins the container `user:` to it and chowns every declared private bind dir to it**, exactly as the folder cases already do.
 
 **The app declares intent, never a UID.** There is deliberately **no manifest field naming a numeric UID/GID.** A manifest-named UID would be interpreted in the *host* namespace — malmo runs no user-namespace remap (# Not in v1) — so it could alias a real host principal: a system service account, or a malmo user in the 3000+ range. That would hand a compromised app that principal's filesystem identity, and `THREAT_MODEL.md` names a compromised app as a top adversary. malmo owns the number; the manifest owns the *intent*. A numeric `user:`/UID in a submitted manifest is an admission rejection for both doors.
 
