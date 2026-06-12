@@ -1,0 +1,77 @@
+id: blinko
+manifest_version: 1
+name: Blinko
+version: "1.8.7"
+description:
+  short: "AI-powered card-style notes — capture fleeting thoughts in seconds, find them again by asking in plain language."
+  long: |
+    Blinko is a quick-capture notebook built around small Markdown cards: open it, jot the thought, done — no folders or filing decisions in the way. Notes can carry attachments, todos, and tags, and everything is searchable; connect your own AI provider key and Blinko's retrieval-augmented search lets you ask questions across everything you've written in natural language. All notes live in your home server's database — nothing is sent anywhere unless you opt into an AI provider. The first account registered after install becomes the administrator, and companion apps for desktop and mobile can sync against your instance.
+icon: ./icon.png
+screenshots: [./screenshots/01.png]
+categories: [productivity]
+author:
+  name: Blinko
+  url: https://blinko.space
+license: GPL-3.0
+links:
+  homepage: https://blinko.space
+  source: https://github.com/blinkospace/blinko
+  support: https://docs.blinko.space
+changelog_url: https://github.com/blinkospace/blinko/releases
+
+compose_file: compose.yml
+main_service: blinko
+main_port: 1111
+preferred_slugs: [blinko, notes]
+
+# Unauthenticated "/" serves the app shell (200). First boot applies ~30
+# Prisma migrations plus a seed against the managed Postgres before the
+# server listens, so allow a margin on slow disks.
+health_probe:
+  path: /
+  start_period: 120s
+
+resources:
+  recommended: { memory: 512M, cpu: 0.5 }
+
+# Notes, accounts, and settings live in the managed Postgres; ./data is
+# /app/.blinko — uploaded attachments (files/), installed plugins (plugins/),
+# the app's own scheduled pg dumps (pgdump/), and the AI embeddings index
+# (vector/). vector/ is rebuildable on demand and pgdump/ holds copies of
+# data already protected by the managed-service backup path, so both are
+# cache. Measured baseline at first healthy on a clean install is ~0 (four
+# empty directories). Notes are database rows, not files in a use-case
+# folder, and there is no external-library option, so the app manages its
+# own content (forfeits the files-first-class badge).
+storage:
+  data_volumes: [./data]
+  cache_volumes: [./data/vector, ./data/pgdump]
+  estimated_size: 1M
+  app_managed_user_content: true
+
+services:
+  database:
+    type: postgres
+    version: "15"
+
+# Blinko signs auth tokens with NEXTAUTH_SECRET (the name survives from its
+# earlier Next.js stack). The brain generates it once at install and injects
+# MOLMA_SECRET_AUTH; the compose maps it across, stable across restarts so
+# sessions survive.
+secrets:
+  - name: auth
+
+# internet: only for features the user opts into later — an external AI
+# provider for the RAG search, the plugin marketplace, webhooks. Core note
+# capture needs no outbound access. lan: not needed — the brain routes
+# inbound traffic.
+permissions:
+  internet: true
+  lan: false
+
+# Filled by `go run ./cmd/molma manifest resolve catalog/blinko/manifest.yml`.
+images:
+  blinkospace/blinko:1.8.7:
+    digest: sha256:f7c1167f8c86db586599d849539a732929d89adb10977046e7b427813b2a84b4
+    download_bytes: 435911817
+    disk_bytes: 1250560000
