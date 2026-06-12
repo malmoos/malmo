@@ -8,9 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -205,13 +205,6 @@ type Agent struct {
 	// the map entirely — /etc/shadow is the source of truth there.
 	passwords map[string][]byte
 	roles     map[string]string
-	// svcIdents is the in-memory app-service allocation map (instance_id →
-	// UID) used by allocate/releaseAppService when UserMgr is nil. Not
-	// persisted: the brain stores the allocated UID on its instance row and
-	// never re-asks, and the dev brain can't chown to the allocated UID
-	// anyway, so a post-restart re-issue of the same number is harmless in
-	// the fake loop. The real agent's reservation is the /etc/passwd entry.
-	svcIdents map[string]int
 	// statePath, when non-empty, backs passwords+roles with a JSON file so the
 	// fake binary's accounts survive a restart (a dev stand-in for /etc/shadow,
 	// which the real agent persists for free). Empty by default — tests and the
@@ -323,7 +316,6 @@ func New(v PasswordVerifier, pub Publisher) *Agent {
 		published: map[string]protocol.PublishedName{},
 		passwords: map[string][]byte{},
 		roles:     map[string]string{},
-		svcIdents: map[string]int{},
 		startedAt: time.Now(),
 		Verifier:  v,
 		Publisher: pub,
@@ -805,14 +797,21 @@ func (a *Agent) resolveHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fake branch: deterministic home path and UID/GID from the username.
-	uid := fakeUID(username)
-	slog.Info("resolve-home (fake)", "username", username, "uid", uid)
-	writeJSON(w, http.StatusOK, protocol.ResolveHomeResponse{
-		HomePath: "/home/" + username,
-		UID:      uid,
-		GID:      uid,
-	})
+	// Fake branch: the dev loop runs the brain and this agent as the same
+	// unprivileged operator, so resolve-home returns that operator's *own*
+	// uid/gid and home dir — not a synthetic fakeUID + /home/<user> the brain
+	// can't chown to. The brain (same operator) then already owns every private
+	// bind dir it creates, so the per-dir chowns are no-op successes needing no
+	// privilege (#147). The home dir is ensured to exist + operator-owned so the
+	// use-case folder bind source is writable too.
+	home, uid, gid, err := devIdentity()
+	if err != nil {
+		slog.Error("resolve-home (fake): resolve operator identity", "err", err)
+		writeErr(w, http.StatusInternalServerError, "resolve-home-failed", "resolve-home failed")
+		return
+	}
+	slog.Info("resolve-home (fake)", "username", username, "home", home, "uid", uid)
+	writeJSON(w, http.StatusOK, protocol.ResolveHomeResponse{HomePath: home, UID: uid, GID: gid})
 }
 
 // wellKnownIdentity returns the fixed service-account UIDs/GIDs for the
@@ -838,13 +837,22 @@ func (a *Agent) wellKnownIdentity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fake branch: fixed dev constants.
-	// 2000/2001 sit below the per-user FNV hash range [3000, 3999] so service
-	// identities don't collide with hashed user UIDs in the fake host-agent.
+	// Fake branch: resolve the malmo-app service identity to the dev operator's
+	// own uid/gid (not fixed 2000/2001) for the same reason as resolve-home — a
+	// household-scope folder app then runs as an identity the unprivileged dev
+	// brain owns, so Part A's bind-dir chowns are no-op successes (#147). The
+	// shared GID is the operator's egid, a group the operator is actually in, so
+	// the group_add on shared-source mounts is valid in dev.
+	_, uid, gid, err := devIdentity()
+	if err != nil {
+		slog.Error("well-known-identity (fake): resolve operator identity", "err", err)
+		writeErr(w, http.StatusInternalServerError, "well-known-identity-failed", "well-known-identity failed")
+		return
+	}
 	writeJSON(w, http.StatusOK, protocol.WellKnownIdentityResponse{
-		MalmoAppUID:    2000,
-		MalmoAppGID:    2000,
-		MalmoSharedGID: 2001,
+		MalmoAppUID:    uid,
+		MalmoAppGID:    gid,
+		MalmoSharedGID: gid,
 	})
 }
 
@@ -856,7 +864,13 @@ func (a *Agent) wellKnownIdentity(w http.ResponseWriter, r *http.Request) {
 //
 // When UserMgr is wired (cmd/host-agent-real), the reservation is a real
 // system account (malmo-svc-<uid> in /etc/passwd, durable across restarts).
-// When nil (cmd/host-agent fake), it's an in-memory map — see svcIdents.
+// When nil (cmd/host-agent fake), it resolves to the dev operator's own
+// uid/gid — the same chownable-identity rule as resolveHome/wellKnownIdentity
+// (#147): the unprivileged dev brain runs as this operator, so it already owns
+// every bind dir it creates and the per-dir chowns are no-op successes. A
+// band UID (≥ 2100) would be un-chownable in dev and the service_user app's
+// data dir would stay operator-owned while the container ran as the band UID —
+// the crash-loop this avoids.
 func (a *Agent) allocateAppService(w http.ResponseWriter, r *http.Request) {
 	var req protocol.AllocateAppServiceIdentityRequest
 	if !decode(w, r, &req) {
@@ -879,44 +893,31 @@ func (a *Agent) allocateAppService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fake branch: first free number in the band not already handed out.
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if uid, ok := a.svcIdents[req.InstanceID]; ok {
-		writeJSON(w, http.StatusOK, protocol.AllocateAppServiceIdentityResponse{UID: uid, GID: uid})
-		return
-	}
-	taken := make(map[int]bool, len(a.svcIdents))
-	for _, uid := range a.svcIdents {
-		taken[uid] = true
-	}
-	for uid := protocol.AppServiceUIDMin; uid <= protocol.AppServiceUIDMax; uid++ {
-		if taken[uid] {
-			continue
-		}
-		a.svcIdents[req.InstanceID] = uid
-		slog.Info("allocate-app-service (fake)", "instance_id", req.InstanceID, "uid", uid)
-		writeJSON(w, http.StatusOK, protocol.AllocateAppServiceIdentityResponse{UID: uid, GID: uid})
-		return
-	}
-	writeErr(w, http.StatusInternalServerError, "app-service-band-exhausted", "no free UID in the app-service band")
+	// Fake branch: the dev operator's own identity (see doc comment).
+	uid, gid := os.Getuid(), os.Getgid()
+	slog.Info("allocate-app-service (fake)", "instance_id", req.InstanceID, "uid", uid)
+	writeJSON(w, http.StatusOK, protocol.AllocateAppServiceIdentityResponse{UID: uid, GID: gid})
 }
 
 // releaseAppService returns an allocated app-service identity to the band
 // (uninstall, or install rollback). Idempotent: releasing a UID that is not
-// allocated returns 200. UIDs outside the band are rejected — the handler
-// must never be usable to delete an arbitrary account.
+// allocated returns 200.
 func (a *Agent) releaseAppService(w http.ResponseWriter, r *http.Request) {
 	var req protocol.ReleaseAppServiceIdentityRequest
 	if !decode(w, r, &req) {
 		return
 	}
-	if req.UID < protocol.AppServiceUIDMin || req.UID > protocol.AppServiceUIDMax {
-		writeErr(w, http.StatusBadRequest, "bad-request", "uid outside the app-service band")
-		return
-	}
 
 	if a.UserMgr != nil {
+		// Band guard, real agent only: a release runs userdel, so it must
+		// never be usable to delete an arbitrary account — reject any UID
+		// outside the reserved app-service band. The fake branch allocates the
+		// dev operator's own out-of-band UID (allocateAppService), so the guard
+		// can't live before the split.
+		if req.UID < protocol.AppServiceUIDMin || req.UID > protocol.AppServiceUIDMax {
+			writeErr(w, http.StatusBadRequest, "bad-request", "uid outside the app-service band")
+			return
+		}
 		if err := a.UserMgr.ReleaseAppService(req.UID); err != nil {
 			slog.Error("release-app-service: user-manager error", "uid", req.UID, "err", err)
 			writeErr(w, http.StatusInternalServerError, "release-app-service-failed", "release-app-service failed")
@@ -927,26 +928,27 @@ func (a *Agent) releaseAppService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fake branch.
-	a.mu.Lock()
-	for id, uid := range a.svcIdents {
-		if uid == req.UID {
-			delete(a.svcIdents, id)
-			break
-		}
-	}
-	a.mu.Unlock()
+	// Fake branch: nothing to release — the dev operator's identity is not a
+	// reservation (allocateAppService hands out os.Getuid()/os.Getgid()).
 	slog.Info("release-app-service (fake)", "uid", req.UID)
 	w.WriteHeader(http.StatusOK)
 }
 
-// fakeUID returns a stable UID in the range [3000, 3999] for the given username
-// using FNV-32a so the fake host-agent's resolve-home responses are coherent
-// across calls without persisting state.
-func fakeUID(username string) int {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(username))
-	return 3000 + int(h.Sum32()%1000)
+// devIdentity returns the operator identity the fake host-agent hands out for
+// resolve-home and well-known-identity: the process's own uid/gid (the dev
+// brain runs as this same operator, so everything it creates is already
+// chownable) and its home dir, ensured to exist so the use-case folder bind
+// source is writable (#147). os.UserHomeDir reads $HOME — set in every dev
+// shell — and the dir is the operator's, so MkdirAll is operator-owned.
+func devIdentity() (home string, uid, gid int, err error) {
+	home, err = os.UserHomeDir()
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("resolve home dir: %w", err)
+	}
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		return "", 0, 0, fmt.Errorf("ensure home dir %q: %w", home, err)
+	}
+	return home, os.Getuid(), os.Getgid(), nil
 }
 
 // --- HTTP helpers ---

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -113,13 +114,23 @@ func TestInstallFolders_PersonalSourceReadWithSubfolder(t *testing.T) {
 	if got := app["user"]; got != "3000:3000" {
 		t.Errorf("user: want 3000:3000, got %v", got)
 	}
-	wantVol := "/home/alex/Documents/Work:/malmo/documents:ro" // read → :ro, subfolder narrows source
+	src := filepath.Join(e.host.homeRoot, "alex", "Documents", "Work")
+	wantVol := src + ":/malmo/documents:ro" // read → :ro, subfolder narrows source
 	if !hasString(app["volumes"], wantVol) {
 		t.Errorf("volumes: want %q, got %v", wantVol, app["volumes"])
 	}
 	// No shared source → no group_add.
 	if _, ok := app["group_add"]; ok {
 		t.Errorf("group_add: want absent for personal source, got %v", app["group_add"])
+	}
+	// The brain creates the elected personal source (the pick-subfolder subdir)
+	// before compose up, so docker can't create it root-owned and the owner-UID
+	// container can write user content into it (#147 personal-folder follow-up).
+	// Fails before the fix: the subdir was never created by the brain.
+	if fi, err := os.Stat(src); err != nil {
+		t.Errorf("personal folder source must be created: %v", err)
+	} else if !fi.IsDir() {
+		t.Errorf("personal folder source %q is not a directory", src)
 	}
 }
 
@@ -223,6 +234,110 @@ func TestInstallCustomFolders_TargetDestination(t *testing.T) {
 	}
 	if !strings.Contains(string(env), "MALMO_FOLDER_DOCUMENTS=/photoprism/originals") {
 		t.Errorf("env should map MALMO_FOLDER_DOCUMENTS to the target, got:\n%s", env)
+	}
+}
+
+// multiDirCompose binds more than the single top-level ./data: it declares
+// several relative bind dirs across two services (Paperless-ngx shape, #142).
+// Before the #147 fix the brain created + chowned only ./data, leaving the rest
+// for the docker daemon to create root-owned — unwritable to a cap_drop:ALL
+// container running as the non-root runtime UID.
+const multiDirCompose = `
+services:
+  app:
+    image: traefik/whoami:v1.10.3
+    volumes:
+      - ./data:/data
+      - ./data/media:/media
+      - ./data/export:/export
+      - ./config:/config
+  redis:
+    image: traefik/whoami:v1.10.3
+    volumes:
+      - ./data/redis:/data
+`
+
+func multiDirManifest() string {
+	return `
+id: multidir
+manifest_version: 1
+name: Multi Dir
+version: "1.0"
+compose_file: compose.yml
+main_service: app
+main_port: 80
+preferred_slugs: [multidir]
+permissions:
+  internet: false
+  lan: false
+images:
+  ` + testImage + `: ` + testDigest + `
+`
+}
+
+// TestInstallPreparesAllRelativeBindDirs is the #147 regression guard: a
+// folderless multi-dir app runs as the brain's own euid, so every declared
+// relative bind dir must be created and owned by that runtime identity before
+// compose up — not just the top-level data/. Fails before the fix (only data/
+// was prepared), passes after.
+func TestInstallPreparesAllRelativeBindDirs(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeCatalogApp(t, "multidir", multiDirCompose, multiDirManifest())
+	e.docker.digests[testImage] = testDigest
+
+	inst, err := e.m.Install(context.Background(), "multidir",
+		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	base := filepath.Join(e.stateDir, "instances", inst.ID)
+	for _, rel := range []string{"data", "data/media", "data/export", "config", "data/redis"} {
+		fi, err := os.Stat(filepath.Join(base, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Errorf("bind dir %q must exist: %v", rel, err)
+			continue
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			t.Fatalf("stat %q: unexpected Stat_t type", rel)
+		}
+		if int(st.Uid) != os.Geteuid() || int(st.Gid) != os.Getegid() {
+			t.Errorf("bind dir %q owner = %d:%d, want runtime %d:%d",
+				rel, st.Uid, st.Gid, os.Geteuid(), os.Getegid())
+		}
+	}
+}
+
+// TestRelativeBindDirs covers the filter directly: only "./"-relative bind
+// sources are prepared, deduplicated and sorted. Absolute sources (the use-case
+// folder binds the override injects — never created/chowned by the prepare
+// step), named volumes, and anonymous volumes are all excluded by construction.
+func TestRelativeBindDirs(t *testing.T) {
+	compose := `
+services:
+  app:
+    volumes:
+      - ./data:/data
+      - ./data/media:/media:rw
+      - ./data/media:/media2
+      - { type: bind, source: ./config, target: /config }
+      - /etc/localtime:/etc/localtime:ro
+      - { type: bind, source: /var/run/docker.sock, target: /sock }
+      - cache-vol:/cache
+      - { type: volume, source: data-vol, target: /v }
+      - /anon
+  sidecar:
+    volumes:
+      - ./logs:/logs
+`
+	got, err := relativeBindDirs([]byte(compose))
+	if err != nil {
+		t.Fatalf("relativeBindDirs: %v", err)
+	}
+	want := []string{"config", "data", "data/media", "logs"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("relativeBindDirs = %v, want %v", got, want)
 	}
 }
 

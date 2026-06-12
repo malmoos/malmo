@@ -54,6 +54,7 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	cat := catalog.New(catDir)
 	host := newFakeHost()
+	host.homeRoot = t.TempDir()
 	cd := newFakeCaddy()
 	docker := newFakeDocker()
 	bus := events.NewBus()

@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -464,20 +466,67 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 		iso.uid, iso.gid = alloc.UID, alloc.GID
 	}
 
-	// Align the private ./data bind's ownership with the container's runtime
-	// identity so the cap_drop:ALL app can write its own state. No-op when the
-	// runtime UID already owns the dir (default folderless apps run as the
-	// brain's euid, which created it). Under the production brain (euid 0) a
-	// chown failure is a real fault; under the unprivileged native dev brain it
-	// cannot chown ./data to a host-agent-assigned UID it does not own — folder
-	// or service_user identities alike — so that case is downgraded to a warning
-	// (default folderless apps, the common dev path, are unaffected).
-	if err := os.Chown(filepath.Join(m.instanceDir(id), "data"), iso.uid, iso.gid); err != nil {
-		if os.Geteuid() == 0 {
-			return rollback(fmt.Errorf("chown data dir: %w", err))
+	// Create + align ownership of every *private* bind dir the app declares so
+	// the cap_drop:ALL container can write its own state. Docker creates a
+	// missing bind source as root:root, so any declared `./…` dir the brain
+	// doesn't prepare is unwritable to the non-root runtime UID (#147) — this
+	// covers not just the top-level ./data but every relative bind (./data/media,
+	// ./config, …). No-op chown when the runtime UID already owns the dir
+	// (default folderless apps run as the brain's euid, which created it). Under
+	// the production brain (euid 0) a chown failure is a real fault; under the
+	// unprivileged native dev brain it cannot chown to a host-agent-assigned UID
+	// it does not own — folder or service_user identities alike — so that case is
+	// downgraded to a warning (default folderless apps, the common dev path,
+	// resolve to the brain's own euid and are unaffected). Absolute use-case
+	// folder binds are excluded by construction — they're user-owned and managed
+	// by the election logic, never re-chowned here.
+	relDirs, err := relativeBindDirs(composeBytes)
+	if err != nil {
+		return rollback(fmt.Errorf("parse compose volumes: %w", err))
+	}
+	for _, rel := range relDirs {
+		dir := filepath.Join(m.instanceDir(id), filepath.FromSlash(rel))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return rollback(fmt.Errorf("create bind dir %q: %w", rel, err))
 		}
-		slog.Warn("data dir chown skipped under unprivileged brain",
-			"instance_id", id, "uid", iso.uid, "gid", iso.gid, "err", err)
+		if err := os.Chown(dir, iso.uid, iso.gid); err != nil {
+			if os.Geteuid() == 0 {
+				return rollback(fmt.Errorf("chown bind dir %q: %w", rel, err))
+			}
+			slog.Warn("bind dir chown skipped under unprivileged brain",
+				"instance_id", id, "step", rel, "uid", iso.uid, "gid", iso.gid, "err", err)
+		}
+	}
+
+	// Prepare each elected PERSONAL folder source so the app can write user
+	// content into it. A docker-created bind source is root:root (the same
+	// daemon behavior as the private bind dirs above), so a pick-subfolder
+	// election whose subdir doesn't exist yet — e.g. ~/Documents/Notebooks for
+	// Jupyter — lands root-owned and the cap_drop:ALL container, running as the
+	// owner UID, can't write it. The runtime identity for a personal source IS
+	// the owner, so MkdirAll + chown to iso.uid/gid is safe: a pre-existing
+	// ~/Documents is already owner-owned (chown is a no-op) and only the new
+	// leaf is created. SHARED sources (/srv/malmo/shared/…) are deliberately
+	// skipped here — that tree is group-owned via malmo-shared and must NOT be
+	// chowned to a runtime UID; preparing shared subfolders is its own concern
+	// (#156). Same privilege posture as the bind-dir loop above:
+	// hard-fail under the root production brain, warn-and-skip under the
+	// unprivileged dev brain (where iso.uid is the operator that owns its home).
+	for _, mt := range iso.mounts {
+		if mt.Source != sourcePersonal {
+			continue
+		}
+		src := iso.hostSource(mt)
+		if err := os.MkdirAll(src, 0o755); err != nil {
+			return rollback(fmt.Errorf("create folder source %q: %w", src, err))
+		}
+		if err := os.Chown(src, iso.uid, iso.gid); err != nil {
+			if os.Geteuid() == 0 {
+				return rollback(fmt.Errorf("chown folder source %q: %w", src, err))
+			}
+			slog.Warn("folder source chown skipped under unprivileged brain",
+				"instance_id", id, "step", src, "uid", iso.uid, "gid", iso.gid, "err", err)
+		}
 	}
 
 	// 7. Generate override (with pins + isolation) + .env.
@@ -1340,11 +1389,14 @@ func generateSecrets(decls []manifest.Secret) ([]store.InstanceSecret, error) {
 
 // composeService is the subset of an author compose service the override
 // generator needs: its declared restart policy (to decide whether the forced
-// `unless-stopped` is safe) and its depends_on conditions (to find which
-// services are completion-gate targets — #92).
+// `unless-stopped` is safe), its depends_on conditions (to find which services
+// are completion-gate targets — #92), and the host-side sources of its declared
+// bind mounts (so the brain can pre-create + chown the app's private bind dirs
+// before `compose up` — #147).
 type composeService struct {
-	Restart   string
-	DependsOn map[string]string // dep service name → condition (long-form only)
+	Restart     string
+	DependsOn   map[string]string // dep service name → condition (long-form only)
+	BindSources []string          // host-side source of each declared volume
 }
 
 // parseComposeServices extracts each author service's restart policy and
@@ -1365,13 +1417,23 @@ func parseComposeServices(composeBytes []byte) (map[string]composeService, error
 	out := make(map[string]composeService, len(doc.Services))
 	for name, node := range doc.Services {
 		var raw struct {
-			Restart   string    `yaml:"restart"`
-			DependsOn yaml.Node `yaml:"depends_on"`
+			Restart   string      `yaml:"restart"`
+			DependsOn yaml.Node   `yaml:"depends_on"`
+			Volumes   []yaml.Node `yaml:"volumes"`
 		}
 		if err := node.Decode(&raw); err != nil {
 			return nil, fmt.Errorf("parse service %q: %w", name, err)
 		}
 		svc := composeService{Restart: raw.Restart}
+		for _, v := range raw.Volumes {
+			src, err := bindSource(v)
+			if err != nil {
+				return nil, fmt.Errorf("parse service %q volume: %w", name, err)
+			}
+			if src != "" {
+				svc.BindSources = append(svc.BindSources, src)
+			}
+		}
 		if raw.DependsOn.Kind == yaml.MappingNode {
 			var deps map[string]struct {
 				Condition string `yaml:"condition"`
@@ -1387,6 +1449,79 @@ func parseComposeServices(composeBytes []byte) (map[string]composeService, error
 		out[name] = svc
 	}
 	return out, nil
+}
+
+// bindSource extracts the host-side source from a single compose volume entry,
+// in either the short string form (`source:target[:mode]`) or the long mapping
+// form (`{type: bind, source: …, target: …}`). Returns "" for entries that
+// declare no host source the brain should prepare: anonymous volumes (a bare
+// in-container path, no colon) and non-bind long-form mounts (named volumes,
+// tmpfs). Named volumes in the short form (`name:/path`, no leading slash or
+// dot) are returned here but filtered later by relativeBindDirs.
+func bindSource(n yaml.Node) (string, error) {
+	switch n.Kind {
+	case yaml.ScalarNode:
+		var s string
+		if err := n.Decode(&s); err != nil {
+			return "", err
+		}
+		// Anonymous volume (`/var/lib/data`) has no `source:target` colon.
+		src, _, ok := strings.Cut(s, ":")
+		if !ok {
+			return "", nil
+		}
+		return src, nil
+	case yaml.MappingNode:
+		var m struct {
+			Type   string `yaml:"type"`
+			Source string `yaml:"source"`
+		}
+		if err := n.Decode(&m); err != nil {
+			return "", err
+		}
+		// Only bind mounts carry a host directory; volume/tmpfs do not.
+		if m.Type != "" && m.Type != "bind" {
+			return "", nil
+		}
+		return m.Source, nil
+	}
+	return "", nil
+}
+
+// relativeBindDirs returns the deduplicated, sorted set of relative (`./`)
+// bind-mount host sources declared across the compose's services, as
+// slash-separated paths relative to the instance dir (e.g. "data/media"). These
+// are the app's *private* bind dirs the brain must create + chown before
+// `compose up`: docker creates a missing bind source as root:root, so a
+// cap_drop:ALL container running as the non-root runtime UID can't write a dir
+// the brain didn't prepare (#147). Absolute sources (the use-case folder binds
+// the override injects, which are user-owned and managed by the election logic)
+// and named volumes are excluded by construction — only "./"-prefixed sources
+// qualify, and any that would escape the instance dir are dropped.
+func relativeBindDirs(composeBytes []byte) ([]string, error) {
+	svcs, err := parseComposeServices(composeBytes)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var dirs []string
+	for _, svc := range svcs {
+		for _, src := range svc.BindSources {
+			if !strings.HasPrefix(src, "./") {
+				continue
+			}
+			rel := path.Clean(strings.TrimPrefix(src, "./"))
+			if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+				continue
+			}
+			if !seen[rel] {
+				seen[rel] = true
+				dirs = append(dirs, rel)
+			}
+		}
+	}
+	sort.Strings(dirs)
+	return dirs, nil
 }
 
 // isTerminatingJob reports whether a service was designed to run to completion
