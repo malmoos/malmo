@@ -82,7 +82,7 @@ The *mechanism* — a manifest `secrets:` declaration → brain generates a CSPR
 
 - **`.env` file permissions.** The instance `.env` is written world-readable (`0o644`). Now that it holds a signing secret, a non-admin local account can read every app's secret. Decide `0o600` + root-owned, and whether that's the answer for *all* injected vars or just secrets.
 - **Env-var delivery surface.** A value in the container environment is visible via `docker inspect`, `/proc/<pid>/environ`, and child-process inheritance — the classic leak is an app's own crash reporter shipping `process.env` off-box (and these apps tend to declare `internet: true`). The safer shape is the Docker-secret / `_FILE` convention (mount the value as a file, app reads `*_FILE`), but it needs per-app support. Decide whether env-var is the accepted v1 trade-off and where `_FILE` is offered.
-- **At-rest encryption.** The value is stored plaintext in SQLite and on disk in `.env`. `SERVICE_PROVISIONING.md` promises managed-service creds "encrypted at rest" — unbuilt, and the same decision covers secrets. Relationship to LUKS (covers a powered-off stolen drive) vs. row-level encryption (covers a live box / a leaked DB) needs to be drawn explicitly.
+- **At-rest encryption.** The value is stored plaintext in SQLite and on disk in `.env`. `SERVICE_PROVISIONING.md` promises managed-service creds "encrypted at rest" — unbuilt, and the same decision covers secrets and the outgoing-mail provider passwords (`mail_providers.password`, # BYO outgoing mail — the one credential that unlocks an *external* account, not just a box-local DB). Relationship to LUKS (covers a powered-off stolen drive) vs. row-level encryption (covers a live box / a leaked DB) needs to be drawn explicitly.
 - **Backups.** A signing secret must travel in the app's backup archive (a restored app has to keep validating old tokens), which makes backup-archive encryption load-bearing the moment secrets exist. Gate with the backup design (# Backup architecture shape).
 - **Rotation + log hygiene.** Env-injected secrets can't rotate without restarting the container and invalidating live tokens — no recovery story beyond reset. And molma's own logs/audit/compose-output must never surface the value (one watch point: `ComposeUp` returns `CombinedOutput()` into install errors).
 
@@ -113,6 +113,18 @@ App-level and managed-service migration are well-specced (`SERVICE_PROVISIONING.
 
 **Context:** `UPDATES.md`, `STORAGE.md` (system dataset vs. data drive split makes image-based A/B more feasible), `BUILD.md`.
 **Why Tier 3:** doesn't bite until Debian cuts the next stable (~2027). Pin the commitment now so design choices don't accidentally foreclose A/B.
+
+### Outgoing mail — what stays deferred past BYO (`SERVICE_PROVISIONING.md` # BYO outgoing mail)
+
+The v1 shape is shipped (#122): admin-registered SMTP providers, per-app bindings, `MOLMA_MAIL_*` direct injection, no molma relay. Deliberately deferred, in rough order of likely demand:
+
+- **A box-default provider.** Today every mail-capable app is bound explicitly; a "use for new apps automatically" default would remove a picker step once a box has exactly one provider it always uses.
+- **Brain-sent email riding the same providers.** Notification email digests, password-recovery mail (`# Email-on-file for users` above) — the brain becoming a *consumer* of the provider registry rather than just an injector. This is the promotion trigger: the moment email goes cross-cutting (brain + apps), the `SERVICE_PROVISIONING.md` section graduates to its own `OUTGOING_MAIL.md`.
+- **Re-stamp-on-edit.** A provider edit currently reaches bound apps only at their next rebind/recreate. If edit-propagation demand materializes, the answer is an explicit "apply to N bound apps now" action (visible restarts), not a silent fleet recreate.
+- **Relay/smarthost.** Stays rejected, not deferred — residential IPs can't deliver mail, so a box-local relay is a queue plus a deliverability support burden in front of the user's real provider (`DECISIONS.md` 2026-06-12).
+
+**Context:** `SERVICE_PROVISIONING.md` # BYO outgoing mail, `APP_MANIFEST.md` # D3, `DECISIONS.md` 2026-06-12. Password at-rest hardening folds into # App-secret injection hardening above.
+**Why Tier 3:** the BYO shape is complete for app demand today; each deferral has a clean additive path that doesn't reshape the v1 contract.
 
 ### `molmactl` — on-box CLI
 

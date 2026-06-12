@@ -21,7 +21,7 @@ TEST_DIR="${REPO_ROOT}/dev/test-qemu"
 WORK="${REPO_ROOT}/.dev/qemu"
 EXTRA="${TEST_DIR}/mkosi.extra"
 CANARY="${WORK}/.molma-medium-ready"
-CANARY_VERSION="v16"  # bump when mkosi.conf changes require a clean rebuild
+CANARY_VERSION="v17"  # bump when mkosi.conf changes require a clean rebuild
 PASSPHRASE_FILE="${TEST_DIR}/mkosi.passphrase"  # LUKS recovery key (slice 0023); gitignored
 IMAGE_OUT="${WORK}/molma-medium.raw"
 SSH_KEY="${WORK}/ssh-key"
@@ -140,6 +140,18 @@ else
         "${REPO_ROOT}/cmd/molma-storage-verify/"
 fi
 
+# network-verify (#130): drives the real netstate + avahipublisher packages
+# against the VM's NetworkManager and avahi-daemon. CGO-free on purpose —
+# host-agent-real needs libpam at build time, this doesn't.
+NETVERIFY_BIN="${WORK}/molma-network-verify"
+if [ -n "$CALLER" ]; then
+    sudo -u "$CALLER" env CGO_ENABLED=0 "$GO" build -o "$NETVERIFY_BIN" \
+        "${REPO_ROOT}/cmd/molma-network-verify/"
+else
+    CGO_ENABLED=0 "$GO" build -o "$NETVERIFY_BIN" \
+        "${REPO_ROOT}/cmd/molma-network-verify/"
+fi
+
 # --- 3. SSH keypair
 if [ ! -f "$SSH_KEY" ]; then
     if [ -n "$CALLER" ]; then
@@ -226,6 +238,10 @@ ln -sf /bin/true "$EXTRA/usr/lib/molma/host-agent-real"
 # storage-verify binary.
 cp "$VERIFY_BIN" "$EXTRA/usr/lib/molma/molma-storage-verify"
 chmod 0755 "$EXTRA/usr/lib/molma/molma-storage-verify"
+
+# network-verify binary (#130 in-VM driver).
+cp "$NETVERIFY_BIN" "$EXTRA/usr/lib/molma/molma-network-verify"
+chmod 0755 "$EXTRA/usr/lib/molma/molma-network-verify"
 
 # First-boot TPM2 enrollment (slice 0023 Stage 2): the run-once unit +
 # its enrollment script. The unit gates on a marker (run-once); the

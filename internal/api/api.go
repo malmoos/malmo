@@ -117,6 +117,7 @@ func (s *Server) registerAll(api huma.API) {
 	s.registerMeRoutes(api)
 	s.registerHealth(api)
 	s.registerNotifications(api)
+	s.registerMail(api)
 }
 
 // OpenAPIDocument builds the brain's full REST surface against a throwaway mux
@@ -224,6 +225,12 @@ type InstanceDTO struct {
 	Scope         string `json:"scope"`
 	IconURL       string `json:"icon_url,omitempty"`
 	IconGlyph     string `json:"icon_glyph,omitempty"`
+	// Mail fields are detail-page enrichments set only by getApp (list
+	// responses omit them): MailSupported reports the manifest's mail block,
+	// MailProviderID the current binding ("" ⇒ unbound). They drive the
+	// rebind picker (SERVICE_PROVISIONING.md # BYO outgoing mail).
+	MailSupported  bool   `json:"mail_supported,omitempty"`
+	MailProviderID string `json:"mail_provider_id,omitempty"`
 }
 
 func toDTO(i store.Instance, ownerUsername string, e *catalog.Entry) InstanceDTO {
@@ -387,7 +394,19 @@ func (s *Server) getApp(ctx context.Context, in *struct {
 	if e, err := s.catalog.Entry(i.ManifestID); err == nil {
 		catEntry = &e
 	}
-	return &struct{ Body InstanceDTO }{Body: toDTO(i, owner.Username, catEntry)}, nil
+	dto := toDTO(i, owner.Username, catEntry)
+	// Mail enrichment for the rebind picker. The manifest comes from the
+	// catalog, so a withdrawn app simply hides the picker (the binding itself
+	// keeps working — lifecycle reads the instance dir's own manifest copy).
+	if man, _, err := s.catalog.Load(i.ManifestID); err == nil && man.Mail != nil {
+		dto.MailSupported = true
+		if mp, err := s.store.GetInstanceMailProvider(i.ID); err == nil {
+			dto.MailProviderID = mp.ID
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return nil, huma.Error500InternalServerError("mail binding lookup failed", err)
+		}
+	}
+	return &struct{ Body InstanceDTO }{Body: dto}, nil
 }
 
 // canSee mirrors store.ListVisibleTo's visibility predicate for a single
@@ -420,6 +439,9 @@ func (s *Server) installApp(ctx context.Context, in *struct {
 		Confirm    bool   `json:"confirm,omitempty"` // proceed past the duplicate-install warning
 		Config     struct {
 			Folders []FolderElection `json:"folders,omitempty"`
+			// MailProviderID binds a mail-capable app to a registered outgoing-mail
+			// provider (SERVICE_PROVISIONING.md # BYO outgoing mail). Empty ⇒ unbound.
+			MailProviderID string `json:"mail_provider_id,omitempty"`
 		} `json:"config,omitempty"` // per-folder source/subfolder elections (consent screen)
 	}
 }) (*struct{ Body Job }, error) {
@@ -454,12 +476,30 @@ func (s *Server) installApp(ctx context.Context, in *struct {
 			map[string]any{"manifest_id": manifestID, "scope": scope, "owner_user_id": owner.UserID}, false)
 		return nil, err
 	}
+	// Validate the mail-provider election authoritatively, like folder
+	// elections above: the app must declare mail support and the provider must
+	// exist. Same elevation-class rejection ⇒ audits success=false.
+	mailProviderID := in.Body.Config.MailProviderID
+	if mailProviderID != "" {
+		failMeta := map[string]any{"manifest_id": manifestID, "scope": scope, "owner_user_id": owner.UserID}
+		if man.Mail == nil {
+			s.auditor.Record(ctx, audit.ActionAppInstall, audit.Target{Kind: "app"}, failMeta, false)
+			return nil, huma.Error422UnprocessableEntity("this app does not support outgoing email")
+		}
+		if _, err := s.store.GetMailProvider(mailProviderID); errors.Is(err, store.ErrNotFound) {
+			s.auditor.Record(ctx, audit.ActionAppInstall, audit.Target{Kind: "app"}, failMeta, false)
+			return nil, huma.Error422UnprocessableEntity("no such mail provider")
+		} else if err != nil {
+			slog.Error("install: mail provider lookup failed", "manifest_id", manifestID, "err", err)
+			return nil, huma.Error500InternalServerError("mail provider lookup failed")
+		}
+	}
 	if err := s.checkDuplicate(ctx, manifestID, in.Body.Confirm, audit.ActionAppInstall); err != nil {
 		return nil, err
 	}
 	jobCtx := ctx // capture for audit inside the job goroutine
 	job := s.jobs.run("app-install", func(job *Job) (map[string]any, error) {
-		inst, err := s.life.Install(context.Background(), manifestID, owner, scope, mounts, job.setStep)
+		inst, err := s.life.Install(context.Background(), manifestID, owner, scope, mounts, mailProviderID, job.setStep)
 		target := audit.Target{Kind: "app"}
 		// confirm records a deliberate override of the duplicate-install warning,
 		// so the Activity view can see "installed a second copy on purpose".

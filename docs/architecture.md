@@ -14,7 +14,7 @@ one is JavaScript, one is a container we don't write.
 |---|---|---|---|
 | **`molma-brain`** | `cmd/brain/`, `internal/` | The control-plane daemon. Owns SQLite state, the REST+SSE API, the app lifecycle, and the Caddy config. One Go binary. | Real |
 | **`host-agent` (fake)** | `cmd/host-agent/` | Privileged side used in the inner dev loop. Speaks the real `BRAIN_HOST_PROTOCOL.md` wire format over a UNIX socket; the host operations themselves (Avahi, LUKS, PAM, apt) are stubbed in memory. | **Fake** (real wire, canned ops) |
-| **`host-agent-real`** | `cmd/host-agent-real/`, `internal/hostagent/` | The real privileged binary. Seam-injected reporters: PAM password verify (`pamverifier`), `/proc` system sampling (`procsource`), disk usage, RAM pressure, journal streaming, service health, reboot-required flag, user manager. Host ops not yet wired: Avahi, LUKS/TPM, NetworkManager, apt. | Partial — see "What is not built yet" |
+| **`host-agent-real`** | `cmd/host-agent-real/`, `internal/hostagent/` | The real privileged binary. Seam-injected reporters: PAM password verify (`pamverifier`), `/proc` system sampling (`procsource`), disk usage, RAM pressure, journal streaming, service health, reboot-required flag, user manager. Discovery is real: per-LAN-interface Avahi announcements (`avahipublisher`) driven by the NetworkManager LAN set (`netstate`), with an avahi-daemon.conf allowlist sync and IP-change replay. Host ops not yet wired: LUKS/TPM, apt, NM configuration (WiFi setup, `/v1/network/*`). | Partial — see "What is not built yet" |
 | **Caddy** | `dev/caddy.json`, `dev/docker-compose.yml` | Reverse proxy. Terminates `*.molma.local` and routes to app containers + the brain. Configured live by the brain via Caddy's admin API. | Real (container) |
 | **`web-ui`** | `web-ui/` | Vue 3 + Vite + TanStack Query dashboard. Talks only to the brain. Tailwind 4 landed; shadcn-vue scaffolding present, components not yet copied in. Internal code architecture: [`dev/web-ui.md`](dev/web-ui.md). | Real |
 | **SQLite** | `$STATE_DIR/molma.db` | The brain's only persistent store. Schema + queries in `internal/store/`. | Real |
@@ -136,7 +136,7 @@ for the full inner loop. The VM-based outer loop for host-integrated parts
 
 So this doc isn't read as a claim about the finished product:
 
-- **Full real host-agent.** `cmd/host-agent-real` is partially real: PAM password verify, `/proc` system sampling, disk usage, RAM pressure, journal streaming, service health, and reboot-required are wired. Avahi, LUKS/TPM, NetworkManager, and apt are not yet wired — those ops are still no-ops or stubs.
+- **Full real host-agent.** `cmd/host-agent-real` is partially real: PAM password verify, `/proc` system sampling, disk usage, RAM pressure, journal streaming, service health, reboot-required, and discovery (per-LAN-interface Avahi announcements from the NetworkManager LAN set, allowlist sync, IP-change replay) are wired. LUKS/TPM, apt, and the NM configuration surface (WiFi setup, `/v1/network/*`) are not yet wired — those ops are still no-ops or stubs.
 - **Storage subsystem.** No `/srv/molma`, no mergerfs, no LUKS-unlock flow,
   no `molma-storage-ready.target`. Apps write to wherever Docker puts volumes.
 - **Boot, install ISO, updates.** `live-build`, the release manifest, and the

@@ -99,6 +99,66 @@ main_port: 80
 	}
 }
 
+func TestParseMail(t *testing.T) {
+	src := []byte(`
+id: kimai
+manifest_version: 1
+name: Kimai
+version: "2.59"
+compose_file: compose.yml
+main_service: kimai
+main_port: 8001
+mail:
+  optional: true
+`)
+	m, err := Parse(src)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if m.Mail == nil || !m.Mail.Optional {
+		t.Fatalf("mail block not parsed: %+v", m.Mail)
+	}
+}
+
+func TestParseMailAbsentIsNil(t *testing.T) {
+	src := []byte(`
+id: whoami
+manifest_version: 1
+name: Whoami
+version: "1.10"
+compose_file: compose.yml
+main_service: whoami
+main_port: 80
+`)
+	m, err := Parse(src)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if m.Mail != nil {
+		t.Fatalf("absent mail block must stay nil, got %+v", m.Mail)
+	}
+}
+
+func TestParseRejectsRequiredMail(t *testing.T) {
+	for name, block := range map[string]string{
+		"explicit false": "mail:\n  optional: false",
+		"empty block":    "mail: {}",
+	} {
+		src := []byte(`
+id: kimai
+manifest_version: 1
+name: Kimai
+version: "2.59"
+compose_file: compose.yml
+main_service: kimai
+main_port: 8001
+` + block + "\n")
+		if _, err := Parse(src); err == nil {
+			t.Errorf("%s: parse must reject non-optional mail", name)
+		}
+	}
+}
+
 func TestParseSecretsNormalizesBytes(t *testing.T) {
 	src := []byte(`
 id: kan

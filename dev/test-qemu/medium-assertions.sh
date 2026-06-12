@@ -14,7 +14,10 @@
 #   second-boot  common checks + the token persisted, AND this boot got
 #                here at all — the harness withheld the passphrase
 #                credential, so reaching multi-user proves the initrd
-#                unsealed root unattended via that TPM2 token.
+#                unsealed root unattended via that TPM2 token. Then the
+#                network-state slice (#130): NM LAN set, avahi
+#                allow-interfaces sync, per-interface announcement,
+#                interface-removal rewrite, IP-change replay.
 #   combined     (default) common checks only — for `mkosi qemu` manual
 #                debugging where no harness phase is supplied.
 #
@@ -150,6 +153,121 @@ assert_tpm2_pcr7_token() {
         || fail "systemd-tpm2 token not bound to PCR 7 (tpm2-pcrs=[$arr]) on $backing"
 }
 
+# --- network-state slice (#130) -----------------------------------------
+# Second boot only (the steady-state boot, after the LUKS/TPM checks).
+# Drives /usr/lib/molma/molma-network-verify — the same netstate +
+# avahipublisher packages cmd/host-agent-real wires, minus PAM — against
+# the VM's real NetworkManager and avahi-daemon. The SSH NIC (MAC pinned
+# in run-medium-tests.sh, NM-unmanaged) is never touched.
+SSH_NIC_MAC="52:54:00:6d:6c:01"
+MNV=/usr/lib/molma/molma-network-verify
+AVAHI_CONF=/etc/avahi/avahi-daemon.conf
+MNV_LOG=/var/log/molma-network-verify.log
+
+nic_ipv4() {
+    ip -o -4 addr show dev "$1" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1
+}
+
+assert_network_state() {
+    command -v nmcli >/dev/null || fail "nmcli not in image"
+    command -v avahi-resolve >/dev/null || fail "avahi-resolve not in image"
+    [ -x "$MNV" ] || fail "$MNV missing from image"
+
+    # Both NM NICs must reach 'connected'. DHCP on the isolated usernets
+    # is quick but has no ordering against sshd, so poll.
+    local nics=""
+    for _i in $(seq 1 60); do
+        nics="$(nmcli -t -f DEVICE,TYPE,STATE device 2>/dev/null \
+            | awk -F: '$2 == "ethernet" && $3 == "connected" {print $1}' | sort)"
+        [ "$(grep -c . <<<"$nics")" -eq 2 ] && break
+        sleep 1
+    done
+    [ "$(grep -c . <<<"$nics")" -eq 2 ] \
+        || fail "want 2 NM-connected ethernet NICs, have: $(nmcli device 2>&1)"
+    local nic_a nic_b
+    nic_a="$(sed -n 1p <<<"$nics")"
+    nic_b="$(sed -n 2p <<<"$nics")"
+
+    # The SSH NIC must be NM-unmanaged — its absence below proves the LAN
+    # set is "active NM connections", not "all kernel interfaces".
+    local ssh_nic
+    ssh_nic="$(ip -o link | awk -v mac="$SSH_NIC_MAC" \
+        'tolower($0) ~ mac {sub(/:$/, "", $2); print $2; exit}')"
+    [ -n "$ssh_nic" ] || fail "no interface with SSH NIC MAC $SSH_NIC_MAC"
+    grep -qx "$ssh_nic" <<<"$nics" \
+        && fail "SSH NIC $ssh_nic leaked into the NM-connected set"
+
+    # 1. netstate's LAN set == the NM set, SSH NIC excluded.
+    local lan lan_names
+    lan="$("$MNV" lan 2>&1)" || fail "molma-network-verify lan: $lan"
+    lan_names="$(grep -oE '"Name":"[^"]*"' <<<"$lan" | cut -d'"' -f4 | sort)"
+    [ "$lan_names" = "$nics" ] \
+        || fail "netstate LAN set [$lan_names] != NM set [$nics] (raw: $lan)"
+
+    # 2. serve: the conf ships with no allow-interfaces, so the startup
+    # sync exercises conf-change -> daemon restart -> republish; the
+    # published name must then resolve to one of the LAN addresses.
+    "$MNV" serve -slug molmatest >"$MNV_LOG" 2>&1 &
+    local mnv_pid=$!
+    local want_allow="allow-interfaces=${nic_a},${nic_b}"
+    local got=""
+    for _i in $(seq 1 30); do
+        grep -qx "$want_allow" "$AVAHI_CONF" 2>/dev/null && { got=1; break; }
+        kill -0 "$mnv_pid" 2>/dev/null || break
+        sleep 1
+    done
+    [ -n "$got" ] || fail "allowlist never became '$want_allow': conf=$(grep allow-interfaces "$AVAHI_CONF" 2>/dev/null) log=$(tail -5 "$MNV_LOG" 2>/dev/null)"
+
+    local addr_a addr_b resolved=""
+    addr_a="$(nic_ipv4 "$nic_a")"
+    addr_b="$(nic_ipv4 "$nic_b")"
+    for _i in $(seq 1 30); do
+        resolved="$(avahi-resolve -4 -n molmatest.local 2>/dev/null | awk '{print $2}')"
+        [ -n "$resolved" ] && break
+        sleep 1
+    done
+    [ -n "$resolved" ] || fail "molmatest.local never resolved: $(tail -5 "$MNV_LOG" 2>/dev/null)"
+    case "$resolved" in
+        "$addr_a"|"$addr_b") ;;
+        *) fail "molmatest.local resolved to $resolved, want $addr_a or $addr_b" ;;
+    esac
+
+    # 3. interface removal: disconnecting nic_b must rewrite the allowlist
+    # to nic_a alone (second conf-change -> restart -> republish round).
+    nmcli device disconnect "$nic_b" >/dev/null 2>&1 \
+        || fail "nmcli device disconnect $nic_b failed"
+    got=""
+    for _i in $(seq 1 30); do
+        grep -qx "allow-interfaces=${nic_a}" "$AVAHI_CONF" 2>/dev/null && { got=1; break; }
+        sleep 1
+    done
+    [ -n "$got" ] || fail "allowlist not rewritten after $nic_b disconnect: conf=$(grep allow-interfaces "$AVAHI_CONF" 2>/dev/null) log=$(tail -5 "$MNV_LOG" 2>/dev/null)"
+
+    # 4. IP-change replay: committed entry groups hold the literal old
+    # address, so only watcher -> RepublishAll makes the new one
+    # resolvable. Conf is unchanged by an IP-only change (no restart).
+    local conn
+    conn="$(nmcli -t -f GENERAL.CONNECTION device show "$nic_a" 2>/dev/null | cut -d: -f2-)"
+    [ -n "$conn" ] || fail "no NM connection on $nic_a"
+    nmcli connection modify "$conn" ipv4.method manual \
+        ipv4.addresses 10.0.9.99/24 ipv4.gateway "" ipv4.dns "" \
+        || fail "nmcli connection modify '$conn' failed"
+    nmcli connection up "$conn" >/dev/null 2>&1 \
+        || fail "nmcli connection up '$conn' failed"
+    resolved=""
+    for _i in $(seq 1 30); do
+        resolved="$(avahi-resolve -4 -n molmatest.local 2>/dev/null | awk '{print $2}')"
+        [ "$resolved" = "10.0.9.99" ] && break
+        sleep 1
+    done
+    [ "$resolved" = "10.0.9.99" ] \
+        || fail "replay never re-announced 10.0.9.99 (last resolve: '$resolved'): $(tail -10 "$MNV_LOG" 2>/dev/null)"
+
+    kill -0 "$mnv_pid" 2>/dev/null \
+        || fail "molma-network-verify serve died mid-test: $(tail -10 "$MNV_LOG" 2>/dev/null)"
+    kill "$mnv_pid" 2>/dev/null
+}
+
 case "$PHASE" in
     first-boot)
         # The run-once enrollment unit (molma-tpm-enroll.service) is
@@ -184,6 +302,7 @@ case "$PHASE" in
         # proof above is load-bearing.
         journalctl -b --no-pager 2>/dev/null \
             | grep -iE 'tpm2|cryptsetup' | tail -5 || true
+        assert_network_state
         ;;
     combined) ;;
     *) fail "unknown phase '$PHASE'" ;;

@@ -187,12 +187,12 @@ type Owner struct {
 	Username string
 }
 
-func (m *Manager) Install(ctx context.Context, manifestID string, owner Owner, scope string, mounts []FolderMount, progress func(step string)) (store.Instance, error) {
+func (m *Manager) Install(ctx context.Context, manifestID string, owner Owner, scope string, mounts []FolderMount, mailProviderID string, progress func(step string)) (store.Instance, error) {
 	man, composeBytes, err := m.catalog.Load(manifestID)
 	if err != nil {
 		return store.Instance{}, err
 	}
-	return m.install(ctx, man, composeBytes, owner, scope, mounts, progress)
+	return m.install(ctx, man, composeBytes, owner, scope, mounts, mailProviderID, progress)
 }
 
 // CustomSpec is a user-pasted (Door-2) app: a raw compose plus the bits the
@@ -217,7 +217,7 @@ func (m *Manager) InstallCustom(ctx context.Context, spec CustomSpec, owner Owne
 	if err != nil {
 		return store.Instance{}, err
 	}
-	return m.install(ctx, man, composeBytes, owner, scope, customMounts(man.Permissions.Folders, scope), progress)
+	return m.install(ctx, man, composeBytes, owner, scope, customMounts(man.Permissions.Folders, scope), "", progress)
 }
 
 // customMounts resolves a Door-2 manifest's folder grants into FolderMounts.
@@ -241,11 +241,18 @@ func customMounts(folders []manifest.Folder, scope string) []FolderMount {
 // install is the shared transaction both doors converge on (APP_MANIFEST.md #
 // one model, two doors): a manifest + verbatim compose pair, whether loaded
 // from the catalog or synthesized from a pasted compose.
-func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBytes []byte, owner Owner, scope string, mounts []FolderMount, progress func(step string)) (store.Instance, error) {
+func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBytes []byte, owner Owner, scope string, mounts []FolderMount, mailProviderID string, progress func(step string)) (store.Instance, error) {
 	step := func(s string) {
 		if progress != nil {
 			progress(s)
 		}
+	}
+
+	// A mail-provider election is only meaningful for an app that declares
+	// mail support — the API validates this against the install plan, so this
+	// is the transaction owner's backstop, checked before any state is written.
+	if mailProviderID != "" && man.Mail == nil {
+		return store.Instance{}, fmt.Errorf("app %q does not declare mail support", man.ID)
 	}
 
 	// 1-2. Manifest validated by the caller; admit the compose + the manifest's
@@ -348,6 +355,17 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	if err := m.store.SetServiceGrants(id, grants); err != nil {
 		m.dropServiceGrants(context.Background(), id, grants)
 		return rollback(fmt.Errorf("persist service grants: %w", err))
+	}
+
+	// 5d. Bind the elected outgoing-mail provider before writeEnv reads it
+	// (SERVICE_PROVISIONING.md # BYO outgoing mail). The FK catches a provider
+	// deleted between the API's validation and here; rollback's instance
+	// Delete cascades the binding away. No election ⇒ no row ⇒ no MOLMA_MAIL_*.
+	if mailProviderID != "" {
+		step("binding_mail_provider")
+		if err := m.store.SetInstanceMailBinding(id, mailProviderID); err != nil {
+			return rollback(fmt.Errorf("bind mail provider: %w", err))
+		}
 	}
 
 	// 6. Resolve the per-instance isolation (container identity + folder binds).
@@ -591,11 +609,12 @@ func (m *Manager) Uninstall(ctx context.Context, id string) error {
 // ErrNotRunning / ErrNotStopped are returned by Stop/Start when the instance
 // is not in the state the transition requires. The API maps them to 409 so the
 // UI can tell "illegal transition" apart from a missing app (404) or a host
-// fault (500). State guards are the only place lifecycle discriminates a
-// conflict, so these are the only two sentinels here.
+// fault (500). ErrNoMailSupport is RebindMail's parallel: binding a provider
+// to an app whose manifest has no mail block, mapped to 422.
 var (
-	ErrNotRunning = errors.New("app is not running")
-	ErrNotStopped = errors.New("app is not stopped")
+	ErrNotRunning    = errors.New("app is not running")
+	ErrNotStopped    = errors.New("app is not stopped")
+	ErrNoMailSupport = errors.New("app does not declare mail support")
 )
 
 // Stop halts an instance's containers without removing them
@@ -1225,6 +1244,17 @@ func (m *Manager) writeEnv(id, slug string, iso isolation) error {
 			prefix+"PASSWORD="+g.Password,
 			prefix+"DSN="+dsn,
 		)
+	}
+	// Re-emit the bound outgoing-mail provider as MOLMA_MAIL_*
+	// (SERVICE_PROVISIONING.md # BYO outgoing mail). Unbound (ErrNotFound) is
+	// the common case and injects nothing — a mail-capable app must run
+	// without it (manifest validation enforces optional: true).
+	mp, err := m.store.GetInstanceMailProvider(id)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("load mail binding: %w", err)
+	}
+	if err == nil {
+		lines = append(lines, mailEnvLines(mp)...)
 	}
 	env := strings.Join(append(lines, ""), "\n")
 	return os.WriteFile(filepath.Join(m.instanceDir(id), ".env"), []byte(env), 0o644)

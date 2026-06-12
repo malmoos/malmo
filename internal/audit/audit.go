@@ -43,6 +43,15 @@ const (
 	// Health issue transitions (HEALTH.md # Persistence, LOGGING.md).
 	ActionHealthIssueRaised  = "health.issue.raised"
 	ActionHealthIssueCleared = "health.issue.cleared"
+
+	// Outgoing-mail providers (SERVICE_PROVISIONING.md # BYO outgoing mail).
+	// CRUD is elevation-class; test sends real mail through the credential, so
+	// it audits too. Rebind is the per-app binding change.
+	ActionMailProviderCreate = "mail.provider.create"
+	ActionMailProviderUpdate = "mail.provider.update"
+	ActionMailProviderDelete = "mail.provider.delete"
+	ActionMailProviderTest   = "mail.provider.test"
+	ActionAppMailRebind      = "app.mail.rebind"
 )
 
 // Target describes the object the action acts on. Both fields are optional.

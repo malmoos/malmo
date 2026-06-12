@@ -30,6 +30,12 @@ services:
     image: kimai/kimai2:2.59.0
     environment:
       DATABASE_URL: "${MOLMA_SERVICE_DATABASE_DSN}?charset=utf8mb4&serverVersion=8.4"
+      # Outgoing mail (manifest `mail:` block): bound, MOLMA_MAIL_DSN is a
+      # Symfony-style SMTP URL Kimai consumes directly; unbound, the vars are
+      # absent and the defaults below keep email off via the null transport
+      # (upstream's documented "no mail" value) instead of a broken empty DSN.
+      MAILER_URL: "${MOLMA_MAIL_DSN:-null://null}"
+      MAILER_FROM: "${MOLMA_MAIL_FROM:-kimai@example.com}"
       ADMINMAIL: admin@kimai.local
       ADMINPASS: changemeplease
       TRUSTED_PROXIES: "127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
