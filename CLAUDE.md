@@ -14,7 +14,7 @@ A running molma is five processes/artifacts. Three are Go, one is JavaScript, on
 - **`molma-brain`** (`cmd/brain/`, `internal/`) — the control-plane daemon. One Go binary: owns SQLite state, the REST+SSE API, the app lifecycle, and the Caddy config. Drives Docker via the `docker compose` CLI.
 - **`host-agent`** (`cmd/host-agent/`) — the privileged side. Today it's a **fake**: real `BRAIN_HOST_PROTOCOL.md` wire format over a real UNIX socket, but the host ops themselves (Avahi, LUKS, PAM, apt) are stubbed in memory. The real one is `cmd/host-agent-real/` (PAM verify is real; the rest is still being built).
 - **`web-ui`** (`web-ui/`) — Vue 3 + Vite + TanStack Query dashboard. Talks only to the brain.
-- **Caddy** (`dev/`) — reverse proxy. Terminates `*.molma.local` and routes to app containers + the brain, configured live by the brain via Caddy's admin API. Subdomain routing per app, never path-based (browser same-origin policy is the reason).
+- **Caddy** (`dev/`) — reverse proxy. Terminates `*.local` and routes to app containers + the brain, configured live by the brain via Caddy's admin API. Subdomain routing per app, never path-based (browser same-origin policy is the reason).
 - **SQLite** — the brain's only persistent store (`internal/store/`).
 
 Wire: `browser → web-ui → brain`, and the brain fans out to `docker compose`, Caddy's admin API, and the host-agent (HTTP/JSON over a UNIX socket).
@@ -49,7 +49,7 @@ The inner/outer boundary is also the **cross-platform / Linux-only** boundary. T
 - `make test-nopam` — full suite minus the PAM package, for when you don't have `libpam0g-dev` (i.e. off Linux).
 - `make clean` — stop dev Caddy, remove molma containers/networks, wipe `.dev/state`.
 
-**Prerequisites for the inner loop:** Docker + `docker compose`, Node 20+, Go 1.23+, host port `:80` free (dev Caddy binds it so `<slug>.molma.local` works portless), and `avahi-daemon` running on Linux (so `.local` names resolve under `make dev`). The full Go test suite additionally needs `libpam0g-dev` on Linux; see `docs/dev/running-locally.md`.
+**Prerequisites for the inner loop:** Docker + `docker compose`, Node 20+, Go 1.23+, host port `:80` free (dev Caddy binds it so `<slug>.local` works portless), and `avahi-daemon` running on Linux (so `.local` names resolve under `make dev`). The full Go test suite additionally needs `libpam0g-dev` on Linux; see `docs/dev/running-locally.md`.
 
 **Start every piece of work from a fresh branch off latest `main`:** `git checkout main && git pull && git checkout -b <branch>`. Never commit straight to `main`.
 
@@ -76,7 +76,7 @@ Small set of rules. Codified now so we don't have to back them out later.
 - **Consumer-side interfaces.** Interfaces live in the package that *uses* them, not the package that implements them. `lifecycle.DockerDriver` lives in `internal/lifecycle/`, not in a hypothetical `internal/docker/`. Provider packages export concrete types only. Exception: a single interface shared by three or more consumers can move to the provider, but default to consumer-side until that's true.
 - **Layer boundaries.** `internal/lifecycle` is the transaction owner; only `cmd/brain` and `internal/api` may import it. `internal/store` is the persistence boundary; only `internal/lifecycle`, `internal/api`, `internal/auth`, `internal/audit`, and `cmd/brain` may import it. Anything else reaching in is breaking the model — push the call through the right seam instead.
 - **`log/slog` is the only logger.** No `"log"` imports, no `fmt.Println` for diagnostics. Structured fields, not interpolated strings: `slog.Info("app installed", "instance_id", id)`, not `slog.Info(fmt.Sprintf("installed %s", id))`. The default handler is set in `cmd/brain/main.go`; use `slog.Default()` (the package-level functions) — don't thread `*slog.Logger` through constructors.
-- **Standard structured fields.** Use these key names so journalctl/jq filters stay stable: `instance_id`, `manifest_id`, `slug`, `service`, `image`, `host`, `upstream`, `step`, `err`, `output`, `user_id`, `username`, `role`, `action`, `actor_user_id`, `target_kind`, `target_id`, `retry_after`. Adding a new recurring field? Add it here.
+- **Standard structured fields.** Use these key names so journalctl/jq filters stay stable: `instance_id`, `manifest_id`, `slug`, `service`, `image`, `host`, `upstream`, `step`, `err`, `output`, `user_id`, `username`, `role`, `action`, `actor_user_id`, `target_kind`, `target_id`, `retry_after`, `iface`, `interfaces`. `host` is a machine or upstream hostname only — a single network interface name is `iface`, a list of them is `interfaces` (never overload `host` for either). Adding a new recurring field? Add it here.
 - **Typed errors at boundaries, not everywhere.** Define a sentinel/typed error only when a *consumer* needs to discriminate (HTTP status, retry decision, UI text). `store.ErrNotFound` exists because the API maps it to 404. Don't pre-declare error types speculatively.
 - **No premature abstraction.** Don't introduce an interface, factory, or DI container until at least two concrete consumers exist. It bites hardest in Go where every extra interface is import-graph weight.
 - **`internal/` for everything except `cmd/`.** No `pkg/`. Anything inside `internal/` is private to this module by Go's own rules — no public API surface to maintain.
@@ -87,7 +87,7 @@ Small set of rules. Codified now so we don't have to back them out later.
 ## Load-bearing decisions (don't relitigate without cause)
 
 - **Debian base, single-node, BYO x86, Docker apps, custom YAML manifest, ISO install.**
-- **Subdomain routing** (`photos.molma.local`), explicitly *not* path-based — browser same-origin policy is the reason. See `SPEC.md`.
+- **Subdomain routing** (`photos.local`), explicitly *not* path-based — browser same-origin policy is the reason. See `SPEC.md`.
 - **Headscale + DERP (BSD-3)** for the molma mesh — **deferred, not v1.** Locked for when remote access ships; Tailscale's coordinator is proprietary and NetBird's server is AGPLv3, both rejected as the substrate. In v1, remote access is user-opt-in Tailscale (Tier-2 service, `SERVICE_PROVISIONING.md`), which is entirely separate — the user's own Tailscale account, not molma-brokered.
 - **ext4 + LUKS, not ZFS.** ZFS forecloses mergerfs/SnapRAID upgrades and adds CDDL/kernel licensing pain.
 - **Mergerfs from day 1** when a data drive is present (pool of one with one drive; `epmfs` placement). Enables zero-downtime drive addition. SnapRAID parity stays deferred.

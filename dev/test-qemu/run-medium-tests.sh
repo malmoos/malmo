@@ -235,7 +235,19 @@ qemu_base_args() {
         -chardev "socket,id=chrtpm,path=${SWTPM_SOCK}"
         -tpmdev "emulator,id=tpm0,chardev=chrtpm"
         -device tpm-crb,tpmdev=tpm0
-        -nic "user,hostfwd=tcp::${SSH_PORT}-:22,model=virtio-net-pci"
+        # Three NICs (#130 network-state slice). NIC1 carries SSH exactly
+        # as before (systemd-networkd DHCP; NM-unmanaged via its MAC — see
+        # mkosi.postinst.chroot). NIC2/NIC3 are NetworkManager-managed LAN
+        # interfaces on isolated usernets with distinct subnets so their
+        # DHCP addresses differ. MACs are pinned because the in-image
+        # config partitions networkd vs NM by MAC, not by the
+        # slot-dependent predictable interface name.
+        -netdev "user,id=mn1,hostfwd=tcp::${SSH_PORT}-:22"
+        -device "virtio-net-pci,netdev=mn1,mac=52:54:00:6d:6c:01"
+        -netdev "user,id=mn2,net=10.0.3.0/24"
+        -device "virtio-net-pci,netdev=mn2,mac=52:54:00:6d:6c:02"
+        -netdev "user,id=mn3,net=10.0.4.0/24"
+        -device "virtio-net-pci,netdev=mn3,mac=52:54:00:6d:6c:03"
         -no-reboot
     )
     if [ -n "$OVMF_VARS" ]; then

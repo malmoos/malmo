@@ -120,7 +120,7 @@ Unlike `docs/progress/` entries (frozen ADR snapshots), this file is **mutable b
 - **Trigger:** `MAILER_URL` — the image defaults it to `null://localhost`, Symfony's discard-everything transport, so all mail is silently dropped until an admin supplies a real SMTP DSN. Second app in this gap-class (see `smtp-relay — ghost`).
 - **What breaks:** every email Kimai sends — "forgot password" reset links and any mail an admin enables later (scheduled report delivery, notifications). Silent failure: the UI reports the mail as sent. Workaround inside the app: an admin can reset any user's password from the admin UI, so nobody is permanently locked out. Core time-tracking is unaffected.
 - **Why molma can't satisfy it (v1):** same missing mechanism as the ghost entry — molma has no outgoing-mail relay, no `MOLMA_SMTP_*` injection, and no per-app env-override UI through which a user could supply their own provider's credentials post-install.
-- **Status:** planned (#122 — BYO outgoing email: per-app SMTP provider binding + injection). Recurs across apps (ghost, kimai, and docuseal's email-signing workflow); the design shape lives on the issue.
+- **Status:** implemented (#122 — BYO outgoing mail, `SERVICE_PROVISIONING.md` # BYO outgoing mail). `catalog/kimai` declares `mail: {optional: true}` and maps `MAILER_URL: "${MOLMA_MAIL_DSN:-null://null}"` + `MAILER_FROM: "${MOLMA_MAIL_FROM:-kimai@example.com}"`, so a bound instance delivers mail and an unbound one keeps the null transport. Recurred across apps (ghost, gitea, docuseal's email-signing workflow); each needs its own compose mapping.
 
 ### smtp-relay — gitea (2026-06-11)
 
@@ -153,3 +153,19 @@ Unlike `docs/progress/` entries (frozen ADR snapshots), this file is **mutable b
 - **What breaks:** out of the box, only providers whose credentials are entered in the app UI work (Bluesky app-password, Nostr key, similar). The headline integrations stay dead until the operator can set env vars, and molma has no per-app env-override surface — no install-form field, no post-install editor, and SSH is rescue-only. Would bite even if the sandbox blocker above were lifted.
 - **Why molma can't satisfy it (v1):** same missing mechanism the `smtp-relay` entries hit ("no per-app env-override UI through which a user could supply their own provider's credentials post-install"), but for a non-mail feature class — coined separately so recurrence of generic operator-config (API keys, feature flags) is greppable apart from the mail-relay design (#122).
 - **Status:** open
+
+### runtime-self-patch — paperless-ngx (2026-06-11)
+
+- **Severity:** degraded
+- **Trigger:** `PAPERLESS_OCR_LANGUAGES` — the image's init scripts install additional tesseract language packs at container start via `apt-get install`, a runtime self-patch of the image's own filesystem.
+- **What breaks:** OCR languages beyond the five preinstalled in the image (English, German, Italian, Spanish, French) cannot be added. Documents in other languages still consume and archive, but their OCR text layer is garbage, so full-text search misses them. Core scanning/archiving in the preinstalled languages is unaffected.
+- **Why molma can't satisfy it (v1):** same mechanism as `runtime-self-patch — jotty` — the app runs as the granted-folder owner's non-root uid under `cap_drop: ALL`, and upstream's rootless docs themselves state the apt-based language install requires root. There is no molma-side fix in scope: granting root or `CAP_DAC_OVERRIDE` so an app can rewrite its own image is what Tier-3 exists to prevent. The clean unblock is upstream shipping language packs in the image (or a non-root plugin path); until then the catalog description states the fixed language set.
+- **Status:** open — shipped degraded (`catalog/paperless-ngx`).
+
+### smtp-relay — paperless-ngx (2026-06-11)
+
+- **Severity:** degraded
+- **Trigger:** no `PAPERLESS_EMAIL_HOST` (+ `_PORT`/`_HOST_USER`/`_HOST_PASSWORD`/`_USE_TLS`/`_FROM`) set — Paperless's Django mail backend has no SMTP server, so every outbound message is dropped/errors until an admin configures one. Note this is outbound only; IMAP mail-rule *ingestion* (pulling documents from a mailbox) is inbound and works under the granted `internet` permission.
+- **What breaks:** account password-reset emails and workflow "send by email" actions (mailing a consumed document or a notification out). Silent or failed delivery. Workaround inside the app: an admin can reset any user's password from the Django admin UI, so nobody is locked out. Core consumption, OCR, search, and archiving are unaffected.
+- **Why molma can't satisfy it (v1):** no outgoing-mail relay, no `MOLMA_SMTP_*` injection, and no per-app env-override UI for post-install SMTP credentials. Same missing mechanism as ghost, kimai, gitea, and docuseal.
+- **Status:** mechanism implemented (#122 — BYO outgoing mail, `SERVICE_PROVISIONING.md` # BYO outgoing mail); gitea's own manifest/compose not yet updated. The revisit: declare `mail: {optional: true}` and map `GITEA__mailer__ENABLED` + `GITEA__mailer__SMTP_ADDR`, `SMTP_PORT`, `FROM`, `USER`, `PASSWD` from the injected `MOLMA_MAIL_*` vars (Gitea has no single-DSN var, so it consumes the discrete fields; `ENABLED` needs a guard for the unbound case, e.g. defaulting off when `MOLMA_MAIL_HOST` is absent).

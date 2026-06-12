@@ -1,6 +1,9 @@
-// Local-IPv4 detection for the announced A records. No build tag: pure net
-// code, shared so the non-Linux build compiles and the tests run everywhere.
-package avahipublisher
+// Route-probe IPv4 detection: the no-NetworkManager fallback for the
+// announced address. No build tag: pure net code, shared so the non-Linux
+// build compiles and the tests run everywhere. Moved here from avahipublisher
+// when the LAN set gained a second consumer (#130); semantics unchanged from
+// #129.
+package netstate
 
 import (
 	"fmt"
@@ -8,10 +11,18 @@ import (
 	"net"
 )
 
-// detectLocalIPv4 returns the box's LAN IPv4: the kernel's route-chosen source
+// DetectIPv4 returns the box's LAN IPv4: the kernel's route-chosen source
 // address, falling back to interface enumeration when the probe fails.
-func detectLocalIPv4() (string, error) {
+func DetectIPv4() (string, error) {
 	return detectIPv4(probeLANIPv4, enumerateLocalIPv4)
+}
+
+// ProbeIPv4 is the route probe alone, without the enumeration fallback.
+// Exported for the #129 regression test in avahipublisher, which needs the
+// kernel's route-chosen address as an independent expected value (and a skip
+// when no default route exists). Production callers use DetectIPv4.
+func ProbeIPv4() (string, error) {
+	return probeLANIPv4()
 }
 
 // detectIPv4 implements the probe-then-enumerate composition; split out so the
@@ -23,9 +34,9 @@ func detectIPv4(probe, enumerate func() (string, error)) (string, error) {
 	}
 	ip, enumErr := enumerate()
 	if enumErr != nil {
-		return "", fmt.Errorf("avahipublisher: no usable local IPv4: route probe: %v; interface enumeration: %w", err, enumErr)
+		return "", fmt.Errorf("netstate: no usable local IPv4: route probe: %v; interface enumeration: %w", err, enumErr)
 	}
-	slog.Warn("avahipublisher: route probe failed (no default route?); announced address picked by interface enumeration and may be wrong",
+	slog.Warn("netstate: route probe failed (no default route?); announced address picked by interface enumeration and may be wrong",
 		"err", err, "host", ip)
 	return ip, nil
 }
@@ -57,7 +68,7 @@ func probeLANIPv4() (string, error) {
 func enumerateLocalIPv4() (string, error) {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
-		return "", fmt.Errorf("avahipublisher: list interfaces: %w", err)
+		return "", fmt.Errorf("netstate: list interfaces: %w", err)
 	}
 	for _, addr := range addrs {
 		var ip net.IP
@@ -82,5 +93,5 @@ func enumerateLocalIPv4() (string, error) {
 		}
 		return ip4.String(), nil
 	}
-	return "", fmt.Errorf("avahipublisher: no usable local IPv4 address found (loopback and link-local excluded)")
+	return "", fmt.Errorf("netstate: no usable local IPv4 address found (loopback and link-local excluded)")
 }

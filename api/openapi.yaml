@@ -101,6 +101,8 @@ components:
           type:
             - array
             - "null"
+        mail_provider_id:
+          type: string
       type: object
     Create-userRequest:
       additionalProperties: false
@@ -515,6 +517,8 @@ components:
           type: string
         footprint:
           $ref: "#/components/schemas/InstallPlanFootprint"
+        mail:
+          $ref: "#/components/schemas/InstallPlanMail"
         manifest_id:
           type: string
         name:
@@ -579,6 +583,21 @@ components:
         - image_disk_bytes
         - free_bytes
       type: object
+    InstallPlanMail:
+      additionalProperties: false
+      properties:
+        optional:
+          type: boolean
+        providers:
+          items:
+            $ref: "#/components/schemas/MailProviderOption"
+          type:
+            - array
+            - "null"
+      required:
+        - optional
+        - providers
+      type: object
     InstallPlanPermissions:
       additionalProperties: false
       properties:
@@ -623,6 +642,10 @@ components:
           type: string
         id:
           type: string
+        mail_provider_id:
+          type: string
+        mail_supported:
+          type: boolean
         manifest_id:
           type: string
         name:
@@ -809,6 +832,44 @@ components:
       required:
         - apps
       type: object
+    List-mail-provider-optionsResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/List-mail-provider-optionsResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        providers:
+          items:
+            $ref: "#/components/schemas/MailProviderOption"
+          type:
+            - array
+            - "null"
+      required:
+        - providers
+      type: object
+    List-mail-providersResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/List-mail-providersResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        providers:
+          items:
+            $ref: "#/components/schemas/MailProviderDTO"
+          type:
+            - array
+            - "null"
+      required:
+        - providers
+      type: object
     List-notification-mutesResponse:
       additionalProperties: false
       properties:
@@ -909,6 +970,95 @@ components:
           $ref: "#/components/schemas/UserDTO"
       required:
         - user
+      type: object
+    MailProviderBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/MailProviderBody.json
+          format: uri
+          readOnly: true
+          type: string
+        encryption:
+          enum:
+            - none
+            - starttls
+            - tls
+          type: string
+        from_address:
+          type: string
+        host:
+          type: string
+        label:
+          type: string
+        password:
+          type: string
+        port:
+          format: int64
+          type: integer
+        username:
+          type: string
+      required:
+        - label
+        - host
+        - port
+        - from_address
+        - encryption
+      type: object
+    MailProviderDTO:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/MailProviderDTO.json
+          format: uri
+          readOnly: true
+          type: string
+        created_at:
+          format: int64
+          type: integer
+        encryption:
+          enum:
+            - none
+            - starttls
+            - tls
+          type: string
+        from_address:
+          type: string
+        host:
+          type: string
+        id:
+          type: string
+        label:
+          type: string
+        port:
+          format: int64
+          type: integer
+        username:
+          type: string
+      required:
+        - id
+        - label
+        - host
+        - port
+        - username
+        - from_address
+        - encryption
+        - created_at
+      type: object
+    MailProviderOption:
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+      required:
+        - id
+        - label
       type: object
     NotificationDTO:
       additionalProperties: false
@@ -1055,6 +1205,21 @@ components:
       required:
         - password
       type: object
+    Set-app-mail-bindingRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/Set-app-mail-bindingRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        provider_id:
+          type: string
+      required:
+        - provider_id
+      type: object
     SetupRequest:
       additionalProperties: false
       properties:
@@ -1105,6 +1270,21 @@ components:
       required:
         - options
         - default
+      type: object
+    Test-mail-providerRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/Test-mail-providerRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        to:
+          type: string
+      required:
+        - to
       type: object
     Unread-notification-countResponse:
       additionalProperties: false
@@ -1345,6 +1525,35 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       summary: Get one app instance
+  /api/v1/apps/{id}/mail-binding:
+    put:
+      operationId: set-app-mail-binding
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Set-app-mail-bindingRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Bind an app to an outgoing-mail provider (empty provider_id unbinds)
   /api/v1/apps/{id}/start:
     post:
       operationId: start-app
@@ -1626,6 +1835,134 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       summary: Revoke the current session
+  /api/v1/mail-providers:
+    get:
+      operationId: list-mail-providers
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/List-mail-providersResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List outgoing-mail providers (admin only)
+    post:
+      operationId: create-mail-provider
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MailProviderBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MailProviderDTO"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Register an outgoing-mail provider (admin only)
+  /api/v1/mail-providers/options:
+    get:
+      operationId: list-mail-provider-options
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/List-mail-provider-optionsResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List provider picker options — id and label only (any authenticated user)
+  /api/v1/mail-providers/{id}:
+    delete:
+      operationId: delete-mail-provider
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Delete an outgoing-mail provider (admin only; bound apps fall back to unbound)
+    put:
+      operationId: update-mail-provider
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MailProviderBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MailProviderDTO"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Update an outgoing-mail provider (admin only)
+  /api/v1/mail-providers/{id}/test:
+    post:
+      operationId: test-mail-provider
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Test-mail-providerRequest"
+        required: true
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Send a test email through a provider (admin only)
   /api/v1/me:
     get:
       operationId: me

@@ -24,6 +24,9 @@
 //	                    devices) in dev. Requires avahi-daemon running; runs
 //	                    unprivileged. `make dev` sets this. All other host ops
 //	                    stay fake — this only swaps the discovery publisher.
+//	MOLMA_FAKE_NO_GPU — when "1", GET /v1/system/gpu reports no usable GPU
+//	                    instead of the default synthetic Intel iGPU, so the
+//	                    `gpu: true` install refusal is exercisable in dev.
 package main
 
 import (
@@ -36,6 +39,7 @@ import (
 	"github.com/molmaos/molma/internal/hostagent"
 	"github.com/molmaos/molma/internal/hostagent/avahipublisher"
 	"github.com/molmaos/molma/internal/hostagent/healthsource"
+	"github.com/molmaos/molma/internal/hostagent/netstate"
 	"github.com/molmaos/molma/internal/protocol"
 )
 
@@ -92,10 +96,28 @@ func main() {
 	// `docker logs -f --timestamps`. The compose replica suffix (-1) is probed
 	// automatically; falls back to the bare stem for standalone containers.
 	a.Logs = &dockerLogSource{}
+	// On Linux, wire real /proc counters so make dev shows live CPU and RAM.
+	// On other platforms newSystemSampler returns nil and the agent falls back
+	// to synthetic monotonic counters (agent.go:447).
+	a.System = newSystemSampler()
 	// No real data drive in the dev loop, so GET /v1/system/status reports a
 	// canned free/total (≈412 GiB free of a 1 TiB drive) — enough for the
 	// install plan's free_bytes to render a plausible figure natively.
 	a.Disk = hostagent.NewFakeDiskReporter(412<<30, 1<<40)
+	// No real /dev/dri in the dev loop, so GET /v1/system/gpu reports a
+	// synthetic Intel iGPU (render GID 104, Debian's usual `render` group) so
+	// a `gpu: true` install exercises the full override path natively.
+	// MOLMA_FAKE_NO_GPU=1 flips it to "no usable GPU" for the refusal path.
+	gpu := protocol.SystemGPU{Present: true, Vendor: "intel", RenderGID: 104}
+	if os.Getenv("MOLMA_FAKE_NO_GPU") == "1" {
+		gpu = protocol.SystemGPU{}
+		slog.Info("host-agent (fake) reporting no GPU (MOLMA_FAKE_NO_GPU=1)")
+	}
+	a.GPU = hostagent.NewFakeGPUReporter(gpu)
+	// No NetworkManager in the dev loop either: a fixed plausible LAN set
+	// keeps GET /v1/discovery/state's interfaces field stable regardless of
+	// the dev box's real network.
+	a.Net = hostagent.NewFakeNetState(netstate.LANInterface{Name: "eth0", Index: 2, IPv4: "192.168.1.20"})
 
 	mux := http.NewServeMux()
 	a.Mount(mux)

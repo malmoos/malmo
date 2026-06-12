@@ -21,6 +21,18 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-12 — Outgoing email is BYO-SMTP with per-app bindings, not a molma relay (#122)
+
+**Previously:** apps that send email (Kimai's password resets, Gitea's notifications) had no molma story at all — the catalog-import ledger parked them as `smtp-relay` gaps, and their descriptions told the user an administrator had to configure a mail server somehow, with no UI path.
+
+**Now:** the admin **brings their own SMTP account**. Settings → Outgoing email holds a box-level provider registry (label, host/port, optional credentials, from address, encryption mode; admin-only, elevation-class, with a synchronous test-send). A mail-capable app declares `mail: {optional: true}` in its manifest; the install dialog then offers a provider picker (None default, sole provider preselected), and the binding is per-instance and rebindable from the app's detail page. The brain direct-injects the bound provider as `MOLMA_MAIL_HOST/_PORT/_USER/_PASSWORD/_FROM/_ENCRYPTION` plus a Symfony-style `MOLMA_MAIL_DSN`; the app's compose maps them app-defined, with a compose default covering the unbound case. Unbound → nothing injected, app runs with email off.
+
+**Why:** running a relay/smarthost on the box was rejected — residential IPs can't deliver mail (blocklists, missing PTR records), so a molma relay would just be a queue in front of the user's real provider, plus deliverability support burden molma can't carry. Direct injection reuses the established `MOLMA_*` contract (`MOLMA_SERVICE_*`, `MOLMA_SECRET_*`) instead of inventing a mail-specific mechanism, and the app dialing the provider itself rides its already-declared `internet` permission. v1 admits only `optional: true` because a box with zero registered providers must still be able to install the app; required-mail (block install until bound) is a possible later loosening, not a v1 shape. Provider edits don't re-stamp bound apps' env until their next rebind/recreate — accepted lag, surfaced in the UI, rather than a fleet-restart side effect hidden inside a settings save.
+
+**Affected docs:** `SERVICE_PROVISIONING.md` (# BYO outgoing mail — new section, injection table, locked decisions), `APP_MANIFEST.md` (# D3 — new section, locked decisions), `SETTINGS.md` (panel inventory), `DASHBOARD.md` (consent dialog), `NEXT.md` (# Outgoing mail), `docs/dev/catalog-import-gaps.md` (kimai/gitea `smtp-relay` entries → implemented). Implementation: `internal/store/mail.go`, `internal/lifecycle/mail.go`, `internal/api/mail.go`, catalog kimai; realized by `docs/progress/byo-outgoing-mail.md`.
+
+---
+
 ## 2026-06-10 — App Start uses `docker compose up -d`, not `compose start`
 
 **Previously:** `APP_LIFECYCLE.md` # stop, start, uninstall locked Start as `docker compose -p molma-<id> start`, the literal inverse of the `stop` it pairs with.

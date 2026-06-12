@@ -15,7 +15,7 @@ export MOLMA_AGENT_SOCK := $(AGENT_SOCK)
 export MOLMA_STATE_DIR := $(STATE_DIR)
 export MOLMA_CATALOG_DIR := ./catalog
 
-.PHONY: build host-agent brain host-agent-real check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev stop openapi openapi-check clean check-state-owner help
+.PHONY: build host-agent brain host-agent-real check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-netstate test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev stop openapi openapi-check clean check-state-owner help
 
 # msteinert/pam v2.1.0 uses RTLD_NEXT, a GNU extension that requires
 # _GNU_SOURCE at C compile time. Apply globally; harmless to non-cgo builds.
@@ -102,6 +102,11 @@ test-nopam:
 # running on the host. No sudo needed (default DBus policy allows it).
 test-avahi:
 	$(GO) test -tags avahitest ./internal/hostagent/avahipublisher/
+
+# Integration tests for the NetworkManager LAN-interface provider. Requires
+# NetworkManager running on the host. No sudo needed (read-only DBus calls).
+test-netstate:
+	$(GO) test -tags nmtest ./internal/hostagent/netstate/
 
 # Integration tests for LinuxUserManager. Exercises real useradd + chpasswd
 # against /etc/passwd and /etc/shadow. MUST run as root and is intended for

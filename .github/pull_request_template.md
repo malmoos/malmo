@@ -1,9 +1,6 @@
 <!-- See docs/dev/contributing.md # Step 7 + Definition of done. Fill every section; delete the comments. -->
 <!-- Branch should be named <area>/<N>-<short-slug> (e.g. feat/12-health-banners). One PR closes exactly one issue. -->
 
-<!-- ⚠️ REQUIRED: keep the Closes line below — do not delete it. Without it GitHub will NOT auto-close the issue on merge and it will remain open. Replace <N> with the issue number. -->
-Closes #<N>
-
 ## What & why
 
 <!-- One or two lines: what this slice does and the behavior change. -->
@@ -20,6 +17,10 @@ Closes #<N>
 
 <!-- Be honest. Every "handled" claim must be verifiable in the diff — don't assume symmetry between similar code paths. "None" if truly none. -->
 
+## Platform gaps
+
+<!-- Catalog PRs only. If the app shipped with a feature that molma can't fully support, list each gap here: gap-class tag, severity (degrades / blocks-start), trigger, what breaks for the user, and why molma can't satisfy it. Omit this section (or write "None") for non-catalog PRs. -->
+
 ## Definition of done
 
 - [ ] Behavior works in the inner loop (`make dev`), and integration-tested against the real system if it touches one.
@@ -28,3 +29,6 @@ Closes #<N>
 - [ ] Spec doc updated if behavior realized/diverged; `DECISIONS.md` entry if a locked decision flipped.
 - [ ] No section-sign symbol (write `#` instead), no hard-wrapped markdown, `log/slog` only, conventions per `CLAUDE.md`.
 - [ ] Branch off `main`, PR into `main` with `Closes #<N>` (do not delete this line — GitHub will not auto-close the issue otherwise); any dependent issue un-`blocked`.
+
+<!-- ⚠️ REQUIRED: keep the Closes line below — do not delete it. Without it GitHub will NOT auto-close the issue on merge and it will remain open. Replace <N> with the issue number. -->
+Closes #<N>

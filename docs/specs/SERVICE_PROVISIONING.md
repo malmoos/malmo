@@ -97,6 +97,7 @@ Managed-service credentials are one of four `MOLMA_*` injection mechanisms the b
 | `MOLMA_FOLDER_<NAME>` | In-container path of a bound use-case folder (`APP_MANIFEST.md` # folders) | Fixed (`/molma/<folder>`) |
 | `MOLMA_DATA_DIR`, `MOLMA_APP_URL`, `MOLMA_INSTANCE_ID` | Per-instance facts the brain knows (data root, routed URL, id) | Fixed for the instance |
 | `MOLMA_SECRET_<NAME>` | A per-app random secret the brain **generates** from a manifest `secrets:` declaration | **Generated once at install, persisted, re-emitted verbatim** — never re-rolled |
+| `MOLMA_MAIL_*` | The outgoing-mail provider the instance is bound to (this doc # BYO outgoing mail) | Stamped at install / rebind; absent when unbound |
 
 The secret case is the only one the brain *creates* rather than *reflects*: for each `secrets: [{name, bytes?}]` entry (`APP_MANIFEST.md` # D2) it draws `bytes` (default 32, floor 16) from a CSPRNG, base64url-encodes them, and persists the value alongside the instance. Stability is load-bearing: a token-signing secret (e.g. `BETTER_AUTH_SECRET`) that changed on restart would invalidate every live session, so the value is read back from storage on every `.env` rewrite, not regenerated. Security hardening of this path (env-var delivery surface, at-rest encryption, rotation) is open — `NEXT.md` # App-secret injection hardening.
 
@@ -165,6 +166,38 @@ If we later need stronger isolation (security-sensitive app, regulatory requirem
 
 - The shared Postgres / Redis data lives on **fast tier** if available, falling back to normal.
 - Apps don't get a say — this is OS-policy, not per-app config.
+
+---
+
+## BYO outgoing mail (`MOLMA_MAIL_*`)
+
+> Implemented 2026-06-12 (`docs/progress/byo-outgoing-mail.md`, issue #122).
+
+Many apps want to *send* email — password resets, reminders, invites. molma does not run a mail server, relay, or smarthost: **the admin brings their own SMTP account** (Fastmail, a Gmail app password, the ISP's smarthost), and the brain injects its credentials into the apps the admin chooses. The app dials the provider itself over its declared `internet` permission; no mail traffic flows through molma infrastructure.
+
+**Providers** are box-level records, managed in Settings → Outgoing email (admin-only; create/update/delete are elevation-class, `USERS_AND_GROUPS.md` # Elevation in the UI): a label, SMTP host + port, optional username/password, a from address, and an encryption mode (`none` | `starttls` | `tls`). A synchronous test-send (`POST /mail-providers/{id}/test`) validates a provider end to end — dial, TLS, auth, one delivered message — before any app depends on it. Passwords are write-only at the API: requests carry them, responses never echo them. (At-rest they are plaintext in the brain's SQLite today, same status as managed-service credentials — folds into `NEXT.md` # App-secret injection hardening.)
+
+**Binding** is per-instance: a mail-capable app (manifest `mail:` block, `APP_MANIFEST.md` # D3) is bound to at most one provider. The install dialog offers the picker (None is the default and always valid; a sole registered provider is preselected), and the binding is changeable later from the app's detail page — by admins for any app, by a member for their own personal instances, same authorization as stop/start. Unbound means **nothing is injected**: the app must run with email features off, which is why v1 admits only `optional: true` manifests.
+
+A bound instance's `.env` carries the discrete fields plus a Symfony-style DSN, since apps differ in what they consume:
+
+```
+MOLMA_MAIL_HOST=smtp.fastmail.com
+MOLMA_MAIL_PORT=465
+MOLMA_MAIL_USER=box@example.com
+MOLMA_MAIL_PASSWORD=<stored>
+MOLMA_MAIL_FROM=box@example.com
+MOLMA_MAIL_ENCRYPTION=tls
+MOLMA_MAIL_USE_TLS=false
+MOLMA_MAIL_USE_SSL=true
+MOLMA_MAIL_DSN=smtps://box%40example.com:...@smtp.fastmail.com:465
+```
+
+The DSN scheme is `smtps://` for implicit TLS and `smtp://` otherwise (SMTP-URL consumers negotiate STARTTLS opportunistically; an app needing the exact mode reads `MOLMA_MAIL_ENCRYPTION`). `MOLMA_MAIL_USE_TLS` / `MOLMA_MAIL_USE_SSL` are boolean projections of that mode (STARTTLS vs implicit TLS, at most one true) for apps that take two separate flags — e.g. Django's `EMAIL_USE_TLS` / `EMAIL_USE_SSL`, which Paperless surfaces — since a compose file can't derive a boolean from the encryption string. Credentials are URL-escaped. The app's compose maps the vars to whatever it expects, per the family contract above — with a compose default for the unbound case so absence degrades cleanly (Kimai: `MAILER_URL: "${MOLMA_MAIL_DSN:-null://null}"`).
+
+**Propagation:** env is read at container create, so a rebind re-stamps the `.env` and recreates the instance's containers immediately (stopped instances pick it up at next start). Editing or deleting a *provider* does not re-stamp bound apps: they keep the previously injected values until their next rebind or reinstall — v1 accepts this lag, and the Settings UI says so. Deleting a provider unbinds its apps in the brain's state (the next rebind of each app drops the vars).
+
+**Explicitly not in v1** (deferral, not rejection — `NEXT.md` # Outgoing mail): no molma-run relay/smarthost, no per-app rate limiting or queue, no inbound mail anything. If email grows more surface (a default box-wide provider, brain-sent notification email riding the same providers), this section promotes to its own `OUTGOING_MAIL.md`.
 
 ---
 
@@ -276,6 +309,7 @@ Locked now: **the molma mesh is the intended transport for future cross-box serv
 - **Network isolation:** apps reach Tier-1 services only via dedicated Docker networks; no manifest declaration → no network membership → no reachability.
 - **Env-var injection:** stable `MOLMA_SERVICE_*` names; app maps them in its compose to whatever it actually expects (per `APP_MANIFEST.md`). Same contract for the rest of the `MOLMA_*` family (`MOLMA_FOLDER_*`, `MOLMA_APP_URL`, `MOLMA_SECRET_*`).
 - **Generated secrets (`MOLMA_SECRET_*`):** a manifest `secrets:` declaration makes the brain generate a CSPRNG value once at install, persist it, and re-emit it stably across restarts. The only injected variable molma creates rather than reflects. Security hardening is open (`NEXT.md` # App-secret injection hardening).
+- **Outgoing mail is BYO (`MOLMA_MAIL_*`), not a molma relay.** Admins register external SMTP providers; the brain injects the bound provider's credentials per instance and the app dials the provider itself. No smarthost, no queue, no inbound mail in v1; unbound apps get nothing injected and must run with email off (`mail: optional: true` is the only admitted shape).
 - **Tier 2 is curated, not open.** No third-party Tier-2 in v1.
 - **Tier 2 runs as native Debian packages under systemd**, not as Docker containers. The admin UI lives in the molma dashboard at `/settings/<service>/*` — no upstream admin UI is exposed at its own subdomain. Tier 2 updates ride apt.
 

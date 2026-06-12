@@ -43,7 +43,7 @@ func installSecretApp(t *testing.T, e *testEnv) (store.Instance, string) {
 	e.writeCatalogApp(t, "secretapp", secretsCompose, secretsManifest)
 	e.docker.digests[testImage] = testDigest
 	inst, err := e.m.Install(context.Background(), "secretapp",
-		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, nil)
+		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
 	}

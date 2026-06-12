@@ -10,7 +10,11 @@
 // imports this type at runtime.
 package avahipublisher
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/molmaos/molma/internal/hostagent/netstate"
+)
 
 // ErrCollision is the name-collision sentinel — defined here so callers can
 // use errors.Is on both platforms without a build-tag check.
@@ -20,6 +24,7 @@ var ErrCollision = errors.New("avahipublisher: name collision")
 // All methods return an "not supported on this OS" error.
 type DBusPublisher struct {
 	HostSuffix string
+	LAN        func() ([]netstate.LANInterface, error)
 }
 
 func (p *DBusPublisher) Publish(slug string) (string, error) {
@@ -27,6 +32,10 @@ func (p *DBusPublisher) Publish(slug string) (string, error) {
 }
 
 func (p *DBusPublisher) Unpublish(slug string) error {
+	return errors.New("avahipublisher: DBus publisher not supported on this OS")
+}
+
+func (p *DBusPublisher) RepublishAll() error {
 	return errors.New("avahipublisher: DBus publisher not supported on this OS")
 }
 
