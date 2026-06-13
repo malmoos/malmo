@@ -46,7 +46,6 @@ func (s *Server) appSecrets(ctx context.Context, in *struct {
 		return nil, huma.Error500InternalServerError("reveal secrets failed", err)
 	}
 	out := &struct{ Body AppSecretsDTO }{}
-	out.Body.Secrets = []AppSecretDTO{}
 	for _, sec := range secrets {
 		out.Body.Secrets = append(out.Body.Secrets, AppSecretDTO{Name: sec.Name, Value: sec.Value})
 	}
