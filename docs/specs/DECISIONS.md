@@ -21,6 +21,18 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-13 — malmo-brain runtime is `debian:trixie-slim` with the docker/Compose CLI bundled, not distroless (#162)
+
+**Previously:** `BUILD.md` # 5 leaned a **distroless** runtime for `malmo-brain` (`gcr.io/distroless/static-debian12`), and the locked build summary pinned "distroless runtime" — smallest image, least attack surface.
+
+**Now:** the brain runtime stage is **`debian:trixie-slim` with the `docker` CLI + Compose plugin bundled** (`docker-ce-cli` + `docker-compose-plugin` from Docker's official apt repo). The CLI shell-out model is unchanged; no brain code moves.
+
+**Why:** the brain orchestrates apps by shelling out to the `docker` / `docker compose` CLI (~15 call sites in `internal/lifecycle/docker.go`), and a distroless runtime — no shell, no binaries — cannot host them. Three ways out: **(a)** slim base + bundled CLI; **(b)** rewrite the shell-outs onto the Docker Go SDK to keep distroless; **(c)** bind-mount the host's CLI into the container. Chose **(a)**: zero code change, keeps the compose-CLI model the whole codebase + test suite is built on, and `docker-ce-cli` via apt is the blessed install path (same trusted source as the host engine, not a third-party package set). **(b)** rejected as a large refactor — `docker compose up` has no SDK equivalent, so it would mean vendoring `compose-go` and reimplementing the multi-service orchestration the project deliberately delegates to the CLI, busting the size:S budget and the architecture. **(c)** rejected as fragile — distroless lacks the loader/libs the CLI needs, and the brain image would couple to the host's Docker version (glibc / version skew). The distroless **size** win is immaterial: multi-stage already keeps the Go toolchain out of the final image (~30 MB brain binary), and the bundled CLI is a ~170 MB runtime dependency multi-stage can't trim (image ~200 MB) — noise against the multi-GB app images the box pulls. The **attack-surface** win is marginal for a daemon that already holds Docker API access via the socket proxy (`CONTROL_PLANE.md` # Locked: Docker socket exposure mitigated by socket proxy), and slim stays debuggable (it has a shell). Orthogonal to the socket-proxy decision: the bundled CLI reaches the daemon through the same proxy via `DOCKER_HOST`, so the endpoint allowlist still applies. Unblocks `#163`/M0 — the brain image now has an unambiguous base.
+
+**Affected docs:** `BUILD.md` (# 5 build line + locked build summary). Realized by `docs/progress/brain-image-base-slim.md`.
+
+---
+
 ## 2026-06-12 — Outgoing email is BYO-SMTP with per-app bindings, not a malmo relay (#122)
 
 **Previously:** apps that send email (Kimai's password resets, Gitea's notifications) had no malmo story at all — the catalog-import ledger parked them as `smtp-relay` gaps, and their descriptions told the user an administrator had to configure a mail server somehow, with no UI path.
