@@ -5,7 +5,7 @@ version: "1.26.2"
 description:
   short: "A lightweight, self-hosted Git service — your repositories, issues, and pull requests on your own hardware."
   long: |
-    Gitea gives you the full code-hosting experience at home: Git repositories with issues, pull requests, a wiki, and releases, served by a single small binary that stays fast on modest hardware. Keep personal projects, dotfiles, and household scripts versioned on a machine you own, and bring existing repositories home with the built-in migrator for GitHub, GitLab, and friends. On first visit Gitea shows its install screen with every setting already filled in — just create your administrator account and finish. Cloning and pushing work over HTTP at the app's malmo address; git-over-SSH is disabled because malmo routes web traffic only. Email notifications (password resets, issue mentions) are silently dropped until malmo ships its outgoing-mail relay.
+    Gitea gives you the full code-hosting experience at home: Git repositories with issues, pull requests, a wiki, and releases, served by a single small binary that stays fast on modest hardware. Keep personal projects, dotfiles, and household scripts versioned on a machine you own, and bring existing repositories home with the built-in migrator for GitHub, GitLab, and friends. On first visit Gitea shows its install screen with every setting already filled in — just create your administrator account and finish. Cloning and pushing work over HTTP at the app's malmo address; git-over-SSH is disabled because malmo routes web traffic only. Email notifications (password resets, issue mentions) work once an administrator adds an outgoing email account in malmo and binds Gitea to it; until then they are silently dropped, and an admin can still reset any account's password from Gitea's own admin panel.
 icon: ./icon.png
 screenshots: [./screenshots/01.png]
 categories: [developer-tools]
@@ -58,6 +58,14 @@ storage:
 permissions:
   internet: true
   lan: false
+
+# Gitea sends email (password resets, issue/PR mentions, registration
+# confirmations) when bound to an outgoing-mail provider — compose maps the
+# discrete MALMO_MAIL_* fields onto Gitea's GITEA__mailer__* keys. Unbound,
+# the mailer stays disabled and mail is silently dropped (an admin can still
+# reset passwords from Gitea's own admin panel).
+mail:
+  optional: true
 
 # Filled by `go run ./cmd/malmo manifest resolve catalog/gitea/manifest.yml`.
 
