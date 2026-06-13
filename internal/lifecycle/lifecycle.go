@@ -709,7 +709,7 @@ func (m *Manager) Uninstall(ctx context.Context, id string) error {
 // at the gate) is the one non-conflict sentinel declared elsewhere.
 var (
 	ErrNotRunning    = errors.New("app is not running")
-	ErrNotStopped    = errors.New("app is not stopped")
+	ErrNotStopped    = errors.New("app is not stopped or failed")
 	ErrNoMailSupport = errors.New("app does not declare mail support")
 )
 
