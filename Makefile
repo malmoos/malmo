@@ -102,7 +102,7 @@ CP_IMAGE_DIR := $(DEV_DIR)/control-plane
 BRAIN_IMAGE  := malmo-brain:dev
 UI_IMAGE     := malmo-ui:dev
 CADDY_IMAGE  := caddy:2-alpine
-PROXY_IMAGE  := tecnativa/docker-socket-proxy
+PROXY_IMAGE  := tecnativa/docker-socket-proxy:v0.4.2
 
 brain-image:
 	docker build -f cmd/brain/Dockerfile -t $(BRAIN_IMAGE) .

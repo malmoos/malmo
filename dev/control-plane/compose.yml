@@ -46,7 +46,10 @@ services:
       - malmo
 
   docker-proxy:
-    image: tecnativa/docker-socket-proxy
+    # Pinned (kept in sync with PROXY_IMAGE in the Makefile) so the saved
+    # tarball and this reference can't drift — the VM has no network, so a
+    # tag mismatch at first boot would fail silently.
+    image: tecnativa/docker-socket-proxy:v0.4.2
     container_name: malmo-docker-proxy
     restart: unless-stopped
     environment:
