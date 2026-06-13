@@ -21,7 +21,7 @@ TEST_DIR="${REPO_ROOT}/dev/test-qemu"
 WORK="${REPO_ROOT}/.dev/qemu"
 EXTRA="${TEST_DIR}/mkosi.extra"
 CANARY="${WORK}/.malmo-medium-ready"
-CANARY_VERSION="v17"  # bump when mkosi.conf changes require a clean rebuild
+CANARY_VERSION="v18"  # bump when mkosi.conf changes require a clean rebuild
 PASSPHRASE_FILE="${TEST_DIR}/mkosi.passphrase"  # LUKS recovery key (slice 0023); gitignored
 IMAGE_OUT="${WORK}/malmo-medium.raw"
 SSH_KEY="${WORK}/ssh-key"
@@ -53,7 +53,7 @@ fi
 
 # --- 1. host preflight
 preflight_missing=()
-for tool in mkosi swtpm qemu-system-x86_64 qemu-img ssh ssh-keygen scp; do
+for tool in mkosi swtpm qemu-system-x86_64 qemu-img ssh ssh-keygen scp curl docker; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         preflight_missing+=("$tool")
     fi
@@ -270,6 +270,48 @@ chmod 0600 "$EXTRA/root/.ssh/authorized_keys"
 cp "${TEST_DIR}/medium-assertions.sh" "$EXTRA/usr/local/bin/medium-assertions.sh"
 chmod 0755 "$EXTRA/usr/local/bin/medium-assertions.sh"
 
+# --- 4b. control-plane image bundle + Docker apt repo (M0, #163)
+# The medium-lane image runs Docker (baked from Docker's apt repo at build time)
+# and bakes the control-plane image tarballs, docker-loading them at first boot.
+# The VM has no network, so every image the brain's compose references must be a
+# local tarball (TESTING.md # Full-stack control-plane integration).
+
+# Build + save the four control-plane images. `docker save` writes to
+# .dev/control-plane/*.tar; the docker layer cache makes re-runs cheap.
+echo "building + saving control-plane image bundle (docker build)..."
+make -C "$REPO_ROOT" control-plane-images
+CP_BUNDLE="${REPO_ROOT}/.dev/control-plane"
+
+# Stage the tarballs into the image at /var/lib/malmo/control-plane-images/.
+mkdir -p "$EXTRA/var/lib/malmo/control-plane-images"
+cp "$CP_BUNDLE"/*.tar "$EXTRA/var/lib/malmo/control-plane-images/"
+
+# First-boot docker-load oneshot + its script (postinst wires the .wants symlink).
+cp "${TEST_DIR}/malmo-load-images.service" "$EXTRA/etc/systemd/system/"
+cp "${TEST_DIR}/load-control-plane-images.sh" "$EXTRA/usr/lib/malmo/load-control-plane-images.sh"
+chmod 0755 "$EXTRA/usr/lib/malmo/load-control-plane-images.sh"
+
+# Order docker.service after storage assembly (BOOT.md; #163). Best-effort
+# ordering, not a strict gate — Docker still starts if storage partially failed.
+mkdir -p "$EXTRA/etc/systemd/system/docker.service.d"
+cat > "$EXTRA/etc/systemd/system/docker.service.d/10-malmo-storage.conf" <<'EOF'
+[Unit]
+After=malmo-storage-ready.target
+EOF
+
+# Docker's apt repo for the image build (mkosi.conf # PackageManagerTrees).
+# The GPG key is fetched here — the build host has network; the VM never does.
+# bookworm pocket: the medium-lane image is Release=bookworm.
+PKGMNGR="${TEST_DIR}/mkosi.pkgmngr"
+rm -rf "$PKGMNGR"
+mkdir -p "$PKGMNGR/etc/apt/keyrings" "$PKGMNGR/etc/apt/sources.list.d"
+curl -fsSL https://download.docker.com/linux/debian/gpg \
+    -o "$PKGMNGR/etc/apt/keyrings/docker.asc"
+chmod a+r "$PKGMNGR/etc/apt/keyrings/docker.asc"
+cat > "$PKGMNGR/etc/apt/sources.list.d/docker.list" <<'EOF'
+deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable
+EOF
+
 # --- 5. mkosi build
 # Run as caller for cache ownership. mkosi auto-sudos for the privileged
 # ops it needs (loopback mount, etc.).
@@ -281,7 +323,7 @@ cd "$TEST_DIR"
 # the work dir mkosi writes into) to the caller. mkosi preserves mode
 # inside the image regardless of host ownership.
 if [ -n "$CALLER" ]; then
-    chown -R "$CALLER":"$(id -gn "$CALLER")" "$EXTRA" "$WORK"
+    chown -R "$CALLER":"$(id -gn "$CALLER")" "$EXTRA" "$WORK" "$PKGMNGR" "$CP_BUNDLE"
 fi
 # Resolve absolute path so the nested `sudo -u` invocation finds mkosi
 # even though sudo strips PATH (same idiom as $GO above).

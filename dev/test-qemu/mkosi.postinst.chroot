@@ -79,11 +79,27 @@ cat > /usr/lib/systemd/system-preset/99-malmo-medium-test.preset <<'EOF'
 enable ssh.service
 enable NetworkManager.service
 enable avahi-daemon.service
+enable docker.service
+enable containerd.service
+enable malmo-load-images.service
 disable NetworkManager-wait-online.service
 disable host-agent.service
 EOF
 # Belt-and-suspenders: remove any enable symlink already created during build.
 systemctl --root=/ disable host-agent.service >/dev/null 2>&1 || true
+
+# Docker + first-boot control-plane image load (#163). docker-ce is baked from
+# Docker's apt repo; enable docker.service (ordered After=malmo-storage-ready.
+# target via the drop-in staged in mkosi.extra) and the run-once image-load
+# oneshot. As elsewhere, we can't `systemctl enable` in the chroot — drop the
+# .wants symlinks manually (the preset above is the belt-and-suspenders half).
+chmod 0755 /usr/lib/malmo/load-control-plane-images.sh
+ln -sf /lib/systemd/system/docker.service \
+    /etc/systemd/system/multi-user.target.wants/docker.service
+ln -sf /lib/systemd/system/containerd.service \
+    /etc/systemd/system/multi-user.target.wants/containerd.service
+ln -sf /etc/systemd/system/malmo-load-images.service \
+    /etc/systemd/system/multi-user.target.wants/malmo-load-images.service
 
 # Networking is split by MAC between networkd and NetworkManager (#130):
 # the first NIC (52:54:00:6d:6c:01, pinned in run-medium-tests.sh) carries

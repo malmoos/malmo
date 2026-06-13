@@ -198,14 +198,14 @@ Per `CONTROL_PLANE.md`: brain runs as a container, supervised by host-agent.
 
 ### Build
 
-- Multi-stage Dockerfile. Build stage compiles the Go binary (static, CGO disabled where possible). Runtime stage: **`debian:trixie-slim` with the `docker` CLI + Compose plugin bundled** (`docker-ce-cli` + `docker-compose-plugin` from Docker's official apt repo — the same trusted source as the host engine, per the Docker-package-source decision below). **Not distroless:** the brain orchestrates apps by shelling out to the `docker` / `docker compose` CLI (`internal/lifecycle/docker.go`), which a distroless runtime — no shell, no binaries — cannot host. Multi-stage already keeps the Go toolchain out of the final image; the bundled CLI is a runtime dependency (~170 MB) it can't trim, putting the image around ~200 MB — immaterial against the multi-GB app images the box pulls, and slim stays debuggable (it has a shell). See `DECISIONS.md` 2026-06-13 for the flip off distroless.
+- Multi-stage Dockerfile. Build stage compiles the Go binary (static, CGO disabled where possible). Runtime stage: **`debian:trixie-slim` with the `docker` CLI + Compose plugin bundled** (`docker-ce-cli` + `docker-compose-plugin` from Docker's official apt repo — the same trusted source as the host engine, per the Docker-package-source decision below). **Not distroless:** the brain orchestrates apps by shelling out to the `docker` / `docker compose` CLI (`internal/lifecycle/docker.go`), which a distroless runtime — no shell, no binaries — cannot host. Multi-stage already keeps the Go toolchain out of the final image; the bundled CLI is a runtime dependency it can't trim, putting the image at **~256 MB** (measured in M0, #163) — immaterial against the multi-GB app images the box pulls, and slim stays debuggable (it has a shell). See `DECISIONS.md` 2026-06-13 for the flip off distroless.
 - Output is a single OCI image, tagged `vX.Y.Z` and `latest` (latest only on stable channel).
 
 ### Distribution — three options
 
 - **A — Public registry (`ghcr.io/malmo/brain` or Docker Hub).** Pull at first boot. Simple, no infra to run beyond a registry account. Requires internet at first boot.
 - **B — Self-hosted registry (`registry.malmo.network`).** Same as A but we own the namespace and don't depend on GitHub/Docker policies. Modest VPS cost.
-- **C — Bundle the image in the ISO.** Image is loaded into Docker at install time via `docker load`. Works offline at first boot. ISO grows by the image size (~200 MB for the slim-with-CLI brain image — see the Build section above — still small against the multi-GB app images the box pulls).
+- **C — Bundle the image in the ISO.** Image is loaded into Docker at install time via `docker load`. Works offline at first boot. ISO grows by the image size (~256 MB for the slim-with-CLI brain image, measured in M0 #163 — see the Build section above — still small against the multi-GB app images the box pulls).
 
 ### Recommendation: B + C combined
 
