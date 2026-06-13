@@ -1604,6 +1604,9 @@ func prepareSharedSource(root, src string, sharedGID int) error {
 			return err
 		}
 		if err := os.Mkdir(cur, sharedDirMode); err != nil {
+			if os.IsExist(err) {
+				continue // created concurrently after the Stat — treat as pre-existing, never re-own
+			}
 			return err
 		}
 		// Set the group to malmo-shared, then chmod explicitly: Mkdir's mode is
