@@ -285,6 +285,9 @@ async function copySecret(s: AppSecret) {
       <!-- Setup secrets — owner-visible bootstrap credentials for self-auth apps.
            Shown only when the app declared one (`show: true`); masked until the
            owner reveals it. -->
+      <p v-if="secretsQuery.isError.value" class="text-sm text-destructive">
+        Couldn't load secrets: {{ (secretsQuery.error.value as Error)?.message }}
+      </p>
       <section v-if="canControl && secrets.length" class="space-y-2">
         <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Setup secrets</h2>
         <p class="text-xs text-muted-foreground">
@@ -298,7 +301,7 @@ async function copySecret(s: AppSecret) {
           >
             <div class="min-w-0 flex-1">
               <div class="text-xs font-medium text-muted-foreground">{{ s.name }}</div>
-              <div class="mt-0.5 select-all break-all font-mono text-sm">
+              <div class="mt-0.5 break-all font-mono text-sm" :class="{ 'select-all': revealed.has(s.name) }">
                 {{ revealed.has(s.name) ? s.value : "••••••••••••" }}
               </div>
             </div>
