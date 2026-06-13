@@ -12,7 +12,7 @@ import { computed, ref, watch } from "vue";
 import { useRoute, useRouter, RouterLink } from "vue-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/vue-query";
 import { AppWindow, ChevronDown } from "lucide-vue-next";
-import { api, waitForJob, type Instance, type CatalogDetail, type Job, type MailProviderOption } from "@/api";
+import { api, waitForJob, type Instance, type CatalogDetail, type Job, type MailProviderOption, type AppSecrets, type AppSecret } from "@/api";
 import { useAuth } from "@/auth";
 import AppLogs from "@/components/AppLogs.vue";
 
@@ -111,6 +111,43 @@ const rebindMail = useMutation({
     awaitJob(await api.put<Job>(`/apps/${id.value}/mail-binding`, { provider_id: providerId })),
   onSettled: invalidate,
 });
+
+// ── Setup secrets (#152, SERVICE_PROVISIONING.md # Env-var injection) ─────────
+// Owner-visible per-instance secrets a self-auth app declared `show: true` — the
+// bootstrap credential the user reads to finish first sign-in. Gated to the same
+// owner-or-admin rule as the controls (canControl); the brain re-checks. The
+// section hides itself when the app declares none (the list comes back empty).
+const secretsQuery = useQuery({
+  queryKey: computed(() => ["app-secrets", id.value]),
+  queryFn: () => api.get<AppSecrets>(`/apps/${id.value}/secrets`),
+  enabled: computed(() => canControl.value),
+});
+const secrets = computed(() => secretsQuery.data.value?.secrets ?? []);
+
+// Masked by default — revealed per-secret on demand so the value isn't shoulder-
+// surfaced just by opening the page. A reassigned Set keeps the template reactive.
+const revealed = ref(new Set<string>());
+function toggleReveal(name: string) {
+  const next = new Set(revealed.value);
+  if (next.has(name)) next.delete(name);
+  else next.add(name);
+  revealed.value = next;
+}
+
+// Copy is best-effort: navigator.clipboard is unavailable on the HTTP-only
+// .local origin, so the value stays select-all on screen as the fallback.
+const copied = ref<string | null>(null);
+async function copySecret(s: AppSecret) {
+  try {
+    await navigator.clipboard.writeText(s.value);
+    copied.value = s.name;
+    setTimeout(() => {
+      if (copied.value === s.name) copied.value = null;
+    }, 1500);
+  } catch {
+    // No clipboard on an insecure context — the value is on screen to copy by hand.
+  }
+}
 </script>
 
 <template>
@@ -243,6 +280,47 @@ const rebindMail = useMutation({
         <p v-if="rebindMail.isError.value" class="text-sm text-destructive">
           Couldn't change the email account: {{ (rebindMail.error.value as Error)?.message }}
         </p>
+      </section>
+
+      <!-- Setup secrets — owner-visible bootstrap credentials for self-auth apps.
+           Shown only when the app declared one (`show: true`); masked until the
+           owner reveals it. -->
+      <p v-if="secretsQuery.isError.value" class="text-sm text-destructive">
+        Couldn't load secrets: {{ (secretsQuery.error.value as Error)?.message }}
+      </p>
+      <section v-if="canControl && secrets.length" class="space-y-2">
+        <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Setup secrets</h2>
+        <p class="text-xs text-muted-foreground">
+          Use these to finish signing in to {{ app.name }} the first time. Keep them private.
+        </p>
+        <ul class="space-y-2">
+          <li
+            v-for="s in secrets"
+            :key="s.name"
+            class="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card px-4 py-3"
+          >
+            <div class="min-w-0 flex-1">
+              <div class="text-xs font-medium text-muted-foreground">{{ s.name }}</div>
+              <div class="mt-0.5 break-all font-mono text-sm" :class="{ 'select-all': revealed.has(s.name) }">
+                {{ revealed.has(s.name) ? s.value : "••••••••••••" }}
+              </div>
+            </div>
+            <button
+              type="button"
+              class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
+              @click="toggleReveal(s.name)"
+            >
+              {{ revealed.has(s.name) ? "Hide" : "Reveal" }}
+            </button>
+            <button
+              type="button"
+              class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
+              @click="copySecret(s)"
+            >
+              {{ copied === s.name ? "Copied" : "Copy" }}
+            </button>
+          </li>
+        </ul>
       </section>
 
       <!-- Logs — collapsed by default; a full-width accordion row (styled like

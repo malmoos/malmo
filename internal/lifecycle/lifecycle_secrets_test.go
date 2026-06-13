@@ -101,6 +101,79 @@ func TestGenerateSecretsEntropy(t *testing.T) {
 	}
 }
 
+// revealSecretsManifest declares one owner-visible secret (`show: true`) and one
+// internal one, so RevealSecrets must return only the former (#152).
+const revealSecretsManifest = `
+id: revealapp
+manifest_version: 1
+name: Reveal App
+version: "1.0"
+compose_file: compose.yml
+main_service: app
+main_port: 8080
+preferred_slugs: [revealapp]
+permissions:
+  internet: false
+  lan: false
+secrets:
+  - name: setup_token
+    show: true
+  - name: db
+`
+
+func TestRevealSecretsReturnsOnlyOwnerVisible(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeCatalogApp(t, "revealapp", secretsCompose, revealSecretsManifest)
+	e.docker.digests[testImage] = testDigest
+	inst, err := e.m.Install(context.Background(), "revealapp",
+		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	revealed, err := e.m.RevealSecrets(inst.ID)
+	if err != nil {
+		t.Fatalf("reveal: %v", err)
+	}
+	if len(revealed) != 1 || revealed[0].Name != "setup_token" {
+		t.Fatalf("want only setup_token revealed, got %v", revealed)
+	}
+	// The revealed value is the stored/injected one, never re-rolled.
+	want := ""
+	all, _ := e.store.GetInstanceSecrets(inst.ID)
+	for _, s := range all {
+		if s.Name == "setup_token" {
+			want = s.Value
+		}
+	}
+	if revealed[0].Value == "" || revealed[0].Value != want {
+		t.Fatalf("revealed value %q != stored %q", revealed[0].Value, want)
+	}
+}
+
+// TestRevealSecretsEmptyWhenNoneVisible: an app whose secrets are all internal
+// (no `show`) reveals nothing — the early return before touching the store.
+func TestRevealSecretsEmptyWhenNoneVisible(t *testing.T) {
+	e := newTestEnv(t)
+	inst, _ := installSecretApp(t, e) // `auth`, no show flag
+	revealed, err := e.m.RevealSecrets(inst.ID)
+	if err != nil {
+		t.Fatalf("reveal: %v", err)
+	}
+	if len(revealed) != 0 {
+		t.Fatalf("want nothing revealable, got %v", revealed)
+	}
+}
+
+// TestRevealSecretsUnknownInstance: no instance dir ⇒ the manifest load fails,
+// surfaced as an error (the API maps it to 500).
+func TestRevealSecretsUnknownInstance(t *testing.T) {
+	e := newTestEnv(t)
+	if _, err := e.m.RevealSecrets("inst_missing"); err == nil {
+		t.Fatal("want error for unknown instance, got nil")
+	}
+}
+
 // envValue pulls the value of KEY=... from a .env blob, or "" if absent.
 func envValue(env, key string) string {
 	for _, line := range strings.Split(env, "\n") {
