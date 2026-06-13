@@ -2,7 +2,7 @@
 
 - **Status:** done
 - **Date:** 2026-06-13
-- **Specs touched:** none (realizes `BUILD.md` # 5 / # 5b, `WEB_UI.md` # deploy model, `TESTING.md` # Full-stack control-plane integration — no spec change)
+- **Specs touched:** `CONTROL_PLANE.md` # Locked: Caddy is malmo substrate (admin-port bind + network-isolation invariant clarified). Otherwise realizes `BUILD.md` # 5 / # 5b, `WEB_UI.md` # deploy model, `TESTING.md` # Full-stack control-plane integration with no spec change.
 
 Closes #163 (M0, part of #161), picking up the "author the Dockerfile + build wiring" next-step of [brain-image-base-slim.md](brain-image-base-slim.md) (#162, which fixed the *base decision*). M0 produces the two control-plane OCI images and the control-plane compose, and delivers them — plus the third-party control-plane images — into the medium-lane test image via the `docker save` / first-boot `docker load` bundle mechanism `TESTING.md` specifies. **No launch wiring**: the brain does not yet start the stack (that is M1a/M1b); M0's bar is buildable, loadable artifacts and a VM that runs `docker.service` with the images present.
 
@@ -41,5 +41,6 @@ Closes #163 (M0, part of #161), picking up the "author the Dockerfile + build wi
 
 - **Boot-verify the medium-lane image** (`sudo make test-medium-qemu` on a host with mkosi/swtpm/QEMU): confirm `docker.service` is active and `docker images` lists `malmo-brain`, `malmo-ui`, `caddy`, and `docker-socket-proxy` after first boot. The in-VM assertion is intentionally not added here — `dev/test-qemu/medium-assertions.sh` is out of M0's touch scope; the automated control-plane assertions belong to the full-stack integration lane.
 - **M1a/M1b — launch wiring:** `host-agent-real` launches the brain container; the brain brings up `dev/control-plane/compose.yml` (Caddy + malmo-ui + socket-proxy). The compose authored here is M1b's input.
+  - **Known gap / M1b constraint — Caddy admin-port network isolation.** `caddy.json` binds the admin API to `0.0.0.0:2019` (it must, since the brain reaches it cross-container — Caddy's loopback isn't an option), and the admin API has no auth. The port is not host-published, so its only protection is network trust. M1b's network model **must keep app containers off whatever network carries `:2019`** — Caddy reaches app upstreams by joining each app's own per-app network, never by letting apps onto the control-plane/ingress network the admin port lives on. An app sharing that network could rewrite the entire route table. Spec invariant added to `CONTROL_PLANE.md` # Locked: Caddy is malmo substrate.
 - **Pin exact image tags/digests** for the bundle (reproducible builds): `tecnativa/docker-socket-proxy` is currently `:latest`, and the malmo images are `:dev`. Release tagging (`vX.Y.Z`) and digest-pinning land with the distribution/release-manifest work (`BUILD.md` # 6, `RELEASE_MANIFEST.md`).
 - **M2** bundles the `whoami` app image alongside these and adds the full-stack assertions.
