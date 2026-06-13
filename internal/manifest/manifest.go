@@ -379,9 +379,16 @@ type Folder struct {
 // uppercased name (so `auth` → `MALMO_SECRET_AUTH`). Bytes is the entropy drawn
 // from the CSPRNG before base64url encoding; it defaults to DefaultSecretBytes
 // and is floored at MinSecretBytes so a manifest can't request a weak secret.
+//
+// Show opts the secret into being surfaced to the instance owner (and admins) on
+// the app detail page (#152): set it for a per-instance bootstrap credential the
+// user must read to finish first sign-in (e.g. a self-auth app's setup token),
+// so the manifest never has to ship a published constant. Absent ⇒ internal-only
+// (a DB password the app consumes but the user never sees), never revealed.
 type Secret struct {
 	Name  string `yaml:"name"`
 	Bytes int    `yaml:"bytes,omitempty"`
+	Show  bool   `yaml:"show,omitempty"`
 }
 
 // ServiceDep is one managed-service dependency (APP_MANIFEST.md # D). Type is

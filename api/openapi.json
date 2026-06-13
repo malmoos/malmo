@@ -1,6 +1,49 @@
 {
   "components": {
     "schemas": {
+      "AppSecretDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "type": "object"
+      },
+      "AppSecretsDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/AppSecretsDTO.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "secrets": {
+            "items": {
+              "$ref": "#/components/schemas/AppSecretDTO"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "secrets"
+        ],
+        "type": "object"
+      },
       "AuditEventDTO": {
         "additionalProperties": false,
         "properties": {
@@ -2234,6 +2277,44 @@
           }
         },
         "summary": "Bind an app to an outgoing-mail provider (empty provider_id unbinds)"
+      }
+    },
+    "/api/v1/apps/{id}/secrets": {
+      "get": {
+        "operationId": "get-app-secrets",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppSecretsDTO"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Reveal an app instance's owner-visible setup secrets (owner or admin)"
       }
     },
     "/api/v1/apps/{id}/start": {

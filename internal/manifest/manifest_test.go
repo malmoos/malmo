@@ -187,6 +187,34 @@ secrets:
 	}
 }
 
+// TestParseSecretShowFlag: `show: true` opts a secret into owner-visibility
+// (#152); omitted defaults to internal-only.
+func TestParseSecretShowFlag(t *testing.T) {
+	src := []byte(`
+id: kan
+manifest_version: 1
+name: Kan
+version: "1.0"
+compose_file: compose.yml
+main_service: web
+main_port: 3000
+secrets:
+  - name: setup_token
+    show: true
+  - name: db
+`)
+	m, err := Parse(src)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	want := map[string]bool{"setup_token": true, "db": false}
+	for _, s := range m.Secrets {
+		if s.Show != want[s.Name] {
+			t.Errorf("secret %q: show = %v, want %v", s.Name, s.Show, want[s.Name])
+		}
+	}
+}
+
 func TestParseRejectsBadSecrets(t *testing.T) {
 	cases := map[string]string{
 		"bad name":      "- name: Auth",

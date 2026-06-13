@@ -268,6 +268,32 @@ assert_network_state() {
     kill "$mnv_pid" 2>/dev/null
 }
 
+# --- TEMPORARY (M0, #163): control-plane images baked + loaded.
+# This is NOT a permanent medium-lane assertion — the automated control-plane
+# checks belong to the full-stack lane (M2). It is here to verify the M0
+# "Done when": docker.service is active and the four bundled images are present
+# after first boot. Remove (or migrate to the full-stack lane) once that lands.
+docker_state="$(systemctl is-active docker.service 2>&1 || true)"
+[ "$docker_state" = "active" ] \
+    || fail "docker.service is '$docker_state' (expected active)"
+# malmo-load-images.service runs once at first boot (WantedBy=multi-user.target);
+# SSH can beat its docker-load, so poll for the success marker before listing.
+for _i in $(seq 1 60); do
+    [ -f /var/lib/malmo/.control-plane-images-loaded ] && break
+    if systemctl is-failed --quiet malmo-load-images.service; then
+        fail "malmo-load-images.service failed: $(journalctl -u malmo-load-images.service -b --no-pager 2>/dev/null | tail -20)"
+    fi
+    sleep 1
+done
+[ -f /var/lib/malmo/.control-plane-images-loaded ] \
+    || fail "control-plane image-load marker never appeared after 60s"
+cp_images="$(docker images --format '{{.Repository}}' 2>&1 || true)"
+for repo in malmo-brain malmo-ui caddy tecnativa/docker-socket-proxy; do
+    grep -qx "$repo" <<<"$cp_images" \
+        || fail "control-plane image '$repo' not loaded (have: $(tr '\n' ' ' <<<"$cp_images"))"
+done
+echo "control-plane: docker.service active, 4 bundled images loaded"
+
 case "$PHASE" in
     first-boot)
         # The run-once enrollment unit (malmo-tpm-enroll.service) is

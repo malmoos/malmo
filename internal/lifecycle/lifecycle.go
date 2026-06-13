@@ -1083,6 +1083,41 @@ func (m *Manager) InstanceManifest(id string) (*manifest.Manifest, error) {
 	return m.loadInstanceManifest(id)
 }
 
+// RevealSecrets returns an instance's owner-visible generated secrets — those
+// the manifest declared with `show: true` (APP_MANIFEST.md # D2) — as name+value
+// pairs the owner reads on the app detail page to finish first sign-in (#152).
+// Secrets without the flag (an internal DB password the user never needs) are
+// omitted, so a single read can't expose every injected credential. The manifest
+// is the instance-dir copy the installer persisted, so a later catalog
+// withdrawal never changes what's revealable. Empty (nil) when nothing is
+// declared owner-visible.
+func (m *Manager) RevealSecrets(id string) ([]store.InstanceSecret, error) {
+	man, err := m.loadInstanceManifest(id)
+	if err != nil {
+		return nil, fmt.Errorf("load manifest: %w", err)
+	}
+	show := make(map[string]bool, len(man.Secrets))
+	for _, s := range man.Secrets {
+		if s.Show {
+			show[s.Name] = true
+		}
+	}
+	if len(show) == 0 {
+		return nil, nil
+	}
+	secrets, err := m.store.GetInstanceSecrets(id)
+	if err != nil {
+		return nil, fmt.Errorf("load secrets: %w", err)
+	}
+	out := make([]store.InstanceSecret, 0, len(show))
+	for _, sec := range secrets {
+		if show[sec.Name] {
+			out = append(out, sec)
+		}
+	}
+	return out, nil
+}
+
 // MainContainerName returns the container name of an instance's main service —
 // "malmo-<id>-<MainService>", the same project+service stem used for the Caddy
 // upstream alias. The per-app Logs tail keys on it (the brain hands it to

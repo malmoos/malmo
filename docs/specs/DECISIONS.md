@@ -45,6 +45,30 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-13 — malmo-brain runtime is `debian:trixie-slim` with the docker/Compose CLI bundled, not distroless (#162)
+
+**Previously:** `BUILD.md` # 5 leaned a **distroless** runtime for `malmo-brain` (`gcr.io/distroless/static-debian12`), and the locked build summary pinned "distroless runtime" — smallest image, least attack surface.
+
+**Now:** the brain runtime stage is **`debian:trixie-slim` with the `docker` CLI + Compose plugin bundled** (`docker-ce-cli` + `docker-compose-plugin` from Docker's official apt repo). The CLI shell-out model is unchanged; no brain code moves.
+
+**Why:** the brain orchestrates apps by shelling out to the `docker` / `docker compose` CLI (~15 call sites in `internal/lifecycle/docker.go`), and a distroless runtime — no shell, no binaries — cannot host them. Three ways out: **(a)** slim base + bundled CLI; **(b)** rewrite the shell-outs onto the Docker Go SDK to keep distroless; **(c)** bind-mount the host's CLI into the container. Chose **(a)**: zero code change, keeps the compose-CLI model the whole codebase + test suite is built on, and `docker-ce-cli` via apt is the blessed install path (same trusted source as the host engine, not a third-party package set). **(b)** rejected as a large refactor — `docker compose up` has no SDK equivalent, so it would mean vendoring `compose-go` and reimplementing the multi-service orchestration the project deliberately delegates to the CLI, busting the size:S budget and the architecture. **(c)** rejected as fragile — distroless lacks the loader/libs the CLI needs, and the brain image would couple to the host's Docker version (glibc / version skew). The distroless **size** win is immaterial: multi-stage already keeps the Go toolchain out of the final image (~30 MB brain binary), and the bundled CLI is a runtime dependency multi-stage can't trim (image ~256 MB, measured in M0 #163) — noise against the multi-GB app images the box pulls. The **attack-surface** win is marginal for a daemon that already holds Docker API access via the socket proxy (`CONTROL_PLANE.md` # Locked: Docker socket exposure mitigated by socket proxy), and slim stays debuggable (it has a shell). Orthogonal to the socket-proxy decision: the bundled CLI reaches the daemon through the same proxy via `DOCKER_HOST`, so the endpoint allowlist still applies. Unblocks `#163`/M0 — the brain image now has an unambiguous base.
+
+**Affected docs:** `BUILD.md` (# 5 build line + locked build summary). Realized by `docs/progress/brain-image-base-slim.md`.
+
+---
+
+## 2026-06-13 — A manifest secret can be owner-visible (`show: true`), so self-auth apps drop the published bootstrap constant (#152)
+
+**Previously:** the brain generated per-app secrets (`MALMO_SECRET_*`) but had no way to *show* one to the owner. An app whose own login is gated by a token rather than malmo's session (Jupyter, #124/#136) therefore had to ship a **published constant** (`malmo-setup`) as its bootstrap token — printed in the app description, disabled by a self-grepping gate in the compose `command:` once the user set a password. If a future image bump renamed the grepped config key, the gate fails *open* and the documented constant becomes a permanent LAN backdoor, silently.
+
+**Now:** a `secrets:` entry may declare `show: true`. Such a secret is owner-visible: the brain serves its value at `GET /apps/{id}/secrets` (owner-or-admin, the same control-authorization gate as stop/start), and the app detail page surfaces a masked **Setup secrets** row the owner reveals to finish first sign-in. Unmarked secrets stay internal (a managed-service password is never listed), so one reveal can't dump every injected credential. The read is a pure read — no audit (only elevation-class mutations audit). The reveal is the **missing molma-side capability**: with it, a self-auth app's bootstrap token can be a *per-instance random* secret, so the fail-open case degrades from "published backdoor" to "a random token nobody knows stays valid" — harmless.
+
+**Why:** the root cause of the Jupyter fragility was molma-side, not Jupyter-side — there was no seam to hand the owner a generated value, so the token had to be public. Surfacing the secret is the smaller, self-contained half of the fix (a first-class "this app authenticates itself" manifest seam is the larger, separate piece — `NEXT.md`). Reusing the existing control-authorization gate (not a new elevation prompt) keeps it consistent with stop/start and with the issue's ask; gating on the manifest `show` flag (not revealing all secrets) keeps internal credentials internal. Migrating the Jupyter manifest off the `molma-setup` constant is a deliberate **follow-up PR**, not this change.
+
+**Affected docs:** `APP_MANIFEST.md` (# D2 — `show` flag + example, locked decisions), `SERVICE_PROVISIONING.md` (# Env-var injection — owner-visible paragraph, locked decisions), `DASHBOARD.md` (# Installed apps — Setup secrets surface). Implementation: `internal/manifest/manifest.go` (`Secret.Show`), `internal/lifecycle/lifecycle.go` (`RevealSecrets`), `internal/api/appsecrets.go` (`GET /apps/{id}/secrets`), `web-ui/src/views/settings/InstalledAppDetailSection.vue`; realized by `docs/progress/owner-visible-secrets.md`.
+
+---
+
 ## 2026-06-12 — Outgoing email is BYO-SMTP with per-app bindings, not a malmo relay (#122)
 
 **Previously:** apps that send email (Kimai's password resets, Gitea's notifications) had no malmo story at all — the catalog-import ledger parked them as `smtp-relay` gaps, and their descriptions told the user an administrator had to configure a mail server somehow, with no UI path.

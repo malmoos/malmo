@@ -1,0 +1,12 @@
+# Build context for cmd/brain/Dockerfile is the repo root. Keep it lean and —
+# critically — never copy dev state (which can hold instance .env secrets) into
+# the build context.
+.git
+.dev
+web-ui
+**/node_modules
+**/*.tar
+*.test
+dev/test-qemu/mkosi.extra
+dev/test-qemu/mkosi.pkgmngr
+dev/test-qemu/mkosi.tools
