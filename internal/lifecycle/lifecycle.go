@@ -1378,7 +1378,12 @@ func (m *Manager) writeEnv(id, slug string, iso isolation) error {
 		prefix := "MALMO_SERVICE_" + strings.ToUpper(g.LogicalName) + "_"
 		host := serviceDNSAlias(g.Kind, g.Version)
 		port := servicePort[g.Kind]
-		dsn := fmt.Sprintf("%s://%s:%s@%s:%d/%s", serviceDSNScheme[g.Kind], g.RoleName, g.Password, host, port, g.DBName)
+		// SQL engines carry a database name in the path; Valkey has none, so the DSN
+		// is scheme://user:pw@host:port (clients default to logical DB 0).
+		dsn := fmt.Sprintf("%s://%s:%s@%s:%d", serviceDSNScheme[g.Kind], g.RoleName, g.Password, host, port)
+		if g.DBName != "" {
+			dsn += "/" + g.DBName
+		}
 		lines = append(lines,
 			prefix+"HOST="+host,
 			prefix+"PORT="+strconv.Itoa(port),
