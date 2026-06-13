@@ -217,11 +217,13 @@ services:
 	t.Logf("database %q dropped on uninstall", dbName)
 }
 
-// TestLiveRedisProvisioning mirrors the SQL live tests for Redis: a real redis:7
-// service container is lazily spun up with an external aclfile, the per-app ACL
-// user is provisioned via docker-exec redis-cli, that user authenticates and
-// reads/writes the keyspace with the injected password, and ACL DELUSER removes
-// it on uninstall.
+// TestLiveRedisProvisioning mirrors the SQL live tests for the Valkey engine,
+// and proves the redis alias end-to-end: the manifest declares `type: redis,
+// version: "7"`, which normalizes to a real valkey/valkey:8 service container
+// (never upstream redis). The container is lazily spun up with an external
+// aclfile, the per-app ACL user is provisioned via docker-exec valkey-cli, that
+// user authenticates and reads/writes the keyspace with the injected password,
+// and ACL DELUSER removes it on uninstall.
 //
 //	go test ./internal/lifecycle/ -tags dockerlive -run TestLiveRedisProvisioning -v -timeout 300s
 func TestLiveRedisProvisioning(t *testing.T) {
@@ -270,10 +272,10 @@ services:
 	writeLiveCatalogApp(t, catDir, "livecache", compose, man)
 
 	t.Cleanup(func() {
-		_ = exec.Command("docker", "rm", "-f", serviceContainerName("redis", "7")).Run()
-		_ = exec.Command("docker", "network", "rm", serviceNetworkName("redis", "7")).Run()
+		_ = exec.Command("docker", "rm", "-f", serviceContainerName("valkey", "8")).Run()
+		_ = exec.Command("docker", "network", "rm", serviceNetworkName("valkey", "8")).Run()
 		_ = exec.Command("docker", "network", "rm", ingressNetwork).Run()
-		// redis chowns its data dir to the redis user; remove it via a throwaway
+		// valkey chowns its data dir to the valkey user; remove it via a throwaway
 		// container so t.TempDir cleanup doesn't hit permission-denied.
 		_ = exec.Command("docker", "run", "--rm", "-v", stateDir+":/s",
 			"alpine", "rm", "-rf", "/s/services").Run()
@@ -290,14 +292,14 @@ services:
 		t.Fatalf("grants = %v, err %v", grants, err)
 	}
 	g := grants[0]
-	if g.Kind != "redis" || g.DBName != "" {
-		t.Fatalf("grant = %+v, want redis with empty db name", g)
+	if g.Kind != "valkey" || g.Version != "8" || g.DBName != "" {
+		t.Fatalf("grant = %+v, want valkey/8 with empty db name (redis alias)", g)
 	}
 
 	if !redisACLUserExists(t, g.RoleName) {
-		t.Fatalf("ACL user %q not found in the live Redis", g.RoleName)
+		t.Fatalf("ACL user %q not found in the live Valkey", g.RoleName)
 	}
-	t.Logf("provisioned ACL user %q present in live Redis", g.RoleName)
+	t.Logf("provisioned ACL user %q present in live Valkey", g.RoleName)
 
 	if !redisUserCanConnect(t, g.RoleName, g.Password) {
 		t.Fatalf("user %q could not auth + read/write keyspace with the injected password", g.RoleName)
@@ -314,12 +316,12 @@ services:
 }
 
 // redisACLUserExists reports whether an ACL user is present, scanning ACL LIST
-// (one `user <name> ...` line per account). redis-cli runs as the default
+// (one `user <name> ...` line per account). valkey-cli runs as the default
 // (superuser) account via REDISCLI_AUTH from the container env.
 func redisACLUserExists(t *testing.T, user string) bool {
 	t.Helper()
-	out, _ := exec.Command("docker", "exec", serviceContainerName("redis", "7"),
-		"redis-cli", "ACL", "LIST").CombinedOutput()
+	out, _ := exec.Command("docker", "exec", serviceContainerName("valkey", "8"),
+		"valkey-cli", "ACL", "LIST").CombinedOutput()
 	for _, line := range strings.Split(string(out), "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "user "+user+" ") {
 			return true
@@ -334,14 +336,14 @@ func redisACLUserExists(t *testing.T, user string) bool {
 func redisUserCanConnect(t *testing.T, user, password string) bool {
 	t.Helper()
 	url := fmt.Sprintf("redis://%s:%s@127.0.0.1:6379", user, password)
-	container := serviceContainerName("redis", "7")
+	container := serviceContainerName("valkey", "8")
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		set, err := exec.Command("docker", "exec", container,
-			"redis-cli", "--no-auth-warning", "-u", url, "set", "malmo:probe", "ok").CombinedOutput()
+			"valkey-cli", "--no-auth-warning", "-u", url, "set", "malmo:probe", "ok").CombinedOutput()
 		if err == nil && strings.Contains(string(set), "OK") {
 			got, _ := exec.Command("docker", "exec", container,
-				"redis-cli", "--no-auth-warning", "-u", url, "get", "malmo:probe").CombinedOutput()
+				"valkey-cli", "--no-auth-warning", "-u", url, "get", "malmo:probe").CombinedOutput()
 			if strings.TrimSpace(string(got)) == "ok" {
 				return true
 			}

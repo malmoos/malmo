@@ -21,6 +21,18 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-13 — Managed Redis always runs Valkey; `valkey` is a first-class type, `redis` is a BSD-3 compatibility alias (#159)
+
+**Previously:** managed Redis ran the upstream `redis` image (`redis:7`), declared in manifests as `type: redis, version: "7"` (the entry immediately below).
+
+**Now:** malmo never runs upstream Redis at any version. `valkey` is a first-class managed-service type (single version line: `8`); `redis` is kept as a pure compatibility alias that **always** provisions Valkey underneath. A `redis: "7"` declaration normalizes once, early, to the engine identity `valkey: "8"` (`normalizeEngine` in `internal/lifecycle/services.go`), so a `redis:7` app and a `valkey:8` app coalesce onto the one shared `malmo-svc-valkey-8` instance. The grant stores the engine identity (`Kind: "valkey", Version: "8"`), so everything downstream — compose, container/network/alias names, the ready probe, ACL provisioning, drop, and the writeEnv DSN — keys off valkey and never sees "redis". The injected DSN keeps the universal `redis://user:pw@valkey-8.malmo.internal:6379` scheme (RESP, every client understands it).
+
+**Why:** the `redis:7` tag now resolves to Redis 7.4+, which is RSALv2 + SSPLv1 (not OSI open source), and Redis 8+ adds AGPLv3 — both license tracks are on malmo's avoid-list (NetBird rejected for AGPL, ZFS avoided for CDDL, Headscale chosen for BSD-3). Valkey is the Linux Foundation BSD-3-Clause fork of Redis 7.2.4 — the same license family as malmo's other picks, and RESP/ACL-compatible, so Valkey 8 is a drop-in for a Redis 7 client. Keeping `redis` as an alias means existing manifests and the broad Redis ecosystem keep working without authors learning a new name, while the engine underneath is unambiguously the BSD-3 one. This is stronger than the mysql/mariadb pairing (two real engines sharing a code path): here there is **one** engine (Valkey) serving two type names. Normalizing redis→valkey once, before anything touches the lifecycle maps, keeps the maps valkey-only — there is deliberately no `redis` key in `servicePort`/`serviceImageRepo`/`provisionedKinds`, so no dead code path could ever silently pull the upstream image. The `valkey/valkey:8` image ships `redis-cli`/`redis-server` as symlinks to `valkey-cli`/`valkey-server` and honors `REDISCLI_AUTH`; the code uses the honest `valkey-*` binary names.
+
+**Affected docs:** `SERVICE_PROVISIONING.md` (# Catalog, # Implementation status, # Per-app isolation), `NEXT.md` (# Managed-service per-app key isolation), `APP_MANIFEST.md` (service types), `docs/dev/catalog-import-gaps.md` (`managed-redis — postiz`). Implementation: `internal/manifest/manifest.go` (`valkey` allowlisted, `redis` retained), `internal/lifecycle/services.go` (`normalizeEngine`, valkey-only maps, `provisionValkeyACL`, `valkeyServiceCompose`); realized by `docs/progress/managed-services-redis.md`. Supersedes the image/engine choice in the entry below (the per-app ACL-user isolation model it describes is unchanged).
+
+---
+
 ## 2026-06-13 — Managed Redis is a per-app ACL user with full keyspace, not a logical-DB split (#159)
 
 **Previously:** the manifest schema accepted `services: {…: {type: redis}}`, but the brain didn't provision it — a redis declaration passed `manifest check` then failed at install (a check/install asymmetry). The per-app isolation model was an open question in `NEXT.md`.

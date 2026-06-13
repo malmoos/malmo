@@ -236,49 +236,87 @@ func TestUninstallDropsMySQLDB(t *testing.T) {
 	}
 }
 
-func TestInstallProvisionsRedis(t *testing.T) {
+// TestInstallProvisionsValkeyViaRedisAlias proves the compatibility alias: an
+// app that declares `type: redis, version: "7"` is provisioned on the Valkey
+// engine (valkey/8) — the grant stores the engine identity, the names key off
+// valkey, and malmo never spins up an upstream redis instance. The native
+// `type: valkey` path is covered by TestInstallProvisionsValkeyNative.
+func TestInstallProvisionsValkeyViaRedisAlias(t *testing.T) {
 	e := newTestEnv(t)
 	inst := installDBAppKind(t, e, "cacheapp", "redis", "7")
 
-	// A shared Redis-7 service instance was recorded and started.
-	if _, err := e.store.GetServiceInstance("redis", "7"); err != nil {
-		t.Fatalf("service instance not recorded: %v", err)
+	// redis 7 normalized to the Valkey engine: a shared valkey-8 instance was
+	// recorded and started; no upstream redis-7 instance exists.
+	if _, err := e.store.GetServiceInstance("valkey", "8"); err != nil {
+		t.Fatalf("valkey service instance not recorded: %v", err)
+	}
+	if _, err := e.store.GetServiceInstance("redis", "7"); err == nil {
+		t.Fatalf("an upstream redis-7 instance was recorded; redis must normalize to valkey")
 	}
 	if !e.docker.hasCall("ServiceUp(") {
 		t.Fatalf("ServiceUp never called; calls: %v", e.docker.Calls())
 	}
 
-	// A per-app grant was persisted — an ACL user, no database (Redis has none).
+	// A per-app grant was persisted — an ACL user, no database (Valkey has none).
+	// The grant stores the ENGINE identity, not the declared alias.
 	grants, err := e.store.GetServiceGrants(inst.ID)
 	if err != nil || len(grants) != 1 {
 		t.Fatalf("grants = %v, err %v", grants, err)
 	}
 	g := grants[0]
-	if g.LogicalName != "database" || g.Kind != "redis" || g.Version != "7" {
-		t.Fatalf("grant = %+v", g)
+	if g.LogicalName != "database" || g.Kind != "valkey" || g.Version != "8" {
+		t.Fatalf("grant = %+v, want kind=valkey version=8", g)
 	}
 	if g.RoleName == "" || g.DBName != "" {
 		t.Fatalf("grant role=%q dbname=%q, want non-empty role and empty dbname", g.RoleName, g.DBName)
 	}
 
+	assertValkeyProvisioned(t, e, inst, g)
+}
+
+// TestInstallProvisionsValkeyNative is the native `type: valkey, version: "8"`
+// path — identical engine behavior to the redis alias, declared directly.
+func TestInstallProvisionsValkeyNative(t *testing.T) {
+	e := newTestEnv(t)
+	inst := installDBAppKind(t, e, "cacheapp", "valkey", "8")
+
+	if _, err := e.store.GetServiceInstance("valkey", "8"); err != nil {
+		t.Fatalf("valkey service instance not recorded: %v", err)
+	}
+	grants, err := e.store.GetServiceGrants(inst.ID)
+	if err != nil || len(grants) != 1 {
+		t.Fatalf("grants = %v, err %v", grants, err)
+	}
+	g := grants[0]
+	if g.Kind != "valkey" || g.Version != "8" {
+		t.Fatalf("grant = %+v, want kind=valkey version=8", g)
+	}
+	assertValkeyProvisioned(t, e, inst, g)
+}
+
+// assertValkeyProvisioned checks the Valkey ACL provisioning + injected env that
+// is identical whether the engine was reached via the redis alias or natively.
+func assertValkeyProvisioned(t *testing.T, e *testEnv, inst store.Instance, g store.ServiceGrant) {
+	t.Helper()
 	// The brain created the per-app ACL user and persisted it via docker-exec
-	// redis-cli (full keyspace, no @admin), then ACL SAVE'd it.
+	// valkey-cli (full keyspace, no @admin), then ACL SAVE'd it.
 	if !e.docker.hasCall("ACL SETUSER "+g.RoleName) || !e.docker.hasCall("+@all -@admin") {
-		t.Fatalf("no redis ACL SETUSER call; calls: %v", e.docker.Calls())
+		t.Fatalf("no valkey ACL SETUSER call; calls: %v", e.docker.Calls())
 	}
 	// The keyspace-destruction commands are subtracted so one app can't wipe the
 	// shared keyspace every other app reads from (Problem A — cross-app destroy).
 	if !e.docker.hasCall("-flushall -flushdb -swapdb") {
-		t.Fatalf("redis ACL user can still flush the shared keyspace; calls: %v", e.docker.Calls())
+		t.Fatalf("valkey ACL user can still flush the shared keyspace; calls: %v", e.docker.Calls())
 	}
 	if !e.docker.hasCall("ACL SAVE") {
 		t.Fatalf("ACL not persisted (no ACL SAVE); calls: %v", e.docker.Calls())
 	}
 
-	// The injected family carries the dot-folded host, port 6379, and a redis://
-	// DSN with no database path (clients default to logical DB 0).
+	// The injected family carries the valkey-8 host, port 6379, and a redis://
+	// DSN with no database path (clients default to logical DB 0; redis:// is the
+	// universal RESP scheme).
 	env := readInstanceEnv(t, e, inst.ID)
-	wantHost := "redis-7.malmo.internal"
+	wantHost := "valkey-8.malmo.internal"
 	if got := envValue(env, "MALMO_SERVICE_DATABASE_HOST"); got != wantHost {
 		t.Fatalf("HOST = %q, want %q", got, wantHost)
 	}
@@ -286,23 +324,48 @@ func TestInstallProvisionsRedis(t *testing.T) {
 		t.Fatalf("PORT = %q, want 6379", got)
 	}
 	if got := envValue(env, "MALMO_SERVICE_DATABASE_NAME"); got != "" {
-		t.Fatalf("NAME = %q, want empty (redis has no database)", got)
+		t.Fatalf("NAME = %q, want empty (valkey has no database)", got)
 	}
 	dsn := envValue(env, "MALMO_SERVICE_DATABASE_DSN")
 	if !strings.HasPrefix(dsn, "redis://") || !strings.Contains(dsn, wantHost+":6379") {
 		t.Fatalf("DSN = %q, want redis:// … %s:6379", dsn, wantHost)
 	}
 	if strings.Contains(dsn, ":6379/") {
-		t.Fatalf("DSN = %q has a database path; redis grants carry none", dsn)
+		t.Fatalf("DSN = %q has a database path; valkey grants carry none", dsn)
 	}
 
 	override := readInstanceFile(t, e, inst.ID, "compose.override.yml")
-	if !strings.Contains(override, "malmo-svc-redis-7") {
+	if !strings.Contains(override, "malmo-svc-valkey-8") {
 		t.Fatalf("override missing service network:\n%s", override)
 	}
 }
 
-func TestUninstallDropsRedisACL(t *testing.T) {
+// TestRedisAndValkeyCoalesce is the heart of the alias decision: a redis-7 app
+// and a valkey-8 app must share ONE engine instance (malmo-svc-valkey-8), not
+// two. Proves redis-7 normalizes to valkey-8 *before* the lazy-spinup gate, so
+// the second install reuses the existing service_instances row.
+func TestRedisAndValkeyCoalesce(t *testing.T) {
+	e := newTestEnv(t)
+	installDBAppKind(t, e, "cacheredis", "redis", "7")
+	upsAfterFirst := e.docker.countMethod("ServiceUp")
+	installDBAppKind(t, e, "cachevalkey", "valkey", "8")
+
+	// The second install (declared as valkey:8) finds the instance the first
+	// (declared as redis:7) already spun up — no second ServiceUp.
+	if got := e.docker.countMethod("ServiceUp"); got != upsAfterFirst {
+		t.Fatalf("ServiceUp called %d times total, want %d (redis-7 and valkey-8 must coalesce)", got, upsAfterFirst)
+	}
+	// Exactly one service instance exists, and it is the Valkey engine.
+	instances, err := e.store.ListServiceInstances()
+	if err != nil {
+		t.Fatalf("list service instances: %v", err)
+	}
+	if len(instances) != 1 || instances[0].Kind != "valkey" || instances[0].Version != "8" {
+		t.Fatalf("service instances = %+v, want exactly one valkey-8", instances)
+	}
+}
+
+func TestUninstallDropsValkeyACL(t *testing.T) {
 	e := newTestEnv(t)
 	inst := installDBAppKind(t, e, "cacheapp", "redis", "7")
 	grants, _ := e.store.GetServiceGrants(inst.ID)

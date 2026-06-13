@@ -186,13 +186,13 @@ services:
     version: "15"                     # version pin
     name: photoprism_db               # logical name within this app
   cache:
-    type: redis
-    version: "7"
+    type: valkey
+    version: "8"
 ```
 
 The brain provisions the resource (e.g., creates a database in the shared Postgres-15 instance with a scoped user) and **injects credentials as environment variables**.
 
-Available types and versions (`SERVICE_PROVISIONING.md` # Catalog (v1)): `postgres` (15, 16), `mysql` (8.0, 8.4), `mariadb` (10.11, 11.4), `redis` (7 — schema-valid, provisioning staged). A type/version outside this set is rejected at manifest parse time. The MySQL family injects port 3306 and a `mysql://` DSN for both engines (one wire protocol).
+Available types and versions (`SERVICE_PROVISIONING.md` # Catalog (v1)): `postgres` (15, 16), `mysql` (8.0, 8.4), `mariadb` (10.11, 11.4), `valkey` (8). `redis` (7) is accepted as a **compatibility alias for `valkey`** — it always provisions the BSD-3 Valkey engine underneath, never upstream Redis (`DECISIONS.md` 2026-06-13); new manifests should prefer `valkey`. A type/version outside this set is rejected at manifest parse time. The MySQL family injects port 3306 and a `mysql://` DSN for both engines (one wire protocol); Valkey injects port 6379 and a `redis://` DSN (the universal RESP scheme).
 
 **Naming convention: app-defined.** The malmo brain exposes the credentials under stable, documented variable names (e.g., `MALMO_SERVICE_DATABASE_HOST`, `MALMO_SERVICE_DATABASE_USER`, `MALMO_SERVICE_DATABASE_PASSWORD`, `MALMO_SERVICE_DATABASE_NAME`, `MALMO_SERVICE_DATABASE_DSN`). The app's compose file maps these to whatever variables the app actually expects:
 

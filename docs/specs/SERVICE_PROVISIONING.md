@@ -8,7 +8,7 @@ Every "service" on a malmo box falls into one of three tiers, distinguished by *
 
 ### Tier 1 — Managed data services
 
-Pure containers with persistent state: **Postgres, MySQL, MariaDB, Redis** (v1). Later: MongoDB, others as demand justifies.
+Pure containers with persistent state: **Postgres, MySQL, MariaDB, Valkey** (v1; `redis` is a compatibility alias for Valkey). Later: MongoDB, others as demand justifies.
 
 - Run as containers, fully isolated.
 - Brain owns lifecycle, schema, credentials.
@@ -38,7 +38,7 @@ Everything else. Run with whatever permissions they declared in their manifest. 
 ## Mental model: how do I install software on malmo?
 
 1. **Standard case:** install from app store (Tier 3).
-2. **Need Postgres / Redis:** the manifest just declares it. Brain provides it (Tier 1, invisible).
+2. **Need Postgres / Valkey:** the manifest just declares it. Brain provides it (Tier 1, invisible).
 3. **Need Tailscale / SMB / VPN exit:** toggle in Settings (Tier 2, curated).
 4. **Power user with a custom container:** paste a compose file (Tier 3 custom door).
 5. **Genuinely advanced:** SSH in, do whatever — but it's not the supported path.
@@ -54,9 +54,10 @@ No `apt`, no terminal-by-default. The OS surface area is the UI.
 - **Postgres** — versions 15 and 16. Most modern self-hosted apps target Postgres.
 - **MySQL** — versions 8.0 and 8.4 (upstream LTS series; 8.0 is past Oracle EOL but kept because Ghost pins it specifically). Some apps speak only the MySQL dialect — Ghost, Kimai.
 - **MariaDB** — versions 10.11 and 11.4 (upstream LTS series). Some apps require it specifically — Nextcloud, WordPress.
-- **Redis** — version 7. Caching, sessions, queues.
+- **Valkey** — version 8. Caching, sessions, queues. Provided by [Valkey](https://valkey.io), the Linux Foundation BSD-3-Clause fork of Redis 7.2.4 — RESP/ACL-compatible. New manifests should declare `type: valkey`.
+- **Redis** — version 7, a **compatibility alias** for Valkey. malmo never runs the upstream Redis image (Redis 7.4+ is RSALv2/SSPLv1, Redis 8+ is AGPLv3 — both on malmo's avoid-list); a `type: redis, version: "7"` declaration always provisions the Valkey engine underneath (normalized to `valkey: "8"`), so a `redis:7` app and a `valkey:8` app share one instance. Kept so existing manifests and the broad Redis ecosystem keep working (`DECISIONS.md` 2026-06-13).
 
-MySQL and MariaDB share one wire protocol and SQL dialect, so they are two `type` values backed by one provisioning path; the per-engine deltas are the image pin, the client binary names, the root-password env var, and the readiness probe (`DECISIONS.md` 2026-06-09).
+MySQL and MariaDB share one wire protocol and SQL dialect, so they are two `type` values backed by one provisioning path; the per-engine deltas are the image pin, the client binary names, the root-password env var, and the readiness probe (`DECISIONS.md` 2026-06-09). `valkey` and `redis` go further: they are two `type` values backed by **one engine** (Valkey) — `redis` normalizes to `valkey` before anything provisions, so there is no upstream-Redis code path at all (`DECISIONS.md` 2026-06-13).
 
 We add new types when **3+ store apps actually want them**, not before. Each new type is real ongoing operational complexity (backup integration, version management, schema isolation).
 
@@ -64,7 +65,7 @@ Plausible v2+ additions: MongoDB (common in modern self-hosted apps).
 
 ### Provisioning protocol — end to end
 
-> **Implementation status (v1, 2026-06-05 — `docs/progress/managed-services-postgres.md`; MySQL family 2026-06-09 — `docs/progress/managed-services-mysql.md`; Redis 2026-06-13 — `docs/progress/managed-services-redis.md`).** Built: Postgres, MySQL, MariaDB, and Redis provisioning end-to-end (lazy spinup, per-app credential, `MALMO_SERVICE_<NAME>_*` injection, drop-on-uninstall). The brain provisions via **`docker exec` of the service's own client** (`psql` / `mysql` / `mariadb` / `redis-cli`) — not a client connection of its own — so the control plane never joins the service network (`DECISIONS.md` 2026-06-02, 2026-06-05). Each service is a brain-owned compose project with a fixed `container_name` (`malmo-svc-postgres-15`, the exec handle) and an in-network DNS alias (`postgres-15.malmo.internal`, the DSN host); dots in a version fold to dashes in every derived name (`malmo-svc-mysql-8-0`, `mysql-8-0.malmo.internal`) because compose project names reject dots. MySQL-family DSNs are `mysql://…:3306/…` for both engines (one wire protocol). **Redis** has no database: the per-app credential is an **ACL user with full keyspace** (`redis://…:6379`, no DB path; the credential is the isolation boundary, `DECISIONS.md` 2026-06-13), provisioned by `ACL SETUSER` and persisted to an external aclfile on the data volume (`ACL SAVE`) so it survives a restart — Redis ACLs are config, not keyspace. **Deferred:** the grace-shutdown timer (services stay running after the last consumer uninstalls), backup/restore + cross-version migration (gated on the backup design), and at-rest encryption of the stored superuser + per-app passwords (plaintext today — folds into `NEXT.md` # App-secret injection hardening). See `NEXT.md` for each.
+> **Implementation status (v1, 2026-06-05 — `docs/progress/managed-services-postgres.md`; MySQL family 2026-06-09 — `docs/progress/managed-services-mysql.md`; Valkey/Redis 2026-06-13 — `docs/progress/managed-services-redis.md`).** Built: Postgres, MySQL, MariaDB, and Valkey provisioning end-to-end (lazy spinup, per-app credential, `MALMO_SERVICE_<NAME>_*` injection, drop-on-uninstall). The brain provisions via **`docker exec` of the service's own client** (`psql` / `mysql` / `mariadb` / `valkey-cli`) — not a client connection of its own — so the control plane never joins the service network (`DECISIONS.md` 2026-06-02, 2026-06-05). Each service is a brain-owned compose project with a fixed `container_name` (`malmo-svc-postgres-15`, the exec handle) and an in-network DNS alias (`postgres-15.malmo.internal`, the DSN host); dots in a version fold to dashes in every derived name (`malmo-svc-mysql-8-0`, `mysql-8-0.malmo.internal`) because compose project names reject dots. MySQL-family DSNs are `mysql://…:3306/…` for both engines (one wire protocol). **Valkey** (the engine behind both `type: valkey` and the `type: redis` alias — `redis:7` normalizes to `valkey:8`, so both land on `malmo-svc-valkey-8`) has no database: the per-app credential is an **ACL user with full keyspace** (`redis://…valkey-8.malmo.internal:6379`, no DB path; the universal RESP scheme; the credential is the isolation boundary, `DECISIONS.md` 2026-06-13), provisioned by `ACL SETUSER` and persisted to an external aclfile on the data volume (`ACL SAVE`) so it survives a restart — Valkey ACLs are config, not keyspace. **Deferred:** the grace-shutdown timer (services stay running after the last consumer uninstalls), backup/restore + cross-version migration (gated on the backup design), and at-rest encryption of the stored superuser + per-app passwords (plaintext today — folds into `NEXT.md` # App-secret injection hardening). See `NEXT.md` for each.
 
 #### At app install
 
@@ -141,7 +142,7 @@ When the new app version's manifest declares a different major (e.g., now needs 
 
 ### Network architecture
 
-- Each managed service instance runs on a dedicated internal Docker network: `malmo-svc-postgres-15`, `malmo-svc-redis-7`, etc.
+- Each managed service instance runs on a dedicated internal Docker network: `malmo-svc-postgres-15`, `malmo-svc-valkey-8`, etc.
 - Apps that declared a service in their manifest are attached to the matching network at start time.
 - Internal DNS: `postgres-15.malmo.internal` resolves **only on networks where that service is reachable**.
 - Apps **cannot reach managed services they didn't declare**. Network membership is the enforcement mechanism, not a software allowlist.
@@ -154,7 +155,7 @@ One Postgres-15 instance serves many apps. Each app sees only:
 
 Enforcement is via standard Postgres role/grant mechanics — not separate instances. Cleaner resource use, simpler operations.
 
-**Redis** has no database to scope a role to, so the per-app unit is an **ACL user with full keyspace** (`ACL SETUSER … ~* &* +@all -@admin -flushall -flushdb -swapdb`): each app gets its own credential — revocable on uninstall, and unable to touch the ACL system, `CONFIG`, `SHUTDOWN`, or replication (`-@admin`) — but the keyspace is shared. The isolation boundary is the credential (no unauthenticated access; an app with no Redis declaration never joins the network), not a key partition. This is a stronger boundary than a logical-DB-number split, which has no auth boundary between apps (`DECISIONS.md` 2026-06-13). `-flushall -flushdb -swapdb` removes the keyspace-destruction commands by name (rather than the blunt `-@dangerous`, which would also strip `INFO`/`KEYS`/`SORT` that ordinary clients call) so a single compromised or buggy app can't wipe the shared keyspace every other app reads from. The shared keyspace means one app can still *read* another's keys; per-app key **confidentiality** is the deferred isolation hardening (`NEXT.md` # Managed-service per-app key isolation), whose clean form is the `isolated: true` dedicated-instance escape hatch below.
+**Valkey** (the engine behind both `type: valkey` and the `type: redis` alias) has no database to scope a role to, so the per-app unit is an **ACL user with full keyspace** (`ACL SETUSER … ~* &* +@all -@admin -flushall -flushdb -swapdb`): each app gets its own credential — revocable on uninstall, and unable to touch the ACL system, `CONFIG`, `SHUTDOWN`, or replication (`-@admin`) — but the keyspace is shared. The isolation boundary is the credential (no unauthenticated access; an app with no Valkey declaration never joins the network), not a key partition. This is a stronger boundary than a logical-DB-number split, which has no auth boundary between apps (`DECISIONS.md` 2026-06-13). `-flushall -flushdb -swapdb` removes the keyspace-destruction commands by name (rather than the blunt `-@dangerous`, which would also strip `INFO`/`KEYS`/`SORT` that ordinary clients call) so a single compromised or buggy app can't wipe the shared keyspace every other app reads from. The shared keyspace means one app can still *read* another's keys; per-app key **confidentiality** is the deferred isolation hardening (`NEXT.md` # Managed-service per-app key isolation), whose clean form is the `isolated: true` dedicated-instance escape hatch below.
 
 If we later need stronger isolation (security-sensitive app, regulatory requirement), we can add a `services.database.isolated: true` manifest field that forces a dedicated instance for that app. **Not in v1.**
 
@@ -166,7 +167,7 @@ If we later need stronger isolation (security-sensitive app, regulatory requirem
 
 ### Storage tier for managed services
 
-- The shared Postgres / Redis data lives on **fast tier** if available, falling back to normal.
+- The shared Postgres / Valkey data lives on **fast tier** if available, falling back to normal.
 - Apps don't get a say — this is OS-policy, not per-app config.
 
 ---
@@ -264,7 +265,7 @@ Caveat: apps with framework-embedded schedulers (Sidekiq-cron, APScheduler, etc.
 
 ### Additional managed data services (Tier-1 catalog growth)
 
-Extend the catalog as concrete app demand justifies. We **host the substrates apps already use** rather than inventing new APIs — same shape as Postgres/Redis today.
+Extend the catalog as concrete app demand justifies. We **host the substrates apps already use** rather than inventing new APIs — same shape as Postgres/Valkey today.
 
 Plausible additions:
 - **MongoDB** — common in modern self-hosted apps.
@@ -272,7 +273,7 @@ Plausible additions:
 
 (MariaDB graduated from this list to the v1 catalog alongside MySQL — `DECISIONS.md` 2026-06-09.)
 
-We host queue substrates, not queue libraries. Sidekiq (Ruby), BullMQ (Node), Celery (Python), RQ — these are libraries that run *inside the app's own container*, pointed at a substrate we provide (already-managed Redis for most; potentially Kafka or RabbitMQ later). Malmo does not build or expose a queue API of its own.
+We host queue substrates, not queue libraries. Sidekiq (Ruby), BullMQ (Node), Celery (Python), RQ — these are libraries that run *inside the app's own container*, pointed at a substrate we provide (already-managed Valkey for most; potentially Kafka or RabbitMQ later). Malmo does not build or expose a queue API of its own.
 
 ### Cross-box services (federated state)
 
@@ -302,7 +303,7 @@ Locked now: **the malmo mesh is the intended transport for future cross-box serv
 ## Locked decisions
 
 - **Three-tier model:** managed data services / OS integrations / regular apps.
-- **v1 Tier-1 catalog:** Postgres (15, 16), MySQL (8.0, 8.4), MariaDB (10.11, 11.4), and Redis (7). Add types only when 3+ store apps justify it.
+- **v1 Tier-1 catalog:** Postgres (15, 16), MySQL (8.0, 8.4), MariaDB (10.11, 11.4), and Valkey (8; `redis: "7"` is a compatibility alias for it — malmo never runs upstream Redis). Add types only when 3+ store apps justify it.
 - **v1 Tier-2 list:** Tailscale, Samba/SMB, DLNA/UPnP (DLNA possibly deprioritized).
 - **Shared instances for Tier 1.** One Postgres-15 instance serves many apps; isolation via Postgres roles/DBs.
 - **Lazy spinup.** Tier-1 instances start when first needed, shut down with a grace period after the last app using them is uninstalled. *(v1: lazy spinup built; grace-shutdown deferred — services stay running.)*
