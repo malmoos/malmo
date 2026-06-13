@@ -52,6 +52,10 @@ const canControl = computed(
 
 const running = computed(() => app.value?.state === "running");
 const stopped = computed(() => app.value?.state === "stopped");
+// `failed` shares the Start control as a click-to-retry (#154): the brain runs
+// the identical Start transaction from `stopped` or `failed`. The logs below are
+// the failure reason, so a retry from here isn't blind.
+const failed = computed(() => app.value?.state === "failed");
 
 function invalidate() {
   qc.invalidateQueries({ queryKey: ["apps"] });
@@ -207,12 +211,13 @@ async function copySecret(s: AppSecret) {
           {{ stop.isPending.value ? "Stopping…" : "Stop service" }}
         </button>
         <button
-          v-else-if="canControl && stopped"
+          v-else-if="canControl && (stopped || failed)"
           class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
           :disabled="busy"
           @click="start.mutate()"
         >
-          {{ start.isPending.value ? "Starting…" : "Start service" }}
+          <template v-if="failed">{{ start.isPending.value ? "Retrying…" : "Retry" }}</template>
+          <template v-else>{{ start.isPending.value ? "Starting…" : "Start service" }}</template>
         </button>
 
         <template v-if="canControl">

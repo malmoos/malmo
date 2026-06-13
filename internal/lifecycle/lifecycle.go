@@ -762,7 +762,11 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 // uninstall). It uses `docker compose up -d` rather than `compose start` — the
 // same op the reconcile pass uses — so dependency ordering and one-shot
 // completion-gate jobs (#92) behave exactly as on install, and the op is
-// idempotent. Legal only from `stopped`.
+// idempotent. Legal from `stopped` or `failed`: the same path is the click-to-
+// retry recovery for a failed instance (#154), since a retry is just a Start —
+// `compose up -d` + waitHealthy + Caddy flip + the #153 mDNS re-publish — that
+// lands in `running` on success and back in `failed` (via startFailed) if the
+// app still won't come healthy.
 //
 // State is written to `running` BEFORE the docker op (brain-commits-first): a
 // crash mid-start leaves a `running` row the reconcile pass finishes, the same
@@ -774,9 +778,10 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if inst.State != "stopped" {
+	if inst.State != "stopped" && inst.State != "failed" {
 		return fmt.Errorf("%w (state=%s)", ErrNotStopped, inst.State)
 	}
+	prevState := inst.State
 	man, err := m.loadInstanceManifest(id)
 	if err != nil {
 		return fmt.Errorf("load manifest: %w", err)
@@ -826,7 +831,7 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 		slog.Warn("start: caddy upstream flip failed (continuing)",
 			"instance_id", id, "host", host, "upstream", upstream, "err", err)
 	}
-	m.emitState(inst, "stopped")
+	m.emitState(inst, prevState)
 	slog.Info("app started", "instance_id", id, "name", inst.Name, "upstream", upstream)
 	return nil
 }
