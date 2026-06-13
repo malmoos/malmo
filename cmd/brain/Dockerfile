@@ -34,6 +34,11 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin; \
     apt-get purge -y --auto-remove curl; \
     rm -rf /var/lib/apt/lists/*
+# Declare the wire-protocol major host-agent checks before launch (lockstep
+# guard — CONTROL_PLANE.md # Locked: host-agent launches the brain container).
+# Must equal internal/protocol.Major; bump both together with the /v<N> URL
+# prefix.
+LABEL malmo.protocol.major="1"
 COPY --from=build /out/malmo-brain /usr/local/bin/malmo-brain
 # State dir and catalog are bind-mounts the supervisor provides at runtime; the
 # brain reads its config from MALMO_* env (cmd/brain/main.go # loadConfig).

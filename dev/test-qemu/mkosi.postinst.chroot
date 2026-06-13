@@ -8,12 +8,13 @@
 #   - Ensure /run/malmo/health/ exists via tmpfiles.d (cleaner than
 #     the reporter's mkdir -p; tracked as a known gap in 0019).
 #   - Make the storage-verify binary executable.
-#   - Enable sshd and disable host-agent.service (host-agent-real is
-#     /bin/true here; its RuntimeDirectory=malmo would delete
-#     /run/malmo/ on exit, destroying storage.json before assertions).
+#   - Enable sshd and host-agent.service (#164: host-agent-real is now
+#     the real binary that launches the brain container; it runs long
+#     so RuntimeDirectory=malmo stays put — the /bin/true-exits hazard
+#     that kept it disabled is gone).
 #   - Pre-commit machine-id + mask systemd-firstboot so the interactive
 #     firstboot wizard doesn't block sysinit.target.
-#   - System preset file: enable ssh.service, disable host-agent.service.
+#   - System preset file: enable ssh.service and host-agent.service.
 #   - Enable systemd-networkd + DHCP config for the virtio NIC.
 set -euo pipefail
 
@@ -69,11 +70,11 @@ systemd-machine-id-setup 2>/dev/null || \
 # Belt-and-suspenders: mask the unit too so even if detection fires it's a no-op.
 systemctl --root=/ mask systemd-firstboot.service >/dev/null 2>&1 || true
 
-# Preset file so systemctl-preset-all on first boot keeps ssh enabled and
-# keeps host-agent.service disabled. host-agent.service has WantedBy=multi-user.target
-# so mkosi's preset-all would enable it; but host-agent-real is /bin/true in this
-# image and host-agent.service has RuntimeDirectory=malmo which causes systemd to
-# remove /run/malmo/ (including health/storage.json) when the service exits.
+# Preset file so systemctl-preset-all on first boot keeps ssh + host-agent
+# enabled. host-agent.service has WantedBy=multi-user.target; #164 runs the real
+# host-agent-real (which launches the brain), and it stays running, so the
+# RuntimeDirectory=malmo teardown that the old /bin/true stub triggered on exit
+# no longer applies — the unit is enabled.
 mkdir -p /usr/lib/systemd/system-preset
 cat > /usr/lib/systemd/system-preset/99-malmo-medium-test.preset <<'EOF'
 enable ssh.service
@@ -82,11 +83,13 @@ enable avahi-daemon.service
 enable docker.service
 enable containerd.service
 enable malmo-load-images.service
+enable host-agent.service
 disable NetworkManager-wait-online.service
-disable host-agent.service
 EOF
-# Belt-and-suspenders: remove any enable symlink already created during build.
-systemctl --root=/ disable host-agent.service >/dev/null 2>&1 || true
+# Belt-and-suspenders: drop the .wants symlink manually (can't run
+# `systemctl enable` in the chroot), same idiom as the other units above.
+ln -sf /etc/systemd/system/host-agent.service \
+    /etc/systemd/system/multi-user.target.wants/host-agent.service
 
 # Docker + first-boot control-plane image load (#163). docker-ce is baked from
 # Docker's apt repo; enable docker.service (ordered After=malmo-storage-ready.
