@@ -884,7 +884,10 @@ func (m *Manager) publishHost(ctx context.Context, inst store.Instance) (string,
 	} else {
 		host = pub.Name
 		if pub.Name != inst.MDNSName {
-			_ = m.store.SetMDNSName(inst.ID, pub.Name)
+			if err := m.store.SetMDNSName(inst.ID, pub.Name); err != nil {
+				slog.Warn("mDNS name persist failed (continuing)",
+					"instance_id", inst.ID, "name", pub.Name, "err", err)
+			}
 		}
 	}
 	if host == "" {
