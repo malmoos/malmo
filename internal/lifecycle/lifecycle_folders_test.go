@@ -90,7 +90,7 @@ func TestInstallFolders_HouseholdSharedWrite(t *testing.T) {
 	if got := app["user"]; got != "2000:2000" {
 		t.Errorf("user: want 2000:2000, got %v", got)
 	}
-	wantVol := "/srv/malmo/shared/Documents:/malmo/documents:rw" // write → :rw
+	wantVol := filepath.Join(e.m.sharedRoot, "Documents") + ":/malmo/documents:rw" // write → :rw
 	if !hasString(app["volumes"], wantVol) {
 		t.Errorf("volumes: want %q, got %v", wantVol, app["volumes"])
 	}
@@ -224,7 +224,7 @@ func TestInstallCustomFolders_TargetDestination(t *testing.T) {
 	app := doc.Services["app"]
 
 	// Household → shared source; write → :rw; bind lands at the typed target.
-	wantVol := "/srv/malmo/shared/Documents:/photoprism/originals:rw"
+	wantVol := filepath.Join(e.m.sharedRoot, "Documents") + ":/photoprism/originals:rw"
 	if !hasString(app["volumes"], wantVol) {
 		t.Errorf("volumes: want %q, got %v", wantVol, app["volumes"])
 	}

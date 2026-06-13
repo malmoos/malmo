@@ -59,6 +59,10 @@ func newTestEnv(t *testing.T) *testEnv {
 	docker := newFakeDocker()
 	bus := events.NewBus()
 	m := NewManager(s, cat, host, cd, docker, bus, stateDir)
+	// Root the household shared tree under a temp dir so shared-source bind paths
+	// and (under a root-run suite) their on-disk preparation never touch the real
+	// /srv (mirrors how the fake host roots personal homes under homeRoot).
+	m.sharedRoot = t.TempDir()
 	// Tests must never shell out to `docker compose config -q`.
 	m.SetAdmitter(admission.CheckStructure)
 	// Keep timeout small so health-failure tests finish fast.

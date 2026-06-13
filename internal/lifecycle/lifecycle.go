@@ -41,6 +41,13 @@ const (
 	sourceShared   = "shared"
 )
 
+// defaultSharedRoot is the production household shared tree (STORAGE.md # user
+// content): /srv/malmo/shared, owned root:malmo-shared, mode 02770 (setgid).
+// Held as a Manager field (overridable in tests) so a shared source's bind path
+// and its on-disk preparation resolve under a temp root in hermetic tests rather
+// than the real /srv.
+const defaultSharedRoot = "/srv/malmo/shared"
+
 // folderDir maps a taxonomy folder name to its capitalized on-disk directory
 // (STORAGE.md # user content). Personal source binds <home>/<dir>, shared binds
 // /srv/malmo/shared/<dir>.
@@ -71,10 +78,11 @@ type FolderMount struct {
 // run as the owner's UID/GID with mounts populated; folderless apps run as the
 // brain's own effective identity with mounts empty (folder-bind paths are no-ops).
 type isolation struct {
-	uid, gid  int    // container runtime identity (compose user:)
-	sharedGID int    // malmo-shared GID for group_add on shared-source mounts
-	home      string // owner home dir (personal scope); "" for household
-	mounts    []FolderMount
+	uid, gid   int    // container runtime identity (compose user:)
+	sharedGID  int    // malmo-shared GID for group_add on shared-source mounts
+	sharedBase string // household shared tree root (Manager.sharedRoot); base for a shared source's host path
+	home       string // owner home dir (personal scope); "" for household
+	mounts     []FolderMount
 	// gpu is the host's GPU capability report, queried (and Present enforced)
 	// by the install gate only when the manifest declares gpu: true; the zero
 	// value means "no GPU declared" and writeOverride emits no GPU stanza.
@@ -82,10 +90,11 @@ type isolation struct {
 }
 
 // hostSource resolves the host path bound for one mount: the owner's
-// <home>/<Folder>/ for a personal source, /srv/malmo/shared/<Folder>/ for a
-// shared source, narrowed by Subfolder when present.
+// <home>/<Folder>/ for a personal source, <sharedBase>/<Folder>/ (the household
+// shared tree, /srv/malmo/shared in production) for a shared source, narrowed by
+// Subfolder when present.
 func (it *isolation) hostSource(mt FolderMount) string {
-	base := filepath.Join("/srv/malmo/shared", folderDir[mt.Folder])
+	base := filepath.Join(it.sharedBase, folderDir[mt.Folder])
 	if mt.Source == sourcePersonal {
 		base = filepath.Join(it.home, folderDir[mt.Folder])
 	}
@@ -121,6 +130,11 @@ type Manager struct {
 	bus      *events.Bus
 	stateDir string // e.g. ./.dev/state -> instances under <stateDir>/instances/<id>
 
+	// sharedRoot is the household shared tree root (defaultSharedRoot in
+	// production; a temp dir in tests). Base for shared-source bind paths and
+	// their on-disk preparation.
+	sharedRoot string
+
 	// healthWait is overridable in tests; production uses healthWaitTimeout.
 	healthWait time.Duration
 	// healthPoll is the inter-poll interval; production uses 2s.
@@ -139,6 +153,7 @@ func NewManager(st *store.Store, cat *catalog.Catalog, host HostDriver, cd Caddy
 	return &Manager{
 		store: st, catalog: cat, host: host, caddy: cd, docker: docker,
 		admit: admission.Check, bus: bus, stateDir: stateDir,
+		sharedRoot: defaultSharedRoot,
 		healthWait: healthWaitTimeout, healthPoll: 2 * time.Second,
 		instLocks: map[string]*sync.Mutex{},
 	}
@@ -424,7 +439,7 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	// manifest declares service_user: true, which swaps in a dedicated
 	// host-allocated identity (APP_ISOLATION.md # Runtime identity & data
 	// ownership).
-	iso := isolation{uid: os.Geteuid(), gid: os.Getegid(), gpu: gpu}
+	iso := isolation{uid: os.Geteuid(), gid: os.Getegid(), gpu: gpu, sharedBase: m.sharedRoot}
 	if len(man.Permissions.Folders) > 0 {
 		wk, err := m.host.WellKnownIdentity(ctx)
 		if err != nil {
@@ -526,6 +541,33 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 			}
 			slog.Warn("folder source chown skipped under unprivileged brain",
 				"instance_id", id, "step", src, "uid", iso.uid, "gid", iso.gid, "err", err)
+		}
+	}
+
+	// Prepare each elected SHARED folder source (#156). Unlike a personal source
+	// — owned by the runtime UID, so MkdirAll + chown suffices — the household
+	// shared tree is root:malmo-shared, mode 02770 setgid (STORAGE.md # user
+	// content): the brain creates the elected <Folder>[/<subfolder>] beneath the
+	// shared root, owning each NEW dir to the malmo-shared group with the setgid
+	// bit, never chowning to a runtime UID and never re-owning a pre-existing
+	// parent. The malmo-app container reaches it through its malmo-shared
+	// group_add (writeOverride) — no per-UID ownership. Writing under the shared
+	// tree needs root, so this runs only under the production brain (euid 0); the
+	// unprivileged native dev brain can't create the shared tree, so household
+	// shared-folder apps are out of the inner loop — skip with a warning, leaving
+	// dev behavior unchanged (APP_ISOLATION.md # User content).
+	for _, mt := range iso.mounts {
+		if mt.Source != sourceShared {
+			continue
+		}
+		src := iso.hostSource(mt)
+		if os.Geteuid() != 0 {
+			slog.Warn("shared folder source prep skipped under unprivileged brain (out-of-inner-loop, #156)",
+				"instance_id", id, "step", src)
+			continue
+		}
+		if err := prepareSharedSource(iso.sharedBase, src, iso.sharedGID); err != nil {
+			return rollback(fmt.Errorf("prepare shared source %q: %w", src, err))
 		}
 	}
 
@@ -1522,6 +1564,59 @@ func relativeBindDirs(composeBytes []byte) ([]string, error) {
 	}
 	sort.Strings(dirs)
 	return dirs, nil
+}
+
+// sharedDirMode is the household shared tree's directory mode, 02770 — setgid
+// (so a new child inherits the malmo-shared group) + group rwx, no other access
+// (STORAGE.md # user content). Expressed with os.ModeSetgid, not a raw 0o2000,
+// because os.Mkdir/os.Chmod take an os.FileMode where the setgid bit is a named
+// flag, not the octal bit.
+const sharedDirMode = os.ModeSetgid | 0o770
+
+// prepareSharedSource creates the elected household shared-source directory —
+// the <Folder>[/<subfolder>] beneath the shared tree root — that does not yet
+// exist, owning each NEWLY created level to the malmo-shared group with mode
+// 02770 (setgid, so descendants inherit the group) per STORAGE.md # user
+// content. The shared tree is root:malmo-shared and is NOT owned by any runtime
+// UID: the malmo-app container reaches it through its malmo-shared group_add, so
+// this never chowns to a runtime UID. Pre-existing levels are left untouched —
+// a shared parent belongs to the storage setup, not to one install — and the
+// shared root itself must already exist (its absence is a real fault). The
+// owner of a created level stays the calling process (root under the production
+// brain); only the group + mode are set. Intended to run only under euid 0; the
+// caller skips it under the unprivileged dev brain.
+func prepareSharedSource(root, src string, sharedGID int) error {
+	rel, err := filepath.Rel(root, src)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("shared source %q is not under shared root %q", src, root)
+	}
+	if fi, err := os.Stat(root); err != nil {
+		return fmt.Errorf("shared root %q: %w", root, err)
+	} else if !fi.IsDir() {
+		return fmt.Errorf("shared root %q is not a directory", root)
+	}
+	cur := root
+	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+		cur = filepath.Join(cur, part)
+		if _, err := os.Stat(cur); err == nil {
+			continue // pre-existing — never re-own a shared parent
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.Mkdir(cur, sharedDirMode); err != nil {
+			return err
+		}
+		// Set the group to malmo-shared, then chmod explicitly: Mkdir's mode is
+		// masked by umask, so the setgid + group-rwx bits must be reasserted
+		// regardless of the parent's bits or the process umask.
+		if err := os.Chown(cur, -1, sharedGID); err != nil {
+			return err
+		}
+		if err := os.Chmod(cur, sharedDirMode); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // isTerminatingJob reports whether a service was designed to run to completion
