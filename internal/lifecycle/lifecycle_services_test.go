@@ -266,6 +266,11 @@ func TestInstallProvisionsRedis(t *testing.T) {
 	if !e.docker.hasCall("ACL SETUSER "+g.RoleName) || !e.docker.hasCall("+@all -@admin") {
 		t.Fatalf("no redis ACL SETUSER call; calls: %v", e.docker.Calls())
 	}
+	// The keyspace-destruction commands are subtracted so one app can't wipe the
+	// shared keyspace every other app reads from (Problem A — cross-app destroy).
+	if !e.docker.hasCall("-flushall -flushdb -swapdb") {
+		t.Fatalf("redis ACL user can still flush the shared keyspace; calls: %v", e.docker.Calls())
+	}
 	if !e.docker.hasCall("ACL SAVE") {
 		t.Fatalf("ACL not persisted (no ACL SAVE); calls: %v", e.docker.Calls())
 	}
@@ -334,6 +339,10 @@ func TestRedisProvisioningExecFailures(t *testing.T) {
 			if _, err := e.m.Install(context.Background(), "cacheapp",
 				Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil); err == nil {
 				t.Fatalf("install succeeded despite %s failure", fail)
+			}
+			// Rollback is clean: no instance row survives the failed provisioning.
+			if list, _ := e.store.List(); len(list) != 0 {
+				t.Fatalf("instance row must be rolled back after %s failure, got %v", fail, list)
 			}
 		})
 	}

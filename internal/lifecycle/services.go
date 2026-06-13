@@ -310,19 +310,27 @@ func (m *Manager) provisionMySQLDB(ctx context.Context, kind, version, dbName, p
 // provisionRedisACL creates the per-app ACL user inside the shared Redis
 // container via docker-exec redis-cli. The user gets the full keyspace (~*) and
 // all pub/sub channels (&*) — Redis 7 denies channels by default — and every
-// command except @admin, so a compromised app can't touch the ACL system,
-// CONFIG, SHUTDOWN, or replication and subvert the shared instance. The
-// credential is the per-app isolation boundary (SERVICE_PROVISIONING.md #
-// Per-app isolation), revoked by ACL DELUSER on uninstall. redis-cli runs as the
-// default (superuser) account, authenticated by REDISCLI_AUTH from the container
-// env; the per-app password rides argv as the ACL `>password` token (base64url,
-// no shell hazards) — only the superuser password is kept out of argv. ACL SAVE
-// persists the user to the aclfile so it survives a service restart (Redis ACLs
-// live in the config, not the keyspace, unlike Postgres/MySQL accounts).
+// command except @admin and the keyspace-destruction commands, so a compromised
+// app can't touch the ACL system, CONFIG, SHUTDOWN, or replication and subvert
+// the shared instance (-@admin), nor wipe the shared keyspace every other app
+// reads from (-flushall -flushdb -swapdb). Subtracting those three by name
+// rather than -@dangerous keeps INFO/KEYS/SORT — also @dangerous, and called by
+// ordinary clients on connect — reachable. The keyspace is still shared, so this
+// blocks cross-app *destruction*, not cross-app reads; per-app key confidentiality
+// is the deferred isolation hardening (NEXT.md # Managed-service per-app key
+// isolation, SERVICE_PROVISIONING.md # Per-app isolation). The credential is the
+// per-app isolation boundary, revoked by ACL DELUSER on uninstall. redis-cli runs
+// as the default (superuser) account, authenticated by REDISCLI_AUTH from the
+// container env; the per-app password rides argv as the ACL `>password` token
+// (base64url, no shell hazards) — only the superuser password is kept out of
+// argv. ACL SAVE persists the user to the aclfile so it survives a service
+// restart (Redis ACLs live in the config, not the keyspace, unlike
+// Postgres/MySQL accounts).
 func (m *Manager) provisionRedisACL(ctx context.Context, version, username, password string) error {
 	container := serviceContainerName("redis", version)
 	if out, err := m.docker.Exec(ctx, container, []string{
-		"redis-cli", "ACL", "SETUSER", username, "on", ">" + password, "~*", "&*", "+@all", "-@admin",
+		"redis-cli", "ACL", "SETUSER", username, "on", ">" + password,
+		"~*", "&*", "+@all", "-@admin", "-flushall", "-flushdb", "-swapdb",
 	}); err != nil {
 		return fmt.Errorf("redis acl setuser: %w\n%s", err, out)
 	}
@@ -359,6 +367,13 @@ func (m *Manager) dropServiceGrants(ctx context.Context, instanceID string, gran
 			}}
 		}
 		if g.Kind == "redis" {
+			// DELUSER revokes in memory; SAVE persists the removal to the aclfile.
+			// If DELUSER succeeds but SAVE fails (best-effort, logged below), a
+			// restart reloads the user from the unchanged aclfile — but the grant
+			// row is gone by then, so the password is recorded nowhere and no app
+			// holds it: a harmless orphan, pruned whenever the reconcile loop that
+			// owns the deferred grace-shutdown lands (NEXT.md # Managed-service
+			// lifecycle gaps). Symmetric with the provisioning-side orphan.
 			cmds = [][]string{
 				{"redis-cli", "ACL", "DELUSER", g.RoleName},
 				{"redis-cli", "ACL", "SAVE"},

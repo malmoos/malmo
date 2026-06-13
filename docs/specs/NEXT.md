@@ -186,6 +186,13 @@ Postgres provisioning shipped (`docs/progress/managed-services-postgres.md`, `DE
 **Context:** `SERVICE_PROVISIONING.md` # Tier 1, the App-secret injection hardening entry above, the Backup architecture entry below.
 **Why deferred, not dropped:** the Postgres slice was scoped to unblock kan; these extend the same spec without changing its shape. Pin them so the next managed-service touch picks the right one off the top.
 
+### Managed-service per-app key isolation
+
+The shared Redis instance gives each app its own ACL credential, not its own keyspace (`DECISIONS.md` 2026-06-13). The Redis slice (#159) closed cross-app **destruction** — `+@all -@admin -flushall -flushdb -swapdb` means no app can wipe the shared keyspace — but cross-app **confidentiality** is still open: because every app holds `~*`, app A can read or overwrite app B's keys with ordinary `GET`/`SET`/`SCAN`. Command ACLs can't fix this (those are core commands), and per-app key-pattern ACLs (`~app:*`) only work if the app prefixes every key itself, which most don't and malmo can't force. The clean form is the `isolated: true` manifest field already sketched in `SERVICE_PROVISIONING.md` # Per-app isolation — a dedicated instance per app for the apps that need a hard boundary, shared-by-default otherwise. The cost is runtime RAM (one Redis process per opted-in app), not code, so the decision is about *when an app warrants the dedicated instance*, not how to build it. Same shape would extend to the SQL families if a regulatory/security app ever needs it. No catalog app requires this today; pin it so the next isolation-sensitive app picks it up.
+
+**Context:** `SERVICE_PROVISIONING.md` # Per-app isolation in shared instances, `DECISIONS.md` 2026-06-13, `docs/progress/managed-services-redis.md`.
+**Why deferred, not dropped:** single-tenant home server, all apps installed by the same owner — the credential boundary (no unauthenticated access, no cross-app *destruction*) is enough for v1; cross-app key *reads* matter only once a genuinely untrusted or regulated app lands.
+
 ### Backup architecture shape
 
 Off-site backup is paid + post-MVP, but the *interfaces* — manifest hints (data vs. cache volumes), restore path, bind-mount-only constraint, managed-service dump path — should be sketched now to avoid retrofitting once we ship.
