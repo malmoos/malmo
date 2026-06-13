@@ -23,6 +23,12 @@ main_port: 5006
 preferred_slugs: [actual, budget]
 health_probe: /health
 
+# Folderless app: the actual-server image has no USER directive and no
+# privilege-dropping entrypoint, so it runs as root upstream. service_user
+# gives it a dedicated malmo non-root identity (band [2100,2999]) with data/
+# chowned to it — financial data shouldn't run as the brain's euid.
+service_user: true
+
 resources:
   recommended: { memory: 256M, cpu: 0.5 }
 
