@@ -167,11 +167,15 @@ export interface CustomInstallRequest {
 }
 
 // Poll a job to a terminal state (Pattern B). A useJob() composable with
-// refetchInterval is the real shape; this is enough for the skeleton.
-export async function waitForJob(jobId: string): Promise<Job> {
+// refetchInterval is the real shape; this is enough for the skeleton. onPoll, if
+// given, is called with each non-terminal poll so callers can surface the job's
+// live `step` (e.g. the install button's phase label, #150) instead of discarding
+// every intermediate state.
+export async function waitForJob(jobId: string, onPoll?: (job: Job) => void): Promise<Job> {
   for (;;) {
     const job = await api.get<Job>(`/jobs/${jobId}`);
     if (job.status !== "running" && job.status !== "cancelling") return job;
+    onPoll?.(job);
     await new Promise((r) => setTimeout(r, 600));
   }
 }
