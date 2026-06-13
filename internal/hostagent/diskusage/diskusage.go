@@ -57,8 +57,8 @@ func New() *Reporter {
 }
 
 // DataDisk returns the data drive's available and total bytes. free is the space
-// an unprivileged writer can actually use (Bavail × Bsize — already net of the
-// root reserve); total is the filesystem size (Blocks × Bsize). On a statfs
+// an unprivileged writer can actually use (Bavail × Frsize — already net of the
+// root reserve); total is the filesystem size (Blocks × Frsize). On a statfs
 // error it fails open to (0, 0): the brain reads 0 as "not measured" and shows
 // no free figure rather than a misleading empty disk.
 func (r *Reporter) DataDisk() (free, total int64) {
@@ -103,16 +103,18 @@ func (r *Reporter) dataDrivePresent() bool {
 }
 
 // statfsBytes returns a path's available and total bytes. ok is false on a
-// statfs error (the caller fails open). free = Bavail × Bsize (net of the root
-// reserve); total = Blocks × Bsize.
+// statfs error (the caller fails open). free = Bavail × Frsize (net of the root
+// reserve); total = Blocks × Frsize. Block counts are in units of f_frsize (the
+// fundamental block size) per POSIX, not f_bsize (the preferred I/O size); they
+// are equal on ext4/xfs/btrfs but can differ on e.g. NFS.
 func statfsBytes(path string) (free, total int64, ok bool) {
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(path, &st); err != nil {
 		slog.Error("diskusage: statfs failed", "path", path, "err", err)
 		return 0, 0, false
 	}
-	bsize := int64(st.Bsize)
-	return int64(st.Bavail) * bsize, int64(st.Blocks) * bsize, true
+	frsize := int64(st.Frsize)
+	return int64(st.Bavail) * frsize, int64(st.Blocks) * frsize, true
 }
 
 // statDeviceID returns a path's backing-filesystem id (st_dev from stat(2)).
