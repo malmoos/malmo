@@ -1,0 +1,77 @@
+# malmo control-plane compose — the stack the brain brings up after host-agent
+# launches the brain (CONTROL_PLANE.md # host-agent launches the brain
+# container; # the dashboard UI is a brain-launched container). Authored in M0
+# (#163); the brain consumes it in M1b. It is NOT started in M0 — the M0
+# acceptance is only that the four images build and load.
+#
+# Three containers:
+#   caddy        — LAN-facing reverse proxy. The brain drives it via the admin
+#                  API at caddy:2019 over the malmo network and publishes the
+#                  catch-all + per-app routes there (CONTROL_PLANE.md # Caddy).
+#                  The bootstrap caddy.json only opens the admin endpoint and
+#                  the catch-all; everything else is added live via the API.
+#   malmo-ui     — static SPA server; Caddy routes all non-/api traffic here
+#                  (WEB_UI.md # deploy model). Read-only, no ports, no secrets.
+#   docker-proxy — tecnativa/docker-socket-proxy. The brain reaches Docker only
+#                  through this allowlisted proxy at tcp://docker-proxy:2375,
+#                  never the raw socket (CONTROL_PLANE.md # Docker socket
+#                  exposure). The brain container sets DOCKER_HOST accordingly.
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: malmo-caddy
+    restart: unless-stopped
+    command: ["caddy", "run", "--config", "/etc/caddy/caddy.json"]
+    volumes:
+      - ./caddy.json:/etc/caddy/caddy.json:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - malmo
+
+  malmo-ui:
+    image: malmo-ui:dev
+    container_name: malmo-ui
+    restart: unless-stopped
+    read_only: true
+    # caddy writes its storage/autosave under /data and /config on startup; with
+    # a read-only root those writes error out (harmless for HTTP-only static
+    # serving, but noisy). tmpfs gives it scratch space without a persistent
+    # mount — the bundle is baked at /srv/ui, nothing here needs to persist.
+    tmpfs:
+      - /data
+      - /config
+    networks:
+      - malmo
+
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy
+    container_name: malmo-docker-proxy
+    restart: unless-stopped
+    environment:
+      # Allowlist only the endpoint families the brain needs to manage app and
+      # control-plane containers (CONTROL_PLANE.md # Docker socket exposure).
+      # POST enables the write methods `docker compose up` needs to create
+      # containers, networks and volumes. EXEC and host-bind mounts stay denied
+      # (the proxy defaults them to 0).
+      POST: "1"
+      PING: "1"
+      VERSION: "1"
+      INFO: "1"
+      CONTAINERS: "1"
+      IMAGES: "1"
+      NETWORKS: "1"
+      VOLUMES: "1"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - malmo
+
+# The malmo network is created and owned by the brain (cmd/brain/main.go
+# # EnsureIngress); reference it as external so this compose attaches to it
+# rather than racing to create it.
+networks:
+  malmo:
+    name: malmo-ingress
+    external: true

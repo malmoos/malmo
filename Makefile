@@ -15,7 +15,7 @@ export MALMO_AGENT_SOCK := $(AGENT_SOCK)
 export MALMO_STATE_DIR := $(STATE_DIR)
 export MALMO_CATALOG_DIR := ./catalog
 
-.PHONY: build host-agent brain host-agent-real check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-netstate test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev stop openapi openapi-check clean check-state-owner help
+.PHONY: build host-agent brain host-agent-real brain-image ui-image control-plane-images check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-netstate test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev stop openapi openapi-check clean check-state-owner help
 
 # msteinert/pam v2.1.0 uses RTLD_NEXT, a GNU extension that requires
 # _GNU_SOURCE at C compile time. Apply globally; harmless to non-cgo builds.
@@ -28,6 +28,7 @@ help:
 	@echo "make fmt         - rewrite Go sources into gofmt-canonical form (autofix)"
 	@echo "make dev         - all three foreground procs in one terminal (recommended)"
 	@echo "make build       - compile brain + host-agent"
+	@echo "make control-plane-images - build malmo-brain + malmo-ui images and docker-save the control-plane bundle to .dev/"
 	@echo "make net         - create the malmo-ingress docker network"
 	@echo "make caddy       - start the dev Caddy reverse proxy (container)"
 	@echo "make run-agent   - run the fake host-agent (foreground)"
@@ -89,6 +90,35 @@ host-agent-real:
 
 brain:
 	$(GO) build -o $(DEV_DIR)/brain ./cmd/brain
+
+# ---- Control-plane images (M0, #163) -----------------------------------
+# Build the two malmo OCI images and `docker save` them — together with the two
+# third-party control-plane images the brain's compose pulls — into a tarball
+# bundle under .dev/ (BUILD.md # 5 / # 5b; TESTING.md # Full-stack control-plane
+# integration). The medium-lane VM bakes this bundle and docker-loads it at
+# first boot; it has no network, so the third-party images must be in the bundle
+# too. Needs only Docker (the images build hermetically — no host Go/Node).
+CP_IMAGE_DIR := $(DEV_DIR)/control-plane
+BRAIN_IMAGE  := malmo-brain:dev
+UI_IMAGE     := malmo-ui:dev
+CADDY_IMAGE  := caddy:2-alpine
+PROXY_IMAGE  := tecnativa/docker-socket-proxy
+
+brain-image:
+	docker build -f cmd/brain/Dockerfile -t $(BRAIN_IMAGE) .
+
+ui-image:
+	docker build -f web-ui/Dockerfile -t $(UI_IMAGE) web-ui
+
+control-plane-images: brain-image ui-image
+	@mkdir -p $(CP_IMAGE_DIR)
+	docker pull $(CADDY_IMAGE)
+	docker pull $(PROXY_IMAGE)
+	docker save $(BRAIN_IMAGE) -o $(CP_IMAGE_DIR)/malmo-brain.tar
+	docker save $(UI_IMAGE)    -o $(CP_IMAGE_DIR)/malmo-ui.tar
+	docker save $(CADDY_IMAGE) -o $(CP_IMAGE_DIR)/caddy.tar
+	docker save $(PROXY_IMAGE) -o $(CP_IMAGE_DIR)/docker-socket-proxy.tar
+	@echo "saved control-plane image bundle to $(CP_IMAGE_DIR)/"
 
 # Run the full suite. Requires libpam0g-dev for the pamverifier package.
 test:
