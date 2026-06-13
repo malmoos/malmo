@@ -32,12 +32,21 @@
 #   projections (MALMO_MAIL_USE_TLS/_SSL) can't drive this: they're the literal
 #   strings "true"/"false", always non-empty, so `:+` can't gate on them.
 # - PROTOCOL is left unset on purpose. Gitea infers it from SMTP_PORT
-#   (465 → smtps implicit TLS, 587 → smtp+starttls, 25 → insecure), and the
-#   brain injects the provider's real port, so the encryption mode follows the
-#   port for the standard cases without a conditional malmo can't express in
-#   compose interpolation. Note Gitea only sends credentials over an encrypted
-#   link (STARTTLS/TLS) or to localhost, so a plaintext provider won't auth —
-#   acceptable, every real provider is encrypted.
+#   (modules/setting/mailer.go: 25 → smtp, 465 → smtps implicit TLS,
+#   587 → smtp+starttls), and the brain injects the provider's real port, so
+#   the encryption mode follows the port for the three canonical ports without
+#   a conditional malmo can't express in compose interpolation. Note Gitea only
+#   sends credentials over an encrypted link (STARTTLS/TLS) or to localhost, so
+#   a plaintext (port-25) provider won't auth — acceptable, every real provider
+#   is encrypted.
+#   Limitation: a NON-standard port (e.g. 2525, a STARTTLS alt some providers
+#   offer) hits Gitea's inference default, which assumes `smtps` (implicit TLS),
+#   not starttls — so the immediate-TLS handshake fails against a STARTTLS-only
+#   port and mail silently breaks. The injected MALMO_MAIL_ENCRYPTION would
+#   disambiguate, but compose `${}` can't translate its value into Gitea's
+#   PROTOCOL token, so there's no fix here. If a 2525-style provider ever needs
+#   support, pin GITEA__mailer__PROTOCOL explicitly. The standard 587/465/25
+#   ports — what essentially every provider uses — are correct.
 services:
   gitea:
     image: gitea/gitea:1.26.2-rootless
