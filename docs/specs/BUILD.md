@@ -205,7 +205,7 @@ Per `CONTROL_PLANE.md`: brain runs as a container, supervised by host-agent.
 
 - **A — Public registry (`ghcr.io/malmo/brain` or Docker Hub).** Pull at first boot. Simple, no infra to run beyond a registry account. Requires internet at first boot.
 - **B — Self-hosted registry (`registry.malmo.network`).** Same as A but we own the namespace and don't depend on GitHub/Docker policies. Modest VPS cost.
-- **C — Bundle the image in the ISO.** Image is loaded into Docker at install time via `docker load`. Works offline at first boot. ISO grows by the image size (~50–150 MB for a Go-based brain — small).
+- **C — Bundle the image in the ISO.** Image is loaded into Docker at install time via `docker load`. Works offline at first boot. ISO grows by the image size (~200 MB for the slim-with-CLI brain image — see the Build section above — still small against the multi-GB app images the box pulls).
 
 ### Recommendation: B + C combined
 
