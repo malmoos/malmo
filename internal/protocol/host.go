@@ -22,6 +22,24 @@ const SocketPath = "/var/run/malmo/agent.sock"
 // shared wire-contract package.
 const AppHostSuffix = ".local"
 
+// Major is the brain ↔ host-agent wire-protocol major version. The socket API
+// is served under the /v<Major> URL prefix, and the two endpoints ship lockstep
+// within one OS release — there is no connection-time negotiation
+// (BRAIN_HOST_PROTOCOL.md # Versioning).
+//
+// host-agent additionally guards the pairing at brain launch: it reads the
+// brain image's declared major from the ImageProtocolMajorLabel OCI label and
+// refuses to start a brain whose major it does not speak (CONTROL_PLANE.md
+// # Locked: host-agent launches the brain container). Bump this in lockstep
+// with the /v<N> URL prefix and the brain image's label.
+const Major = 1
+
+// ImageProtocolMajorLabel is the OCI image label under which the brain image
+// declares the wire-protocol major it implements (set in cmd/brain/Dockerfile).
+// host-agent reads it at launch and compares against Major. The dotted `malmo.`
+// prefix matches the runtime label convention (e.g. malmo.instance_id).
+const ImageProtocolMajorLabel = "malmo.protocol.major"
+
 // PublishRequest registers a per-app .local name (POST /v1/discovery/publish).
 type PublishRequest struct {
 	Slug string `json:"slug"`

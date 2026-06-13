@@ -59,6 +59,12 @@ for tool in mkosi swtpm qemu-system-x86_64 qemu-img ssh ssh-keygen scp curl dock
     fi
 done
 
+# host-agent-real is a CGO binary (PAM); building it (#164, brain bootstrap)
+# needs the libpam development headers on the build host.
+if [ ! -f /usr/include/security/pam_appl.h ]; then
+    preflight_missing+=("libpam0g-dev (PAM headers for host-agent-real)")
+fi
+
 # OVMF firmware location varies by distro.
 OVMF_CODE=""
 for cand in /usr/share/OVMF/OVMF_CODE.fd \
@@ -77,7 +83,7 @@ medium-lane host preflight: missing tooling
   ${preflight_missing[*]}
 
 Install (Ubuntu/Debian):
-  sudo apt-get install -y qemu-system-x86 swtpm ovmf openssh-client
+  sudo apt-get install -y qemu-system-x86 swtpm ovmf openssh-client libpam0g-dev
   # mkosi v22+: Ubuntu 20.04's apt has v9 (too old). Install via pipx:
   sudo apt-get install -y pipx
   pipx install mkosi
@@ -150,6 +156,20 @@ if [ -n "$CALLER" ]; then
 else
     CGO_ENABLED=0 "$GO" build -o "$NETVERIFY_BIN" \
         "${REPO_ROOT}/cmd/malmo-network-verify/"
+fi
+
+# host-agent-real (#164): the production privileged binary, which now launches
+# the brain container during its own startup. CGO on (PAM) + CGO_CFLAGS as the
+# Makefile sets — a dynamic binary linking the build host's libpam/glibc, run on
+# the Debian VM (which carries libpam0g in its base). Replaces the /bin/true
+# stub staged below so the real brain bootstrap runs on boot.
+HOSTAGENT_BIN="${WORK}/host-agent-real"
+if [ -n "$CALLER" ]; then
+    sudo -u "$CALLER" env CGO_ENABLED=1 CGO_CFLAGS=-D_GNU_SOURCE "$GO" build \
+        -o "$HOSTAGENT_BIN" "${REPO_ROOT}/cmd/host-agent-real/"
+else
+    CGO_ENABLED=1 CGO_CFLAGS=-D_GNU_SOURCE "$GO" build \
+        -o "$HOSTAGENT_BIN" "${REPO_ROOT}/cmd/host-agent-real/"
 fi
 
 # --- 3. SSH keypair
@@ -227,13 +247,26 @@ cp "${REPO_ROOT}/dist/systemd/malmo-storage-ready.target"   "$EXTRA/etc/systemd/
 cp "${REPO_ROOT}/dist/systemd/malmo-storage-verify.service" "$EXTRA/etc/systemd/system/"
 cp "${REPO_ROOT}/dist/systemd/malmo-recovery.target"        "$EXTRA/etc/systemd/system/"
 
-# host-agent.service references /usr/lib/malmo/host-agent-real which we
-# don't have in the medium-lane image (the brain stack isn't part of
-# this slice). Drop a /bin/true symlink so the unit loads if anything
-# inspects it; but DON'T enable the unit — nothing in /etc/systemd/system/
-# *.wants/ pulls host-agent.service in.
+# host-agent.service runs the real host-agent-real (#164): it binds the agent
+# socket and, after Docker is ready, launches the brain container (the postinst
+# enables the unit). A medium-lane drop-in points the brain bootstrap at the
+# bundle's dev-tagged image + tarball and orders host-agent after the first-boot
+# image load so the brain image is present when the bootstrap runs.
 cp "${REPO_ROOT}/dist/systemd/host-agent.service" "$EXTRA/etc/systemd/system/"
-ln -sf /bin/true "$EXTRA/usr/lib/malmo/host-agent-real"
+cp "$HOSTAGENT_BIN" "$EXTRA/usr/lib/malmo/host-agent-real"
+chmod 0755 "$EXTRA/usr/lib/malmo/host-agent-real"
+
+mkdir -p "$EXTRA/etc/systemd/system/host-agent.service.d"
+cat > "$EXTRA/etc/systemd/system/host-agent.service.d/10-malmo-brain-image.conf" <<'EOF'
+[Unit]
+# The brain image is docker-loaded by the first-boot oneshot; order after it so
+# the bootstrap finds it present rather than re-loading the tarball.
+After=malmo-load-images.service
+
+[Service]
+Environment=MALMO_BRAIN_IMAGE=malmo-brain:dev
+Environment=MALMO_BRAIN_IMAGE_TAR=/var/lib/malmo/control-plane-images/malmo-brain.tar
+EOF
 
 # storage-verify binary.
 cp "$VERIFY_BIN" "$EXTRA/usr/lib/malmo/malmo-storage-verify"

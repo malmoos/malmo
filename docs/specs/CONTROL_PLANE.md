@@ -158,7 +158,7 @@ Capability dropping (`CapabilityBoundingSet=`) is **not** used — host-agent's 
 
 - During its own startup, after Docker is ready, host-agent pulls (if needed) and starts the brain container with Docker restart policy `unless-stopped`. After that, Docker keeps brain alive across host-agent restarts; host-agent does not actively supervise brain during steady-state operation.
 - **One chain of custody.** host-agent owns every container on the box (apps, managed services, *and* brain). The reconciler pattern from `APP_LIFECYCLE.md` extends to brain naturally.
-- **Lockstep version check happens at launch.** host-agent refuses to start a brain whose major protocol version it doesn't speak (per `BRAIN_HOST_PROTOCOL.md`). One actor owns both endpoints' lifecycles, so the check is a function call, not an out-of-band reconciliation.
+- **Lockstep version check happens at launch.** host-agent refuses to start a brain whose major protocol version it doesn't speak (per `BRAIN_HOST_PROTOCOL.md`). One actor owns both endpoints' lifecycles, so the check is a function call, not an out-of-band reconciliation. Concretely (#164): the brain image declares its wire-protocol major in the `malmo.protocol.major` OCI label, and host-agent reads it (`docker image inspect`) and compares against its own `protocol.Major` before `docker run` — a mismatch, or a missing label, is a refused launch with a clear error, not a first-request failure.
 - The alternative — a separate `malmo-brain.service` systemd unit — was rejected because it splits the update flow (host-agent already owns the brain+UI update stream per `UPDATES.md`) and moves the lockstep version check out-of-band into first-request failure.
 
 ### Locked: Caddy is malmo substrate, runs as a container
