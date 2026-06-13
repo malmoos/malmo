@@ -304,16 +304,29 @@ type fakeHost struct {
 	allocated int
 	released  []int
 	allocErr  error
+
+	// publishErr forces Publish to fail (the mDNS-down path); publishName, when
+	// set, overrides the returned name to exercise the box-qualified collision
+	// fallback (a published name differing from the primary <slug>.local).
+	publishErr  error
+	publishName string
 }
 
 func newFakeHost() *fakeHost { return &fakeHost{published: map[string]bool{}} }
 
 func (h *fakeHost) Publish(_ context.Context, slug string) (protocol.PublishResponse, error) {
 	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.calls = append(h.calls, call{method: "Publish", args: []any{slug}})
+	if h.publishErr != nil {
+		return protocol.PublishResponse{}, h.publishErr
+	}
 	h.published[slug] = true
-	h.mu.Unlock()
-	return protocol.PublishResponse{Name: slug + ".local"}, nil
+	name := slug + ".local"
+	if h.publishName != "" {
+		name = h.publishName
+	}
+	return protocol.PublishResponse{Name: name}, nil
 }
 
 func (h *fakeHost) Unpublish(_ context.Context, slug string) error {
@@ -387,6 +400,30 @@ func (h *fakeHost) isPublished(slug string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.published[slug]
+}
+
+// publishCount reports how many times Publish was called for a slug, so a test
+// can assert a *re*-publish (e.g. Start re-asserting an already-announced name)
+// rather than just the eventual published state.
+func (h *fakeHost) publishCount(slug string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := 0
+	for _, c := range h.calls {
+		if c.method == "Publish" && len(c.args) == 1 && c.args[0] == slug {
+			n++
+		}
+	}
+	return n
+}
+
+// dropPublished simulates the host-agent losing its process-local Avahi entry
+// group for a slug (e.g. a mid-life host-agent restart) — the name goes dark
+// without a recorded call, so a test can verify a later Publish re-announces it.
+func (h *fakeHost) dropPublished(slug string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.published, slug)
 }
 
 func (h *fakeHost) called(method string) bool {

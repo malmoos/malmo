@@ -778,7 +778,18 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("load manifest: %w", err)
 	}
-	host := routeHost(inst)
+	// Re-assert the mDNS name, not just the Caddy route (#153). Start is a
+	// recovery path: the name may be dark — the host-agent restarted and lost its
+	// process-local Avahi entry groups, or the prior install/start failed before
+	// publishing — in which case re-asserting Caddy alone (as Start used to) left
+	// <slug>.local unresolvable until the next brain reboot's reconcile pass.
+	// Publish up-front, like install's step 9 and unlike a passive routeHost
+	// lookup, so the name resolves to the "starting" splash immediately and the
+	// same host keys the splash, the final upstream, and any failed-splash flip.
+	// Keeping the name announced throughout Start matches the lifecycle model
+	// (Stop deliberately keeps the name pointing at its splash); the publish is
+	// idempotent, so re-running it on every Start is a host-side no-op.
+	host, _ := m.publishHost(ctx, inst)
 
 	// Commit desired state first, then flip the route to the starting splash so
 	// the hostname stops serving the "stopped" page the moment the user acts.
@@ -843,12 +854,43 @@ func (m *Manager) startFailed(ctx context.Context, inst store.Instance, host, ap
 // routeHost is the hostname an instance's Caddy route is keyed on: the published
 // mDNS name when we have one (it may be the box-qualified collision fallback),
 // else the reconstructed primary `<slug>.local`. Mirrors the fallback chain in
-// install + reassertRouting so the three never disagree.
+// install + reassertRouting so the three never disagree. Used by the passive
+// callers (Stop) that flip the splash without re-announcing the name;
+// re-assertion paths (Start, reconcile) use publishHost instead.
 func routeHost(inst store.Instance) string {
 	if inst.MDNSName != "" {
 		return inst.MDNSName
 	}
 	return inst.Slug + protocol.AppHostSuffix
+}
+
+// publishHost re-asserts the instance's mDNS name via host-agent and returns the
+// hostname its Caddy route should key on, plus whether the Avahi publish
+// succeeded. The published name is authoritative — Publish may return a
+// box-qualified collision fallback ("<slug>-<box>.local") that differs from the
+// primary "<slug>.local" — so a changed name is persisted. On publish failure it
+// falls back to the stored name, then the reconstructed primary, so the route
+// always exists even when mDNS resolution is down. Idempotent: re-publishing an
+// already-announced name is a host-side no-op, which is what lets Start and the
+// reconcile pass both call it freely. Shared by reassertRouting (reconcile) and
+// Start so Caddy, Avahi, and the stored MDNSName never disagree.
+func (m *Manager) publishHost(ctx context.Context, inst store.Instance) (string, bool) {
+	host := inst.MDNSName
+	avahiOK := true
+	if pub, err := m.host.Publish(ctx, inst.Slug); err != nil {
+		slog.Warn("mDNS publish failed (continuing)",
+			"instance_id", inst.ID, "slug", inst.Slug, "err", err)
+		avahiOK = false
+	} else {
+		host = pub.Name
+		if pub.Name != inst.MDNSName {
+			_ = m.store.SetMDNSName(inst.ID, pub.Name)
+		}
+	}
+	if host == "" {
+		host = inst.Slug + protocol.AppHostSuffix
+	}
+	return host, avahiOK
 }
 
 // releaseServiceIdentity returns an allocated app-service identity to the
@@ -1023,25 +1065,7 @@ func (m *Manager) reassertRouting(ctx context.Context, inst store.Instance) bool
 			"instance_id", inst.ID, "err", err)
 		return false
 	}
-	avahiOK := true
-	// Use the freshly published name (which may be the box-qualified collision
-	// fallback) for the route. Persist it if it changed since install; fall
-	// back to the stored name, then to the reconstructed primary, so the route
-	// always exists even when mDNS publish fails.
-	host := inst.MDNSName
-	if pub, err := m.host.Publish(ctx, inst.Slug); err != nil {
-		slog.Warn("reconcile: mDNS publish",
-			"instance_id", inst.ID, "slug", inst.Slug, "err", err)
-		avahiOK = false
-	} else {
-		host = pub.Name
-		if pub.Name != inst.MDNSName {
-			_ = m.store.SetMDNSName(inst.ID, pub.Name)
-		}
-	}
-	if host == "" {
-		host = inst.Slug + protocol.AppHostSuffix
-	}
+	host, avahiOK := m.publishHost(ctx, inst)
 	upstream := fmt.Sprintf("malmo-%s-%s:%d", inst.ID, man.MainService, man.MainPort)
 	if err := m.caddy.AddRoute(ctx, inst.ID, host, upstream); err != nil {
 		slog.Warn("reconcile: caddy route",
