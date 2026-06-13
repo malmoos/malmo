@@ -217,6 +217,143 @@ services:
 	t.Logf("database %q dropped on uninstall", dbName)
 }
 
+// TestLiveRedisProvisioning mirrors the SQL live tests for Redis: a real redis:7
+// service container is lazily spun up with an external aclfile, the per-app ACL
+// user is provisioned via docker-exec redis-cli, that user authenticates and
+// reads/writes the keyspace with the injected password, and ACL DELUSER removes
+// it on uninstall.
+//
+//	go test ./internal/lifecycle/ -tags dockerlive -run TestLiveRedisProvisioning -v -timeout 300s
+func TestLiveRedisProvisioning(t *testing.T) {
+	ctx := context.Background()
+	stateDir := t.TempDir()
+	catDir := t.TempDir()
+	s, err := store.Open(filepath.Join(stateDir, "malmo.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	cat := catalog.New(catDir)
+	docker := NewCLIDocker()
+	m := NewManager(s, cat, newFakeHost(), newFakeCaddy(), docker, events.NewBus(), stateDir)
+	m.SetAdmitter(admission.Check)
+
+	if err := docker.NetworkCreate(ctx, ingressNetwork, false); err != nil {
+		t.Fatalf("ingress net: %v", err)
+	}
+
+	man := `
+id: livecache
+manifest_version: 1
+name: Live Cache App
+version: "1.0"
+compose_file: compose.yml
+main_service: app
+main_port: 80
+preferred_slugs: [livecache]
+services:
+  cache:
+    type: redis
+    version: "7"
+permissions:
+  internet: false
+  lan: false
+`
+	compose := `
+services:
+  app:
+    image: traefik/whoami:v1.10.3
+    environment:
+      REDIS_URL: ${MALMO_SERVICE_CACHE_DSN}
+`
+	writeLiveCatalogApp(t, catDir, "livecache", compose, man)
+
+	t.Cleanup(func() {
+		_ = exec.Command("docker", "rm", "-f", serviceContainerName("redis", "7")).Run()
+		_ = exec.Command("docker", "network", "rm", serviceNetworkName("redis", "7")).Run()
+		_ = exec.Command("docker", "network", "rm", ingressNetwork).Run()
+		// redis chowns its data dir to the redis user; remove it via a throwaway
+		// container so t.TempDir cleanup doesn't hit permission-denied.
+		_ = exec.Command("docker", "run", "--rm", "-v", stateDir+":/s",
+			"alpine", "rm", "-rf", "/s/services").Run()
+	})
+
+	inst, err := m.Install(ctx, "livecache",
+		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	grants, err := s.GetServiceGrants(inst.ID)
+	if err != nil || len(grants) != 1 {
+		t.Fatalf("grants = %v, err %v", grants, err)
+	}
+	g := grants[0]
+	if g.Kind != "redis" || g.DBName != "" {
+		t.Fatalf("grant = %+v, want redis with empty db name", g)
+	}
+
+	if !redisACLUserExists(t, g.RoleName) {
+		t.Fatalf("ACL user %q not found in the live Redis", g.RoleName)
+	}
+	t.Logf("provisioned ACL user %q present in live Redis", g.RoleName)
+
+	if !redisUserCanConnect(t, g.RoleName, g.Password) {
+		t.Fatalf("user %q could not auth + read/write keyspace with the injected password", g.RoleName)
+	}
+	t.Logf("user %q authenticates and reads/writes the keyspace with the injected credentials", g.RoleName)
+
+	if err := m.Uninstall(ctx, inst.ID); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	if redisACLUserExists(t, g.RoleName) {
+		t.Fatalf("ACL user %q survived uninstall", g.RoleName)
+	}
+	t.Logf("ACL user %q dropped on uninstall", g.RoleName)
+}
+
+// redisACLUserExists reports whether an ACL user is present, scanning ACL LIST
+// (one `user <name> ...` line per account). redis-cli runs as the default
+// (superuser) account via REDISCLI_AUTH from the container env.
+func redisACLUserExists(t *testing.T, user string) bool {
+	t.Helper()
+	out, _ := exec.Command("docker", "exec", serviceContainerName("redis", "7"),
+		"redis-cli", "ACL", "LIST").CombinedOutput()
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "user "+user+" ") {
+			return true
+		}
+	}
+	return false
+}
+
+// redisUserCanConnect verifies the provisioned user authenticates with the
+// injected password and exercises its ~* keyspace grant (SET then GET), using
+// the redis:// URL form the DSN is built from.
+func redisUserCanConnect(t *testing.T, user, password string) bool {
+	t.Helper()
+	url := fmt.Sprintf("redis://%s:%s@127.0.0.1:6379", user, password)
+	container := serviceContainerName("redis", "7")
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		set, err := exec.Command("docker", "exec", container,
+			"redis-cli", "--no-auth-warning", "-u", url, "set", "malmo:probe", "ok").CombinedOutput()
+		if err == nil && strings.Contains(string(set), "OK") {
+			got, _ := exec.Command("docker", "exec", container,
+				"redis-cli", "--no-auth-warning", "-u", url, "get", "malmo:probe").CombinedOutput()
+			if strings.TrimSpace(string(got)) == "ok" {
+				return true
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Logf("connect attempt output: %s", set)
+			return false
+		}
+		time.Sleep(time.Second)
+	}
+}
+
 // TestLiveServiceUserBootAndWrite drives a real folderless `service_user: true`
 // install end to end: the override pins the host-allocated identity (fake host:
 // 2100), the container actually runs as that UID, and it can write its ./data

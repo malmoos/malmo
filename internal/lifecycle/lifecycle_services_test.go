@@ -8,6 +8,7 @@ package lifecycle
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -232,6 +233,109 @@ func TestUninstallDropsMySQLDB(t *testing.T) {
 	}
 	if !e.docker.hasCall("DROP DATABASE") || !e.docker.hasCall("DROP USER") || !e.docker.hasCall(dbName) {
 		t.Fatalf("uninstall did not drop %s; calls: %v", dbName, e.docker.Calls())
+	}
+}
+
+func TestInstallProvisionsRedis(t *testing.T) {
+	e := newTestEnv(t)
+	inst := installDBAppKind(t, e, "cacheapp", "redis", "7")
+
+	// A shared Redis-7 service instance was recorded and started.
+	if _, err := e.store.GetServiceInstance("redis", "7"); err != nil {
+		t.Fatalf("service instance not recorded: %v", err)
+	}
+	if !e.docker.hasCall("ServiceUp(") {
+		t.Fatalf("ServiceUp never called; calls: %v", e.docker.Calls())
+	}
+
+	// A per-app grant was persisted — an ACL user, no database (Redis has none).
+	grants, err := e.store.GetServiceGrants(inst.ID)
+	if err != nil || len(grants) != 1 {
+		t.Fatalf("grants = %v, err %v", grants, err)
+	}
+	g := grants[0]
+	if g.LogicalName != "database" || g.Kind != "redis" || g.Version != "7" {
+		t.Fatalf("grant = %+v", g)
+	}
+	if g.RoleName == "" || g.DBName != "" {
+		t.Fatalf("grant role=%q dbname=%q, want non-empty role and empty dbname", g.RoleName, g.DBName)
+	}
+
+	// The brain created the per-app ACL user and persisted it via docker-exec
+	// redis-cli (full keyspace, no @admin), then ACL SAVE'd it.
+	if !e.docker.hasCall("ACL SETUSER "+g.RoleName) || !e.docker.hasCall("+@all -@admin") {
+		t.Fatalf("no redis ACL SETUSER call; calls: %v", e.docker.Calls())
+	}
+	if !e.docker.hasCall("ACL SAVE") {
+		t.Fatalf("ACL not persisted (no ACL SAVE); calls: %v", e.docker.Calls())
+	}
+
+	// The injected family carries the dot-folded host, port 6379, and a redis://
+	// DSN with no database path (clients default to logical DB 0).
+	env := readInstanceEnv(t, e, inst.ID)
+	wantHost := "redis-7.malmo.internal"
+	if got := envValue(env, "MALMO_SERVICE_DATABASE_HOST"); got != wantHost {
+		t.Fatalf("HOST = %q, want %q", got, wantHost)
+	}
+	if got := envValue(env, "MALMO_SERVICE_DATABASE_PORT"); got != "6379" {
+		t.Fatalf("PORT = %q, want 6379", got)
+	}
+	if got := envValue(env, "MALMO_SERVICE_DATABASE_NAME"); got != "" {
+		t.Fatalf("NAME = %q, want empty (redis has no database)", got)
+	}
+	dsn := envValue(env, "MALMO_SERVICE_DATABASE_DSN")
+	if !strings.HasPrefix(dsn, "redis://") || !strings.Contains(dsn, wantHost+":6379") {
+		t.Fatalf("DSN = %q, want redis:// … %s:6379", dsn, wantHost)
+	}
+	if strings.Contains(dsn, ":6379/") {
+		t.Fatalf("DSN = %q has a database path; redis grants carry none", dsn)
+	}
+
+	override := readInstanceFile(t, e, inst.ID, "compose.override.yml")
+	if !strings.Contains(override, "malmo-svc-redis-7") {
+		t.Fatalf("override missing service network:\n%s", override)
+	}
+}
+
+func TestUninstallDropsRedisACL(t *testing.T) {
+	e := newTestEnv(t)
+	inst := installDBAppKind(t, e, "cacheapp", "redis", "7")
+	grants, _ := e.store.GetServiceGrants(inst.ID)
+	user := grants[0].RoleName
+
+	if err := e.m.Uninstall(context.Background(), inst.ID); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	if !e.docker.hasCall("ACL DELUSER " + user) {
+		t.Fatalf("uninstall did not drop ACL user %s; calls: %v", user, e.docker.Calls())
+	}
+}
+
+// TestRedisProvisioningExecFailures forces each redis-cli provisioning command
+// to fail and asserts install surfaces the error (and rolls back). Targets the
+// ACL substrings so the readiness probe (`redis-cli ping`) still passes — only
+// the SETUSER / SAVE execs fail.
+func TestRedisProvisioningExecFailures(t *testing.T) {
+	for _, fail := range []string{"ACL SETUSER", "ACL SAVE"} {
+		t.Run(fail, func(t *testing.T) {
+			e := newTestEnv(t)
+			e.docker.exec = func(_ string, args []string) (string, error) {
+				if strings.Contains(strings.Join(args, " "), fail) {
+					return "boom", fmt.Errorf("forced %s failure", fail)
+				}
+				return "", nil
+			}
+			man := strings.Replace(dbManifest, "id: dbapp", "id: cacheapp", 1)
+			man = strings.Replace(man, "preferred_slugs: [dbapp]", "preferred_slugs: [cacheapp]", 1)
+			man = strings.Replace(man, "type: postgres", "type: redis", 1)
+			man = strings.Replace(man, `version: "15"`, `version: "7"`, 1)
+			e.writeCatalogApp(t, "cacheapp", dbCompose, man)
+			e.docker.digests[testImage] = testDigest
+			if _, err := e.m.Install(context.Background(), "cacheapp",
+				Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil); err == nil {
+				t.Fatalf("install succeeded despite %s failure", fail)
+			}
+		})
 	}
 }
 

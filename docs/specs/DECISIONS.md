@@ -21,6 +21,18 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-13 — Managed Redis is a per-app ACL user with full keyspace, not a logical-DB split (#159)
+
+**Previously:** the manifest schema accepted `services: {…: {type: redis}}`, but the brain didn't provision it — a redis declaration passed `manifest check` then failed at install (a check/install asymmetry). The per-app isolation model was an open question in `NEXT.md`.
+
+**Now:** Redis provisions on the Postgres/MySQL code path. The per-app credential is an **ACL user with the full keyspace** — `ACL SETUSER <app> on >pw ~* &* +@all -@admin` — created and dropped via `docker exec redis-cli` and persisted to an external aclfile on the data volume (`ACL SAVE`). The injected DSN is `redis://user:pw@redis-7.malmo.internal:6379` (no database path; clients default to logical DB 0). The shared instance's default (superuser) account lives in the aclfile; its password reaches redis-cli via `REDISCLI_AUTH` in the container env, never host argv.
+
+**Why:** chose the per-app ACL user over the logical-DB-number split because it mirrors the established per-app-role Postgres/MySQL model (one revocable credential per consumer, dropped on uninstall) and gives a real **auth boundary** — every app authenticates as its own user and unauthenticated access is refused — whereas the DB-number split has no auth boundary between apps and a finite DB count. The keyspace stays shared (the "full keyspace" model): partitioning keys by prefix would require apps to cooperate, which they don't, so the credential — not a key namespace — is the boundary, acceptable for a single-tenant home server. `-@admin` keeps a compromised app off the ACL system / `CONFIG` / `SHUTDOWN` / replication so it can't subvert the shared instance or the control plane. The external aclfile is required because Redis ACLs are server config, not keyspace — they aren't in the RDB/AOF and would vanish on restart; letting Redis persist them to a file on the data volume mirrors how Postgres/MySQL accounts persist in their data dir.
+
+**Affected docs:** `SERVICE_PROVISIONING.md` (# Implementation status, # Per-app isolation in shared instances), `NEXT.md` (# Managed-service lifecycle gaps — Redis item resolved), `docs/dev/catalog-import-gaps.md` (`managed-redis — postiz` → implemented). Implementation: `internal/lifecycle/services.go`, `internal/lifecycle/lifecycle.go` (writeEnv no-dbname DSN); realized by `docs/progress/managed-services-redis.md`.
+
+---
+
 ## 2026-06-12 — Outgoing email is BYO-SMTP with per-app bindings, not a malmo relay (#122)
 
 **Previously:** apps that send email (Kimai's password resets, Gitea's notifications) had no malmo story at all — the catalog-import ledger parked them as `smtp-relay` gaps, and their descriptions told the user an administrator had to configure a mail server somehow, with no UI path.

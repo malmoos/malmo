@@ -177,9 +177,8 @@ Where do user docs and app-author docs live? In-product help drawer, `docs.malmo
 
 ### Managed-service lifecycle gaps (Tier-1, post-Postgres-slice)
 
-Postgres provisioning shipped (`docs/progress/managed-services-postgres.md`, `DECISIONS.md` 2026-06-05). Four pieces of the `SERVICE_PROVISIONING.md` # Tier 1 spec were **deliberately deferred** out of that slice, each its own follow-up:
+Postgres provisioning shipped (`docs/progress/managed-services-postgres.md`, `DECISIONS.md` 2026-06-05), then the MySQL family (`DECISIONS.md` 2026-06-09) and Redis (`docs/progress/managed-services-redis.md`, `DECISIONS.md` 2026-06-13 — isolation model resolved: a per-app ACL user with full keyspace, the credential being the boundary, over the logical-DB-number split). Of the `SERVICE_PROVISIONING.md` # Tier 1 spec pieces **deliberately deferred** out of the Postgres slice, three remain, each its own follow-up:
 
-- **Redis provisioning.** The manifest schema accepts `type: redis` (forward-valid) but the brain doesn't provision it yet — a redis declaration fails at install. Needs the isolation model decided: a per-app ACL user + password (full keyspace) vs. a logical-DB-number split. No catalog app *requires* redis today (kan's is optional with an in-memory fallback), so it waited.
 - **Grace-shutdown.** Lazy spinup is built; the symmetric "stop a service version 12h after its last consumer uninstalls" (`SERVICE_PROVISIONING.md` # At app uninstall, # Versioning) is not — services stay running. Needs a timer/GC and reconcile integration that checks remaining `service_grants` for the kind+version.
 - **Cross-version migration.** Auto-migrate on a major-version bump (`pg_dump` old → `pg_restore` new, pre-migration backup as rollback) is unbuilt; gated on the backup design below.
 - **At-rest encryption of service credentials.** The superuser password (`service_instances`) and per-app passwords (`service_grants`) are plaintext in SQLite + the service `.env`, exactly the gap tracked for `MALMO_SECRET_*` — folds into **App-secret injection hardening** above; the decision should cover both.
