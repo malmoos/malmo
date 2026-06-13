@@ -227,6 +227,15 @@ environment:
 
 **The value is generated once and stays stable** for the life of the instance — it is persisted and re-emitted on every restart, never re-rolled, because a token-signing secret that changed underneath the app would invalidate every live session. `name` is lowercase snake_case (so the uppercased env-var suffix is unambiguous); names are unique within a manifest. See `SERVICE_PROVISIONING.md` # Env-var injection.
 
+**`show: true` surfaces a secret's value to the instance owner** (and admins) on the app detail page (`DASHBOARD.md` # Installed apps), gated to the same owner-or-admin rule as the app's controls. Set it for a *bootstrap* credential the user must read to finish first sign-in — a self-authenticating app's setup token — so the manifest never has to ship a published constant as its fallback. Omitted (the default) keeps a secret internal: a managed-service password the app consumes but the user never needs is never revealed, so a single reveal can't expose every injected credential.
+
+```yaml
+secrets:
+  - name: setup_token   # owner reads this once to set a password
+    show: true
+  - name: auth          # internal: signs sessions, never shown
+```
+
 ### D3. Outgoing mail
 
 Apps that can *send* email — password resets, reminders, invites — declare it, and the admin decides at install (or later) which of the box's registered SMTP providers the app sends through (`SERVICE_PROVISIONING.md` # BYO outgoing mail).
@@ -447,7 +456,7 @@ permissions:
 - **`needs_secure_context` is an install-time warning, not a routing override or install block.** Apps declare it honestly; the brain warns the user if the current URL scheme is HTTP. The URL each app uses is determined by the global toggle in Settings, not the manifest.
 - **Public, versioned spec.** Third-party stores depend on it.
 - **Env-var injection: app-defined naming.** App's compose maps malmo's stable `MALMO_SERVICE_*` variables to whatever names the app expects. No auto-rewrite. Authors adapt; we document.
-- **Generated secrets are declared, brain-generated, and stable.** A manifest declares `secrets: [{name, bytes?}]`; the brain draws each from a CSPRNG once at install, persists it, and injects it as `MALMO_SECRET_<NAME>` — re-emitted verbatim on every restart so token-signing secrets don't rotate underneath live sessions. Same app-defined wiring as `MALMO_SERVICE_*` (# D2). Security hardening (delivery surface, at-rest, rotation) is tracked open in `NEXT.md` # App-secret injection hardening.
+- **Generated secrets are declared, brain-generated, and stable.** A manifest declares `secrets: [{name, bytes?, show?}]`; the brain draws each from a CSPRNG once at install, persists it, and injects it as `MALMO_SECRET_<NAME>` — re-emitted verbatim on every restart so token-signing secrets don't rotate underneath live sessions. Same app-defined wiring as `MALMO_SERVICE_*` (# D2). `show: true` makes one owner-visible on the app detail page (so a self-auth app's bootstrap token can be per-instance random, not a published constant — #152); omitted keeps it internal. Security hardening (delivery surface, at-rest, rotation) is tracked open in `NEXT.md` # App-secret injection hardening.
 - **Outgoing mail is declared optional-only (`mail: {optional: true}`).** The declaration unlocks the install-time provider picker and per-instance `MALMO_MAIL_*` injection (# D3, `SERVICE_PROVISIONING.md` # BYO outgoing mail); unbound apps get nothing injected and must run with email off. `optional: false` (and a bare `mail: {}`) is rejected at parse in v1.
 - **Permissions granularity: medium for v1.** Internet, LAN, shared storage, devices, privileged, network isolation. Not coarse-only, not fine-grained Kubernetes-style.
 - **Custom apps can request managed services.** Allowed, not encouraged.

@@ -33,6 +33,18 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-13 — A manifest secret can be owner-visible (`show: true`), so self-auth apps drop the published bootstrap constant (#152)
+
+**Previously:** the brain generated per-app secrets (`MALMO_SECRET_*`) but had no way to *show* one to the owner. An app whose own login is gated by a token rather than malmo's session (Jupyter, #124/#136) therefore had to ship a **published constant** (`malmo-setup`) as its bootstrap token — printed in the app description, disabled by a self-grepping gate in the compose `command:` once the user set a password. If a future image bump renamed the grepped config key, the gate fails *open* and the documented constant becomes a permanent LAN backdoor, silently.
+
+**Now:** a `secrets:` entry may declare `show: true`. Such a secret is owner-visible: the brain serves its value at `GET /apps/{id}/secrets` (owner-or-admin, the same control-authorization gate as stop/start), and the app detail page surfaces a masked **Setup secrets** row the owner reveals to finish first sign-in. Unmarked secrets stay internal (a managed-service password is never listed), so one reveal can't dump every injected credential. The read is a pure read — no audit (only elevation-class mutations audit). The reveal is the **missing molma-side capability**: with it, a self-auth app's bootstrap token can be a *per-instance random* secret, so the fail-open case degrades from "published backdoor" to "a random token nobody knows stays valid" — harmless.
+
+**Why:** the root cause of the Jupyter fragility was molma-side, not Jupyter-side — there was no seam to hand the owner a generated value, so the token had to be public. Surfacing the secret is the smaller, self-contained half of the fix (a first-class "this app authenticates itself" manifest seam is the larger, separate piece — `NEXT.md`). Reusing the existing control-authorization gate (not a new elevation prompt) keeps it consistent with stop/start and with the issue's ask; gating on the manifest `show` flag (not revealing all secrets) keeps internal credentials internal. Migrating the Jupyter manifest off the `molma-setup` constant is a deliberate **follow-up PR**, not this change.
+
+**Affected docs:** `APP_MANIFEST.md` (# D2 — `show` flag + example, locked decisions), `SERVICE_PROVISIONING.md` (# Env-var injection — owner-visible paragraph, locked decisions), `DASHBOARD.md` (# Installed apps — Setup secrets surface). Implementation: `internal/manifest/manifest.go` (`Secret.Show`), `internal/lifecycle/lifecycle.go` (`RevealSecrets`), `internal/api/appsecrets.go` (`GET /apps/{id}/secrets`), `web-ui/src/views/settings/InstalledAppDetailSection.vue`; realized by `docs/progress/owner-visible-secrets.md`.
+
+---
+
 ## 2026-06-12 — Outgoing email is BYO-SMTP with per-app bindings, not a malmo relay (#122)
 
 **Previously:** apps that send email (Kimai's password resets, Gitea's notifications) had no malmo story at all — the catalog-import ledger parked them as `smtp-relay` gaps, and their descriptions told the user an administrator had to configure a mail server somehow, with no UI path.
