@@ -12,7 +12,8 @@
 // rate fields (no prior sample to diff) — we render those as "—" until the
 // second sample arrives ~1s later (BRAIN_UI_PROTOCOL.md:179).
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
-import { Activity } from "lucide-vue-next";
+import { Activity, ChevronDown } from "lucide-vue-next";
+import { api, type SystemStorage, type DiskSpace } from "./api";
 
 interface NetRate {
   iface: string;
@@ -36,10 +37,15 @@ interface Sample {
 const open = ref(false);
 const root = ref<HTMLElement | null>(null);
 const sample = ref<Sample | null>(null);
+// Disk fullness is a separate concern from the live gauges: it doesn't change at
+// the 1 Hz cadence of CPU/RAM, so it's a one-time poll on panel open (mirroring
+// how the install-plan dialog reads free bytes), not part of the SSE stream.
+const storage = ref<SystemStorage | null>(null);
+const storageOpen = ref(false); // per-disk detail collapsed by default
 
 let es: EventSource | null = null;
 
-function connect() {
+async function connect() {
   if (es) return;
   // EventSource bypasses the api.ts fetch wrapper; write the full path and pass
   // the session cookie (withCredentials), exactly as useEvents.ts does.
@@ -47,12 +53,23 @@ function connect() {
   es.addEventListener("sample", (e) => {
     sample.value = JSON.parse((e as MessageEvent).data) as Sample;
   });
+  // One-time Storage poll. Guard the assignment on es so a fetch that resolves
+  // after the panel closed (disconnect cleared es) doesn't leave stale bars.
+  try {
+    const s = await api.get<SystemStorage>("/system/storage");
+    if (es) storage.value = s;
+  } catch {
+    // Leave the Storage section hidden on a fetch error rather than showing
+    // a misleading empty disk — same posture as the brain's fail-open zeros.
+  }
 }
 
 function disconnect() {
   es?.close();
   es = null;
   sample.value = null; // forget the last frame so reopening starts clean
+  storage.value = null;
+  storageOpen.value = false;
 }
 
 function toggle() {
@@ -76,8 +93,10 @@ onUnmounted(() => document.removeEventListener("click", onDocClick));
 // --- formatting: wire units are SI bytes; the UI humanizes (LOCAL_ANALYTICS) ---
 
 function humanBytes(b: number): string {
+  const tib = 1024 ** 4;
   const gib = 1024 ** 3;
   const mib = 1024 ** 2;
+  if (b >= tib) return `${(b / tib).toFixed(1)} TiB`;
   if (b >= gib) return `${(b / gib).toFixed(1)} GiB`;
   if (b >= mib) return `${(b / mib).toFixed(0)} MiB`;
   return `${(b / 1024).toFixed(0)} KiB`;
@@ -109,6 +128,26 @@ const memBar = computed(() => {
   if (!m || m.total_bytes === 0) return 0;
   return Math.min(100, (m.used_bytes / m.total_bytes) * 100);
 });
+
+// Storage: the collapsed bar is the aggregate across every reported volume
+// (used = Σtotal − Σfree); expanding shows one bar per disk.
+const disks = computed<DiskSpace[]>(() => storage.value?.disks ?? []);
+const storageTotal = computed(() => disks.value.reduce((s, d) => s + d.total_bytes, 0));
+const storageUsed = computed(() => storageTotal.value - disks.value.reduce((s, d) => s + d.free_bytes, 0));
+const storageBar = computed(() => (storageTotal.value === 0 ? 0 : Math.min(100, (storageUsed.value / storageTotal.value) * 100)));
+function diskBar(d: DiskSpace): number {
+  return d.total_bytes === 0 ? 0 : Math.min(100, ((d.total_bytes - d.free_bytes) / d.total_bytes) * 100);
+}
+
+// Precomputed so the template doesn't put a closure (the .map) inline: an inline
+// callback there defeats the v-else null-narrowing of `sample`, which vue-tsc
+// flags (the error pre-dated this change; fixed here to keep check-web green).
+const loadLine = computed(() => {
+  const s = sample.value;
+  if (!s) return "";
+  const labels = ["1m", "5m", "15m"];
+  return s.load.map((v, i) => `${labels[i] ?? ""} ${v.toFixed(2)}`).join("  ");
+});
 </script>
 
 <template>
@@ -139,6 +178,25 @@ const memBar = computed(() => {
           <div class="bar"><div class="bar-fill" :style="{ width: memBar + '%' }"></div></div>
         </div>
 
+        <div v-if="disks.length" class="metric">
+          <button class="storage-head" :aria-expanded="storageOpen" @click.stop="storageOpen = !storageOpen">
+            <span class="label">Storage</span>
+            <span class="value">{{ humanBytes(storageUsed) }} / {{ humanBytes(storageTotal) }}</span>
+            <ChevronDown class="chev" :class="{ open: storageOpen }" />
+          </button>
+          <div class="bar"><div class="bar-fill" :style="{ width: storageBar + '%' }"></div></div>
+
+          <div v-if="storageOpen" class="storage-detail">
+            <div v-for="d in disks" :key="d.label" class="metric">
+              <div class="metric-row">
+                <span class="label">{{ d.label }}</span>
+                <span class="value">{{ humanBytes(d.free_bytes) }} free of {{ humanBytes(d.total_bytes) }}</span>
+              </div>
+              <div class="bar"><div class="bar-fill" :style="{ width: diskBar(d) + '%' }"></div></div>
+            </div>
+          </div>
+        </div>
+
         <div v-if="sample.net.length" class="group">
           <div class="group-label">Network</div>
           <div v-for="n in sample.net" :key="n.iface" class="io-row">
@@ -158,7 +216,7 @@ const memBar = computed(() => {
         </div>
 
         <div class="foot">
-          <span>load {{ ["1m", "5m", "15m"].map((l, i) => `${l} ${sample.load[i].toFixed(2)}`).join("  ") }}</span>
+          <span>load {{ loadLine }}</span>
           <span>up {{ humanUptime(sample.uptime_s) }}</span>
         </div>
       </template>
@@ -217,6 +275,29 @@ const memBar = computed(() => {
   border-radius: 999px;
   transition: width 0.4s ease;
 }
+
+.storage-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+.storage-head .value { margin-left: auto; }
+.storage-head .chev {
+  width: 14px;
+  height: 14px;
+  color: #aaa;
+  align-self: center;
+  transition: transform 0.2s ease;
+}
+.storage-head .chev.open { transform: rotate(180deg); }
+.storage-detail { margin-top: 0.4rem; padding-left: 0.5rem; }
+.storage-detail .metric:last-child { margin-bottom: 0; }
 
 .group { margin-top: 0.5rem; }
 .group-label {

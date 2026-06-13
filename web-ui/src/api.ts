@@ -94,6 +94,8 @@ export type SourceMenu = Schemas["SourceMenu"];
 export type FolderSources = Schemas["FolderSources"];
 export type MailProvider = Schemas["MailProviderDTO"];
 export type MailProviderOption = Schemas["MailProviderOption"];
+export type SystemStorage = Schemas["SystemStorageDTO"];
+export type DiskSpace = Schemas["DiskSpaceDTO"];
 
 // Scope is a UI-side literal union, intentionally NOT generated. The brain
 // serves scope (like severity / status / state) as a free string — the huma

@@ -249,6 +249,27 @@ func (f *FakeDiskReporter) DataDisk() (int64, int64) {
 	return f.free, f.total
 }
 
+// FakeDiskSpaceReporter implements DiskSpaceReporter with a fixed slice of
+// volumes set at construction. The fake binary wires one with two canned entries
+// (System + Data) so the dev-loop Storage bars render both without a real second
+// drive; tests pass specific slices (including the empty / single-volume cases)
+// to assert what flows through to GET /v1/system/status.
+type FakeDiskSpaceReporter struct {
+	disks []protocol.DiskSpace
+}
+
+// NewFakeDiskSpaceReporter returns a reporter serving the given volumes.
+func NewFakeDiskSpaceReporter(disks ...protocol.DiskSpace) *FakeDiskSpaceReporter {
+	return &FakeDiskSpaceReporter{disks: disks}
+}
+
+// Disks returns a defensive copy so a caller can't mutate the fake's state.
+func (f *FakeDiskSpaceReporter) Disks() []protocol.DiskSpace {
+	out := make([]protocol.DiskSpace, len(f.disks))
+	copy(out, f.disks)
+	return out
+}
+
 // FakeGPUReporter implements GPUReporter with a settable report. The fake
 // binary wires one reporting a synthetic Intel iGPU (present, vendor "intel",
 // a fixed dev render GID) so the `gpu: true` override path is exercisable

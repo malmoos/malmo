@@ -557,6 +557,40 @@ func TestSystemStatus_ReturnsOK(t *testing.T) {
 	if s.Hostname == "" {
 		t.Error("want non-empty hostname")
 	}
+	// With no DiskSpace reporter wired, Disks is an empty (non-nil) slice — the
+	// brain reads it as "no Storage section", never phantom bars.
+	if s.Disks == nil {
+		t.Error("want non-nil empty disks slice, got nil")
+	}
+	if len(s.Disks) != 0 {
+		t.Errorf("want no disks without a reporter, got %+v", s.Disks)
+	}
+}
+
+func TestSystemStatus_DisksFromReporter(t *testing.T) {
+	a, mux := newTestAgent(&stubVerifier{})
+	a.Disk = NewFakeDiskReporter(412<<30, 1<<40) // the data-drive (DataDisk*) seam
+	a.DiskSpace = NewFakeDiskSpaceReporter(
+		protocol.DiskSpace{Label: "System", FreeBytes: 18 << 30, TotalBytes: 64 << 30},
+		protocol.DiskSpace{Label: "Data", FreeBytes: 412 << 30, TotalBytes: 1 << 40},
+	)
+	w := get(t, mux, "/v1/system/status")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	s := decodeBody[protocol.SystemStatus](t, w)
+	if s.DataDiskFreeBytes != 412<<30 {
+		t.Errorf("DataDiskFreeBytes: got %d", s.DataDiskFreeBytes)
+	}
+	if len(s.Disks) != 2 {
+		t.Fatalf("want 2 disks, got %+v", s.Disks)
+	}
+	if s.Disks[0].Label != "System" || s.Disks[0].TotalBytes != 64<<30 {
+		t.Errorf("System entry: got %+v", s.Disks[0])
+	}
+	if s.Disks[1].Label != "Data" || s.Disks[1].FreeBytes != 412<<30 {
+		t.Errorf("Data entry: got %+v", s.Disks[1])
+	}
 }
 
 func TestSystemResources_ReturnsAllowlistedSample(t *testing.T) {

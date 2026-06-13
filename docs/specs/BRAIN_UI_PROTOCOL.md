@@ -202,6 +202,8 @@ GET /api/v1/system/live
 
 Available to **every** signed-in user — host-level state isn't per-user data (`LOCAL_ANALYTICS.md` # Privacy model). The brain polls host-agent's `GET /v1/system/resources` (`BRAIN_HOST_PROTOCOL.md`) once per second, diffs the raw counters into the rates above, and fans out to all subscribers from one upstream poller. **Wire units are SI:** `*_bps` are bytes/second, `*_bytes` are bytes, `cpu_pct` and `load` are floats; the UI does the human formatting (KB/s, GiB). The stream opens on the first subscriber and the brain stops polling when the last disconnects (zero idle cost).
 
+**Storage fullness is a one-time poll, not this stream.** The same panel's Storage bars (how full each disk is) read `GET /api/v1/system/storage` — a plain huma JSON endpoint (in the OpenAPI spec, so its TS types are generated) returning `{ "disks": [ { "label", "free_bytes", "total_bytes" } ] }`, the brain's pass-through of host-agent's `SystemStatus.Disks` (`BRAIN_HOST_PROTOCOL.md` # GET /v1/system/status). Disk fullness doesn't move at the 1 Hz gauge cadence, so the panel fetches it once on open rather than subscribing — same one-shot read the install-plan dialog already does for free bytes. Every signed-in user, no role gate.
+
 **No reconnect replay.** This channel is exempt from the `Last-Event-ID` buffer below — replaying stale samples is wrong for a live gauge. A reconnecting client resumes at the next live `sample`; the first event after any connect reports `cpu_pct`/`*_bps` rate fields as `null` (no prior sample to diff against), with real rates from the second sample on. It still counts against the ≤16-stream cap.
 
 ### Pattern D — WebSocket (future, reserved)

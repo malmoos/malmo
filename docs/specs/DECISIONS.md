@@ -21,6 +21,18 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-13 — Per-disk storage bars get a new `Disks` field; `DataDisk*` stays (#149)
+
+**Previously:** GET /v1/system/status carried only `data_disk_free_bytes` / `data_disk_total_bytes` — a single statfs snapshot of the data drive, backing the install-plan's `free_bytes` warning. No OS-drive space, no per-volume view.
+
+**Now:** `SystemStatus` gains `disks: []DiskSpace` (label, free_bytes, total_bytes) — one entry per mounted volume of interest (OS drive at `/` always, data drive at `/srv/malmo` when present), backing the system-resources panel's new Storage bars. **The existing `DataDisk*` fields are kept untouched** rather than folded into the new slice. The brain exposes the slice to the UI as a one-time poll at GET /api/v1/system/storage (not the live SSE stream — disk fullness doesn't move at the 1 Hz gauge cadence).
+
+**Why:** the install-plan footprint already reads `DataDiskFreeBytes` with its specific semantics (the *data* drive only, Bavail net of the root reserve), and `Disks` is a display superset that includes the OS drive — two different consumers with two different needs. Unifying them would churn the footprint path (`internal/lifecycle/footprint.go`) for no behavioural gain, so the additive field is the surgical choice. The "Data" entry duplicates `DataDisk*` by design; that small redundancy is cheaper than rewiring the install plan. The data drive is included only when its backing filesystem differs from the OS drive's — a Level-0 box has no data drive (`/srv/malmo` is a directory on the OS drive), so a successful statfs there is not enough to call it a separate volume.
+
+**Affected docs:** `LOCAL_ANALYTICS.md` (Real-time system resources — Storage), `BRAIN_HOST_PROTOCOL.md` (GET /v1/system/status).
+
+---
+
 ## 2026-06-12 — Outgoing email is BYO-SMTP with per-app bindings, not a malmo relay (#122)
 
 **Previously:** apps that send email (Kimai's password resets, Gitea's notifications) had no malmo story at all — the catalog-import ledger parked them as `smtp-relay` gaps, and their descriptions told the user an administrator had to configure a mail server somehow, with no UI path.

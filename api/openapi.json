@@ -343,6 +343,28 @@
         ],
         "type": "object"
       },
+      "DiskSpaceDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "free_bytes": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "label": {
+            "type": "string"
+          },
+          "total_bytes": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "label",
+          "free_bytes",
+          "total_bytes"
+        ],
+        "type": "object"
+      },
       "ElevateRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1786,6 +1808,33 @@
         "required": [
           "options",
           "default"
+        ],
+        "type": "object"
+      },
+      "SystemStorageDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/SystemStorageDTO.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "disks": {
+            "items": {
+              "$ref": "#/components/schemas/DiskSpaceDTO"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "disks"
         ],
         "type": "object"
       },
@@ -3298,6 +3347,34 @@
           }
         },
         "summary": "Bootstrap the first admin (public; allowed only on empty box)"
+      }
+    },
+    "/api/v1/system/storage": {
+      "get": {
+        "operationId": "get-system-storage",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemStorageDTO"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Per-disk storage usage (used/total bytes) for the system-resources panel"
       }
     },
     "/api/v1/users": {
