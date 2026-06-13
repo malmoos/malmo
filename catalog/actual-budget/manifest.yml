@@ -1,0 +1,52 @@
+id: actual-budget
+manifest_version: 1
+name: Actual Budget
+version: "26.6.0"
+description:
+  short: "Private, local-first envelope budgeting that gives every dollar a job and syncs across your devices."
+  long: |
+    Actual Budget is a fast, local-first personal finance app built around zero-based (envelope) budgeting: every dollar gets a job, so you always know what your money is for. Your budgets, accounts, and transactions live entirely on your home server — multiple accounts, scheduled and split transactions, rules, and reports — and it stays snappy even with years of history. Encrypted sync keeps phones and laptops current without handing your financial life to a cloud provider. Each instance is protected by its own server password that you set on first launch. Core budgeting is fully offline; optional automatic bank import (via GoCardless or SimpleFIN) is an advanced opt-in that needs internet access and your own API keys.
+icon: ./icon.png
+categories: [finance, productivity]
+author:
+  name: Actual
+  url: https://actualbudget.org
+license: MIT
+links:
+  homepage: https://actualbudget.org
+  source: https://github.com/actualbudget/actual
+  support: https://actualbudget.org/docs
+
+compose_file: compose.yml
+main_service: actual-server
+main_port: 5006
+preferred_slugs: [actual, budget]
+health_probe: /health
+
+resources:
+  recommended: { memory: 256M, cpu: 0.5 }
+
+# Actual keeps everything it owns — the SQLite budget databases and uploaded
+# files — under /data, with no separable regenerable cache, so the whole data
+# bind is backed up. Budgets are stored in its own database rather than as files
+# in a use-case folder (there is no finance folder in the taxonomy) and it has no
+# external-library option, so it manages its own content (forfeits the
+# files-first-class badge) instead of taking a folder grant.
+storage:
+  data_volumes: [./data]
+  estimated_size: 1M
+  app_managed_user_content: true
+
+# Core budgeting is fully offline, so no internet/lan grant. Bank sync (GoCardless
+# / SimpleFIN auto-import) is the only internet-dependent feature — an advanced
+# opt-in needing egress + user-supplied API keys — and is left off by default.
+permissions:
+  internet: false
+  lan: false
+
+# Filled by `go run ./cmd/malmo manifest resolve catalog/actual-budget/manifest.yml`.
+images:
+  actualbudget/actual-server:26.6.0:
+    digest: sha256:74385f8067f401e61f0be9e343c471705c42dfaa195295c40c5b2f15f4dcc9d4
+    download_bytes: 112909196
+    disk_bytes: 386638848
