@@ -69,6 +69,15 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-13 — Start re-asserts the mDNS name, up-front, not only the Caddy route (#153)
+
+**Previously:** `Start` re-registered only the Caddy route; the mDNS name was published at install and re-published by the brain-startup reconcile pass, but never by a user-initiated Start. An app recovered via Start after its `<slug>.local` went dark (a mid-life host-agent restart that dropped the process-local Avahi entry group, or a prior install that failed before publishing) came back reachable by Host-header proxy but unresolvable-by-name until the next brain reboot.
+**Now:** `Start` re-asserts mDNS **and** Caddy, lockstep, via the same idempotent `host.Publish` install and the reconcile pass use (extracted as `lifecycle.publishHost`). The publish happens **up-front** — before the "starting" splash, mirroring install's step 9 — not after the app goes healthy as the issue's first sketch suggested.
+**Why:** the name-lifecycle model already keeps a name announced for an app's whole life with the *route content* varying (Stop deliberately keeps `<slug>.local` resolving, pointing it at the stopped splash). "Announce only once healthy" would contradict that model; publishing up-front makes the name resolve to the starting splash during recovery — the exact UX the bug is about — and lets one `host` value key the starting splash, the real upstream, and the failed splash without divergence. Idempotent, so re-running on every Start is a host-side no-op. Does **not** close the broader "mid-life host-agent restart while brain runs" gap for apps left untouched (still `DISCOVERY.md` # Restart durability, the `uptime_s`-poll mitigation).
+**Affected docs:** `APP_LIFECYCLE.md` (# stop, start, uninstall — Start bullet), `docs/progress/start-reasserts-mdns.md`.
+
+---
+
 ## 2026-06-12 — Outgoing email is BYO-SMTP with per-app bindings, not a malmo relay (#122)
 
 **Previously:** apps that send email (Kimai's password resets, Gitea's notifications) had no malmo story at all — the catalog-import ledger parked them as `smtp-relay` gaps, and their descriptions told the user an administrator had to configure a mail server somehow, with no UI path.

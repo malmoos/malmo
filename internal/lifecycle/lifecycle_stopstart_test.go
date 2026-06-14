@@ -68,6 +68,85 @@ func TestStopGuardRejectsNonRunning(t *testing.T) {
 	}
 }
 
+// TestStartReassertsMDNSName guards #153: Start must re-announce the app's mDNS
+// name, not only re-register the Caddy route. An app recovered via Start — after
+// the host-agent dropped its process-local Avahi entry groups, or a prior
+// install/start failed before publishing — was reachable by Host-header proxy
+// but its <slug>.local stayed dark until the next brain reboot's reconcile pass.
+// Stop must NOT re-publish: the stopped splash keeps resolving on the
+// install-time announcement, which is intended (APP_LIFECYCLE.md # stop).
+func TestStartReassertsMDNSName(t *testing.T) {
+	e := newTestEnv(t)
+	inst := installRunning(t, e)
+
+	// Install published the name exactly once.
+	if got := e.host.publishCount(inst.Slug); got != 1 {
+		t.Fatalf("publish count after install = %d, want 1", got)
+	}
+
+	if err := e.m.Stop(context.Background(), inst.ID); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if got := e.host.publishCount(inst.Slug); got != 1 {
+		t.Fatalf("publish count after stop = %d, want 1 (stop must not re-publish)", got)
+	}
+
+	// The bug's trigger: the host-agent restarted and lost its entry group, so
+	// the name is dark while the SQLite row still expects the app to be there.
+	e.host.dropPublished(inst.Slug)
+	if e.host.isPublished(inst.Slug) {
+		t.Fatalf("precondition: name should be dropped before Start")
+	}
+
+	if err := e.m.Start(context.Background(), inst.ID); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	// Start re-asserts both: a second Publish for the slug...
+	if got := e.host.publishCount(inst.Slug); got != 2 {
+		t.Fatalf("publish count after start = %d, want 2 (start must re-publish)", got)
+	}
+	// ...so the dropped name is announced again without a brain restart...
+	if !e.host.isPublished(inst.Slug) {
+		t.Fatalf("name not re-announced after start")
+	}
+	// ...and the stored MDNSName stays the announced name (re-asserted, in sync).
+	if row, _ := e.store.Get(inst.ID); row.MDNSName != inst.Slug+".local" {
+		t.Fatalf("MDNSName after start = %q, want %q", row.MDNSName, inst.Slug+".local")
+	}
+}
+
+// TestPublishHostBranches exercises publishHost's non-happy paths directly: the
+// mDNS-down fallback (publish fails → reconstructed primary, avahi not-OK,
+// nothing persisted) and the collision-fallback persist (a published name that
+// differs from the stored one is written through so Caddy and the URL follow it).
+func TestPublishHostBranches(t *testing.T) {
+	e := newTestEnv(t)
+
+	// Publish fails and there's no stored name → fall back to <slug>.local,
+	// report avahi not-OK, persist nothing.
+	e.host.publishErr = errors.New("avahi down")
+	host, ok := e.m.publishHost(context.Background(), store.Instance{ID: "i_x", Slug: "demo"})
+	if ok {
+		t.Fatalf("avahiOK = true, want false on publish error")
+	}
+	if host != "demo.local" {
+		t.Fatalf("host = %q, want demo.local (reconstructed fallback)", host)
+	}
+	e.host.publishErr = nil
+
+	// Publish returns a box-qualified collision fallback differing from the
+	// stored name → persist the new name and key the route on it.
+	inst := installRunning(t, e) // slug "whoami", MDNSName "whoami.local"
+	e.host.publishName = "whoami-box.local"
+	host, ok = e.m.publishHost(context.Background(), inst)
+	if !ok || host != "whoami-box.local" {
+		t.Fatalf("publishHost = (%q,%v), want (whoami-box.local, true)", host, ok)
+	}
+	if row, _ := e.store.Get(inst.ID); row.MDNSName != "whoami-box.local" {
+		t.Fatalf("persisted MDNSName = %q, want whoami-box.local", row.MDNSName)
+	}
+}
+
 func TestStartGuardRejectsNonStopped(t *testing.T) {
 	e := newTestEnv(t)
 	inst := installRunning(t, e)
