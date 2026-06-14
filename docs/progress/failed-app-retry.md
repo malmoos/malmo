@@ -26,14 +26,9 @@ The insight is that a *retry is exactly a Start*: `compose up -d` + `waitHealthy
 
 ## Verification
 
-- **`internal/lifecycle` — new `TestRetryFromFailed`:** installs, drives the instance to `failed` (stop, then a start whose `main_service` never goes healthy), drops the fake Avahi entry group, then retries via `Start` and asserts: legal from `failed` (no `ErrNotStopped`), state → `running`, route → real upstream, exactly one fresh `Publish` (the #153 re-assert, so `<slug>.local` resolves again), and the name re-announced. The existing `TestStartGuardRejectsNonStopped` (running → 409) and `TestStartHealthFailureMarksFailed` still pass, covering the rejection and the `failed`-landing sides.
+- **`internal/lifecycle` — new `TestRetryFromFailed`:** installs, drives the instance to `failed` (stop, then a start whose `main_service` never goes healthy), drops the fake Avahi entry group, then retries via `Start` and asserts: legal from `failed` (no `ErrNotStartable`), state → `running`, route → real upstream, exactly one fresh `Publish` (the #153 re-assert, so `<slug>.local` resolves again), and the name re-announced. The existing `TestStartGuardRejectsNonStopped` (running → 409) and `TestStartHealthFailureMarksFailed` still pass, covering the rejection and the `failed`-landing sides.
 - **`internal/api`:** `TestStart409WhenRunning` exercises the widened guard's rejection branch. The acceptance branch is covered at the lifecycle layer (the API harness runs with `life=nil`, so a guard-passing start would reach the job goroutine; the file's established pattern keeps happy-path coverage at the lifecycle layer).
 - **Gates:** `make check` green (gofmt + vet + OpenAPI-fresh + full Go suite). `web-ui` typechecks + builds clean on top of #170's `LiveResources.vue` fix (that pre-existing `vue-tsc` break at `LiveResources.vue:161` is unrelated to this change and not touched here).
-
-## Known gaps & deviations
-
-- **"Retrying…" caption is unreachable in practice.** `DASHBOARD.md` # Tile specifies "while the retry job runs the tile shows a 'Retrying…' caption." The implementation reads `{{ failed ? "Retrying…" : "Starting up…" }}`, but by the time the frontend reflects `starting=true` from HomeView, the brain's optimistic `SetState(id, "running")` has already fired — so `failed.value` is `false` and the label reads "Starting up…" for the entire visible window. Cosmetic (the spinner still runs), but the spec promise isn't kept. Fix: a click-time local `retrying` ref (set on click, cleared on state change) instead of reading the server-reflected `failed` computed.
-- **Group hover scope leaks to "View details" link.** The `class="group"` sits on the outer `<div>` wrapper (required because a `<button>` cannot contain a `<RouterLink>`), so `group-hover:opacity-100` on the "Failed — click to retry" caption also triggers when the cursor lands on "View details" below it. Minor visual overlap, no functional impact. Fix: Tailwind named groups (`group/tile` + `group-hover/tile:opacity-100`).
 
 ## What's next
 

@@ -16,7 +16,7 @@
 //   - other:    grayed with the corner alert mark — needs attention.
 //
 // Icon rendering mirrors StoreAppCard: icon_url when present, AppGlyph fallback.
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 import { AlertTriangle } from "lucide-vue-next";
 import type { Instance } from "../api";
@@ -46,6 +46,15 @@ const canRetry = computed(() => failed.value && canControl.value && !props.start
 const canAct = computed(() => canStart.value || canRetry.value);
 
 const brokenIcon = ref(false);
+// Tracks whether the current in-flight start was initiated from `failed`. The
+// server's optimistic SetState("running") fires before the frontend reflects
+// starting=true, so reading `failed` in the template would always yield false
+// by then; a click-time flag is the only way to show "Retrying…" correctly.
+const retrying = ref(false);
+watch(
+  () => props.starting,
+  (v) => { if (!v) retrying.value = false; },
+);
 
 // The corner alert is for trouble (failed/crashed), not a deliberate stop or an
 // in-flight start/retry.
@@ -56,19 +65,21 @@ const showAlert = computed(() => !running.value && !stopped.value && !props.star
 const tag = computed(() => (running.value ? "a" : canAct.value ? "button" : "div"));
 
 function onClick() {
-  if (canAct.value) emit("start");
+  if (!canAct.value) return;
+  if (canRetry.value) retrying.value = true;
+  emit("start");
 }
 </script>
 
 <template>
-  <div class="group flex flex-col items-center gap-2 text-center">
+  <div class="flex flex-col items-center gap-2 text-center">
     <component
       :is="tag"
       :href="running ? instance.url : undefined"
       :target="running ? '_blank' : undefined"
       :type="tag === 'button' ? 'button' : undefined"
       rel="noopener"
-      class="flex w-full flex-col items-center gap-3"
+      class="group/tile flex w-full flex-col items-center gap-3"
       :class="running || canAct ? 'cursor-pointer' : 'cursor-default'"
       :title="running ? `Open ${instance.name}` : `${instance.name} is ${instance.state}`"
       @click="onClick"
@@ -80,7 +91,7 @@ function onClick() {
         class="relative grid aspect-square w-full place-items-center overflow-hidden rounded-3xl border text-muted-foreground transition"
         :class="
           running
-            ? 'border-border bg-card group-hover:shadow-md'
+            ? 'border-border bg-card group-hover/tile:shadow-md'
             : failed
               ? 'border-amber-400 bg-amber-50 opacity-90'
               : 'border-border bg-card opacity-50'
@@ -104,17 +115,17 @@ function onClick() {
         <!-- Status caption under the logo. "Starting up…" / "Retrying…" persists
              while the job runs; the click hint is revealed on hover. -->
         <div v-if="starting" class="text-xs text-muted-foreground">
-          {{ failed ? "Retrying…" : "Starting up…" }}
+          {{ retrying ? "Retrying…" : "Starting up…" }}
         </div>
         <div
           v-else-if="canRetry"
-          class="text-xs text-amber-700 opacity-0 transition group-hover:opacity-100"
+          class="text-xs text-amber-700 opacity-0 transition group-hover/tile:opacity-100"
         >
           Failed — click to retry
         </div>
         <div
           v-else-if="canStart"
-          class="text-xs text-muted-foreground opacity-0 transition group-hover:opacity-100"
+          class="text-xs text-muted-foreground opacity-0 transition group-hover/tile:opacity-100"
         >
           Service stopped - click to start again
         </div>
