@@ -352,8 +352,18 @@ grep -q ' 200' <<<"$spa_status" \
 
 # 4. the /api leg routes to the brain, not the catch-all 404. /api/v1/me is a
 # real brain route (200 with the setup flag, or 401) — either proves Caddy
-# proxied /api to the brain. A 404 would mean the catch-all swallowed it.
-api_status="$(http_status /api/v1/me malmo.local 2>/dev/null || true)"
+# proxied /api to the brain. A 404 would mean the catch-all swallowed it; a 502
+# means the route is installed but the brain's HTTP listener isn't up yet.
+# Poll: the brain installs the dashboard route (which is why /api isn't a 404)
+# before it finishes its synchronous startup host-calls and reaches
+# ListenAndServe, so Caddy can briefly 502 the brain leg while the SPA leg
+# (a separate container) already serves 200. Same poll shape as the SPA above.
+api_status=""
+for _i in $(seq 1 60); do
+    api_status="$(http_status /api/v1/me malmo.local 2>/dev/null || true)"
+    grep -qE ' (200|401)' <<<"$api_status" && break
+    sleep 1
+done
 grep -qE ' (200|401)' <<<"$api_status" \
     || fail "/api not routed to the brain through Caddy: status='$api_status'"
 

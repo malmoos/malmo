@@ -90,16 +90,11 @@ func main() {
 	if err := cd.EnsureCatchAll(ctx); err != nil {
 		slog.Warn("caddy: ensure catch-all failed; continuing", "err", err)
 	}
-	// Dashboard host route (WEB_UI.md # deploy model): /api/v1/* → brain,
-	// everything else → malmo-ui. Production-only — gated on the UI upstream being
-	// set, which dev never does. Inserted after the catch-all so it sorts before
-	// it (PUT at index 0).
-	if cfg.dashboardUIUpstream != "" {
-		if err := cd.EnsureDashboard(ctx, cfg.dashboardHost, cfg.dashboardBrainUpstream, cfg.dashboardUIUpstream); err != nil {
-			slog.Warn("caddy: ensure dashboard route failed; continuing", "err", err)
-		}
-	}
 	cancel()
+	// The dashboard host route (which points Caddy's /api leg at this brain) is
+	// installed *after* the listener is bound, just before Serve — see the end of
+	// main. Advertising it here, ahead of ListenAndServe, would leave Caddy a
+	// window where /api/* routes to a brain that isn't accepting yet (a 502).
 
 	if status, err := host.SystemStatus(context.Background()); err != nil {
 		slog.Warn("host-agent not reachable; host ops will fail",
@@ -183,10 +178,35 @@ func main() {
 	applogs := applog.NewRegistry(pollCtx, host)
 
 	srv := api.NewServer(st, cat, life, bus, authMgr, host, auditor, healthMgr, live, applogs)
-	httpSrv := &http.Server{Addr: cfg.listen, Handler: srv.Handler()}
+	httpSrv := &http.Server{Handler: srv.Handler()}
+
+	// Bind the listener before advertising the dashboard route to Caddy. Once the
+	// socket is bound the kernel accepts connections (no connection-refused → no
+	// 502); Serve below starts answering them a beat later. Binding first, then
+	// registering with the proxy, then serving is the standard ordering — it
+	// closes the window where Caddy's /api leg could point at a brain that isn't
+	// listening yet.
+	ln, err := net.Listen("tcp", cfg.listen)
+	if err != nil {
+		fatal("listen", "listen", cfg.listen, "err", err)
+	}
 	slog.Info("malmo-brain listening",
 		"listen", cfg.listen, "state_dir", cfg.stateDir, "catalog_dir", cfg.catalogDir)
-	if err := httpSrv.ListenAndServe(); err != nil {
+
+	// Dashboard host route (WEB_UI.md # deploy model): /api/v1/* → brain,
+	// everything else → malmo-ui. Production-only — gated on the UI upstream being
+	// set, which dev never does. Inserted at index 0 (PUT) so it sorts before the
+	// catch-all. Installed here, after the listener is bound, so Caddy's /api leg
+	// only goes live once this brain can answer it.
+	if cfg.dashboardUIUpstream != "" {
+		dctx, dcancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := cd.EnsureDashboard(dctx, cfg.dashboardHost, cfg.dashboardBrainUpstream, cfg.dashboardUIUpstream); err != nil {
+			slog.Warn("caddy: ensure dashboard route failed; continuing", "err", err)
+		}
+		dcancel()
+	}
+
+	if err := httpSrv.Serve(ln); err != nil {
 		fatal("http server", "err", err)
 	}
 }
