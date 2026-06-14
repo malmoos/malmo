@@ -99,7 +99,13 @@ func splashHTML(appName, state string) string {
 }
 
 func (c *Client) RemoveRoute(ctx context.Context, instanceID string) error {
-	req, err := http.NewRequestWithContext(ctx, "DELETE", c.admin+"/id/"+routeID(instanceID), nil)
+	return c.RemoveRouteByID(ctx, routeID(instanceID))
+}
+
+// RemoveRouteByID deletes a route by its raw Caddy @id (idempotent: an unknown
+// @id is treated as already-gone). RemoveRoute is the per-instance wrapper.
+func (c *Client) RemoveRouteByID(ctx context.Context, id string) error {
+	req, err := http.NewRequestWithContext(ctx, "DELETE", c.admin+"/id/"+id, nil)
 	if err != nil {
 		return err
 	}
@@ -129,6 +135,74 @@ func catchAllRoute() map[string]any {
 	}
 }
 
+// dashboardRouteID is the stable @id of the dashboard route, so EnsureDashboard
+// is idempotent (remove-then-add) the same way per-app routes are.
+const dashboardRouteID = "malmo-dashboard"
+
+// EnsureDashboard installs the dashboard host route (WEB_UI.md # deploy model):
+// requests to the dashboard host split by path — /api/v1/* (including the SSE
+// streams) reverse-proxy to the brain, everything else to the malmo-ui static
+// server. It is a production-only route: in dev the brain runs natively and the
+// UI is served by Vite, so cmd/brain only calls this when the UI upstream is
+// configured (the containerized stack). Inserted at index 0 like an app route,
+// so it sorts before the catch-all; idempotent via its @id.
+//
+// SSE buffering: the brain's API serves the live-resources and per-app log
+// streams under /api/v1/, so the brain leg sets flush_interval -1 (flush each
+// write, no response buffering) — buffering those would stall the dashboard's
+// live updates. It is harmless for the plain JSON requests on the same leg.
+func (c *Client) EnsureDashboard(ctx context.Context, host, brainUpstream, uiUpstream string) error {
+	_ = c.RemoveRouteByID(ctx, dashboardRouteID)
+	route := map[string]any{
+		"@id":   dashboardRouteID,
+		"match": []any{map[string]any{"host": []string{host}}},
+		"handle": []any{map[string]any{
+			"handler": "subroute",
+			"routes": []any{
+				map[string]any{
+					"match": []any{map[string]any{"path": []string{"/api/*"}}},
+					"handle": []any{map[string]any{
+						"handler":        "reverse_proxy",
+						"flush_interval": -1,
+						"upstreams":      []any{map[string]any{"dial": brainUpstream}},
+					}},
+				},
+				map[string]any{
+					"handle": []any{map[string]any{
+						"handler":   "reverse_proxy",
+						"upstreams": []any{map[string]any{"dial": uiUpstream}},
+					}},
+				},
+			},
+		}},
+	}
+	if err := c.put(ctx, "/config/apps/http/servers/malmo/routes/0", route); err != nil {
+		return fmt.Errorf("caddy: install dashboard route: %w", err)
+	}
+	slog.Info("caddy: dashboard route installed", "host", host, "upstream", uiUpstream)
+	return nil
+}
+
+// WaitReady blocks until the Caddy admin API answers a GET on the config root,
+// or ctx is done. Used at brain startup after the brain has brought Caddy up via
+// compose: the one-shot route configuration (EnsureServer / EnsureCatchAll /
+// EnsureDashboard) must not race the container's first second of life, since
+// nothing re-runs those on a transient failure.
+func (c *Client) WaitReady(ctx context.Context) error {
+	t := time.NewTicker(250 * time.Millisecond)
+	defer t.Stop()
+	for {
+		if status, err := c.get(ctx, "/config/"); err == nil && status == http.StatusOK {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("caddy: admin API not ready: %w", ctx.Err())
+		case <-t.C:
+		}
+	}
+}
+
 // EnsureCatchAll installs the catch-all 404 route if it is not already present.
 // Called at brain startup after EnsureServer resets the route list — it
 // appends the catch-all at the tail of routes[] so all per-app routes inserted
@@ -154,10 +228,11 @@ func (c *Client) EnsureCatchAll(ctx context.Context) error {
 // EnsureServer resets the "malmo" server's route list to empty at brain
 // startup, giving the reconciler a clean slate to rebuild routes from desired
 // state. It PATCHes only the routes array, so it never touches the server's
-// listen addr or Caddy's admin config. The dev Caddy boots with this server
-// pre-declared (dev/caddy.json); creating the server from scratch (production,
-// where Caddy is brain-managed) is a follow-up.
-func (c *Client) EnsureServer(ctx context.Context, listen string) error {
+// listen addr or Caddy's admin config. Both dev (dev/caddy.json) and production
+// (dev/control-plane/caddy.json, staged by the M1b bootstrap) boot Caddy with
+// this server and its :80 listener pre-declared, so the brain never sets the
+// listen addr — there is no caller-supplied listen to apply.
+func (c *Client) EnsureServer(ctx context.Context) error {
 	return c.patch(ctx, "/config/apps/http/servers/malmo/routes", []any{})
 }
 

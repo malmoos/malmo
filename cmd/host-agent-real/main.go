@@ -141,7 +141,17 @@ func main() {
 	// host-agent serving its socket so the box stays diagnosable; it does not
 	// tear host-agent down.
 	brainCtx, brainCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	if err := brainlaunch.Launch(brainCtx, brainlaunch.NewCLIDocker(), brainLaunchConfig(sockPath)); err != nil {
+	brainCfg := brainLaunchConfig(sockPath)
+	// Seed the brain's Docker transport (ingress network + socket-proxy) before
+	// launching the brain — the brain reaches Docker only through this proxy
+	// (CONTROL_PLANE.md # Docker socket exposure), and the brain then reconciles
+	// Caddy + malmo-ui through it. Best-effort, like the launch itself: a failure
+	// leaves the brain degraded (no Docker reach) but host-agent keeps serving so
+	// the box stays diagnosable.
+	if err := brainlaunch.EnsureTransport(brainCtx, brainlaunch.NewCLIDocker(), brainCfg); err != nil {
+		slog.Error("seed brain transport failed; host-agent continues serving", "err", err)
+	}
+	if err := brainlaunch.Launch(brainCtx, brainlaunch.NewCLIDocker(), brainCfg); err != nil {
 		slog.Error("brain launch failed; host-agent continues serving", "err", err)
 	}
 	brainCancel()
@@ -166,6 +176,12 @@ func main() {
 // agent socket host-agent just bound.
 func brainLaunchConfig(sockPath string) brainlaunch.Config {
 	const dataDir = "/var/lib/malmo"
+	// The control-plane compose + caddy.json are staged under dataDir so the
+	// brain's `docker compose up` bind-mounts caddy.json at a path the Docker
+	// daemon resolves identically on host and in the brain container (the
+	// same-path constraint — socket-proxy-compose-validation.md). The proxy image
+	// + bundle default to the names baked by dev/test-qemu / the ISO build.
+	controlPlaneDir := env("MALMO_CONTROL_PLANE_DIR", filepath.Join(dataDir, "control-plane"))
 	return brainlaunch.Config{
 		Image:         env("MALMO_BRAIN_IMAGE", "malmo-brain:latest"),
 		ImageTar:      env("MALMO_BRAIN_IMAGE_TAR", filepath.Join(dataDir, "brain-image.tar")),
@@ -173,6 +189,13 @@ func brainLaunchConfig(sockPath string) brainlaunch.Config {
 		DataDir:       dataDir,
 		StateDir:      filepath.Join(dataDir, "state"),
 		SocketPath:    sockPath,
+
+		Network:            env("MALMO_INGRESS_NETWORK", "malmo-ingress"),
+		ProxyImage:         env("MALMO_PROXY_IMAGE", "tecnativa/docker-socket-proxy:v0.4.2"),
+		ProxyImageTar:      env("MALMO_PROXY_IMAGE_TAR", filepath.Join(controlPlaneDir, "images", "docker-socket-proxy.tar")),
+		ProxyContainerName: "malmo-docker-proxy",
+		ControlPlaneDir:    controlPlaneDir,
+		UIUpstream:         env("MALMO_DASHBOARD_UI_UPSTREAM", "malmo-ui:80"),
 	}
 }
 

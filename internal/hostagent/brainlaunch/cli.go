@@ -64,8 +64,18 @@ func (CLIDocker) Run(ctx context.Context, spec RunSpec) error {
 	if spec.Restart != "" {
 		args = append(args, "--restart", spec.Restart)
 	}
+	if spec.Network != "" {
+		args = append(args, "--network", spec.Network)
+	}
+	for _, a := range spec.Aliases {
+		args = append(args, "--network-alias", a)
+	}
 	for _, m := range spec.Mounts {
-		args = append(args, "-v", m.Source+":"+m.Target)
+		v := m.Source + ":" + m.Target
+		if m.ReadOnly {
+			v += ":ro"
+		}
+		args = append(args, "-v", v)
 	}
 	for _, e := range spec.Env {
 		args = append(args, "-e", e.Key+"="+e.Value)
@@ -73,6 +83,19 @@ func (CLIDocker) Run(ctx context.Context, spec RunSpec) error {
 	args = append(args, spec.Image)
 	if out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("docker run %s: %w\n%s", spec.Image, err, out)
+	}
+	return nil
+}
+
+// NetworkCreate creates a Docker network, treating "already exists" as success
+// so host-agent can seed the ingress network idempotently across restarts.
+func (CLIDocker) NetworkCreate(ctx context.Context, name string) error {
+	out, err := exec.CommandContext(ctx, "docker", "network", "create", name).CombinedOutput()
+	if err != nil && strings.Contains(string(out), "already exists") {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("docker network create %s: %w\n%s", name, err, out)
 	}
 	return nil
 }

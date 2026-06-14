@@ -33,6 +33,11 @@ import (
 
 const ingressNetwork = "malmo-ingress"
 
+// controlPlaneProject is the fixed compose project name for the brain-owned
+// control-plane stack (Caddy + malmo-ui). A constant, not configurable: there
+// is exactly one control-plane stack per box.
+const controlPlaneProject = "malmo-control-plane"
+
 // Folder-source election values (the installer's per-folder choice). Mirrors
 // the api package's source constants; kept local so lifecycle doesn't import
 // the API layer.
@@ -186,13 +191,30 @@ func (m *Manager) SetHealthTiming(wait, poll time.Duration) {
 // EnsureIngress creates the shared ingress network and the Caddy server block.
 // Called once at brain startup. Best-effort: dev runs without Docker/Caddy
 // should still let the API come up.
-func (m *Manager) EnsureIngress(ctx context.Context, caddyListen string) {
+func (m *Manager) EnsureIngress(ctx context.Context) {
 	if err := m.docker.NetworkCreate(ctx, ingressNetwork, false); err != nil {
 		slog.Warn("ensure ingress network", "err", err)
 	}
-	if err := m.caddy.EnsureServer(ctx, caddyListen); err != nil {
+	if err := m.caddy.EnsureServer(ctx); err != nil {
 		slog.Warn("ensure caddy server (routes will retry)", "err", err)
 	}
+}
+
+// EnsureControlPlane brings up the control-plane stack (Caddy + malmo-ui) from
+// the compose project staged at dir, on every brain startup (CONTROL_PLANE.md #
+// Caddy is malmo substrate). It is the production path: the containerized brain
+// reconciles Caddy + the dashboard UI the same way it reconciles app containers,
+// reaching Docker only through the host-agent-seeded socket-proxy. dir is empty
+// in dev (the brain runs natively, Caddy is a standalone dev container and the
+// UI is Vite) — callers skip this entirely then. compose up -d is idempotent, so
+// a stack that is already up converges to a no-op.
+func (m *Manager) EnsureControlPlane(ctx context.Context, dir string) error {
+	out, err := m.docker.ControlPlaneUp(ctx, dir, controlPlaneProject)
+	if err != nil {
+		return fmt.Errorf("control-plane compose up: %w\n%s", err, out)
+	}
+	slog.Info("control-plane stack up", "dir", dir, "project", controlPlaneProject)
+	return nil
 }
 
 func (m *Manager) instanceDir(id string) string {

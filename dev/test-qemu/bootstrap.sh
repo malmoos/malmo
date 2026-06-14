@@ -21,7 +21,7 @@ TEST_DIR="${REPO_ROOT}/dev/test-qemu"
 WORK="${REPO_ROOT}/.dev/qemu"
 EXTRA="${TEST_DIR}/mkosi.extra"
 CANARY="${WORK}/.malmo-medium-ready"
-CANARY_VERSION="v18"  # bump when mkosi.conf changes require a clean rebuild
+CANARY_VERSION="v19"  # bump when mkosi.conf changes require a clean rebuild
 PASSPHRASE_FILE="${TEST_DIR}/mkosi.passphrase"  # LUKS recovery key (slice 0023); gitignored
 IMAGE_OUT="${WORK}/malmo-medium.raw"
 SSH_KEY="${WORK}/ssh-key"
@@ -247,11 +247,13 @@ cp "${REPO_ROOT}/dist/systemd/malmo-storage-ready.target"   "$EXTRA/etc/systemd/
 cp "${REPO_ROOT}/dist/systemd/malmo-storage-verify.service" "$EXTRA/etc/systemd/system/"
 cp "${REPO_ROOT}/dist/systemd/malmo-recovery.target"        "$EXTRA/etc/systemd/system/"
 
-# host-agent.service runs the real host-agent-real (#164): it binds the agent
-# socket and, after Docker is ready, launches the brain container (the postinst
-# enables the unit). A medium-lane drop-in points the brain bootstrap at the
-# bundle's dev-tagged image + tarball and orders host-agent after the first-boot
-# image load so the brain image is present when the bootstrap runs.
+# host-agent.service runs the real host-agent-real (#164/#165): it binds the
+# agent socket and, after Docker is ready, seeds the brain's Docker transport
+# (ingress network + socket-proxy) and launches the brain container (the postinst
+# enables the unit). The brain then reconciles Caddy + malmo-ui from the staged
+# control-plane compose (M1b). A medium-lane drop-in points the bootstrap at the
+# bundle's dev-tagged images + tarballs and orders host-agent after the first-boot
+# image load so every image is present when the bootstrap runs.
 cp "${REPO_ROOT}/dist/systemd/host-agent.service" "$EXTRA/etc/systemd/system/"
 cp "$HOSTAGENT_BIN" "$EXTRA/usr/lib/malmo/host-agent-real"
 chmod 0755 "$EXTRA/usr/lib/malmo/host-agent-real"
@@ -259,13 +261,20 @@ chmod 0755 "$EXTRA/usr/lib/malmo/host-agent-real"
 mkdir -p "$EXTRA/etc/systemd/system/host-agent.service.d"
 cat > "$EXTRA/etc/systemd/system/host-agent.service.d/10-malmo-brain-image.conf" <<'EOF'
 [Unit]
-# The brain image is docker-loaded by the first-boot oneshot; order after it so
-# the bootstrap finds it present rather than re-loading the tarball.
+# The control-plane images are docker-loaded by the first-boot oneshot; order
+# after it so the bootstrap finds them present rather than re-loading tarballs.
 After=malmo-load-images.service
 
 [Service]
 Environment=MALMO_BRAIN_IMAGE=malmo-brain:dev
 Environment=MALMO_BRAIN_IMAGE_TAR=/var/lib/malmo/control-plane-images/malmo-brain.tar
+# M1b: the socket-proxy image + tarball, the staged control-plane compose dir,
+# and the malmo-ui dial target the brain installs the dashboard route with. The
+# proxy tarball lives in the same bundle dir the first-boot loader reads.
+Environment=MALMO_PROXY_IMAGE=tecnativa/docker-socket-proxy:v0.4.2
+Environment=MALMO_PROXY_IMAGE_TAR=/var/lib/malmo/control-plane-images/docker-socket-proxy.tar
+Environment=MALMO_CONTROL_PLANE_DIR=/var/lib/malmo/control-plane
+Environment=MALMO_DASHBOARD_UI_UPSTREAM=malmo-ui:80
 EOF
 
 # storage-verify binary.
@@ -318,6 +327,18 @@ CP_BUNDLE="${REPO_ROOT}/.dev/control-plane"
 # Stage the tarballs into the image at /var/lib/malmo/control-plane-images/.
 mkdir -p "$EXTRA/var/lib/malmo/control-plane-images"
 cp "$CP_BUNDLE"/*.tar "$EXTRA/var/lib/malmo/control-plane-images/"
+
+# Stage the control-plane compose + caddy.json at /var/lib/malmo/control-plane/
+# (M1b): the brain runs `docker compose up` here, and Caddy bind-mounts caddy.json
+# from this dir. It must be the SAME host path the brain container sees (the
+# daemon resolves compose bind sources as host paths — socket-proxy-compose-
+# validation.md), which host-agent's brain run-spec mounts same-path via
+# /var/lib/malmo. The proxy is intentionally absent from this compose; host-agent
+# seeds it. These staged files + the new host-agent env are baked into the image,
+# so CANARY_VERSION is bumped above to force a clean rebuild.
+mkdir -p "$EXTRA/var/lib/malmo/control-plane"
+cp "${REPO_ROOT}/dev/control-plane/compose.yml" "$EXTRA/var/lib/malmo/control-plane/"
+cp "${REPO_ROOT}/dev/control-plane/caddy.json"   "$EXTRA/var/lib/malmo/control-plane/"
 
 # First-boot docker-load oneshot + its script (postinst wires the .wants symlink).
 cp "${TEST_DIR}/malmo-load-images.service" "$EXTRA/etc/systemd/system/"

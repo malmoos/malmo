@@ -33,6 +33,12 @@ import (
 	"github.com/malmoos/malmo/internal/systemlive"
 )
 
+// caddyReadyTimeout bounds the wait for Caddy's admin API after the brain brings
+// the control-plane stack up. Caddy's admin is reachable within ~1s of the
+// container starting, so this is generous for the healthy path while capping the
+// degraded-startup stall when Caddy never came up (see the call site).
+const caddyReadyTimeout = 10 * time.Second
+
 func main() {
 	cfg := loadConfig()
 	installLogger(cfg.logLevel, cfg.logFormat)
@@ -57,8 +63,35 @@ func main() {
 	dock := lifecycle.NewCLIDocker()
 	life := lifecycle.NewManager(st, cat, host, cd, dock, bus, cfg.stateDir)
 
+	// Production: the brain owns the control-plane stack (Caddy + malmo-ui) and
+	// brings it up from the compose staged by host-agent before it configures any
+	// routes (CONTROL_PLANE.md # Caddy is malmo substrate / # the dashboard UI is
+	// a brain-launched container). The socket-proxy itself is host-agent-seeded
+	// transport, not part of this stack. In dev controlPlaneDir is empty: Caddy is
+	// a standalone dev container and the UI is Vite, so this whole block is
+	// skipped and startup behaves exactly as before.
+	if cfg.controlPlaneDir != "" {
+		cpCtx, cpCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		if err := life.EnsureControlPlane(cpCtx, cfg.controlPlaneDir); err != nil {
+			slog.Warn("control-plane stack up failed; continuing", "err", err)
+		}
+		cpCancel()
+		// The route configuration below is one-shot — nothing re-runs it on a
+		// transient failure — so wait for Caddy's admin API before driving it.
+		// This gets its own short budget, not the compose budget above: on a
+		// healthy box (Caddy just came up, or is already running across a
+		// restart) it returns in well under a second; if Caddy never started
+		// (first-boot compose failure) this caps the degraded-startup stall at a
+		// few seconds instead of polling away the whole remaining 60s.
+		waitCtx, waitCancel := context.WithTimeout(context.Background(), caddyReadyTimeout)
+		if err := cd.WaitReady(waitCtx); err != nil {
+			slog.Warn("caddy admin not ready; route config may be incomplete", "err", err)
+		}
+		waitCancel()
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	life.EnsureIngress(ctx, cfg.caddyListen)
+	life.EnsureIngress(ctx)
 	// Startup reconcile: converge Docker + routing to SQLite desired state and
 	// re-assert Caddy routes lost when EnsureIngress reset the server block.
 	if err := life.Reconcile(ctx); err != nil {
@@ -71,6 +104,10 @@ func main() {
 		slog.Warn("caddy: ensure catch-all failed; continuing", "err", err)
 	}
 	cancel()
+	// The dashboard host route (which points Caddy's /api leg at this brain) is
+	// installed *after* the listener is bound, just before Serve — see the end of
+	// main. Advertising it here, ahead of ListenAndServe, would leave Caddy a
+	// window where /api/* routes to a brain that isn't accepting yet (a 502).
 
 	if status, err := host.SystemStatus(context.Background()); err != nil {
 		slog.Warn("host-agent not reachable; host ops will fail",
@@ -154,10 +191,35 @@ func main() {
 	applogs := applog.NewRegistry(pollCtx, host)
 
 	srv := api.NewServer(st, cat, life, bus, authMgr, host, auditor, healthMgr, live, applogs)
-	httpSrv := &http.Server{Addr: cfg.listen, Handler: srv.Handler()}
+	httpSrv := &http.Server{Handler: srv.Handler()}
+
+	// Bind the listener before advertising the dashboard route to Caddy. Once the
+	// socket is bound the kernel accepts connections (no connection-refused → no
+	// 502); Serve below starts answering them a beat later. Binding first, then
+	// registering with the proxy, then serving is the standard ordering — it
+	// closes the window where Caddy's /api leg could point at a brain that isn't
+	// listening yet.
+	ln, err := net.Listen("tcp", cfg.listen)
+	if err != nil {
+		fatal("listen", "listen", cfg.listen, "err", err)
+	}
 	slog.Info("malmo-brain listening",
 		"listen", cfg.listen, "state_dir", cfg.stateDir, "catalog_dir", cfg.catalogDir)
-	if err := httpSrv.ListenAndServe(); err != nil {
+
+	// Dashboard host route (WEB_UI.md # deploy model): /api/v1/* → brain,
+	// everything else → malmo-ui. Production-only — gated on the UI upstream being
+	// set, which dev never does. Inserted at index 0 (PUT) so it sorts before the
+	// catch-all. Installed here, after the listener is bound, so Caddy's /api leg
+	// only goes live once this brain can answer it.
+	if cfg.dashboardUIUpstream != "" {
+		dctx, dcancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := cd.EnsureDashboard(dctx, cfg.dashboardHost, cfg.dashboardBrainUpstream, cfg.dashboardUIUpstream); err != nil {
+			slog.Warn("caddy: ensure dashboard route failed; continuing", "err", err)
+		}
+		dcancel()
+	}
+
+	if err := httpSrv.Serve(ln); err != nil {
 		fatal("http server", "err", err)
 	}
 }
@@ -196,33 +258,45 @@ func fatal(msg string, args ...any) {
 }
 
 type config struct {
-	listen            string
-	stateDir          string
-	catalogDir        string
-	agentSock         string
-	caddyAdmin        string
-	caddyListen       string
-	caddyProbeURL     string
-	logLevel          string
-	logFormat         string
-	healthPollPeriod  time.Duration
-	notifyPrunePeriod time.Duration
+	listen                 string
+	stateDir               string
+	catalogDir             string
+	agentSock              string
+	caddyAdmin             string
+	caddyListen            string
+	caddyProbeURL          string
+	controlPlaneDir        string
+	dashboardHost          string
+	dashboardBrainUpstream string
+	dashboardUIUpstream    string
+	logLevel               string
+	logFormat              string
+	healthPollPeriod       time.Duration
+	notifyPrunePeriod      time.Duration
 }
 
 func loadConfig() config {
 	caddyListen := env("MALMO_CADDY_LISTEN", ":80")
 	return config{
-		listen:            env("MALMO_LISTEN", ":8080"),
-		stateDir:          env("MALMO_STATE_DIR", "./.dev/state"),
-		catalogDir:        env("MALMO_CATALOG_DIR", "./catalog"),
-		agentSock:         env("MALMO_AGENT_SOCK", protocol.SocketPath),
-		caddyAdmin:        env("MALMO_CADDY_ADMIN", "http://localhost:2019"),
-		caddyListen:       caddyListen,
-		caddyProbeURL:     env("MALMO_CADDY_PROBE_URL", probeBaseURL(caddyListen)),
-		logLevel:          env("MALMO_LOG_LEVEL", "info"),
-		logFormat:         env("MALMO_LOG_FORMAT", "text"),
-		healthPollPeriod:  envDuration("MALMO_HEALTH_POLL", 60*time.Second),
-		notifyPrunePeriod: envDuration("MALMO_NOTIFY_PRUNE", time.Hour),
+		listen:        env("MALMO_LISTEN", ":8080"),
+		stateDir:      env("MALMO_STATE_DIR", "./.dev/state"),
+		catalogDir:    env("MALMO_CATALOG_DIR", "./catalog"),
+		agentSock:     env("MALMO_AGENT_SOCK", protocol.SocketPath),
+		caddyAdmin:    env("MALMO_CADDY_ADMIN", "http://localhost:2019"),
+		caddyListen:   caddyListen,
+		caddyProbeURL: env("MALMO_CADDY_PROBE_URL", probeBaseURL(caddyListen)),
+		// Control-plane / dashboard wiring is production-only. controlPlaneDir and
+		// dashboardUIUpstream default empty so the containerless dev brain skips
+		// both the compose bring-up and the dashboard route; the containerized
+		// brain (host-agent's run-spec) sets them.
+		controlPlaneDir:        env("MALMO_CONTROL_PLANE_DIR", ""),
+		dashboardHost:          env("MALMO_DASHBOARD_HOST", "malmo.local"),
+		dashboardBrainUpstream: env("MALMO_DASHBOARD_BRAIN_UPSTREAM", "malmo-brain:8080"),
+		dashboardUIUpstream:    env("MALMO_DASHBOARD_UI_UPSTREAM", ""),
+		logLevel:               env("MALMO_LOG_LEVEL", "info"),
+		logFormat:              env("MALMO_LOG_FORMAT", "text"),
+		healthPollPeriod:       envDuration("MALMO_HEALTH_POLL", 60*time.Second),
+		notifyPrunePeriod:      envDuration("MALMO_NOTIFY_PRUNE", time.Hour),
 	}
 }
 
