@@ -509,7 +509,7 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 				return rollback(fmt.Errorf("chown bind dir %q: %w", rel, err))
 			}
 			slog.Warn("bind dir chown skipped under unprivileged brain",
-				"instance_id", id, "step", rel, "uid", iso.uid, "gid", iso.gid, "err", err)
+				"instance_id", id, "dir", rel, "uid", iso.uid, "gid", iso.gid, "err", err)
 		}
 	}
 
@@ -540,7 +540,7 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 				return rollback(fmt.Errorf("chown folder source %q: %w", src, err))
 			}
 			slog.Warn("folder source chown skipped under unprivileged brain",
-				"instance_id", id, "step", src, "uid", iso.uid, "gid", iso.gid, "err", err)
+				"instance_id", id, "src", src, "uid", iso.uid, "gid", iso.gid, "err", err)
 		}
 	}
 
@@ -563,7 +563,7 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 		src := iso.hostSource(mt)
 		if os.Geteuid() != 0 {
 			slog.Warn("shared folder source prep skipped under unprivileged brain (out-of-inner-loop, #156)",
-				"instance_id", id, "step", src)
+				"instance_id", id, "src", src)
 			continue
 		}
 		if err := prepareSharedSource(iso.sharedBase, src, iso.sharedGID); err != nil {
@@ -1611,7 +1611,11 @@ func prepareSharedSource(root, src string, sharedGID int) error {
 		}
 		// Set the group to malmo-shared, then chmod explicitly: Mkdir's mode is
 		// masked by umask, so the setgid + group-rwx bits must be reasserted
-		// regardless of the parent's bits or the process umask.
+		// regardless of the parent's bits or the process umask. Under euid 0
+		// (the only caller path in production) both calls are infallible; if
+		// either fails here, the directory is left with wrong permissions and
+		// rollback at the call site removes the instance record but not the dir
+		// — acceptable because this path is unreachable in production.
 		if err := os.Chown(cur, -1, sharedGID); err != nil {
 			return err
 		}
