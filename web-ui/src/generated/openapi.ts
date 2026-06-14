@@ -621,6 +621,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/storage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Per-disk storage usage (used/total bytes) for the system-resources panel */
+        get: operations["get-system-storage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users": {
         parameters: {
             query?: never;
@@ -792,6 +809,13 @@ export interface components {
             screenshot_urls?: string[] | null;
             short_description?: string;
             version: string;
+        };
+        DiskSpaceDTO: {
+            /** Format: int64 */
+            free_bytes: number;
+            label: string;
+            /** Format: int64 */
+            total_bytes: number;
         };
         ElevateRequest: {
             /**
@@ -1302,6 +1326,15 @@ export interface components {
         SourceMenu: {
             default: string;
             options: string[] | null;
+        };
+        SystemStorageDTO: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/SystemStorageDTO.json
+             */
+            readonly $schema?: string;
+            disks: components["schemas"]["DiskSpaceDTO"][] | null;
         };
         "Test-mail-providerRequest": {
             /**
@@ -2609,6 +2642,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetupResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "get-system-storage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemStorageDTO"];
                 };
             };
             /** @description Error */

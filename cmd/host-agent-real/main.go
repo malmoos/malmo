@@ -95,7 +95,11 @@ func main() {
 	a.Time = clockhealth.New()
 	a.Logs = journalsource.New()
 	a.Resources = rampressure.New()
-	a.Disk = diskusage.New()
+	// One diskusage.Reporter satisfies both disk seams: DataDisk() for the
+	// install-plan free_bytes (Disk) and Disks() for the Storage bars (DiskSpace).
+	du := diskusage.New()
+	a.Disk = du
+	a.DiskSpace = du
 	a.Reboot = rebootrequired.New()
 	a.System = procsource.New()
 	a.Net = prov

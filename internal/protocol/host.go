@@ -66,13 +66,34 @@ type UnpublishRequest struct {
 // reservation — so the brain treats them as a hint, never a gate. 0 means "not
 // measured" (no disk reporter wired, or statfs failed): the brain shows no free
 // figure rather than a misleading zero.
+//
+// Disks is the per-volume fullness view (one entry per mounted volume of
+// interest — the OS drive, plus the data drive when present) backing the
+// system-resources panel's Storage bars (LOCAL_ANALYTICS.md # Real-time system
+// resources). It is a display superset of DataDisk*, which are kept untouched
+// for the install-plan footprint (DECISIONS.md 2026-06-13). Same Bavail/Blocks
+// statfs semantics per entry; absent volumes are omitted, never zero-filled.
 type SystemStatus struct {
-	Hostname           string `json:"hostname"`
-	UptimeS            int64  `json:"uptime_s"`
-	DiskPressure       bool   `json:"disk_pressure"`
-	AgentVersion       string `json:"agent_version"`
-	DataDiskFreeBytes  int64  `json:"data_disk_free_bytes"`
-	DataDiskTotalBytes int64  `json:"data_disk_total_bytes"`
+	Hostname           string      `json:"hostname"`
+	UptimeS            int64       `json:"uptime_s"`
+	DiskPressure       bool        `json:"disk_pressure"`
+	AgentVersion       string      `json:"agent_version"`
+	DataDiskFreeBytes  int64       `json:"data_disk_free_bytes"`
+	DataDiskTotalBytes int64       `json:"data_disk_total_bytes"`
+	Disks              []DiskSpace `json:"disks"`
+}
+
+// DiskSpace is one mounted volume's fullness for the system-resources Storage
+// bars: a human Label ("System" for the OS drive at /, "Data" for the data
+// drive at /srv/malmo — STORAGE.md mount layout), plus the same statfs figures
+// as DataDisk* (FreeBytes = Bavail × Bsize, TotalBytes = Blocks × Bsize). Used
+// is derived UI-side as Total − Free. host-agent omits a volume that isn't a
+// distinct mount (a Level-0 box has no data drive: /srv/malmo is just a
+// directory on the OS drive), so the slice carries only real volumes.
+type DiskSpace struct {
+	Label      string `json:"label"`
+	FreeBytes  int64  `json:"free_bytes"`
+	TotalBytes int64  `json:"total_bytes"`
 }
 
 // SystemResources is GET /v1/system/resources: one raw cumulative-counter

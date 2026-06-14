@@ -118,6 +118,7 @@ func (s *Server) registerAll(api huma.API) {
 	s.registerHealth(api)
 	s.registerNotifications(api)
 	s.registerMail(api)
+	s.registerSystem(api)
 	s.registerAppSecrets(api)
 }
 
