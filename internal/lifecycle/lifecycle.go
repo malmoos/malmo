@@ -699,7 +699,7 @@ func (m *Manager) Uninstall(ctx context.Context, id string) error {
 	return nil
 }
 
-// ErrNotRunning / ErrNotStopped are returned by Stop/Start when the instance
+// ErrNotRunning / ErrNotStartable are returned by Stop/Start when the instance
 // is not in the state the transition requires. The API maps them to 409 so the
 // UI can tell "illegal transition" apart from a missing app (404) or a host
 // fault (500). State guards are the only place lifecycle discriminates a
@@ -709,7 +709,7 @@ func (m *Manager) Uninstall(ctx context.Context, id string) error {
 // at the gate) is the one non-conflict sentinel declared elsewhere.
 var (
 	ErrNotRunning    = errors.New("app is not running")
-	ErrNotStopped    = errors.New("app is not stopped or failed")
+	ErrNotStartable  = errors.New("app is not stopped or failed")
 	ErrNoMailSupport = errors.New("app does not declare mail support")
 )
 
@@ -779,7 +779,7 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 		return err
 	}
 	if inst.State != "stopped" && inst.State != "failed" {
-		return fmt.Errorf("%w (state=%s)", ErrNotStopped, inst.State)
+		return fmt.Errorf("%w (state=%s)", ErrNotStartable, inst.State)
 	}
 	prevState := inst.State
 	man, err := m.loadInstanceManifest(id)

@@ -152,8 +152,8 @@ func TestStartGuardRejectsNonStopped(t *testing.T) {
 	inst := installRunning(t, e)
 	// The instance is running, so Start must reject.
 	err := e.m.Start(context.Background(), inst.ID)
-	if !errors.Is(err, ErrNotStopped) {
-		t.Fatalf("start err = %v, want ErrNotStopped", err)
+	if !errors.Is(err, ErrNotStartable) {
+		t.Fatalf("start err = %v, want ErrNotStartable", err)
 	}
 }
 
