@@ -33,6 +33,12 @@ import (
 	"github.com/malmoos/malmo/internal/systemlive"
 )
 
+// caddyReadyTimeout bounds the wait for Caddy's admin API after the brain brings
+// the control-plane stack up. Caddy's admin is reachable within ~1s of the
+// container starting, so this is generous for the healthy path while capping the
+// degraded-startup stall when Caddy never came up (see the call site).
+const caddyReadyTimeout = 10 * time.Second
+
 func main() {
 	cfg := loadConfig()
 	installLogger(cfg.logLevel, cfg.logFormat)
@@ -69,16 +75,23 @@ func main() {
 		if err := life.EnsureControlPlane(cpCtx, cfg.controlPlaneDir); err != nil {
 			slog.Warn("control-plane stack up failed; continuing", "err", err)
 		}
+		cpCancel()
 		// The route configuration below is one-shot — nothing re-runs it on a
 		// transient failure — so wait for Caddy's admin API before driving it.
-		if err := cd.WaitReady(cpCtx); err != nil {
+		// This gets its own short budget, not the compose budget above: on a
+		// healthy box (Caddy just came up, or is already running across a
+		// restart) it returns in well under a second; if Caddy never started
+		// (first-boot compose failure) this caps the degraded-startup stall at a
+		// few seconds instead of polling away the whole remaining 60s.
+		waitCtx, waitCancel := context.WithTimeout(context.Background(), caddyReadyTimeout)
+		if err := cd.WaitReady(waitCtx); err != nil {
 			slog.Warn("caddy admin not ready; route config may be incomplete", "err", err)
 		}
-		cpCancel()
+		waitCancel()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	life.EnsureIngress(ctx, cfg.caddyListen)
+	life.EnsureIngress(ctx)
 	// Startup reconcile: converge Docker + routing to SQLite desired state and
 	// re-assert Caddy routes lost when EnsureIngress reset the server block.
 	if err := life.Reconcile(ctx); err != nil {

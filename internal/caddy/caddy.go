@@ -228,10 +228,11 @@ func (c *Client) EnsureCatchAll(ctx context.Context) error {
 // EnsureServer resets the "malmo" server's route list to empty at brain
 // startup, giving the reconciler a clean slate to rebuild routes from desired
 // state. It PATCHes only the routes array, so it never touches the server's
-// listen addr or Caddy's admin config. The dev Caddy boots with this server
-// pre-declared (dev/caddy.json); creating the server from scratch (production,
-// where Caddy is brain-managed) is a follow-up.
-func (c *Client) EnsureServer(ctx context.Context, listen string) error {
+// listen addr or Caddy's admin config. Both dev (dev/caddy.json) and production
+// (dev/control-plane/caddy.json, staged by the M1b bootstrap) boot Caddy with
+// this server and its :80 listener pre-declared, so the brain never sets the
+// listen addr — there is no caller-supplied listen to apply.
+func (c *Client) EnsureServer(ctx context.Context) error {
 	return c.patch(ctx, "/config/apps/http/servers/malmo/routes", []any{})
 }
 

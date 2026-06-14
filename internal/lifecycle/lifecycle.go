@@ -191,11 +191,11 @@ func (m *Manager) SetHealthTiming(wait, poll time.Duration) {
 // EnsureIngress creates the shared ingress network and the Caddy server block.
 // Called once at brain startup. Best-effort: dev runs without Docker/Caddy
 // should still let the API come up.
-func (m *Manager) EnsureIngress(ctx context.Context, caddyListen string) {
+func (m *Manager) EnsureIngress(ctx context.Context) {
 	if err := m.docker.NetworkCreate(ctx, ingressNetwork, false); err != nil {
 		slog.Warn("ensure ingress network", "err", err)
 	}
-	if err := m.caddy.EnsureServer(ctx, caddyListen); err != nil {
+	if err := m.caddy.EnsureServer(ctx); err != nil {
 		slog.Warn("ensure caddy server (routes will retry)", "err", err)
 	}
 }

@@ -233,7 +233,7 @@ func (c *fakeCaddy) record(method string, args ...any) {
 	c.mu.Unlock()
 }
 
-func (c *fakeCaddy) EnsureServer(context.Context, string) error {
+func (c *fakeCaddy) EnsureServer(context.Context) error {
 	c.record("EnsureServer")
 	return nil
 }

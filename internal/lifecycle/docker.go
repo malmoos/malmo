@@ -86,7 +86,7 @@ type RepoDigests []string
 
 // CaddyDriver is the slice of caddy.Client that lifecycle uses.
 type CaddyDriver interface {
-	EnsureServer(ctx context.Context, listen string) error
+	EnsureServer(ctx context.Context) error
 	AddRoute(ctx context.Context, instanceID, host, upstream string) error
 	AddSplashRoute(ctx context.Context, instanceID, host, appName, state string) error
 	RemoveRoute(ctx context.Context, instanceID string) error
