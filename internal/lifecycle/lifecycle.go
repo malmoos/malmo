@@ -605,7 +605,10 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 			"instance_id", id, "slug", slug, "err", err)
 	} else {
 		host = pub.Name
-		_ = m.store.SetMDNSName(id, pub.Name)
+		if err := m.store.SetMDNSName(id, pub.Name); err != nil {
+			slog.Warn("mDNS name persist failed (continuing)",
+				"instance_id", id, "name", pub.Name, "err", err)
+		}
 		inst.MDNSName = pub.Name
 	}
 	step("registering_route")
@@ -738,7 +741,7 @@ func (m *Manager) Uninstall(ctx context.Context, id string) error {
 	return nil
 }
 
-// ErrNotRunning / ErrNotStopped are returned by Stop/Start when the instance
+// ErrNotRunning / ErrNotStartable are returned by Stop/Start when the instance
 // is not in the state the transition requires. The API maps them to 409 so the
 // UI can tell "illegal transition" apart from a missing app (404) or a host
 // fault (500). State guards are the only place lifecycle discriminates a
@@ -748,7 +751,7 @@ func (m *Manager) Uninstall(ctx context.Context, id string) error {
 // at the gate) is the one non-conflict sentinel declared elsewhere.
 var (
 	ErrNotRunning    = errors.New("app is not running")
-	ErrNotStopped    = errors.New("app is not stopped")
+	ErrNotStartable  = errors.New("app is not stopped or failed")
 	ErrNoMailSupport = errors.New("app does not declare mail support")
 )
 
@@ -801,7 +804,11 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 // uninstall). It uses `docker compose up -d` rather than `compose start` — the
 // same op the reconcile pass uses — so dependency ordering and one-shot
 // completion-gate jobs (#92) behave exactly as on install, and the op is
-// idempotent. Legal only from `stopped`.
+// idempotent. Legal from `stopped` or `failed`: the same path is the click-to-
+// retry recovery for a failed instance (#154), since a retry is just a Start —
+// `compose up -d` + waitHealthy + Caddy flip + the #153 mDNS re-publish — that
+// lands in `running` on success and back in `failed` (via startFailed) if the
+// app still won't come healthy.
 //
 // State is written to `running` BEFORE the docker op (brain-commits-first): a
 // crash mid-start leaves a `running` row the reconcile pass finishes, the same
@@ -813,14 +820,26 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if inst.State != "stopped" {
-		return fmt.Errorf("%w (state=%s)", ErrNotStopped, inst.State)
+	if inst.State != "stopped" && inst.State != "failed" {
+		return fmt.Errorf("%w (state=%s)", ErrNotStartable, inst.State)
 	}
+	prevState := inst.State
 	man, err := m.loadInstanceManifest(id)
 	if err != nil {
 		return fmt.Errorf("load manifest: %w", err)
 	}
-	host := routeHost(inst)
+	// Re-assert the mDNS name, not just the Caddy route (#153). Start is a
+	// recovery path: the name may be dark — the host-agent restarted and lost its
+	// process-local Avahi entry groups, or the prior install/start failed before
+	// publishing — in which case re-asserting Caddy alone (as Start used to) left
+	// <slug>.local unresolvable until the next brain reboot's reconcile pass.
+	// Publish up-front, like install's step 9 and unlike a passive routeHost
+	// lookup, so the name resolves to the "starting" splash immediately and the
+	// same host keys the splash, the final upstream, and any failed-splash flip.
+	// Keeping the name announced throughout Start matches the lifecycle model
+	// (Stop deliberately keeps the name pointing at its splash); the publish is
+	// idempotent, so re-running it on every Start is a host-side no-op.
+	host, _ := m.publishHost(ctx, inst)
 
 	// Commit desired state first, then flip the route to the starting splash so
 	// the hostname stops serving the "stopped" page the moment the user acts.
@@ -854,7 +873,7 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 		slog.Warn("start: caddy upstream flip failed (continuing)",
 			"instance_id", id, "host", host, "upstream", upstream, "err", err)
 	}
-	m.emitState(inst, "stopped")
+	m.emitState(inst, prevState)
 	slog.Info("app started", "instance_id", id, "name", inst.Name, "upstream", upstream)
 	return nil
 }
@@ -885,12 +904,46 @@ func (m *Manager) startFailed(ctx context.Context, inst store.Instance, host, ap
 // routeHost is the hostname an instance's Caddy route is keyed on: the published
 // mDNS name when we have one (it may be the box-qualified collision fallback),
 // else the reconstructed primary `<slug>.local`. Mirrors the fallback chain in
-// install + reassertRouting so the three never disagree.
+// install + reassertRouting so the three never disagree. Used by the passive
+// callers (Stop) that flip the splash without re-announcing the name;
+// re-assertion paths (Start, reconcile) use publishHost instead.
 func routeHost(inst store.Instance) string {
 	if inst.MDNSName != "" {
 		return inst.MDNSName
 	}
 	return inst.Slug + protocol.AppHostSuffix
+}
+
+// publishHost re-asserts the instance's mDNS name via host-agent and returns the
+// hostname its Caddy route should key on, plus whether the Avahi publish
+// succeeded. The published name is authoritative — Publish may return a
+// box-qualified collision fallback ("<slug>-<box>.local") that differs from the
+// primary "<slug>.local" — so a changed name is persisted. On publish failure it
+// falls back to the stored name, then the reconstructed primary, so the route
+// always exists even when mDNS resolution is down. Idempotent: re-publishing an
+// already-announced name is a host-side no-op, which is what lets Start and the
+// reconcile pass both call it freely. Shared by reassertRouting (reconcile) and
+// Start so Caddy, Avahi, and the stored MDNSName never disagree.
+func (m *Manager) publishHost(ctx context.Context, inst store.Instance) (string, bool) {
+	host := inst.MDNSName
+	avahiOK := true
+	if pub, err := m.host.Publish(ctx, inst.Slug); err != nil {
+		slog.Warn("mDNS publish failed (continuing)",
+			"instance_id", inst.ID, "slug", inst.Slug, "err", err)
+		avahiOK = false
+	} else {
+		host = pub.Name
+		if pub.Name != inst.MDNSName {
+			if err := m.store.SetMDNSName(inst.ID, pub.Name); err != nil {
+				slog.Warn("mDNS name persist failed (continuing)",
+					"instance_id", inst.ID, "name", pub.Name, "err", err)
+			}
+		}
+	}
+	if host == "" {
+		host = inst.Slug + protocol.AppHostSuffix
+	}
+	return host, avahiOK
 }
 
 // releaseServiceIdentity returns an allocated app-service identity to the
@@ -1065,25 +1118,7 @@ func (m *Manager) reassertRouting(ctx context.Context, inst store.Instance) bool
 			"instance_id", inst.ID, "err", err)
 		return false
 	}
-	avahiOK := true
-	// Use the freshly published name (which may be the box-qualified collision
-	// fallback) for the route. Persist it if it changed since install; fall
-	// back to the stored name, then to the reconstructed primary, so the route
-	// always exists even when mDNS publish fails.
-	host := inst.MDNSName
-	if pub, err := m.host.Publish(ctx, inst.Slug); err != nil {
-		slog.Warn("reconcile: mDNS publish",
-			"instance_id", inst.ID, "slug", inst.Slug, "err", err)
-		avahiOK = false
-	} else {
-		host = pub.Name
-		if pub.Name != inst.MDNSName {
-			_ = m.store.SetMDNSName(inst.ID, pub.Name)
-		}
-	}
-	if host == "" {
-		host = inst.Slug + protocol.AppHostSuffix
-	}
+	host, avahiOK := m.publishHost(ctx, inst)
 	upstream := fmt.Sprintf("malmo-%s-%s:%d", inst.ID, man.MainService, man.MainPort)
 	if err := m.caddy.AddRoute(ctx, inst.ID, host, upstream); err != nil {
 		slog.Warn("reconcile: caddy route",
@@ -1123,6 +1158,41 @@ func (m *Manager) loadInstanceManifest(id string) (*manifest.Manifest, error) {
 // path layout.
 func (m *Manager) InstanceManifest(id string) (*manifest.Manifest, error) {
 	return m.loadInstanceManifest(id)
+}
+
+// RevealSecrets returns an instance's owner-visible generated secrets — those
+// the manifest declared with `show: true` (APP_MANIFEST.md # D2) — as name+value
+// pairs the owner reads on the app detail page to finish first sign-in (#152).
+// Secrets without the flag (an internal DB password the user never needs) are
+// omitted, so a single read can't expose every injected credential. The manifest
+// is the instance-dir copy the installer persisted, so a later catalog
+// withdrawal never changes what's revealable. Empty (nil) when nothing is
+// declared owner-visible.
+func (m *Manager) RevealSecrets(id string) ([]store.InstanceSecret, error) {
+	man, err := m.loadInstanceManifest(id)
+	if err != nil {
+		return nil, fmt.Errorf("load manifest: %w", err)
+	}
+	show := make(map[string]bool, len(man.Secrets))
+	for _, s := range man.Secrets {
+		if s.Show {
+			show[s.Name] = true
+		}
+	}
+	if len(show) == 0 {
+		return nil, nil
+	}
+	secrets, err := m.store.GetInstanceSecrets(id)
+	if err != nil {
+		return nil, fmt.Errorf("load secrets: %w", err)
+	}
+	out := make([]store.InstanceSecret, 0, len(show))
+	for _, sec := range secrets {
+		if show[sec.Name] {
+			out = append(out, sec)
+		}
+	}
+	return out, nil
 }
 
 // MainContainerName returns the container name of an instance's main service —
@@ -1385,7 +1455,12 @@ func (m *Manager) writeEnv(id, slug string, iso isolation) error {
 		prefix := "MALMO_SERVICE_" + strings.ToUpper(g.LogicalName) + "_"
 		host := serviceDNSAlias(g.Kind, g.Version)
 		port := servicePort[g.Kind]
-		dsn := fmt.Sprintf("%s://%s:%s@%s:%d/%s", serviceDSNScheme[g.Kind], g.RoleName, g.Password, host, port, g.DBName)
+		// SQL engines carry a database name in the path; Valkey has none, so the DSN
+		// is scheme://user:pw@host:port (clients default to logical DB 0).
+		dsn := fmt.Sprintf("%s://%s:%s@%s:%d", serviceDSNScheme[g.Kind], g.RoleName, g.Password, host, port)
+		if g.DBName != "" {
+			dsn += "/" + g.DBName
+		}
 		lines = append(lines,
 			prefix+"HOST="+host,
 			prefix+"PORT="+strconv.Itoa(port),

@@ -125,6 +125,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/apps/{id}/secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Reveal an app instance's owner-visible setup secrets (owner or admin) */
+        get: operations["get-app-secrets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/apps/{id}/start": {
         parameters: {
             query?: never;
@@ -604,6 +621,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/storage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Per-disk storage usage (used/total bytes) for the system-resources panel */
+        get: operations["get-system-storage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users": {
         parameters: {
             query?: never;
@@ -661,6 +695,19 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AppSecretDTO: {
+            name: string;
+            value: string;
+        };
+        AppSecretsDTO: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/AppSecretsDTO.json
+             */
+            readonly $schema?: string;
+            secrets: components["schemas"]["AppSecretDTO"][] | null;
+        };
         AuditEventDTO: {
             action: string;
             actor_role: string;
@@ -762,6 +809,13 @@ export interface components {
             screenshot_urls?: string[] | null;
             short_description?: string;
             version: string;
+        };
+        DiskSpaceDTO: {
+            /** Format: int64 */
+            free_bytes: number;
+            label: string;
+            /** Format: int64 */
+            total_bytes: number;
         };
         ElevateRequest: {
             /**
@@ -1273,6 +1327,15 @@ export interface components {
             default: string;
             options: string[] | null;
         };
+        SystemStorageDTO: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/SystemStorageDTO.json
+             */
+            readonly $schema?: string;
+            disks: components["schemas"]["DiskSpaceDTO"][] | null;
+        };
         "Test-mail-providerRequest": {
             /**
              * Format: uri
@@ -1602,6 +1665,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "get-app-secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppSecretsDTO"];
                 };
             };
             /** @description Error */
@@ -2548,6 +2642,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetupResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "get-system-storage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemStorageDTO"];
                 };
             };
             /** @description Error */

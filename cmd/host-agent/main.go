@@ -104,6 +104,14 @@ func main() {
 	// canned free/total (≈412 GiB free of a 1 TiB drive) — enough for the
 	// install plan's free_bytes to render a plausible figure natively.
 	a.Disk = hostagent.NewFakeDiskReporter(412<<30, 1<<40)
+	// No real drives either, so the Storage bars report two canned volumes
+	// (System ≈18 GiB free of 64 GiB, Data ≈412 GiB free of 1 TiB) — the panel
+	// shows both bars in dev without a second physical drive. Data matches the
+	// FakeDiskReporter figure above so the two status fields stay coherent.
+	a.DiskSpace = hostagent.NewFakeDiskSpaceReporter(
+		protocol.DiskSpace{Label: "System", FreeBytes: 18 << 30, TotalBytes: 64 << 30},
+		protocol.DiskSpace{Label: "Data", FreeBytes: 412 << 30, TotalBytes: 1 << 40},
+	)
 	// No real /dev/dri in the dev loop, so GET /v1/system/gpu reports a
 	// synthetic Intel iGPU (render GID 104, Debian's usual `render` group) so
 	// a `gpu: true` install exercises the full override path natively.

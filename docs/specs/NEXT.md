@@ -177,15 +177,21 @@ Where do user docs and app-author docs live? In-product help drawer, `docs.malmo
 
 ### Managed-service lifecycle gaps (Tier-1, post-Postgres-slice)
 
-Postgres provisioning shipped (`docs/progress/managed-services-postgres.md`, `DECISIONS.md` 2026-06-05). Four pieces of the `SERVICE_PROVISIONING.md` # Tier 1 spec were **deliberately deferred** out of that slice, each its own follow-up:
+Postgres provisioning shipped (`docs/progress/managed-services-postgres.md`, `DECISIONS.md` 2026-06-05), then the MySQL family (`DECISIONS.md` 2026-06-09) and Redis (`docs/progress/managed-services-redis.md`, `DECISIONS.md` 2026-06-13 — isolation model resolved: a per-app ACL user with full keyspace, the credential being the boundary, over the logical-DB-number split). Of the `SERVICE_PROVISIONING.md` # Tier 1 spec pieces **deliberately deferred** out of the Postgres slice, three remain, each its own follow-up:
 
-- **Redis provisioning.** The manifest schema accepts `type: redis` (forward-valid) but the brain doesn't provision it yet — a redis declaration fails at install. Needs the isolation model decided: a per-app ACL user + password (full keyspace) vs. a logical-DB-number split. No catalog app *requires* redis today (kan's is optional with an in-memory fallback), so it waited.
 - **Grace-shutdown.** Lazy spinup is built; the symmetric "stop a service version 12h after its last consumer uninstalls" (`SERVICE_PROVISIONING.md` # At app uninstall, # Versioning) is not — services stay running. Needs a timer/GC and reconcile integration that checks remaining `service_grants` for the kind+version.
 - **Cross-version migration.** Auto-migrate on a major-version bump (`pg_dump` old → `pg_restore` new, pre-migration backup as rollback) is unbuilt; gated on the backup design below.
 - **At-rest encryption of service credentials.** The superuser password (`service_instances`) and per-app passwords (`service_grants`) are plaintext in SQLite + the service `.env`, exactly the gap tracked for `MALMO_SECRET_*` — folds into **App-secret injection hardening** above; the decision should cover both.
 
 **Context:** `SERVICE_PROVISIONING.md` # Tier 1, the App-secret injection hardening entry above, the Backup architecture entry below.
 **Why deferred, not dropped:** the Postgres slice was scoped to unblock kan; these extend the same spec without changing its shape. Pin them so the next managed-service touch picks the right one off the top.
+
+### Managed-service per-app key isolation
+
+The shared Valkey instance (the engine behind both `type: valkey` and the `type: redis` alias, `DECISIONS.md` 2026-06-13) gives each app its own ACL credential, not its own keyspace. The Valkey slice (#159) closed cross-app **destruction** — `+@all -@admin -flushall -flushdb -swapdb` means no app can wipe the shared keyspace — but cross-app **confidentiality** is still open: because every app holds `~*`, app A can read or overwrite app B's keys with ordinary `GET`/`SET`/`SCAN`. Command ACLs can't fix this (those are core commands), and per-app key-pattern ACLs (`~app:*`) only work if the app prefixes every key itself, which most don't and malmo can't force. The clean form is the `isolated: true` manifest field already sketched in `SERVICE_PROVISIONING.md` # Per-app isolation — a dedicated instance per app for the apps that need a hard boundary, shared-by-default otherwise. The cost is runtime RAM (one Valkey process per opted-in app), not code, so the decision is about *when an app warrants the dedicated instance*, not how to build it. Same shape would extend to the SQL families if a regulatory/security app ever needs it. No catalog app requires this today; pin it so the next isolation-sensitive app picks it up.
+
+**Context:** `SERVICE_PROVISIONING.md` # Per-app isolation in shared instances, `DECISIONS.md` 2026-06-13, `docs/progress/managed-services-redis.md`.
+**Why deferred, not dropped:** single-tenant home server, all apps installed by the same owner — the credential boundary (no unauthenticated access, no cross-app *destruction*) is enough for v1; cross-app key *reads* matter only once a genuinely untrusted or regulated app lands.
 
 ### Backup architecture shape
 

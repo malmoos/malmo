@@ -135,6 +135,20 @@ type DiskReporter interface {
 	DataDisk() (free, total int64)
 }
 
+// DiskSpaceReporter is a consumer-side interface for the per-volume fullness
+// behind GET /v1/system/status (SystemStatus.Disks), backing the
+// system-resources panel's Storage bars (LOCAL_ANALYTICS.md # Real-time system
+// resources). Provider packages return concrete types: diskusage.Reporter (real
+// statfs on / and /srv/malmo) for cmd/host-agent-real, FakeDiskSpaceReporter for
+// the fake binary and tests.
+//
+// Disks always returns a usable slice and never errors — it omits a volume
+// whose statfs fails or that isn't a distinct mount (a Level-0 box has no data
+// drive), so the brain only ever sees real volumes, never zero-filled phantoms.
+type DiskSpaceReporter interface {
+	Disks() []protocol.DiskSpace
+}
+
 // GPUReporter is a consumer-side interface for the host GPU capability report
 // behind GET /v1/system/gpu (BRAIN_HOST_PROTOCOL.md # GPU capability query):
 // presence + vendor + the render group GID the brain group_adds onto /dev/dri
@@ -261,6 +275,14 @@ type Agent struct {
 	// measured"), which the brain surfaces as "free space unknown" in the
 	// install plan rather than a misleading empty disk.
 	Disk DiskReporter
+
+	// DiskSpace, when non-nil, backs the per-volume Disks field of GET
+	// /v1/system/status (the Storage bars). Swapped per binary: diskusage.Reporter
+	// (real statfs on / and /srv/malmo) vs FakeDiskSpaceReporter. When nil, Disks
+	// is an empty slice — the panel shows no Storage section rather than phantom
+	// bars. cmd/host-agent-real wires the same diskusage.Reporter to Disk and
+	// DiskSpace.
+	DiskSpace DiskSpaceReporter
 
 	// Reboot, when non-nil, backs the system category of GET /v1/health/system
 	// (the reboot-required detector). Swapped per binary: rebootrequired.Reporter
@@ -421,6 +443,12 @@ func (a *Agent) systemStatus(w http.ResponseWriter, r *http.Request) {
 	if a.Disk != nil {
 		free, total = a.Disk.DataDisk()
 	}
+	// Per-volume Storage bars; empty unless a reporter is wired (the brain reads
+	// an empty slice as "no Storage section" rather than phantom bars).
+	disks := []protocol.DiskSpace{}
+	if a.DiskSpace != nil {
+		disks = a.DiskSpace.Disks()
+	}
 	writeJSON(w, http.StatusOK, protocol.SystemStatus{
 		Hostname:           "malmo-dev",
 		UptimeS:            int64(time.Since(a.startedAt).Seconds()),
@@ -428,6 +456,7 @@ func (a *Agent) systemStatus(w http.ResponseWriter, r *http.Request) {
 		AgentVersion:       AgentVersion,
 		DataDiskFreeBytes:  free,
 		DataDiskTotalBytes: total,
+		Disks:              disks,
 	})
 }
 

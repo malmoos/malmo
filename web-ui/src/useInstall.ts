@@ -40,6 +40,7 @@ export function useInstall(manifestId: Ref<string>) {
   const pendingRequest = ref<InstallRequest | null>(null); // last sent, for confirm retry + pending-window scoping
   const installingId = ref<string | null>(null); // set once POST is accepted (202)
   const installError = ref<string | null>(null); // failure during the job, after dialog closed
+  const currentStep = ref<string | null>(null); // running job's live `step` (#150), null between installs
 
   const installPlanQuery = useQuery({
     queryKey: computed(() => ["install-plan", manifestId.value]),
@@ -82,7 +83,9 @@ export function useInstall(manifestId: Ref<string>) {
       // the app installing.
       installingId.value = req.manifest_id;
       planOpen.value = false;
-      const done = await waitForJob(job.job_id);
+      const done = await waitForJob(job.job_id, (j) => {
+        currentStep.value = j.step ?? null;
+      });
       if (done.status !== "completed") {
         throw new Error(done.error?.message ?? "The install didn't finish.");
       }
@@ -108,6 +111,7 @@ export function useInstall(manifestId: Ref<string>) {
       // instance, so it flips straight to "Open" with no "Install" flicker.
       await qc.invalidateQueries({ queryKey: ["apps"] });
       installingId.value = null;
+      currentStep.value = null;
     },
   });
 
@@ -132,6 +136,7 @@ export function useInstall(manifestId: Ref<string>) {
     closeDialog();
     installError.value = null;
     installingId.value = null;
+    currentStep.value = null;
   });
 
   function handleConfirmDuplicate() {
@@ -193,6 +198,7 @@ export function useInstall(manifestId: Ref<string>) {
     duplicateInfo,
     installError,
     installing,
+    currentStep,
     install,
     // handlers
     openInstallDialog,

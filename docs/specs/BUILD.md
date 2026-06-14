@@ -198,14 +198,14 @@ Per `CONTROL_PLANE.md`: brain runs as a container, supervised by host-agent.
 
 ### Build
 
-- Multi-stage Dockerfile. Build stage compiles the Go binary (static, CGO disabled where possible). Runtime stage: `gcr.io/distroless/static-debian12` or `debian:trixie-slim`. Distroless is smaller and has less attack surface; slim is easier to debug. Lean distroless; ship a debug image variant if needed.
+- Multi-stage Dockerfile. Build stage compiles the Go binary (static, CGO disabled where possible). Runtime stage: **`debian:trixie-slim` with the `docker` CLI + Compose plugin bundled** (`docker-ce-cli` + `docker-compose-plugin` from Docker's official apt repo — the same trusted source as the host engine, per the Docker-package-source decision below). **Not distroless:** the brain orchestrates apps by shelling out to the `docker` / `docker compose` CLI (`internal/lifecycle/docker.go`), which a distroless runtime — no shell, no binaries — cannot host. Multi-stage already keeps the Go toolchain out of the final image; the bundled CLI is a runtime dependency it can't trim, putting the image at **~256 MB** (measured in M0, #163) — immaterial against the multi-GB app images the box pulls, and slim stays debuggable (it has a shell). See `DECISIONS.md` 2026-06-13 for the flip off distroless.
 - Output is a single OCI image, tagged `vX.Y.Z` and `latest` (latest only on stable channel).
 
 ### Distribution — three options
 
 - **A — Public registry (`ghcr.io/malmo/brain` or Docker Hub).** Pull at first boot. Simple, no infra to run beyond a registry account. Requires internet at first boot.
 - **B — Self-hosted registry (`registry.malmo.network`).** Same as A but we own the namespace and don't depend on GitHub/Docker policies. Modest VPS cost.
-- **C — Bundle the image in the ISO.** Image is loaded into Docker at install time via `docker load`. Works offline at first boot. ISO grows by the image size (~50–150 MB for a Go-based brain — small).
+- **C — Bundle the image in the ISO.** Image is loaded into Docker at install time via `docker load`. Works offline at first boot. ISO grows by the image size (~256 MB for the slim-with-CLI brain image, measured in M0 #163 — see the Build section above — still small against the multi-GB app images the box pulls).
 
 ### Recommendation: B + C combined
 
@@ -220,7 +220,26 @@ Per `CONTROL_PLANE.md`: brain runs as a container, supervised by host-agent.
 2. host-agent checks `/var/lib/malmo/brain-image.tar` (bundled in ISO) — if Docker doesn't already have the image, `docker load` it.
 3. host-agent pulls the latest tag from `registry.malmo.network` if online and a newer version exists. (Behavior on offline: keep the bundled version. Behavior on update failure: keep current. Never break boot.)
 4. host-agent starts the brain container with the configured pin.
-5. Brain takes over from there — Caddy, sidecars, etc. (`CONTROL_PLANE.md`).
+5. Brain takes over from there — Caddy, `malmo-ui`, sidecars, etc. (`CONTROL_PLANE.md`).
+
+---
+
+## 5b. `malmo-ui` image
+
+The dashboard ships as a **second OCI image**, built and distributed the same way as the brain. `WEB_UI.md` owns the stack and deploy model; this section covers only how the image is built and lands on a box.
+
+### Build
+
+- Base `caddy:alpine`, with the built UI bundle (`web-ui/dist`) baked in at `/srv/ui` and the trivial SPA Caddyfile (serve `/srv/ui`, fallback to `index.html`, gzip/brotli/ETag on by default). No build-stage Go compile — the bundle is produced by the UI's own `vite build` upstream of the image build (`WEB_UI.md`).
+- Output is a single OCI image, tagged `vX.Y.Z` and `latest` (latest only on stable channel), versioned independently of the brain (`WEB_UI.md` # deploy + update flow).
+
+### Distribution
+
+Same as the brain (# 5 Distribution): **bundled in the ISO for offline first-boot** (`docker load` from a pinned tarball) **and** pulled from `registry.malmo.network` for ongoing updates. Both images appear together in the release manifest (`RELEASE_MANIFEST.md`); the updater recreates only what changed (`WEB_UI.md` # deploy + update flow).
+
+### Launch
+
+`malmo-ui` is **not** started by host-agent. The brain launches it as part of the control-plane stack, alongside Caddy (`CONTROL_PLANE.md` # Locked: the dashboard UI is a brain-launched container). host-agent's brain bootstrap (# First-boot brain bootstrap) ends at the brain; the brain brings up everything downstream.
 
 ---
 
@@ -231,6 +250,7 @@ Per `CONTROL_PLANE.md`: brain runs as a container, supervised by host-agent.
 - `malmo-vX.Y.Z-amd64.iso` — the installer ISO.
 - `malmo-host-agent_X.Y.Z_amd64.deb` — published to `apt.malmo.network`.
 - `registry.malmo.network/malmo/brain:vX.Y.Z` — the brain image. `latest` tag advances on stable channel.
+- `registry.malmo.network/malmo/ui:vX.Y.Z` — the dashboard image. Versioned independently of the brain; both bundled in the ISO for offline first-boot.
 
 ### Channels
 
@@ -260,7 +280,7 @@ Not locking specifics, but the rough shape:
             │
             ├──► host-agent .deb ──► apt.malmo.network
             ├──► brain image ─────► registry.malmo.network
-            └──► UI bundle ───────► (deploy method TBD, see WEB_UI.md)
+            └──► ui image ────────► registry.malmo.network  (caddy:alpine + bundle, see WEB_UI.md)
                                      │
                                      ▼
                           live-build ISO assembly
@@ -288,7 +308,8 @@ GitHub Actions or self-hosted CI — TBD, not architecturally interesting at thi
 - **Installer execution model: kiosk web installer.** Minimal compositor (`cage` / `weston --kiosk`) + Chromium pointed at a local installer service. Closest production reference: Fedora's Anaconda Web UI.
 - **Docker package source: `docker-ce` from Docker's official apt repo.** Revisit if Docker Inc. policy changes; swap to `docker.io` is a one-line apt source change.
 - **`host-agent` ships as a Debian package** from our own apt repo, not as a container.
-- **`malmo-brain` ships as an OCI image**, distroless runtime, from our own registry, also bundled in the ISO for offline first-boot.
+- **`malmo-brain` ships as an OCI image**, `debian:trixie-slim` runtime with the `docker` CLI + Compose plugin bundled (the brain shells out to them; distroless can't host them — `DECISIONS.md` 2026-06-13), from our own registry, also bundled in the ISO for offline first-boot.
+- **`malmo-ui` ships as a second OCI image** (`caddy:alpine` + baked UI bundle), versioned independently of the brain, from our own registry, also bundled in the ISO. Launched by the brain, not host-agent (`CONTROL_PLANE.md`).
 - **Same squashfs serves both the live (installer) environment and the installed system.**
 - **SSH daemon enabled at boot; no account can authenticate until per-user opt-in** (`AUTH.md` # SSH access). Root login disabled.
 - **Channels: stable only in v1, no beta, no nightly.** Beta is additive when triggered (see `RELEASE_MANIFEST.md`).

@@ -118,6 +118,8 @@ func (s *Server) registerAll(api huma.API) {
 	s.registerHealth(api)
 	s.registerNotifications(api)
 	s.registerMail(api)
+	s.registerSystem(api)
+	s.registerAppSecrets(api)
 }
 
 // OpenAPIDocument builds the brain's full REST surface against a throwaway mux
@@ -789,8 +791,10 @@ func (s *Server) startApp(ctx context.Context, in *struct {
 	if err != nil {
 		return nil, err
 	}
-	if inst.State != "stopped" {
-		return nil, huma.Error409Conflict("app is not stopped")
+	// Legal from `stopped` (start) and `failed` (click-to-retry, #154) — both run
+	// the identical Start transaction. Any other state is an illegal transition.
+	if inst.State != "stopped" && inst.State != "failed" {
+		return nil, huma.Error409Conflict("app is not stopped or failed")
 	}
 	job := s.jobs.run("app-start", func(job *Job) (map[string]any, error) {
 		job.setStep("starting")

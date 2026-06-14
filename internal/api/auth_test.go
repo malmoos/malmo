@@ -119,11 +119,16 @@ func newHarness(t *testing.T) *harness {
 		_ = json.NewEncoder(w).Encode(struct{}{})
 	})
 	// Canned data-drive free/total so the install-plan footprint's free_bytes has
-	// a stable figure to assert (harnessFreeBytes).
+	// a stable figure to assert (harnessFreeBytes); Disks backs the Storage-bars
+	// endpoint test (TestSystemStorage_*).
 	mux.HandleFunc("GET /v1/system/status", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(protocol.SystemStatus{
 			DataDiskFreeBytes:  harnessFreeBytes,
 			DataDiskTotalBytes: 1 << 40,
+			Disks: []protocol.DiskSpace{
+				{Label: "System", FreeBytes: 18 << 30, TotalBytes: 64 << 30},
+				{Label: "Data", FreeBytes: harnessFreeBytes, TotalBytes: 1 << 40},
+			},
 		})
 	})
 	hostHTTP := &http.Server{Handler: mux}

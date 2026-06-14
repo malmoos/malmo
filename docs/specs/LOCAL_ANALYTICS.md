@@ -110,13 +110,14 @@ The view is available to all users — host-level resource state isn't per-user 
 - **RAM:** used / total, `MemAvailable` (the honest "how much can apps actually grow into" number — accounts for reclaimable cache).
 - **Network:** per-interface in/out (KB/s or MB/s). LAN NIC + mesh interface (when Headscale lands).
 - **Disk IO:** read/write KB/s per drive (OS drive, data drive).
+- **Storage:** how full each disk is — used / total bytes per volume, as a bar (System always, Data when a data drive is present). Unlike the rest of this view, storage fullness is **not** part of the live SSE stream — it doesn't move at the 1 Hz gauge cadence, so it's a **one-time poll on panel open** at `GET /api/v1/system/storage` (the brain proxies host-agent's `SystemStatus.Disks`, the same `GET /v1/system/status` the install-plan dialog reads for free bytes). The panel shows a collapsed aggregate bar (used / total across all volumes) that expands to one bar per disk ("412 GiB free of 1 TiB"). See `BRAIN_HOST_PROTOCOL.md` # GET /v1/system/status and `DECISIONS.md` 2026-06-13.
 - **Uptime:** since last boot.
 
 Out of scope for v1: per-core CPU, CPU temperature, fan speeds, per-container live stats (that's the deferred "per-app Activity Monitor" view in `NEXT.md`).
 
 ### UI surfaces
 
-- **Top-bar dropdown.** Small chevron next to the user menu opens a compact panel: CPU%, RAM used/total, net in/out, disk IO. Live-updating gauges. Available to every signed-in user. Opening the dropdown opens the SSE stream; closing it closes the stream. This is the **fourth locked top-bar element** in `DASHBOARD.md` # the top bar (added alongside the storage pill, avatar menu, and bell — see `DECISIONS.md` 2026-05-31).
+- **Top-bar dropdown.** Small chevron next to the user menu opens a compact panel: CPU%, RAM used/total, a collapsible Storage section (per-disk fullness), net in/out, disk IO. Live-updating gauges (Storage is a one-time poll, see # What it shows). Available to every signed-in user. Opening the dropdown opens the SSE stream and fires the storage poll; closing it closes the stream. This is the **fourth locked top-bar element** in `DASHBOARD.md` # the top bar (added alongside the storage pill, avatar menu, and bell — see `DECISIONS.md` 2026-05-31).
 - **Settings → System page** (admin route, deeper view) — same stream, full graphs over the last 60 seconds, all interfaces and drives broken out. Useful when "the box is slow right now" turns into "let me actually look at what's going on." **Deferred** to a follow-up; the all-users dropdown ships first (`NEXT.md`).
 
 The top-bar dropdown is the primary discoverability surface. The deferred Settings page exists for admins who want to stare at it.

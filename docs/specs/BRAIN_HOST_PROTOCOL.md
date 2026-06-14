@@ -78,7 +78,15 @@ POST /v1/services/tailscale/enable
 GET /v1/system/status
 → 200 OK
   { "hostname": "cindy-zx9", "uptime_s": 84021, "disk_pressure": false,
-    "data_disk_free_bytes": 442381180928, "data_disk_total_bytes": 1099511627776, ... }
+    "data_disk_free_bytes": 442381180928, "data_disk_total_bytes": 1099511627776,
+    "disks": [ { "label": "System", "free_bytes": 19327352832, "total_bytes": 68719476736 },
+               { "label": "Data",   "free_bytes": 442381180928, "total_bytes": 1099511627776 } ], ... }
+  # disks is the per-volume fullness view for the resources panel's Storage bars
+  # (LOCAL_ANALYTICS.md): the OS drive (/) always, the data drive (/srv/malmo)
+  # only when it's a distinct mount (a Level-0 box has no data drive, so it's
+  # omitted, not zero-filled). data_disk_* are kept for the install-plan
+  # footprint (DECISIONS.md 2026-06-13). The brain re-serves disks to the UI at
+  # GET /api/v1/system/storage (BRAIN_UI_PROTOCOL.md).
 
 GET /v1/system/resources
 → 200 OK

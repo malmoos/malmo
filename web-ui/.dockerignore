@@ -1,0 +1,6 @@
+# Build context for web-ui/Dockerfile. node_modules is reinstalled with `npm ci`
+# inside the build stage; dist is produced fresh by `vite build`.
+node_modules
+dist
+.vite
+*.tsbuildinfo
