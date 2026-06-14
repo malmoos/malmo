@@ -161,7 +161,7 @@ The use-case folders (`Photos`, `Music`, `Movies`, `Documents`, `Notes`, `Downlo
 ### Permissions
 
 - **Per-user content:** `/home/<user>/` owned `<user>:<user>`, mode `0750`. Tier-3 (per-user) app instances run as the user's UID — direct owner access, no group plumbing.
-- **Household-shared content:** `/srv/malmo/shared/` owned `root:malmo-shared`, mode `02770` (setgid bit — new files inherit `malmo-shared` group automatically). Every household user is added to `malmo-shared` at user creation. See `USERS_AND_GROUPS.md` for the full group reference (and the distinction between `malmo-shared` and the unrelated `malmo` IPC group).
+- **Household-shared content:** `/srv/malmo/shared/` owned `root:malmo-shared`, mode `02770` (setgid bit — new files inherit `malmo-shared` group automatically). Every household user is added to `malmo-shared` at user creation. See `USERS_AND_GROUPS.md` for the full group reference (and the distinction between `malmo-shared` and the unrelated `malmo` IPC group). When an app elects a shared use-case folder whose `<Folder>[/<subfolder>]` doesn't yet exist, the brain creates each new level with this same `root:malmo-shared` `02770` model before `compose up` — never chowning it to a runtime UID and never re-owning a pre-existing parent (`APP_ISOLATION.md` # Runtime identity & data ownership, #156).
 - **Tier-1/2 shared services** (e.g., a household-level Jellyfin): run as a dedicated service UID in the `malmo-shared` group. They see the shared tree, not individual users' homes (unless the manifest declares specific user folders).
 - **Defense in depth:** manifest declarations (brain-enforced via bind-mount scope + mode) are the user-visible layer; POSIX permissions are the kernel-enforced safety net.
 
