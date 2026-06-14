@@ -49,11 +49,12 @@ type fakeDocker struct {
 	restartCounts map[string]int     // returned by RestartCounts
 	managed       []ManagedContainer // returned by ManagedContainers
 
-	composeUpErr   error // simple "always fail compose up"
-	composeDownErr error
-	composeStopErr error
-	removeImageErr error
-	serviceUpErr   error
+	composeUpErr      error // simple "always fail compose up"
+	composeDownErr    error
+	composeStopErr    error
+	removeImageErr    error
+	serviceUpErr      error
+	controlPlaneUpErr error
 
 	// exec drives Exec: it returns scripted output/error per invocation. Default
 	// (nil) returns ("", nil) — used by readiness polls (pg_isready) and psql
@@ -133,6 +134,14 @@ func (f *fakeDocker) ServiceUp(_ context.Context, dir, project string) (string, 
 	f.record("ServiceUp", dir, project)
 	if f.serviceUpErr != nil {
 		return "boom", f.serviceUpErr
+	}
+	return "", nil
+}
+
+func (f *fakeDocker) ControlPlaneUp(_ context.Context, dir, project string) (string, error) {
+	f.record("ControlPlaneUp", dir, project)
+	if f.controlPlaneUpErr != nil {
+		return "boom", f.controlPlaneUpErr
 	}
 	return "", nil
 }

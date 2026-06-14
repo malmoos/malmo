@@ -99,7 +99,13 @@ func splashHTML(appName, state string) string {
 }
 
 func (c *Client) RemoveRoute(ctx context.Context, instanceID string) error {
-	req, err := http.NewRequestWithContext(ctx, "DELETE", c.admin+"/id/"+routeID(instanceID), nil)
+	return c.RemoveRouteByID(ctx, routeID(instanceID))
+}
+
+// RemoveRouteByID deletes a route by its raw Caddy @id (idempotent: an unknown
+// @id is treated as already-gone). RemoveRoute is the per-instance wrapper.
+func (c *Client) RemoveRouteByID(ctx context.Context, id string) error {
+	req, err := http.NewRequestWithContext(ctx, "DELETE", c.admin+"/id/"+id, nil)
 	if err != nil {
 		return err
 	}
@@ -126,6 +132,74 @@ func catchAllRoute() map[string]any {
 			"headers":     map[string]any{"Content-Type": []any{"text/html; charset=utf-8"}},
 			"body":        catchAllBody,
 		}},
+	}
+}
+
+// dashboardRouteID is the stable @id of the dashboard route, so EnsureDashboard
+// is idempotent (remove-then-add) the same way per-app routes are.
+const dashboardRouteID = "malmo-dashboard"
+
+// EnsureDashboard installs the dashboard host route (WEB_UI.md # deploy model):
+// requests to the dashboard host split by path — /api/v1/* (including the SSE
+// streams) reverse-proxy to the brain, everything else to the malmo-ui static
+// server. It is a production-only route: in dev the brain runs natively and the
+// UI is served by Vite, so cmd/brain only calls this when the UI upstream is
+// configured (the containerized stack). Inserted at index 0 like an app route,
+// so it sorts before the catch-all; idempotent via its @id.
+//
+// SSE buffering: the brain's API serves the live-resources and per-app log
+// streams under /api/v1/, so the brain leg sets flush_interval -1 (flush each
+// write, no response buffering) — buffering those would stall the dashboard's
+// live updates. It is harmless for the plain JSON requests on the same leg.
+func (c *Client) EnsureDashboard(ctx context.Context, host, brainUpstream, uiUpstream string) error {
+	_ = c.RemoveRouteByID(ctx, dashboardRouteID)
+	route := map[string]any{
+		"@id":   dashboardRouteID,
+		"match": []any{map[string]any{"host": []string{host}}},
+		"handle": []any{map[string]any{
+			"handler": "subroute",
+			"routes": []any{
+				map[string]any{
+					"match": []any{map[string]any{"path": []string{"/api/*"}}},
+					"handle": []any{map[string]any{
+						"handler":        "reverse_proxy",
+						"flush_interval": -1,
+						"upstreams":      []any{map[string]any{"dial": brainUpstream}},
+					}},
+				},
+				map[string]any{
+					"handle": []any{map[string]any{
+						"handler":   "reverse_proxy",
+						"upstreams": []any{map[string]any{"dial": uiUpstream}},
+					}},
+				},
+			},
+		}},
+	}
+	if err := c.put(ctx, "/config/apps/http/servers/malmo/routes/0", route); err != nil {
+		return fmt.Errorf("caddy: install dashboard route: %w", err)
+	}
+	slog.Info("caddy: dashboard route installed", "host", host, "upstream", uiUpstream)
+	return nil
+}
+
+// WaitReady blocks until the Caddy admin API answers a GET on the config root,
+// or ctx is done. Used at brain startup after the brain has brought Caddy up via
+// compose: the one-shot route configuration (EnsureServer / EnsureCatchAll /
+// EnsureDashboard) must not race the container's first second of life, since
+// nothing re-runs those on a transient failure.
+func (c *Client) WaitReady(ctx context.Context) error {
+	t := time.NewTicker(250 * time.Millisecond)
+	defer t.Stop()
+	for {
+		if status, err := c.get(ctx, "/config/"); err == nil && status == http.StatusOK {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("caddy: admin API not ready: %w", ctx.Err())
+		case <-t.C:
+		}
 	}
 }
 

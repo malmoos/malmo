@@ -57,6 +57,26 @@ func main() {
 	dock := lifecycle.NewCLIDocker()
 	life := lifecycle.NewManager(st, cat, host, cd, dock, bus, cfg.stateDir)
 
+	// Production: the brain owns the control-plane stack (Caddy + malmo-ui) and
+	// brings it up from the compose staged by host-agent before it configures any
+	// routes (CONTROL_PLANE.md # Caddy is malmo substrate / # the dashboard UI is
+	// a brain-launched container). The socket-proxy itself is host-agent-seeded
+	// transport, not part of this stack. In dev controlPlaneDir is empty: Caddy is
+	// a standalone dev container and the UI is Vite, so this whole block is
+	// skipped and startup behaves exactly as before.
+	if cfg.controlPlaneDir != "" {
+		cpCtx, cpCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		if err := life.EnsureControlPlane(cpCtx, cfg.controlPlaneDir); err != nil {
+			slog.Warn("control-plane stack up failed; continuing", "err", err)
+		}
+		// The route configuration below is one-shot — nothing re-runs it on a
+		// transient failure — so wait for Caddy's admin API before driving it.
+		if err := cd.WaitReady(cpCtx); err != nil {
+			slog.Warn("caddy admin not ready; route config may be incomplete", "err", err)
+		}
+		cpCancel()
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	life.EnsureIngress(ctx, cfg.caddyListen)
 	// Startup reconcile: converge Docker + routing to SQLite desired state and
@@ -69,6 +89,15 @@ func main() {
 	// transiently unreachable here doesn't block the brain from serving.
 	if err := cd.EnsureCatchAll(ctx); err != nil {
 		slog.Warn("caddy: ensure catch-all failed; continuing", "err", err)
+	}
+	// Dashboard host route (WEB_UI.md # deploy model): /api/v1/* → brain,
+	// everything else → malmo-ui. Production-only — gated on the UI upstream being
+	// set, which dev never does. Inserted after the catch-all so it sorts before
+	// it (PUT at index 0).
+	if cfg.dashboardUIUpstream != "" {
+		if err := cd.EnsureDashboard(ctx, cfg.dashboardHost, cfg.dashboardBrainUpstream, cfg.dashboardUIUpstream); err != nil {
+			slog.Warn("caddy: ensure dashboard route failed; continuing", "err", err)
+		}
 	}
 	cancel()
 
@@ -196,33 +225,45 @@ func fatal(msg string, args ...any) {
 }
 
 type config struct {
-	listen            string
-	stateDir          string
-	catalogDir        string
-	agentSock         string
-	caddyAdmin        string
-	caddyListen       string
-	caddyProbeURL     string
-	logLevel          string
-	logFormat         string
-	healthPollPeriod  time.Duration
-	notifyPrunePeriod time.Duration
+	listen                 string
+	stateDir               string
+	catalogDir             string
+	agentSock              string
+	caddyAdmin             string
+	caddyListen            string
+	caddyProbeURL          string
+	controlPlaneDir        string
+	dashboardHost          string
+	dashboardBrainUpstream string
+	dashboardUIUpstream    string
+	logLevel               string
+	logFormat              string
+	healthPollPeriod       time.Duration
+	notifyPrunePeriod      time.Duration
 }
 
 func loadConfig() config {
 	caddyListen := env("MALMO_CADDY_LISTEN", ":80")
 	return config{
-		listen:            env("MALMO_LISTEN", ":8080"),
-		stateDir:          env("MALMO_STATE_DIR", "./.dev/state"),
-		catalogDir:        env("MALMO_CATALOG_DIR", "./catalog"),
-		agentSock:         env("MALMO_AGENT_SOCK", protocol.SocketPath),
-		caddyAdmin:        env("MALMO_CADDY_ADMIN", "http://localhost:2019"),
-		caddyListen:       caddyListen,
-		caddyProbeURL:     env("MALMO_CADDY_PROBE_URL", probeBaseURL(caddyListen)),
-		logLevel:          env("MALMO_LOG_LEVEL", "info"),
-		logFormat:         env("MALMO_LOG_FORMAT", "text"),
-		healthPollPeriod:  envDuration("MALMO_HEALTH_POLL", 60*time.Second),
-		notifyPrunePeriod: envDuration("MALMO_NOTIFY_PRUNE", time.Hour),
+		listen:        env("MALMO_LISTEN", ":8080"),
+		stateDir:      env("MALMO_STATE_DIR", "./.dev/state"),
+		catalogDir:    env("MALMO_CATALOG_DIR", "./catalog"),
+		agentSock:     env("MALMO_AGENT_SOCK", protocol.SocketPath),
+		caddyAdmin:    env("MALMO_CADDY_ADMIN", "http://localhost:2019"),
+		caddyListen:   caddyListen,
+		caddyProbeURL: env("MALMO_CADDY_PROBE_URL", probeBaseURL(caddyListen)),
+		// Control-plane / dashboard wiring is production-only. controlPlaneDir and
+		// dashboardUIUpstream default empty so the containerless dev brain skips
+		// both the compose bring-up and the dashboard route; the containerized
+		// brain (host-agent's run-spec) sets them.
+		controlPlaneDir:        env("MALMO_CONTROL_PLANE_DIR", ""),
+		dashboardHost:          env("MALMO_DASHBOARD_HOST", "malmo.local"),
+		dashboardBrainUpstream: env("MALMO_DASHBOARD_BRAIN_UPSTREAM", "malmo-brain:8080"),
+		dashboardUIUpstream:    env("MALMO_DASHBOARD_UI_UPSTREAM", ""),
+		logLevel:               env("MALMO_LOG_LEVEL", "info"),
+		logFormat:              env("MALMO_LOG_FORMAT", "text"),
+		healthPollPeriod:       envDuration("MALMO_HEALTH_POLL", 60*time.Second),
+		notifyPrunePeriod:      envDuration("MALMO_NOTIFY_PRUNE", time.Hour),
 	}
 }
 

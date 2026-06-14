@@ -21,6 +21,16 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-14 — Socket-proxy ships with EXEC denied; managed-DB-in-production is gated on a provisioning re-architecture (#165)
+
+**Previously:** the control-plane stack (Caddy + malmo-ui + socket-proxy) was specced as a single brain-launched compose, and M1b was blocked on an open question the spike (`socket-proxy-compose-validation.md`) escalated: the socket-proxy denies the Docker `EXEC` family by design, but managed-database provisioning (`internal/lifecycle/services.go`) creates per-app roles/databases by `docker exec`'ing the engine's client (`psql`/`mysql`/`valkey-cli`), so the instant the containerized brain points `DOCKER_HOST` at the proxy, managed-DB provisioning breaks.
+
+**Now:** two settled calls. **(1) Defer, don't compromise.** M1b lands with the proxy switch and `EXEC` **denied** — the correct production posture. Managed-DB-in-production is gated on re-architecting provisioning off `docker exec` (connect to the engine over TCP, or run a one-shot provisioning container with only the engine port reachable), tracked as its own follow-up issue. Dev is unaffected (the natively-run dev brain keeps the raw socket and never sets `DOCKER_HOST`), and managed DB is pre-production regardless, so nothing ships broken. Widening to `EXEC=1` was rejected — it would flip the Locked decision the proxy exists to enforce. **(2) host-agent seeds the proxy.** The brain cannot bring up its own sole Docker path (the proxy *is* that path), so host-agent — which holds the raw socket — seeds the `malmo-ingress` network + the `docker-socket-proxy` container before launching the brain, and points the brain at it via `DOCKER_HOST=tcp://docker-proxy:2375`. The proxy is brain *transport infrastructure*, distinct from the Caddy + malmo-ui *services* the brain owns and reconciles; the proxy is therefore not in the brain's control-plane compose.
+
+**Why:** the proxy's whole purpose is to deny `EXEC` and host-bind mounts to the brain — the component with the largest attack surface (LAN-exposed API, third-party manifests). Smuggling `EXEC=1` back in under M1b to keep a pre-production feature working would defeat the mitigation for the entire fleet to serve a path no production box runs yet. Deferring isolates the real, correctly-sized work (provisioning re-architecture, an L/XL spanning `SERVICE_PROVISIONING.md`) instead of letting it block the control-plane bring-up. The host-agent-seeds-proxy split resolves the bootstrap chicken-and-egg cleanly and keeps one chain of custody (host-agent owns every container's launch).
+
+**Affected docs:** `CONTROL_PLANE.md` (# Docker socket exposure — host-agent-seeds-proxy refinement + the managed-DB EXEC limitation), `docs/progress/brain-control-plane-stack.md`, `docs/progress/socket-proxy-compose-validation.md` (the escalating spike).
+
 ## 2026-06-13 — Per-disk storage bars get a new `Disks` field; `DataDisk*` stays (#149)
 
 **Previously:** GET /v1/system/status carried only `data_disk_free_bytes` / `data_disk_total_bytes` — a single statfs snapshot of the data drive, backing the install-plan's `free_bytes` warning. No OS-drive space, no per-volume view.

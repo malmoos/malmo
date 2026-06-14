@@ -21,9 +21,13 @@ type fakeDocker struct {
 	exists       bool
 	existsErr    error
 	runErr       error
+	netErr       error
 	loadCalls    int
 	runCalls     int
+	netCalls     int
 	lastRun      RunSpec
+	runSpecs     []RunSpec
+	lastNet      string
 	lastLabelKey string
 }
 
@@ -48,7 +52,13 @@ func (f *fakeDocker) ContainerExists(context.Context, string) (bool, error) {
 func (f *fakeDocker) Run(_ context.Context, spec RunSpec) error {
 	f.runCalls++
 	f.lastRun = spec
+	f.runSpecs = append(f.runSpecs, spec)
 	return f.runErr
+}
+func (f *fakeDocker) NetworkCreate(_ context.Context, name string) error {
+	f.netCalls++
+	f.lastNet = name
+	return f.netErr
 }
 
 func testConfig() Config {
@@ -59,6 +69,13 @@ func testConfig() Config {
 		DataDir:       "/var/lib/malmo",
 		StateDir:      "/var/lib/malmo/state",
 		SocketPath:    "/var/run/malmo/agent.sock",
+
+		Network:            "malmo-ingress",
+		ProxyImage:         "tecnativa/docker-socket-proxy:v0.4.2",
+		ProxyImageTar:      "/var/lib/malmo/control-plane/images/docker-socket-proxy.tar",
+		ProxyContainerName: "malmo-docker-proxy",
+		ControlPlaneDir:    "/var/lib/malmo/control-plane",
+		UIUpstream:         "malmo-ui:80",
 	}
 }
 
@@ -117,6 +134,107 @@ func TestLaunchRunSpec(t *testing.T) {
 	}
 	if v := envVal(s.Env, "MALMO_AGENT_SOCK"); v != "/var/run/malmo/agent.sock" {
 		t.Errorf("MALMO_AGENT_SOCK = %q, want the socket path", v)
+	}
+	// M1b: the brain joins the ingress network and is pointed at the proxy +
+	// Caddy + the staged control-plane compose. It must never get the raw socket.
+	if s.Network != "malmo-ingress" {
+		t.Errorf("brain network = %q, want malmo-ingress", s.Network)
+	}
+	if v := envVal(s.Env, "DOCKER_HOST"); v != "tcp://docker-proxy:2375" {
+		t.Errorf("DOCKER_HOST = %q, want tcp://docker-proxy:2375", v)
+	}
+	if v := envVal(s.Env, "MALMO_CADDY_ADMIN"); v != "http://malmo-caddy:2019" {
+		t.Errorf("MALMO_CADDY_ADMIN = %q, want http://malmo-caddy:2019", v)
+	}
+	if v := envVal(s.Env, "MALMO_CONTROL_PLANE_DIR"); v != "/var/lib/malmo/control-plane" {
+		t.Errorf("MALMO_CONTROL_PLANE_DIR = %q", v)
+	}
+	if v := envVal(s.Env, "MALMO_DASHBOARD_UI_UPSTREAM"); v != "malmo-ui:80" {
+		t.Errorf("MALMO_DASHBOARD_UI_UPSTREAM = %q, want malmo-ui:80", v)
+	}
+	if hasMount(s.Mounts, "/var/run/docker.sock", "/var/run/docker.sock") {
+		t.Error("brain must NOT mount the raw Docker socket")
+	}
+}
+
+func TestEnsureTransportSeedsNetworkAndProxy(t *testing.T) {
+	f := newFake()
+	f.exists = false // proxy not yet running
+
+	if err := EnsureTransport(context.Background(), f, testConfig()); err != nil {
+		t.Fatalf("EnsureTransport: %v", err)
+	}
+	if f.netCalls != 1 || f.lastNet != "malmo-ingress" {
+		t.Errorf("network create calls=%d last=%q, want 1 malmo-ingress", f.netCalls, f.lastNet)
+	}
+	if f.runCalls != 1 {
+		t.Fatalf("run calls = %d, want 1 (proxy launched)", f.runCalls)
+	}
+	s := f.lastRun
+	if s.Name != "malmo-docker-proxy" || s.Network != "malmo-ingress" {
+		t.Errorf("proxy spec name/network = %q/%q", s.Name, s.Network)
+	}
+	// The brain dials the proxy by the docker-proxy alias regardless of the
+	// container's malmo-prefixed name.
+	if len(s.Aliases) != 1 || s.Aliases[0] != "docker-proxy" {
+		t.Errorf("proxy aliases = %v, want [docker-proxy]", s.Aliases)
+	}
+	// The raw socket is mounted read-only into the proxy — the one place it is
+	// exposed to a container.
+	var sockRO bool
+	for _, m := range s.Mounts {
+		if m.Source == "/var/run/docker.sock" && m.Target == "/var/run/docker.sock" {
+			sockRO = m.ReadOnly
+		}
+	}
+	if !sockRO {
+		t.Errorf("proxy socket mount must be read-only: %+v", s.Mounts)
+	}
+	// EXEC must stay denied (it is absent from the allowlist).
+	if v := envVal(s.Env, "EXEC"); v != "" {
+		t.Errorf("proxy EXEC = %q, want unset (denied)", v)
+	}
+	if envVal(s.Env, "POST") != "1" || envVal(s.Env, "CONTAINERS") != "1" {
+		t.Errorf("proxy allowlist missing POST/CONTAINERS: %+v", s.Env)
+	}
+}
+
+func TestEnsureTransportProxyExistsIsNoOp(t *testing.T) {
+	f := newFake()
+	f.exists = true // proxy already running (host-agent restart)
+
+	if err := EnsureTransport(context.Background(), f, testConfig()); err != nil {
+		t.Fatalf("EnsureTransport: %v", err)
+	}
+	if f.netCalls != 1 {
+		t.Errorf("network create still ensured idempotently: calls=%d, want 1", f.netCalls)
+	}
+	if f.runCalls != 0 {
+		t.Errorf("run calls = %d, want 0 (existing proxy left to Docker)", f.runCalls)
+	}
+}
+
+func TestEnsureTransportLoadsAbsentProxyImage(t *testing.T) {
+	f := newFake()
+	f.present = false // proxy image not loaded yet
+
+	if err := EnsureTransport(context.Background(), f, testConfig()); err != nil {
+		t.Fatalf("EnsureTransport: %v", err)
+	}
+	if f.loadCalls != 1 {
+		t.Errorf("load calls = %d, want 1 (absent proxy image loaded)", f.loadCalls)
+	}
+}
+
+func TestEnsureTransportNetworkErrorPropagates(t *testing.T) {
+	f := newFake()
+	f.netErr = errors.New("daemon down")
+
+	if err := EnsureTransport(context.Background(), f, testConfig()); err == nil {
+		t.Fatal("want error when network create fails")
+	}
+	if f.runCalls != 0 {
+		t.Errorf("run calls = %d, want 0 after a network-create failure", f.runCalls)
 	}
 }
 

@@ -294,6 +294,71 @@ for repo in malmo-brain malmo-ui caddy tecnativa/docker-socket-proxy; do
 done
 echo "control-plane: docker.service active, 4 bundled images loaded"
 
+# --- M1b (#165): the brain brings up the control-plane stack, reaching Docker
+# only through the host-agent-seeded socket-proxy. Proves the M1b "Done when":
+# Caddy + malmo-ui + socket-proxy launched, dashboard SPA loads through Caddy,
+# the raw socket is not mounted into the brain. The thorough app-install
+# assertions are M2 (#167); the headless /setup round-trip is M1c (#166).
+
+# 1. host-agent seeds the proxy; the brain reconciles caddy + ui. The brain
+# bootstrap + compose up run after Docker is ready and race sshd, so poll.
+want_containers="malmo-brain malmo-caddy malmo-ui malmo-docker-proxy"
+running=""
+for _i in $(seq 1 120); do
+    running="$(docker ps --format '{{.Names}}' 2>/dev/null | tr '\n' ' ')"
+    ok_all=1
+    for c in $want_containers; do
+        grep -qw "$c" <<<"$running" || ok_all=0
+    done
+    [ "$ok_all" = 1 ] && break
+    sleep 1
+done
+for c in $want_containers; do
+    grep -qw "$c" <<<"$running" \
+        || fail "control-plane container '$c' not running after 120s (have: $running)"
+done
+
+# 2. proxy boundary: the brain must NOT have the raw Docker socket mounted — it
+# reaches Docker only via the proxy (CONTROL_PLANE.md # Docker socket exposure).
+brain_sock="$(docker inspect malmo-brain \
+    --format '{{range .Mounts}}{{println .Source}}{{end}}' 2>/dev/null \
+    | grep -c 'docker.sock' || true)"
+[ "$brain_sock" = 0 ] \
+    || fail "raw docker.sock is mounted into malmo-brain (proxy boundary breached)"
+brain_dockerhost="$(docker inspect malmo-brain \
+    --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+    | sed -n 's/^DOCKER_HOST=//p')"
+[ "$brain_dockerhost" = "tcp://docker-proxy:2375" ] \
+    || fail "brain DOCKER_HOST='$brain_dockerhost', want tcp://docker-proxy:2375"
+
+# 3. dashboard loads through Caddy. Caddy publishes :80 on the host; the dashboard
+# host route serves the SPA from malmo-ui and proxies /api to the brain. No curl
+# in the image — use bash /dev/tcp. Poll: the brain configures the route a beat
+# after Caddy comes up.
+http_status() { # $1 path, $2 host -> prints the HTTP status line
+    exec 3<>/dev/tcp/127.0.0.1/80 || return 1
+    printf 'GET %s HTTP/1.0\r\nHost: %s\r\nConnection: close\r\n\r\n' "$1" "$2" >&3
+    head -1 <&3
+    exec 3>&- 3<&-
+}
+spa_status=""
+for _i in $(seq 1 60); do
+    spa_status="$(http_status / malmo.local 2>/dev/null || true)"
+    grep -q ' 200' <<<"$spa_status" && break
+    sleep 1
+done
+grep -q ' 200' <<<"$spa_status" \
+    || fail "dashboard SPA not reachable through Caddy: status='$spa_status'"
+
+# 4. the /api leg routes to the brain, not the catch-all 404. /api/v1/me is a
+# real brain route (200 with the setup flag, or 401) — either proves Caddy
+# proxied /api to the brain. A 404 would mean the catch-all swallowed it.
+api_status="$(http_status /api/v1/me malmo.local 2>/dev/null || true)"
+grep -qE ' (200|401)' <<<"$api_status" \
+    || fail "/api not routed to the brain through Caddy: status='$api_status'"
+
+echo "control-plane M1b: stack up, proxy boundary held, dashboard + /api reachable"
+
 case "$PHASE" in
     first-boot)
         # The run-once enrollment unit (malmo-tpm-enroll.service) is

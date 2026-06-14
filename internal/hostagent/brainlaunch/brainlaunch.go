@@ -57,21 +57,28 @@ type Docker interface {
 	ContainerExists(ctx context.Context, name string) (bool, error)
 	// Run starts a detached container (`docker run -d …`).
 	Run(ctx context.Context, spec RunSpec) error
+	// NetworkCreate creates a Docker network, treating "already exists" as
+	// success (idempotent). host-agent seeds the shared ingress network the
+	// proxy, brain, Caddy and UI all attach to.
+	NetworkCreate(ctx context.Context, name string) error
 }
 
-// RunSpec is one `docker run -d` invocation — the container the brain runs in.
+// RunSpec is one `docker run -d` invocation — a container host-agent launches.
 type RunSpec struct {
 	Name    string
 	Image   string
-	Restart string  // Docker restart policy, e.g. "unless-stopped"
-	Mounts  []Mount // bind mounts
+	Restart string   // Docker restart policy, e.g. "unless-stopped"
+	Network string   // Docker network to attach to (empty → default bridge)
+	Aliases []string // extra network aliases (beyond the container name)
+	Mounts  []Mount  // bind mounts
 	Env     []EnvVar
 }
 
 // Mount is a host→container bind mount.
 type Mount struct {
-	Source string // host path
-	Target string // container path
+	Source   string // host path
+	Target   string // container path
+	ReadOnly bool   // mount :ro (e.g. the Docker socket into the proxy)
 }
 
 // EnvVar is one `-e KEY=VALUE` for the container.
@@ -96,6 +103,28 @@ type Config struct {
 	// SocketPath is the host-agent socket the brain dials. Its directory is
 	// bind-mounted into the brain so the socket node is visible at the same path.
 	SocketPath string
+
+	// --- control-plane transport (M1b) ---
+
+	// Network is the shared Docker network the proxy, brain, Caddy and UI all
+	// attach to (CONTROL_PLANE.md # Caddy is malmo substrate). host-agent seeds
+	// it; the brain references it as external when it reconciles Caddy + UI.
+	Network string
+	// ProxyImage / ProxyImageTar are the docker-socket-proxy image and its
+	// offline bundle (docker-loaded if the image is absent, same as the brain).
+	ProxyImage    string
+	ProxyImageTar string
+	// ProxyContainerName is the proxy container's name (idempotency key).
+	ProxyContainerName string
+	// ControlPlaneDir is the host directory holding the control-plane compose +
+	// caddy.json. Passed to the brain as MALMO_CONTROL_PLANE_DIR and bind-mounted
+	// same-path (the daemon resolves compose bind sources as host paths) so the
+	// brain's `docker compose up` finds caddy.json where the daemon expects it.
+	ControlPlaneDir string
+	// UIUpstream is the malmo-ui dial target passed to the brain as
+	// MALMO_DASHBOARD_UI_UPSTREAM; its presence is what makes the brain install
+	// the dashboard route. Empty leaves the brain without a dashboard route.
+	UIUpstream string
 }
 
 // Launch runs the first-boot brain bootstrap. It is idempotent: a brain
@@ -148,26 +177,122 @@ func Launch(ctx context.Context, d Docker, cfg Config) error {
 	return nil
 }
 
+// proxyDialAlias is the network alias the brain dials the socket-proxy by
+// (CONTROL_PLANE.md # Docker socket exposure: "tcp://docker-proxy:2375"). The
+// proxy container's own name carries the malmo- prefix; this alias keeps the
+// brain's DOCKER_HOST stable regardless of that name.
+const proxyDialAlias = "docker-proxy"
+
+// dockerSockPath is the raw Docker socket, bind-mounted read-only into the proxy
+// — the one place on the box it is exposed to a container. The brain never gets
+// it (CONTROL_PLANE.md # Locked: Docker socket exposure).
+const dockerSockPath = "/var/run/docker.sock"
+
+// proxyAllowlist is the docker-socket-proxy env allowlist — the endpoint
+// families the brain needs to manage app + control-plane containers, kept in
+// sync with dev/control-plane/compose.yml. EXEC and host-bind mounts stay denied
+// (the proxy defaults them off); managed-DB provisioning via `docker exec` is
+// gated on a re-architecture (DECISIONS.md 2026-06-14 — defer EXEC).
+func proxyAllowlist() []EnvVar {
+	return []EnvVar{
+		{Key: "POST", Value: "1"},
+		{Key: "PING", Value: "1"},
+		{Key: "VERSION", Value: "1"},
+		{Key: "INFO", Value: "1"},
+		{Key: "CONTAINERS", Value: "1"},
+		{Key: "IMAGES", Value: "1"},
+		{Key: "NETWORKS", Value: "1"},
+		{Key: "VOLUMES", Value: "1"},
+	}
+}
+
+// EnsureTransport seeds the brain's Docker transport before Launch: the shared
+// ingress network and the docker-socket-proxy that fronts the raw socket. host-
+// agent owns this because the brain cannot bootstrap its own sole Docker path —
+// the proxy IS that path (the spike, socket-proxy-compose-validation.md). It is
+// idempotent: an existing network or proxy container is left untouched, so it is
+// safe across host-agent restarts. A failure is returned for the caller to log;
+// host-agent treats it as non-fatal (the brain then comes up unable to reach
+// Docker, the same degraded posture as before the proxy existed).
+func EnsureTransport(ctx context.Context, d Docker, cfg Config) error {
+	if err := d.NetworkCreate(ctx, cfg.Network); err != nil {
+		return fmt.Errorf("create ingress network %q: %w", cfg.Network, err)
+	}
+
+	present, err := d.ImagePresent(ctx, cfg.ProxyImage)
+	if err != nil {
+		return fmt.Errorf("check proxy image %q: %w", cfg.ProxyImage, err)
+	}
+	if !present {
+		slog.Info("proxy image absent; loading bundled tarball",
+			"image", cfg.ProxyImage, "path", cfg.ProxyImageTar)
+		if err := d.Load(ctx, cfg.ProxyImageTar); err != nil {
+			return fmt.Errorf("docker load %q: %w", cfg.ProxyImageTar, err)
+		}
+	}
+
+	exists, err := d.ContainerExists(ctx, cfg.ProxyContainerName)
+	if err != nil {
+		return fmt.Errorf("check proxy container %q: %w", cfg.ProxyContainerName, err)
+	}
+	if exists {
+		slog.Info("proxy container already present; leaving it to Docker",
+			"container", cfg.ProxyContainerName)
+		return nil
+	}
+	if err := d.Run(ctx, proxyRunSpec(cfg)); err != nil {
+		return fmt.Errorf("run proxy container: %w", err)
+	}
+	slog.Info("socket-proxy launched",
+		"container", cfg.ProxyContainerName, "image", cfg.ProxyImage)
+	return nil
+}
+
+// proxyRunSpec assembles the docker-socket-proxy `docker run`. The raw socket is
+// mounted read-only; the brain reaches the proxy by the docker-proxy alias.
+func proxyRunSpec(cfg Config) RunSpec {
+	return RunSpec{
+		Name:    cfg.ProxyContainerName,
+		Image:   cfg.ProxyImage,
+		Restart: "unless-stopped",
+		Network: cfg.Network,
+		Aliases: []string{proxyDialAlias},
+		Mounts:  []Mount{{Source: dockerSockPath, Target: dockerSockPath, ReadOnly: true}},
+		Env:     proxyAllowlist(),
+	}
+}
+
 // runSpec assembles the brain's `docker run` invocation from cfg. The brain
 // mounts the host-agent socket directory (to reach host-agent) and the data
 // root (SQLite state lives under it), reads its config from MALMO_* env, and
 // runs with restart=unless-stopped so Docker supervises it after launch. It is
 // deliberately not given the Docker socket — the brain reaches Docker only
-// through the socket-proxy the control-plane stack brings up later
-// (CONTROL_PLANE.md # Docker socket exposure), so until then it runs degraded.
+// through the host-agent-seeded socket-proxy at tcp://docker-proxy:2375
+// (CONTROL_PLANE.md # Docker socket exposure). It joins the ingress network so
+// it can reach the proxy + Caddy admin by name, and carries the env that points
+// it at the proxy, Caddy, and the staged control-plane compose.
 func runSpec(cfg Config) RunSpec {
 	sockDir := filepath.Dir(cfg.SocketPath)
+	env := []EnvVar{
+		{Key: "MALMO_STATE_DIR", Value: cfg.StateDir},
+		{Key: "MALMO_AGENT_SOCK", Value: cfg.SocketPath},
+		{Key: "DOCKER_HOST", Value: "tcp://" + proxyDialAlias + ":2375"},
+		{Key: "MALMO_CADDY_ADMIN", Value: "http://malmo-caddy:2019"},
+		// The app-unresponsive probe dials Caddy by service name, not the
+		// container's own loopback (the natively-run dev default).
+		{Key: "MALMO_CADDY_PROBE_URL", Value: "http://malmo-caddy"},
+		{Key: "MALMO_CONTROL_PLANE_DIR", Value: cfg.ControlPlaneDir},
+		{Key: "MALMO_DASHBOARD_UI_UPSTREAM", Value: cfg.UIUpstream},
+	}
 	return RunSpec{
 		Name:    cfg.ContainerName,
 		Image:   cfg.Image,
 		Restart: "unless-stopped",
+		Network: cfg.Network,
 		Mounts: []Mount{
 			{Source: sockDir, Target: sockDir},
 			{Source: cfg.DataDir, Target: cfg.DataDir},
 		},
-		Env: []EnvVar{
-			{Key: "MALMO_STATE_DIR", Value: cfg.StateDir},
-			{Key: "MALMO_AGENT_SOCK", Value: cfg.SocketPath},
-		},
+		Env: env,
 	}
 }

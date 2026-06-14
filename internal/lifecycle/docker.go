@@ -28,6 +28,14 @@ type DockerDriver interface {
 	// generated compose.yml + .env (no per-app override): a service instance is a
 	// brain-owned container, not a user app.
 	ServiceUp(ctx context.Context, dir, project string) (string, error)
+	// ControlPlaneUp brings up the control-plane stack (Caddy + malmo-ui) from a
+	// single compose.yml in dir (CONTROL_PLANE.md # Caddy is malmo substrate; #
+	// the dashboard UI is a brain-launched container). Like ServiceUp it has no
+	// per-app override and no .env — the control-plane compose is a fixed,
+	// brain-owned project, not a user app. The docker-socket-proxy is *not* part
+	// of this project: it is host-agent-seeded transport (the brain cannot bring
+	// up its own sole Docker path), launched separately before the brain.
+	ControlPlaneUp(ctx context.Context, dir, project string) (string, error)
 	// Exec runs a command inside a named container (`docker exec <name> <args…>`)
 	// and returns combined output. The brain uses it to provision per-app
 	// databases/roles via the service container's own client (e.g. psql), so it
@@ -176,6 +184,15 @@ func composeRun(ctx context.Context, dir, project string, args ...string) (strin
 func (cliDocker) ServiceUp(ctx context.Context, dir, project string) (string, error) {
 	// A service project has a single generated compose.yml + .env — no override.
 	base := []string{"compose", "-f", "compose.yml", "--env-file", ".env", "-p", project, "up", "-d"}
+	cmd := exec.CommandContext(ctx, "docker", base...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func (cliDocker) ControlPlaneUp(ctx context.Context, dir, project string) (string, error) {
+	// Single compose.yml, no override, no .env — same shape as ServiceUp.
+	base := []string{"compose", "-f", "compose.yml", "-p", project, "up", "-d"}
 	cmd := exec.CommandContext(ctx, "docker", base...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()

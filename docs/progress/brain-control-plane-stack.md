@@ -1,0 +1,41 @@
+# M1b — brain brings up the control-plane stack (Caddy + malmo-ui + socket-proxy)
+
+- **Status:** done (VM-boot acceptance pending — see Verification)
+- **Date:** 2026-06-14
+- **Specs touched:** `CONTROL_PLANE.md` (# Locked: Docker socket exposure — host-agent-seeds-proxy refinement + the managed-DB EXEC limitation); `DECISIONS.md` (2026-06-14 — defer EXEC + host-agent-seeds-proxy)
+
+Closes #165 (M1b, part of #161), the next link after [host-agent-launches-brain.md](host-agent-launches-brain.md) (#164/M1a, which left the brain running **degraded** — bound to its listener but with no Docker reach and no Caddy in front). It picks up the open risk the spike [socket-proxy-compose-validation.md](socket-proxy-compose-validation.md) escalated and onel resolved: the socket-proxy denies `EXEC`, which breaks managed-DB provisioning the instant the brain switches to it. The product call (`DECISIONS.md` 2026-06-14) is **defer** — ship the proxy with `EXEC` denied (the correct production posture), gate managed-DB-in-production on a provisioning re-architecture (its own follow-up issue), and unblock the control-plane bring-up now. Dev is unaffected.
+
+## What was done
+
+**host-agent seeds the brain's Docker transport (`internal/hostagent/brainlaunch`).** The brain cannot bring up its own *only* path to Docker, so the socket-proxy is host-agent's to launch, not part of the brain's compose. New `EnsureTransport(ctx, Docker, Config)` runs before `Launch`:
+
+1. `NetworkCreate(malmo-ingress)` — idempotent ("already exists" is success).
+2. docker-load the proxy image if absent (same offline-first mechanism as the brain image), then
+3. `docker run` the `tecnativa/docker-socket-proxy` on `malmo-ingress` with the M0 allowlist (`POST PING VERSION INFO CONTAINERS IMAGES NETWORKS VOLUMES`; `EXEC` + host-binds absent ⇒ denied), the **raw socket bind-mounted read-only** (the one place it touches a container), and the `docker-proxy` network alias so the brain's `DOCKER_HOST` is stable regardless of the container's `malmo-`-prefixed name. Idempotent on the container name.
+
+The brain run-spec (`brainlaunch.runSpec`) grows the ingress `Network` and the env that points the brain at the proxy + Caddy + the staged compose: `DOCKER_HOST=tcp://docker-proxy:2375`, `MALMO_CADDY_ADMIN=http://malmo-caddy:2019`, `MALMO_CADDY_PROBE_URL=http://malmo-caddy`, `MALMO_CONTROL_PLANE_DIR`, `MALMO_DASHBOARD_UI_UPSTREAM`. The brain still gets **no** raw socket. `RunSpec` gained `Network`/`Aliases`, and `Mount` a `ReadOnly` flag; `CLIDocker.Run` emits `--network`/`--network-alias`/`:ro`, and a new `CLIDocker.NetworkCreate` is the idempotent network seam. `cmd/host-agent-real` calls `EnsureTransport` then `Launch` (both best-effort — a failure leaves host-agent serving so the box stays diagnosable), and `brainLaunchConfig` reads the proxy image/tarball, ingress network, control-plane dir, and UI upstream from env with production defaults.
+
+**Brain reconciles the *services* it owns (`internal/lifecycle` + `cmd/brain`).** New `Manager.EnsureControlPlane(ctx, dir)` brings up Caddy + malmo-ui from the compose staged at `dir`, via a new `DockerDriver.ControlPlaneUp` (single `compose.yml`, no override, no `.env` — same shape as `ServiceUp`) under the fixed project `malmo-control-plane`. `cmd/brain` calls it **only when `MALMO_CONTROL_PLANE_DIR` is set** (production); dev leaves it empty and startup behaves exactly as before. After the bring-up it waits for Caddy's admin API (`caddy.Client.WaitReady`) before the one-shot route config, since nothing re-runs that on a transient failure. `dev/control-plane/compose.yml` lost its `docker-proxy` service (now host-agent's) — it is now just caddy + malmo-ui on the external `malmo-ingress` net.
+
+**Caddy dashboard route (`internal/caddy`).** New `EnsureDashboard(ctx, host, brainUpstream, uiUpstream)` installs the dashboard host route (`WEB_UI.md` # deploy model): one route matching the dashboard host with a `subroute` splitting `/api/*` → the brain (`flush_interval: -1` so the SSE live-resources/log streams aren't buffered) from everything else → malmo-ui. Inserted at index 0 (PUT) so it sorts before the catch-all; idempotent via its `@id` (new `RemoveRouteByID`, which `RemoveRoute` now wraps). `cmd/brain` installs it only when `MALMO_DASHBOARD_UI_UPSTREAM` is set (production-gated, like the compose bring-up); host (`malmo.local`) and brain upstream (`malmo-brain:8080`) carry env-overridable defaults.
+
+**QEMU medium lane (`dev/test-qemu/`).** `bootstrap.sh` stages `dev/control-plane/{compose.yml,caddy.json}` into the image at `/var/lib/malmo/control-plane/` — the **same host path** the brain mounts (the daemon resolves compose bind sources as host paths, so caddy.json must live where both host and brain see it; socket-proxy-compose-validation.md), and extends the host-agent drop-in with the proxy image/tarball, control-plane dir, and UI upstream env. `CANARY_VERSION` `v18`→`v19`. `medium-assertions.sh` gains an M1b block: the four containers (`malmo-brain`/`-caddy`/`-ui`/`-docker-proxy`) run, the brain has **no** raw `docker.sock` mount and `DOCKER_HOST=tcp://docker-proxy:2375` (the proxy boundary), and the dashboard answers through Caddy on `:80` (SPA `GET /` → 200; `GET /api/v1/me` → 200/401, proving the `/api` leg reaches the brain rather than the catch-all). HTTP is driven by bash `/dev/tcp` — the image carries no curl.
+
+## How it maps to specs
+
+- `CONTROL_PLANE.md` # Locked: Caddy is malmo substrate / # the dashboard UI is a brain-launched container — realized: the brain reconciles Caddy + malmo-ui from compose, the same seam as app containers.
+- `CONTROL_PLANE.md` # Locked: Docker socket exposure — realized (`DOCKER_HOST` at the proxy, raw socket never on the brain) and refined: host-agent seeds the proxy (transport vs. services split), and `EXEC` stays denied with managed-DB-in-production gated on a re-architecture.
+- `WEB_UI.md` # deploy model — the LAN Caddy's `/api/v1/* → malmo-brain`, SSE-unbuffered, everything-else → `malmo-ui` split is the dashboard route.
+
+## Verification
+
+- **Unit tests, `make check` green.** `internal/hostagent/brainlaunch`: `EnsureTransport` seeds the network + proxy (alias `docker-proxy`, socket mounted `:ro`, `EXEC` absent from the allowlist, `POST`/`CONTAINERS` present), is a no-op when the proxy exists, loads an absent proxy image, and propagates a network-create error; the brain run-spec carries the ingress network + proxy/Caddy/control-plane env and **never** the raw socket. `internal/caddy` (new `caddy_test.go`, httptest admin): `EnsureDashboard` deletes-then-PUTs at routes/0 with the subroute (`/api/*` → brain `flush_interval -1`, fallback → ui), `WaitReady` returns on a live admin and times out on a dead one. `internal/lifecycle`: `EnsureControlPlane` invokes `ControlPlaneUp` with the fixed project and propagates its error.
+- **VM-boot acceptance is *not* verified here** — like M0/M1a, the medium lane needs `sudo make test-medium-qemu` on an mkosi/swtpm/QEMU host this environment lacks. The lane is authored to the M1b "Done when" (Caddy + malmo-ui + proxy up, dashboard loads through Caddy, raw socket not on the brain) but a real boot pass is outstanding.
+
+## What's next
+
+- **Run the medium lane on a real QEMU host** to confirm the M1b assertion block passes (the M0/M1a VM-boot acceptances are still outstanding too; all ride the same `sudo make test-medium-qemu`).
+- **M1c (#166): headless first-run.** An SSH-driven `/setup` round-trip through the now-live Caddy `/api` leg, asserting the admin authenticates against `/etc/shadow` via host-agent `verify-password`. The brain `/setup` + host-agent-real usermgr are already complete; M1c is the harness helper + assertion, built directly on this slice.
+- **Managed-DB-off-`docker exec` re-architecture** — the deferred follow-up the EXEC decision created: provision managed Postgres/MySQL/Valkey over the engine's TCP port (or a one-shot provisioning container) instead of `docker exec`, so managed DB works under the containerized/proxy brain. Filed separately; pre-production until then.
+- **Dashboard reachability is `malmo.local` only.** The dashboard route matches a single host; reaching the box by IP or an alternate hostname 404s (catch-all). A box-name / IP fallback is a later refinement, not in this slice.
