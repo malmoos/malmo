@@ -150,15 +150,6 @@ function diskBar(d: DiskSpace): number {
   return d.total_bytes === 0 ? 0 : Math.min(100, ((d.total_bytes - d.free_bytes) / d.total_bytes) * 100);
 }
 
-// Precomputed so the template doesn't put a closure (the .map) inline: an inline
-// callback there defeats the v-else null-narrowing of `sample`, which vue-tsc
-// flags (the error pre-dated this change; fixed here to keep check-web green).
-const loadLine = computed(() => {
-  const s = sample.value;
-  if (!s) return "";
-  const labels = ["1m", "5m", "15m"];
-  return s.load.map((v, i) => `${labels[i] ?? ""} ${v.toFixed(2)}`).join("  ");
-});
 </script>
 
 <template>
