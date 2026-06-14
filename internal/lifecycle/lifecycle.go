@@ -563,7 +563,10 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 			"instance_id", id, "slug", slug, "err", err)
 	} else {
 		host = pub.Name
-		_ = m.store.SetMDNSName(id, pub.Name)
+		if err := m.store.SetMDNSName(id, pub.Name); err != nil {
+			slog.Warn("mDNS name persist failed (continuing)",
+				"instance_id", id, "name", pub.Name, "err", err)
+		}
 		inst.MDNSName = pub.Name
 	}
 	step("registering_route")
