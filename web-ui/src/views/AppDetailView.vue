@@ -38,6 +38,7 @@ const {
   duplicateInfo,
   installError,
   installing,
+  currentStep,
   install,
   openInstallDialog,
   closeDialog,
@@ -47,6 +48,33 @@ const {
   ownPersonalInstance,
   dropdownItems,
 } = useInstall(manifestId);
+
+// The brain emits a fine-grained `step` throughout the install job
+// (internal/lifecycle/lifecycle.go). Collapse those ~15 technical steps into a
+// few friendly, non-technical phases for the Install button — wording stays in
+// the view (useInstall exposes the raw step). Any unknown or empty step falls
+// back to the generic "Installing…" so a newly-added brain step never surfaces
+// raw on the button.
+const INSTALL_PHASES: Record<string, string> = {
+  admitting_compose: "Preparing…",
+  checking_gpu: "Preparing…",
+  allocating_slug: "Preparing…",
+  writing_instance_dir: "Preparing…",
+  generating_secrets: "Preparing…",
+  provisioning_services: "Preparing…",
+  binding_mail_provider: "Preparing…",
+  generating_override: "Preparing…",
+  creating_network: "Preparing…",
+  publishing_mdns: "Preparing…",
+  registering_route: "Preparing…",
+  resolving_digests: "Downloading…",
+  compose_up: "Downloading…",
+  waiting_healthy: "Starting…",
+  flipping_route: "Starting…",
+};
+const installPhaseLabel = computed(
+  () => (currentStep.value && INSTALL_PHASES[currentStep.value]) || "Installing…",
+);
 
 // brokenIcon falls the header icon back to the glyph if the asset fails to load;
 // reset when navigating to a different app so a fresh icon gets a fresh chance.
@@ -152,7 +180,8 @@ const hasLinks = computed(
                "Open shared app" so the caller can still install their own copy. -->
           <HealthGated v-if="!ownPersonalInstance" blocks="apps">
             <SplitButton
-              :label="installing ? 'Installing…' : 'Install'"
+              :label="installing ? installPhaseLabel : 'Install'"
+              :loading="installing"
               :disabled="installing"
               :items="dropdownItems"
               @click="openInstallDialog()"
@@ -219,7 +248,7 @@ const hasLinks = computed(
             :disabled="installing"
             @click="handleConfirmDuplicate"
           >
-            {{ installing ? "Installing…" : "Install my own copy" }}
+            Install my own copy
           </button>
           <button class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted" @click="closeDialog">
             Cancel

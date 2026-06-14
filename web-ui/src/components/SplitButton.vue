@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { DropdownMenuRoot, DropdownMenuTrigger, DropdownMenuPortal, DropdownMenuContent, DropdownMenuItem } from "reka-ui";
-import { ChevronDown } from "lucide-vue-next";
+import { ChevronDown, Loader2 } from "lucide-vue-next";
 
 defineProps<{
   label: string;
   disabled?: boolean;
+  // loading shows a spinner before the label (e.g. a running install, #150).
+  loading?: boolean;
   // When items is empty the chevron is hidden and this renders as a plain button.
   items?: { label: string; action: () => void }[];
 }>();
@@ -21,6 +23,7 @@ const emit = defineEmits<{ click: [] }>();
       :class="items?.length ? '' : 'rounded-r-lg'"
       @click="emit('click')"
     >
+      <Loader2 v-if="loading" class="mr-1.5 size-4 animate-spin" aria-hidden="true" />
       {{ label }}
     </button>
 
