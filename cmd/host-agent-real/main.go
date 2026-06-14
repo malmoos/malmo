@@ -32,9 +32,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/malmoos/malmo/internal/hostagent"
 	"github.com/malmoos/malmo/internal/hostagent/avahipublisher"
+	"github.com/malmoos/malmo/internal/hostagent/brainlaunch"
 	"github.com/malmoos/malmo/internal/hostagent/clockhealth"
 	"github.com/malmoos/malmo/internal/hostagent/diskusage"
 	"github.com/malmoos/malmo/internal/hostagent/healthsource"
@@ -130,6 +133,19 @@ func main() {
 	mux := http.NewServeMux()
 	a.Mount(mux)
 
+	// First-boot brain bootstrap (CONTROL_PLANE.md # Locked: host-agent launches
+	// the brain container; BUILD.md # First-boot brain bootstrap). Docker is
+	// ready by here — host-agent.service is ordered After=docker.service. The
+	// socket is already bound above, so the brain can reach it on first call.
+	// Best-effort: a failure (including a refused protocol-major mismatch) leaves
+	// host-agent serving its socket so the box stays diagnosable; it does not
+	// tear host-agent down.
+	brainCtx, brainCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	if err := brainlaunch.Launch(brainCtx, brainlaunch.NewCLIDocker(), brainLaunchConfig(sockPath)); err != nil {
+		slog.Error("brain launch failed; host-agent continues serving", "err", err)
+	}
+	brainCancel()
+
 	slog.Info("host-agent-real listening", "sock", sockPath)
 	srv := &http.Server{Handler: hostagent.LogRequests(mux)}
 	if err := srv.Serve(ln); err != nil {
@@ -140,4 +156,29 @@ func main() {
 		_ = prov.Close()
 		os.Exit(1)
 	}
+}
+
+// brainLaunchConfig builds the brain bootstrap config from the environment.
+// Defaults are the production paths (BUILD.md # First-boot brain bootstrap); the
+// image ref and bundled-tarball path are overridable so the QEMU test lane can
+// point at its dev tag and baked bundle. The data root is fixed at /var/lib/malmo
+// (STORAGE.md), with the brain's SQLite state under it; the brain dials the same
+// agent socket host-agent just bound.
+func brainLaunchConfig(sockPath string) brainlaunch.Config {
+	const dataDir = "/var/lib/malmo"
+	return brainlaunch.Config{
+		Image:         env("MALMO_BRAIN_IMAGE", "malmo-brain:latest"),
+		ImageTar:      env("MALMO_BRAIN_IMAGE_TAR", filepath.Join(dataDir, "brain-image.tar")),
+		ContainerName: "malmo-brain",
+		DataDir:       dataDir,
+		StateDir:      filepath.Join(dataDir, "state"),
+		SocketPath:    sockPath,
+	}
+}
+
+func env(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }

@@ -2,19 +2,30 @@ package lifecycle
 
 // Managed data services — Tier 1 (SERVICE_PROVISIONING.md). The brain runs one
 // shared container per service type+version (lazy spinup), and provisions a
-// per-app database+role inside it. Credentials are injected back into the app
-// as MALMO_SERVICE_<NAME>_*. v1 supports Postgres and the MySQL family
-// (mysql, mariadb — one code path, per-engine deltas only); Redis is staged
-// after.
+// per-app credential inside it. Credentials are injected back into the app as
+// MALMO_SERVICE_<NAME>_*. v1 supports Postgres, the MySQL family (mysql,
+// mariadb — one code path, per-engine deltas only), and Valkey. The SQL engines
+// get a per-app database+role; Valkey has no database concept, so the per-app
+// unit is an ACL user with full keyspace — the credential itself is the
+// isolation boundary (revocable on uninstall), not a keyspace partition.
+//
+// Valkey is the BSD-3 Linux Foundation fork of Redis 7.2.4; malmo runs it for
+// both the `valkey` and the `redis` manifest types — `redis` is a pure
+// compatibility alias, normalized to the Valkey engine (redis 7 → valkey 8) by
+// normalizeEngine before anything in this file touches it, so the maps and code
+// paths below only ever know "valkey". malmo never runs upstream Redis at any
+// version: Redis 7.4+ is RSALv2/SSPLv1 and Redis 8+ is AGPLv3, both on malmo's
+// avoid-list (DECISIONS.md 2026-06-13).
 //
 // Provisioning runs through `docker exec` of the service's own client (psql /
-// mysql / mariadb, DockerDriver.Exec) rather than a Go SQL client, so the brain
-// never joins the service's Docker network (DECISIONS.md 2026-06-02 — control
-// plane off app-reachable networks). Inside the official postgres image the
-// local unix socket trusts the postgres superuser, so no password is needed for
-// the exec'd psql; the MySQL-family images export the root password to the
-// container environment, which the exec'd shell expands in place — it never
-// appears in host-side argv.
+// mysql / mariadb / valkey-cli, DockerDriver.Exec) rather than a Go client, so
+// the brain never joins the service's Docker network (DECISIONS.md 2026-06-02 —
+// control plane off app-reachable networks). Inside the official postgres image
+// the local unix socket trusts the postgres superuser, so no password is needed
+// for the exec'd psql; the MySQL-family images export the root password to the
+// container environment, which the exec'd shell expands in place; the Valkey
+// superuser password rides REDISCLI_AUTH in the container environment, which
+// valkey-cli reads automatically — none appear in host-side argv.
 
 import (
 	"context"
@@ -38,21 +49,40 @@ import (
 // init (initdb / mysqld --initialize).
 const serviceReadyTimeout = 90 * time.Second
 
-// servicePort is the in-container port each managed service kind listens on.
-var servicePort = map[string]int{"postgres": 5432, "mysql": 3306, "mariadb": 3306}
+// normalizeEngine maps a declared service (manifest) type+version to the engine
+// identity the brain actually provisions. `redis` is a BSD-3 compatibility alias
+// for the Valkey engine: a `redis: "7"` declaration normalizes to `valkey: "8"`
+// (Valkey 8 is RESP/ACL-compatible with Redis 7), so a redis-7 app and a
+// valkey-8 app coalesce onto the one shared malmo-svc-valkey-8 instance. malmo
+// never runs upstream Redis (license: see file header). All other types pass
+// through unchanged. Normalization happens once, early (provisionServices and
+// serviceNetworkNames), so the maps and provisioning paths below only ever see
+// "valkey".
+func normalizeEngine(kind, version string) (string, string) {
+	if kind == "redis" {
+		return "valkey", "8"
+	}
+	return kind, version
+}
 
-// serviceTag maps a managed kind to the upstream image repo; the version is the
-// tag. v1 pins by tag (digest-pinning the service image is deferred, NEXT.md).
-var serviceImageRepo = map[string]string{"postgres": "postgres", "mysql": "mysql", "mariadb": "mariadb"}
+// servicePort is the in-container port each managed service kind listens on.
+var servicePort = map[string]int{"postgres": 5432, "mysql": 3306, "mariadb": 3306, "valkey": 6379}
+
+// serviceImageRepo maps a managed kind to the upstream image repo; the version
+// is the tag. v1 pins by tag (digest-pinning the service image is deferred,
+// NEXT.md). valkey/valkey is the BSD-3 image (never upstream redis).
+var serviceImageRepo = map[string]string{"postgres": "postgres", "mysql": "mysql", "mariadb": "mariadb", "valkey": "valkey/valkey"}
 
 // serviceDSNScheme is the URL scheme writeEnv stamps into MALMO_SERVICE_*_DSN.
-// MariaDB speaks the MySQL wire protocol, so both family members use mysql://.
-var serviceDSNScheme = map[string]string{"postgres": "postgres", "mysql": "mysql", "mariadb": "mysql"}
+// MariaDB speaks the MySQL wire protocol, so both family members use mysql://;
+// Valkey speaks RESP, so the universal redis:// scheme every client understands.
+var serviceDSNScheme = map[string]string{"postgres": "postgres", "mysql": "mysql", "mariadb": "mysql", "valkey": "redis"}
 
-// provisionedKinds is the set of service types the brain can actually provision.
-// A schema-valid but unprovisioned type (redis) fails install with a clear
-// error before anything is spun up.
-var provisionedKinds = map[string]bool{"postgres": true, "mysql": true, "mariadb": true}
+// provisionedKinds is the set of engine identities the brain can actually
+// provision (after normalizeEngine — `redis` never reaches here). A schema-valid
+// but unprovisioned type fails install with a clear error before anything is
+// spun up.
+var provisionedKinds = map[string]bool{"postgres": true, "mysql": true, "mariadb": true, "valkey": true}
 
 // mysqlTools names the per-image client binaries and root-password env var for
 // the MySQL family. The mariadb image ships mariadb-named binaries (the mysql
@@ -100,7 +130,11 @@ func serviceNetworkNames(services map[string]manifest.ServiceDep) []string {
 	var out []string
 	for _, key := range sortedServiceKeys(services) {
 		dep := services[key]
-		n := serviceNetworkName(dep.Type, dep.Version)
+		// Normalize first: a redis-7 app must attach to the valkey-8 network to
+		// reach the coalesced instance — the app key derives from the engine, not
+		// the declared alias.
+		engine, engVersion := normalizeEngine(dep.Type, dep.Version)
+		n := serviceNetworkName(engine, engVersion)
 		if !seen[n] {
 			seen[n] = true
 			out = append(out, n)
@@ -131,32 +165,44 @@ func (m *Manager) provisionServices(ctx context.Context, instanceID, manifestID 
 	var grants []store.ServiceGrant
 	for _, key := range sortedServiceKeys(services) {
 		dep := services[key]
-		if !provisionedKinds[dep.Type] {
-			return nil, fmt.Errorf("managed service %q (%s) is not provisioned yet", key, dep.Type)
+		// Normalize the declared type to the engine identity once, here, before
+		// anything touches the maps or the provisioning paths: `redis` is a BSD-3
+		// alias to the Valkey engine. The grant stores the engine identity, so
+		// everything downstream (compose, names, ready probe, drop, DSN) keys off
+		// valkey and never sees "redis".
+		engine, engVersion := normalizeEngine(dep.Type, dep.Version)
+		if !provisionedKinds[engine] {
+			return nil, fmt.Errorf("managed service %q (%s) is not provisioned yet", key, engine)
 		}
-		if err := m.ensureServiceInstance(ctx, dep.Type, dep.Version); err != nil {
-			return nil, fmt.Errorf("ensure %s-%s: %w", dep.Type, dep.Version, err)
+		if err := m.ensureServiceInstance(ctx, engine, engVersion); err != nil {
+			return nil, fmt.Errorf("ensure %s-%s: %w", engine, engVersion, err)
 		}
 		stem := sanitizeIdent(manifestID)
 		// MySQL caps user names at 32 chars (Postgres truncates past 63); the
 		// role name is the db name, so bound the stem to fit "<stem>_xxxx".
-		if _, isMySQL := mysqlTools[dep.Type]; isMySQL && len(stem) > 26 {
+		if _, isMySQL := mysqlTools[engine]; isMySQL && len(stem) > 26 {
 			stem = stem[:26]
 		}
-		dbName := stem + "_" + randSuffix()
+		// name is the per-app db+role for the SQL engines and the ACL username for
+		// Valkey (which has no database).
+		name := stem + "_" + randSuffix()
 		pw, err := randSecret(24)
 		if err != nil {
 			return nil, fmt.Errorf("service password: %w", err)
 		}
-		if err := m.provisionDB(ctx, dep.Type, dep.Version, dbName, pw); err != nil {
-			return nil, fmt.Errorf("provision %s db: %w", key, err)
+		if err := m.provisionDB(ctx, engine, engVersion, name, pw); err != nil {
+			return nil, fmt.Errorf("provision %s: %w", key, err)
 		}
-		grants = append(grants, store.ServiceGrant{
-			LogicalName: key, Kind: dep.Type, Version: dep.Version,
-			DBName: dbName, RoleName: dbName, Password: pw,
-		})
+		grant := store.ServiceGrant{
+			LogicalName: key, Kind: engine, Version: engVersion,
+			RoleName: name, Password: pw,
+		}
+		if engine != "valkey" {
+			grant.DBName = name // Valkey has no database; the ACL user is the boundary.
+		}
+		grants = append(grants, grant)
 		slog.Info("provisioned managed service",
-			"instance_id", instanceID, "service", key, "kind", dep.Type, "version", dep.Version)
+			"instance_id", instanceID, "service", key, "kind", engine, "version", engVersion)
 	}
 	return grants, nil
 }
@@ -202,12 +248,18 @@ func (m *Manager) ensureServiceInstance(ctx context.Context, kind, version strin
 // `pg_isready` over the local socket (exit 0 = accepting connections), which
 // also clears the initdb window. MySQL family: an admin ping over TCP only —
 // during first-boot init the entrypoint runs a temporary socket-only server
-// (--skip-networking) that a socket ping would mistake for ready.
+// (--skip-networking) that a socket ping would mistake for ready. Valkey: a
+// `valkey-cli ping` that must return PONG — valkey-cli authenticates as the
+// default user via REDISCLI_AUTH from the container env, so a NOAUTH reply (no
+// PONG) keeps the probe waiting rather than passing falsely.
 func serviceReadyProbe(kind string) []string {
 	if t, ok := mysqlTools[kind]; ok {
 		return []string{"sh", "-c", fmt.Sprintf(
 			`MYSQL_PWD="$%s" exec %s ping -h127.0.0.1 --protocol=TCP -uroot --silent`,
 			t.rootPWVar, t.admin)}
+	}
+	if kind == "valkey" {
+		return []string{"sh", "-c", "valkey-cli ping | grep -q PONG"}
 	}
 	return []string{"pg_isready", "-U", "postgres", "-q"}
 }
@@ -235,14 +287,18 @@ func (m *Manager) waitServiceReady(ctx context.Context, kind, version string) er
 	}
 }
 
-// provisionDB creates the per-app database+role inside the shared instance of
-// the right engine. Callers have already gated on provisionedKinds.
-func (m *Manager) provisionDB(ctx context.Context, kind, version, dbName, password string) error {
+// provisionDB creates the per-app credential inside the shared instance of the
+// right engine: a database+role for the SQL engines, an ACL user for Valkey
+// (name carries the db+role name for SQL, the ACL username for Valkey). Callers
+// have already normalized the kind (redis → valkey) and gated on provisionedKinds.
+func (m *Manager) provisionDB(ctx context.Context, kind, version, name, password string) error {
 	switch kind {
 	case "postgres":
-		return m.provisionPostgresDB(ctx, version, dbName, password)
+		return m.provisionPostgresDB(ctx, version, name, password)
 	case "mysql", "mariadb":
-		return m.provisionMySQLDB(ctx, kind, version, dbName, password)
+		return m.provisionMySQLDB(ctx, kind, version, name, password)
+	case "valkey":
+		return m.provisionValkeyACL(ctx, version, name, password)
 	default:
 		return fmt.Errorf("managed service kind %q is not provisioned yet", kind)
 	}
@@ -288,6 +344,39 @@ func (m *Manager) provisionMySQLDB(ctx context.Context, kind, version, dbName, p
 	return nil
 }
 
+// provisionValkeyACL creates the per-app ACL user inside the shared Valkey
+// container via docker-exec valkey-cli. The user gets the full keyspace (~*) and
+// all pub/sub channels (&*) — Valkey denies channels by default — and every
+// command except @admin and the keyspace-destruction commands, so a compromised
+// app can't touch the ACL system, CONFIG, SHUTDOWN, or replication and subvert
+// the shared instance (-@admin), nor wipe the shared keyspace every other app
+// reads from (-flushall -flushdb -swapdb). Subtracting those three by name
+// rather than -@dangerous keeps INFO/KEYS/SORT — also @dangerous, and called by
+// ordinary clients on connect — reachable. The keyspace is still shared, so this
+// blocks cross-app *destruction*, not cross-app reads; per-app key confidentiality
+// is the deferred isolation hardening (NEXT.md # Managed-service per-app key
+// isolation, SERVICE_PROVISIONING.md # Per-app isolation). The credential is the
+// per-app isolation boundary, revoked by ACL DELUSER on uninstall. valkey-cli runs
+// as the default (superuser) account, authenticated by REDISCLI_AUTH from the
+// container env; the per-app password rides argv as the ACL `>password` token
+// (base64url, no shell hazards) — only the superuser password is kept out of
+// argv. ACL SAVE persists the user to the aclfile so it survives a service
+// restart (Valkey ACLs live in the config, not the keyspace, unlike
+// Postgres/MySQL accounts).
+func (m *Manager) provisionValkeyACL(ctx context.Context, version, username, password string) error {
+	container := serviceContainerName("valkey", version)
+	if out, err := m.docker.Exec(ctx, container, []string{
+		"valkey-cli", "ACL", "SETUSER", username, "on", ">" + password,
+		"~*", "&*", "+@all", "-@admin", "-flushall", "-flushdb", "-swapdb",
+	}); err != nil {
+		return fmt.Errorf("valkey acl setuser: %w\n%s", err, out)
+	}
+	if out, err := m.docker.Exec(ctx, container, []string{"valkey-cli", "ACL", "SAVE"}); err != nil {
+		return fmt.Errorf("valkey acl save: %w\n%s", err, out)
+	}
+	return nil
+}
+
 // dropServiceGrants reverses provisionServices: it drops each grant's database
 // and role inside the shared instance. Best-effort — a failure is logged, never
 // fatal (uninstall must always complete). FORCE terminates any straggler
@@ -298,26 +387,47 @@ func (m *Manager) dropServiceGrants(ctx context.Context, instanceID string, gran
 			continue
 		}
 		container := serviceContainerName(g.Kind, g.Version)
-		// Postgres: separate -c per statement — DROP DATABASE, like CREATE, cannot
-		// run inside a transaction block, and FORCE terminates any straggler
-		// connection. MySQL family: one batch run, same $1 shape as provisioning.
-		args := []string{
+		// One exec per command. Postgres: separate -c per statement — DROP
+		// DATABASE, like CREATE, cannot run inside a transaction block, and FORCE
+		// terminates any straggler connection. MySQL family: one batch run, same $1
+		// shape as provisioning. Valkey: ACL DELUSER then ACL SAVE (persist the
+		// removal to the aclfile).
+		cmds := [][]string{{
 			"psql", "-U", "postgres", "-v", "ON_ERROR_STOP=1",
 			"-c", fmt.Sprintf(`DROP DATABASE IF EXISTS "%s" WITH (FORCE)`, g.DBName),
 			"-c", fmt.Sprintf(`DROP ROLE IF EXISTS "%s"`, g.RoleName),
-		}
+		}}
 		if t, ok := mysqlTools[g.Kind]; ok {
 			sql := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`; DROP USER IF EXISTS '%s'@'%%'", g.DBName, g.RoleName)
-			args = []string{
+			cmds = [][]string{{
 				"sh", "-c", fmt.Sprintf(`MYSQL_PWD="$%s" exec %s -uroot -e "$1"`, t.rootPWVar, t.client), "sh", sql,
+			}}
+		}
+		if g.Kind == "valkey" {
+			// DELUSER revokes in memory; SAVE persists the removal to the aclfile.
+			// If DELUSER succeeds but SAVE fails (best-effort, logged below), a
+			// restart reloads the user from the unchanged aclfile — but the grant
+			// row is gone by then, so the password is recorded nowhere and no app
+			// holds it: a harmless orphan, pruned whenever the reconcile loop that
+			// owns the deferred grace-shutdown lands (NEXT.md # Managed-service
+			// lifecycle gaps). Symmetric with the provisioning-side orphan.
+			cmds = [][]string{
+				{"valkey-cli", "ACL", "DELUSER", g.RoleName},
+				{"valkey-cli", "ACL", "SAVE"},
 			}
 		}
-		if out, err := m.docker.Exec(ctx, container, args); err != nil {
-			slog.Warn("drop managed-service db", "instance_id", instanceID,
-				"service", g.LogicalName, "db", g.DBName, "err", err, "output", strings.TrimSpace(out))
-			continue
+		failed := false
+		for _, cmd := range cmds {
+			if out, err := m.docker.Exec(ctx, container, cmd); err != nil {
+				slog.Warn("drop managed-service grant", "instance_id", instanceID,
+					"service", g.LogicalName, "kind", g.Kind, "err", err, "output", strings.TrimSpace(out))
+				failed = true
+				break
+			}
 		}
-		slog.Info("dropped managed-service db", "instance_id", instanceID, "service", g.LogicalName)
+		if !failed {
+			slog.Info("dropped managed-service grant", "instance_id", instanceID, "service", g.LogicalName)
+		}
 	}
 }
 
@@ -354,9 +464,24 @@ func (m *Manager) writeServiceDir(kind, version, superuserPW string) error {
 	if err := os.MkdirAll(filepath.Join(dir, "data"), 0o700); err != nil {
 		return err
 	}
-	compose, pwVar := postgresServiceCompose(version), "POSTGRES_SUPERUSER_PASSWORD"
-	if t, ok := mysqlTools[kind]; ok {
-		compose, pwVar = mysqlServiceCompose(kind, version), t.rootPWVar
+	var compose, pwVar string
+	switch {
+	case kind == "valkey":
+		compose, pwVar = valkeyServiceCompose(version), "VALKEY_SUPERUSER_PASSWORD"
+		// Bootstrap the ACL file with the default (superuser) account so valkey can
+		// start; per-app users are ACL SETUSER'd in afterward and ACL SAVE'd to it.
+		// The valkey entrypoint chowns the data dir to the valkey user, so it can
+		// rewrite the file on ACL SAVE.
+		acl := fmt.Sprintf("user default on >%s ~* &* +@all\n", superuserPW)
+		if err := os.WriteFile(filepath.Join(dir, "data", "users.acl"), []byte(acl), 0o600); err != nil {
+			return err
+		}
+	default:
+		if t, ok := mysqlTools[kind]; ok {
+			compose, pwVar = mysqlServiceCompose(kind, version), t.rootPWVar
+		} else {
+			compose, pwVar = postgresServiceCompose(version), "POSTGRES_SUPERUSER_PASSWORD"
+		}
 	}
 	if err := os.WriteFile(filepath.Join(dir, "compose.yml"), []byte(compose), 0o644); err != nil {
 		return err
@@ -438,6 +563,47 @@ networks:
     name: %s
     external: true
 `, kind, image, container, t.rootPWVar, t.rootPWVar, alias, t.rootPWVar, t.admin, serviceName(kind, version), netName)
+}
+
+// valkeyServiceCompose renders the shared Valkey compose — same shape as the SQL
+// services: external --internal network, versioned DNS alias, fixed
+// container_name exec handle. Valkey runs with an external aclfile on the data
+// volume so per-app ACL users persist across restarts (Valkey ACLs are config,
+// not keyspace); the default (superuser) account is bootstrapped into that file
+// by writeServiceDir. REDISCLI_AUTH (valkey-cli honors the redis env var name)
+// carries the superuser password into the container env so the brain's exec'd
+// valkey-cli and the healthcheck authenticate without it ever reaching argv.
+func valkeyServiceCompose(version string) string {
+	container := serviceContainerName("valkey", version)
+	netName := serviceNetworkName("valkey", version)
+	alias := serviceDNSAlias("valkey", version)
+	image := serviceImageRepo["valkey"] + ":" + version
+	return fmt.Sprintf(`services:
+  valkey:
+    image: %s
+    container_name: %s
+    command: ["valkey-server", "--aclfile", "/data/users.acl"]
+    environment:
+      REDISCLI_AUTH: ${VALKEY_SUPERUSER_PASSWORD}
+    volumes:
+      - ./data:/data
+    networks:
+      svc:
+        aliases:
+          - %s
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    labels:
+      malmo.service: %s
+networks:
+  svc:
+    name: %s
+    external: true
+`, image, container, alias, serviceName("valkey", version), netName)
 }
 
 // sanitizeIdent reduces a manifest id to a safe SQL identifier stem: lowercase

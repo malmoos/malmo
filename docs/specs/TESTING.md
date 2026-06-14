@@ -60,6 +60,31 @@ Implementation: built on `mkosi qemu` (or the equivalent for whichever image-bui
 
 Note on "reboot + unseal" scenarios (the TPM2 unseal happy path, and the slow lane's TPM rot simulation): a reboot that must *withhold* the recovery passphrase on the second boot is realized as **two sequential QEMU processes** sharing one disk overlay + OVMF vars + swtpm state dir (a faithful TPM power cycle — PCRs re-measure identically, SRK/NVRAM persist), not an in-guest `systemctl reboot`. The recovery passphrase is delivered as an SMBIOS type-11 credential fixed at QEMU launch and can't be withheld partway through a single long-lived process, so proving *unattended* unseal (no passphrase, TPM2-only) requires a fresh process with the credential omitted. Realized in slice 0023; see `docs/progress/luks-tpm-enrollment.md`.
 
+### Full-stack control-plane integration
+
+Everything above boots the **host-OS layer** — storage assembly, LUKS/TPM, NetworkManager/Avahi — but deliberately stubs the malmo *application* out of the VM: `host-agent-real` is replaced with `/bin/true`, and no brain, UI, Caddy, or Docker app runs. The matrix proves the box reaches "storage ready," not "dashboard reachable with an app installed."
+
+This sub-lane closes that gap. It is the **bridge between the inner loop** (native brain, fake host-agent — `docs/dev/running-locally.md`) **and the boot/storage assertions above**: the first time the whole production topology runs together on real Debian. It is the same QEMU+swtpm harness (`dev/test-qemu/`), not a new rig — it un-stubs the parts the boot matrix mocks.
+
+What it adds on top of a happy-path boot:
+
+- **The control-plane images are baked in, not pulled.** `malmo-brain` and `malmo-ui` are built on the host, `docker save`'d to tarballs, and sourced into the image; the VM `docker load`s them at first boot. This is the same offline-first mechanism `BUILD.md` # First-boot brain bootstrap specifies for the ISO, applied to the test image — hermetic, no registry, no network dependency in CI.
+- **The real launch chain runs.** `host-agent.service` runs the real `host-agent-real` (not `/bin/true`); host-agent launches the brain (`CONTROL_PLANE.md` # Locked: host-agent launches the brain container); the brain launches Caddy, `malmo-ui`, and the docker-socket-proxy. The production topology `host-agent → malmo-brain → (malmo-caddy + malmo-ui)` is exercised end-to-end.
+- **A real, headless first-run.** `/setup` creates the admin account through the real PAM/`useradd`/`chpasswd` path (`FIRST_RUN.md`, `USERS_AND_GROUPS.md`), driven over SSH/serial with no interactive UI — the start of the headless-automation path the slow-lane ISO test (# Slow lane) completes.
+- **A real app install.** A catalog app (`whoami`) installs end-to-end: real `docker compose up`, a real Caddy route inserted via the admin API, a real per-app `.local` record published via Avahi DBus, and real bind mounts into the use-case folders.
+
+Assertions (in priority order):
+
+| Test | Assertion |
+|---|---|
+| Dashboard reachable | After full boot, `GET /api/v1/...` via the LAN Caddy returns 200; the SPA loads from `malmo-ui` |
+| Real PAM login | The first-run admin authenticates against `/etc/shadow` through host-agent `verify-password` — no brain-side password hash |
+| App install end-to-end | `whoami` installs; its container runs; `whoami.local` resolves; the app's route returns its page through Caddy |
+| Content survives uninstall | A file written under a use-case folder is still present after the app is uninstalled (`STORAGE.md` # Files are first-class) |
+| Socket-proxy boundary | The brain reaches Docker only via the proxy allowlist; the raw `/var/run/docker.sock` is not mounted into the brain container (`CONTROL_PLANE.md` # Locked: Docker socket exposure) |
+
+This sub-lane runs in the medium budget when the image is cached; the first build (two extra images) costs more. It is the foundation the slow-lane ISO end-to-end test builds on — same assertions, driven from a real installer flow instead of a pre-baked image.
+
 ## Slow lane — Soak + ISO end-to-end (nightly on `main`)
 
 **What it catches:**

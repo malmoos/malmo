@@ -186,13 +186,13 @@ services:
     version: "15"                     # version pin
     name: photoprism_db               # logical name within this app
   cache:
-    type: redis
-    version: "7"
+    type: valkey
+    version: "8"
 ```
 
 The brain provisions the resource (e.g., creates a database in the shared Postgres-15 instance with a scoped user) and **injects credentials as environment variables**.
 
-Available types and versions (`SERVICE_PROVISIONING.md` # Catalog (v1)): `postgres` (15, 16), `mysql` (8.0, 8.4), `mariadb` (10.11, 11.4), `redis` (7 — schema-valid, provisioning staged). A type/version outside this set is rejected at manifest parse time. The MySQL family injects port 3306 and a `mysql://` DSN for both engines (one wire protocol).
+Available types and versions (`SERVICE_PROVISIONING.md` # Catalog (v1)): `postgres` (15, 16), `mysql` (8.0, 8.4), `mariadb` (10.11, 11.4), `valkey` (8). `redis` (7) is accepted as a **compatibility alias for `valkey`** — it always provisions the BSD-3 Valkey engine underneath, never upstream Redis (`DECISIONS.md` 2026-06-13); new manifests should prefer `valkey`. A type/version outside this set is rejected at manifest parse time. The MySQL family injects port 3306 and a `mysql://` DSN for both engines (one wire protocol); Valkey injects port 6379 and a `redis://` DSN (the universal RESP scheme).
 
 **Naming convention: app-defined.** The malmo brain exposes the credentials under stable, documented variable names (e.g., `MALMO_SERVICE_DATABASE_HOST`, `MALMO_SERVICE_DATABASE_USER`, `MALMO_SERVICE_DATABASE_PASSWORD`, `MALMO_SERVICE_DATABASE_NAME`, `MALMO_SERVICE_DATABASE_DSN`). The app's compose file maps these to whatever variables the app actually expects:
 
@@ -226,6 +226,15 @@ environment:
 ```
 
 **The value is generated once and stays stable** for the life of the instance — it is persisted and re-emitted on every restart, never re-rolled, because a token-signing secret that changed underneath the app would invalidate every live session. `name` is lowercase snake_case (so the uppercased env-var suffix is unambiguous); names are unique within a manifest. See `SERVICE_PROVISIONING.md` # Env-var injection.
+
+**`show: true` surfaces a secret's value to the instance owner** (and admins) on the app detail page (`DASHBOARD.md` # Installed apps), gated to the same owner-or-admin rule as the app's controls. Set it for a *bootstrap* credential the user must read to finish first sign-in — a self-authenticating app's setup token — so the manifest never has to ship a published constant as its fallback. Omitted (the default) keeps a secret internal: a managed-service password the app consumes but the user never needs is never revealed, so a single reveal can't expose every injected credential.
+
+```yaml
+secrets:
+  - name: setup_token   # owner reads this once to set a password
+    show: true
+  - name: auth          # internal: signs sessions, never shown
+```
 
 ### D3. Outgoing mail
 
@@ -447,7 +456,7 @@ permissions:
 - **`needs_secure_context` is an install-time warning, not a routing override or install block.** Apps declare it honestly; the brain warns the user if the current URL scheme is HTTP. The URL each app uses is determined by the global toggle in Settings, not the manifest.
 - **Public, versioned spec.** Third-party stores depend on it.
 - **Env-var injection: app-defined naming.** App's compose maps malmo's stable `MALMO_SERVICE_*` variables to whatever names the app expects. No auto-rewrite. Authors adapt; we document.
-- **Generated secrets are declared, brain-generated, and stable.** A manifest declares `secrets: [{name, bytes?}]`; the brain draws each from a CSPRNG once at install, persists it, and injects it as `MALMO_SECRET_<NAME>` — re-emitted verbatim on every restart so token-signing secrets don't rotate underneath live sessions. Same app-defined wiring as `MALMO_SERVICE_*` (# D2). Security hardening (delivery surface, at-rest, rotation) is tracked open in `NEXT.md` # App-secret injection hardening.
+- **Generated secrets are declared, brain-generated, and stable.** A manifest declares `secrets: [{name, bytes?, show?}]`; the brain draws each from a CSPRNG once at install, persists it, and injects it as `MALMO_SECRET_<NAME>` — re-emitted verbatim on every restart so token-signing secrets don't rotate underneath live sessions. Same app-defined wiring as `MALMO_SERVICE_*` (# D2). `show: true` makes one owner-visible on the app detail page (so a self-auth app's bootstrap token can be per-instance random, not a published constant — #152); omitted keeps it internal. Security hardening (delivery surface, at-rest, rotation) is tracked open in `NEXT.md` # App-secret injection hardening.
 - **Outgoing mail is declared optional-only (`mail: {optional: true}`).** The declaration unlocks the install-time provider picker and per-instance `MALMO_MAIL_*` injection (# D3, `SERVICE_PROVISIONING.md` # BYO outgoing mail); unbound apps get nothing injected and must run with email off. `optional: false` (and a bare `mail: {}`) is rejected at parse in v1.
 - **Permissions granularity: medium for v1.** Internet, LAN, shared storage, devices, privileged, network isolation. Not coarse-only, not fine-grained Kubernetes-style.
 - **Custom apps can request managed services.** Allowed, not encouraged.

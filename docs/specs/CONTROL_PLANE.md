@@ -102,6 +102,7 @@ Persists its own state in **SQLite** (single file, no separate DB process for ma
 ### Layer 3 — managed sidecars
 
 - **Caddy** as the reverse proxy. Brain calls its admin API to add/remove routes when apps install. Built for dynamic config; native Let's Encrypt.
+- **`malmo-ui`** — the dashboard's static file server (`caddy:alpine` + the built UI bundle baked in). A brain-launched control-plane container; Caddy routes all non-API traffic to it. Stack and deploy model in `WEB_UI.md`.
 - **Managed Postgres** — one shared instance per major version users depend on. Brain is the only DB creator. Apps get scoped credentials.
 - **Managed Redis** similarly.
 - **User apps** — each its own compose stack, brain manages lifecycle.
@@ -157,19 +158,25 @@ Capability dropping (`CapabilityBoundingSet=`) is **not** used — host-agent's 
 
 - During its own startup, after Docker is ready, host-agent pulls (if needed) and starts the brain container with Docker restart policy `unless-stopped`. After that, Docker keeps brain alive across host-agent restarts; host-agent does not actively supervise brain during steady-state operation.
 - **One chain of custody.** host-agent owns every container on the box (apps, managed services, *and* brain). The reconciler pattern from `APP_LIFECYCLE.md` extends to brain naturally.
-- **Lockstep version check happens at launch.** host-agent refuses to start a brain whose major protocol version it doesn't speak (per `BRAIN_HOST_PROTOCOL.md`). One actor owns both endpoints' lifecycles, so the check is a function call, not an out-of-band reconciliation.
+- **Lockstep version check happens at launch.** host-agent refuses to start a brain whose major protocol version it doesn't speak (per `BRAIN_HOST_PROTOCOL.md`). One actor owns both endpoints' lifecycles, so the check is a function call, not an out-of-band reconciliation. Concretely (#164): the brain image declares its wire-protocol major in the `malmo.protocol.major` OCI label, and host-agent reads it (`docker image inspect`) and compares against its own `protocol.Major` before `docker run` — a mismatch, or a missing label, is a refused launch with a clear error, not a first-request failure.
 - The alternative — a separate `malmo-brain.service` systemd unit — was rejected because it splits the update flow (host-agent already owns the brain+UI update stream per `UPDATES.md`) and moves the lockstep version check out-of-band into first-request failure.
 
 ### Locked: Caddy is malmo substrate, runs as a container
 
 - Caddy is **not a Tier-2 OS integration**. It needs no NET_ADMIN, no external auth flow, has no user-facing settings page; it's malmo's own machinery, in the same bucket as the brain itself.
 - Runs as a container, started by the brain alongside other malmo-managed containers. Joins the malmo Docker network and publishes host ports 80 and 443.
-- Configured via Caddy's **admin API on `localhost:2019`** from inside the Docker network — no Caddyfile on disk, no `caddy reload` shell-out. Atomic reloads, no file I/O.
+- Configured via Caddy's **admin API on `:2019`**, reached by the brain over the Docker network — no Caddyfile on disk, no `caddy reload` shell-out. Atomic reloads, no file I/O. The admin endpoint binds `0.0.0.0:2019` (not `localhost`): the brain is a *separate* container, so it can't reach Caddy's loopback — the listener must be on the container's network interface. The host never publishes 2019 (only 80/443 are exposed), so it's reachable only from inside the Docker network. **Network-isolation invariant:** Caddy's admin API has no auth — its only protection is that nothing untrusted shares its network. So **app containers must never be attached to the network that carries the admin port.** Caddy reaches app upstreams by joining each app's own per-app network (Caddy connects outward); the control-plane network (brain, Caddy, `malmo-ui`, the socket proxy) stays trusted-only. An app on the same network as `:2019` could rewrite the entire route table.
 - **Catch-all 404 invariant.** Caddy's `malmo` server always has a final route at the end of `routes[]` with `@id=malmo-catchall` and no matcher, returning HTML 404 ("No app at this hostname"). The brain inserts dynamic per-app routes at index 0 (`POST /config/apps/http/servers/malmo/routes/0`) so the catch-all stays last. On startup the brain calls `EnsureCatchAll` which re-installs the catch-all if missing — survives Caddy state loss, hand-edits, or config drift. Returning 200 empty for unmatched routes is a UX failure and breaks tests that can't distinguish "routed" from "no-match".
 - **Updates ride the brain+UI stream**, not the Debian base stream — image tag in the release manifest, pulled and reconciled by host-agent + brain. Decouples Caddy version from Debian's release cadence.
 - **Performance is a non-issue for the household workload.** Docker bridge networking adds microseconds per connection — invisible at household scale. The heaviest "big file" path (SMB transfers of media to/from laptops) bypasses Caddy entirely: SMB is a Tier-2 host service on port 445. DLNA likewise. Caddy carries HTTP app traffic only (Jellyfin/Plex/Immich streaming, dashboards, app UIs); even a household of 4K streamers is well below containerized Caddy's ceiling.
 - **Memory overhead from containerization is negligible.** Containers are not VMs — same process, same RSS, no extra kernel or libc.
 - **Escape hatch if needed:** `--network=host` recovers host-level networking at the cost of internal-DNS service-name routing. We don't expect to need it.
+
+### Locked: the dashboard UI is a brain-launched container
+
+- The dashboard ships as its own `malmo-ui` container (`caddy:alpine` + the built UI bundle baked in — full deploy model in `WEB_UI.md`). It is **launched by the brain**, alongside Caddy and the docker-socket-proxy, as part of bringing up the control-plane stack — *not* by host-agent. host-agent's chain of custody stops at the brain (# Locked: host-agent launches the brain container); the brain owns every container downstream of itself, the UI included.
+- **Why the brain and not host-agent:** the UI version is bound to the brain's API version (the bundle declares the API minor it requires; `WEB_UI.md` # deploy model), and brain+UI update as one stream (`UPDATES.md`). Keeping both launches under the brain means the version pairing is enforced by the actor that already owns it, not split across the host-agent boundary.
+- The LAN-facing Caddy routes `/api/v1/*` (and the SSE/log streams) to `malmo-brain` and everything else to `malmo-ui` (`WEB_UI.md` # deploy model). Both are reconciled by the brain on startup the same way app containers are.
 
 ### Locked: implementation specifics
 

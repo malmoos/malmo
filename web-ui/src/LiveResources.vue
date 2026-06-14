@@ -122,6 +122,17 @@ function humanUptime(s: number): string {
   return `${m}m`;
 }
 
+// Hoisted out of the template: an inline `.map` closure over `sample.load`
+// defeats the `v-else` null-narrowing of `sample` (vue-tsc flags it), and
+// `noUncheckedIndexedAccess` makes the tuple index possibly-undefined. The
+// early null guard here narrows cleanly and iterating `s.load` drops the index.
+const loadLine = computed(() => {
+  const s = sample.value;
+  if (!s) return "";
+  const labels = ["1m", "5m", "15m"];
+  return s.load.map((v, i) => `${labels[i] ?? ""} ${v.toFixed(2)}`).join("  ");
+});
+
 const cpuBar = computed(() => (sample.value?.cpu_pct == null ? 0 : Math.min(100, sample.value.cpu_pct)));
 const memBar = computed(() => {
   const m = sample.value?.mem;

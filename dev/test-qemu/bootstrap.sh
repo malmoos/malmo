@@ -21,7 +21,7 @@ TEST_DIR="${REPO_ROOT}/dev/test-qemu"
 WORK="${REPO_ROOT}/.dev/qemu"
 EXTRA="${TEST_DIR}/mkosi.extra"
 CANARY="${WORK}/.malmo-medium-ready"
-CANARY_VERSION="v17"  # bump when mkosi.conf changes require a clean rebuild
+CANARY_VERSION="v18"  # bump when mkosi.conf changes require a clean rebuild
 PASSPHRASE_FILE="${TEST_DIR}/mkosi.passphrase"  # LUKS recovery key (slice 0023); gitignored
 IMAGE_OUT="${WORK}/malmo-medium.raw"
 SSH_KEY="${WORK}/ssh-key"
@@ -53,11 +53,17 @@ fi
 
 # --- 1. host preflight
 preflight_missing=()
-for tool in mkosi swtpm qemu-system-x86_64 qemu-img ssh ssh-keygen scp; do
+for tool in mkosi swtpm qemu-system-x86_64 qemu-img ssh ssh-keygen scp curl docker; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         preflight_missing+=("$tool")
     fi
 done
+
+# host-agent-real is a CGO binary (PAM); building it (#164, brain bootstrap)
+# needs the libpam development headers on the build host.
+if [ ! -f /usr/include/security/pam_appl.h ]; then
+    preflight_missing+=("libpam0g-dev (PAM headers for host-agent-real)")
+fi
 
 # OVMF firmware location varies by distro.
 OVMF_CODE=""
@@ -77,7 +83,7 @@ medium-lane host preflight: missing tooling
   ${preflight_missing[*]}
 
 Install (Ubuntu/Debian):
-  sudo apt-get install -y qemu-system-x86 swtpm ovmf openssh-client
+  sudo apt-get install -y qemu-system-x86 swtpm ovmf openssh-client libpam0g-dev
   # mkosi v22+: Ubuntu 20.04's apt has v9 (too old). Install via pipx:
   sudo apt-get install -y pipx
   pipx install mkosi
@@ -150,6 +156,20 @@ if [ -n "$CALLER" ]; then
 else
     CGO_ENABLED=0 "$GO" build -o "$NETVERIFY_BIN" \
         "${REPO_ROOT}/cmd/malmo-network-verify/"
+fi
+
+# host-agent-real (#164): the production privileged binary, which now launches
+# the brain container during its own startup. CGO on (PAM) + CGO_CFLAGS as the
+# Makefile sets — a dynamic binary linking the build host's libpam/glibc, run on
+# the Debian VM (which carries libpam0g in its base). Replaces the /bin/true
+# stub staged below so the real brain bootstrap runs on boot.
+HOSTAGENT_BIN="${WORK}/host-agent-real"
+if [ -n "$CALLER" ]; then
+    sudo -u "$CALLER" env CGO_ENABLED=1 CGO_CFLAGS=-D_GNU_SOURCE "$GO" build \
+        -o "$HOSTAGENT_BIN" "${REPO_ROOT}/cmd/host-agent-real/"
+else
+    CGO_ENABLED=1 CGO_CFLAGS=-D_GNU_SOURCE "$GO" build \
+        -o "$HOSTAGENT_BIN" "${REPO_ROOT}/cmd/host-agent-real/"
 fi
 
 # --- 3. SSH keypair
@@ -227,13 +247,26 @@ cp "${REPO_ROOT}/dist/systemd/malmo-storage-ready.target"   "$EXTRA/etc/systemd/
 cp "${REPO_ROOT}/dist/systemd/malmo-storage-verify.service" "$EXTRA/etc/systemd/system/"
 cp "${REPO_ROOT}/dist/systemd/malmo-recovery.target"        "$EXTRA/etc/systemd/system/"
 
-# host-agent.service references /usr/lib/malmo/host-agent-real which we
-# don't have in the medium-lane image (the brain stack isn't part of
-# this slice). Drop a /bin/true symlink so the unit loads if anything
-# inspects it; but DON'T enable the unit — nothing in /etc/systemd/system/
-# *.wants/ pulls host-agent.service in.
+# host-agent.service runs the real host-agent-real (#164): it binds the agent
+# socket and, after Docker is ready, launches the brain container (the postinst
+# enables the unit). A medium-lane drop-in points the brain bootstrap at the
+# bundle's dev-tagged image + tarball and orders host-agent after the first-boot
+# image load so the brain image is present when the bootstrap runs.
 cp "${REPO_ROOT}/dist/systemd/host-agent.service" "$EXTRA/etc/systemd/system/"
-ln -sf /bin/true "$EXTRA/usr/lib/malmo/host-agent-real"
+cp "$HOSTAGENT_BIN" "$EXTRA/usr/lib/malmo/host-agent-real"
+chmod 0755 "$EXTRA/usr/lib/malmo/host-agent-real"
+
+mkdir -p "$EXTRA/etc/systemd/system/host-agent.service.d"
+cat > "$EXTRA/etc/systemd/system/host-agent.service.d/10-malmo-brain-image.conf" <<'EOF'
+[Unit]
+# The brain image is docker-loaded by the first-boot oneshot; order after it so
+# the bootstrap finds it present rather than re-loading the tarball.
+After=malmo-load-images.service
+
+[Service]
+Environment=MALMO_BRAIN_IMAGE=malmo-brain:dev
+Environment=MALMO_BRAIN_IMAGE_TAR=/var/lib/malmo/control-plane-images/malmo-brain.tar
+EOF
 
 # storage-verify binary.
 cp "$VERIFY_BIN" "$EXTRA/usr/lib/malmo/malmo-storage-verify"
@@ -270,6 +303,48 @@ chmod 0600 "$EXTRA/root/.ssh/authorized_keys"
 cp "${TEST_DIR}/medium-assertions.sh" "$EXTRA/usr/local/bin/medium-assertions.sh"
 chmod 0755 "$EXTRA/usr/local/bin/medium-assertions.sh"
 
+# --- 4b. control-plane image bundle + Docker apt repo (M0, #163)
+# The medium-lane image runs Docker (baked from Docker's apt repo at build time)
+# and bakes the control-plane image tarballs, docker-loading them at first boot.
+# The VM has no network, so every image the brain's compose references must be a
+# local tarball (TESTING.md # Full-stack control-plane integration).
+
+# Build + save the four control-plane images. `docker save` writes to
+# .dev/control-plane/*.tar; the docker layer cache makes re-runs cheap.
+echo "building + saving control-plane image bundle (docker build)..."
+make -C "$REPO_ROOT" control-plane-images
+CP_BUNDLE="${REPO_ROOT}/.dev/control-plane"
+
+# Stage the tarballs into the image at /var/lib/malmo/control-plane-images/.
+mkdir -p "$EXTRA/var/lib/malmo/control-plane-images"
+cp "$CP_BUNDLE"/*.tar "$EXTRA/var/lib/malmo/control-plane-images/"
+
+# First-boot docker-load oneshot + its script (postinst wires the .wants symlink).
+cp "${TEST_DIR}/malmo-load-images.service" "$EXTRA/etc/systemd/system/"
+cp "${TEST_DIR}/load-control-plane-images.sh" "$EXTRA/usr/lib/malmo/load-control-plane-images.sh"
+chmod 0755 "$EXTRA/usr/lib/malmo/load-control-plane-images.sh"
+
+# Order docker.service after storage assembly (BOOT.md; #163). Best-effort
+# ordering, not a strict gate — Docker still starts if storage partially failed.
+mkdir -p "$EXTRA/etc/systemd/system/docker.service.d"
+cat > "$EXTRA/etc/systemd/system/docker.service.d/10-malmo-storage.conf" <<'EOF'
+[Unit]
+After=malmo-storage-ready.target
+EOF
+
+# Docker's apt repo for the image build (mkosi.conf # PackageManagerTrees).
+# The GPG key is fetched here — the build host has network; the VM never does.
+# bookworm pocket: the medium-lane image is Release=bookworm.
+PKGMNGR="${TEST_DIR}/mkosi.pkgmngr"
+rm -rf "$PKGMNGR"
+mkdir -p "$PKGMNGR/etc/apt/keyrings" "$PKGMNGR/etc/apt/sources.list.d"
+curl -fsSL https://download.docker.com/linux/debian/gpg \
+    -o "$PKGMNGR/etc/apt/keyrings/docker.asc"
+chmod a+r "$PKGMNGR/etc/apt/keyrings/docker.asc"
+cat > "$PKGMNGR/etc/apt/sources.list.d/docker.list" <<'EOF'
+deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable
+EOF
+
 # --- 5. mkosi build
 # Run as caller for cache ownership. mkosi auto-sudos for the privileged
 # ops it needs (loopback mount, etc.).
@@ -281,7 +356,7 @@ cd "$TEST_DIR"
 # the work dir mkosi writes into) to the caller. mkosi preserves mode
 # inside the image regardless of host ownership.
 if [ -n "$CALLER" ]; then
-    chown -R "$CALLER":"$(id -gn "$CALLER")" "$EXTRA" "$WORK"
+    chown -R "$CALLER":"$(id -gn "$CALLER")" "$EXTRA" "$WORK" "$PKGMNGR" "$CP_BUNDLE"
 fi
 # Resolve absolute path so the nested `sudo -u` invocation finds mkosi
 # even though sudo strips PATH (same idiom as $GO above).
