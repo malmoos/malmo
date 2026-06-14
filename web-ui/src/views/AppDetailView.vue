@@ -12,7 +12,6 @@ import { useRoute, RouterLink } from "vue-router";
 import { useQuery } from "@tanstack/vue-query";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { Loader2 } from "lucide-vue-next";
 import { api, type CatalogDetail } from "../api";
 import { useInstall } from "../useInstall";
 import { formatSize, safeExternalUrl } from "../utils";
@@ -245,12 +244,11 @@ const hasLinks = computed(
         <p class="text-sm">{{ duplicateInfo }}</p>
         <div class="flex gap-2">
           <button
-            class="inline-flex items-center rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+            class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
             :disabled="installing"
             @click="handleConfirmDuplicate"
           >
-            <Loader2 v-if="installing" class="mr-1.5 size-4 animate-spin" aria-hidden="true" />
-            {{ installing ? installPhaseLabel : "Install my own copy" }}
+            Install my own copy
           </button>
           <button class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted" @click="closeDialog">
             Cancel
