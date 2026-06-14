@@ -12,8 +12,15 @@ import (
 // is exercised with no Docker daemon. Zero value: image present, label matches
 // protocol.Major, container absent — the steady "image already loaded, fresh
 // box" path; tests override the fields they're probing.
+//
+// present is the default ImagePresent answer for any ref; presentByRef overrides
+// it per-ref so a test can express "proxy image absent, brain image present"
+// (the first-boot sequence loads each from its own tarball). Production's
+// CLIDocker.ImagePresent already queries each ref independently — this keeps the
+// fake honest to that.
 type fakeDocker struct {
 	present      bool
+	presentByRef map[string]bool
 	presentErr   error
 	loadErr      error
 	label        string
@@ -23,6 +30,7 @@ type fakeDocker struct {
 	runErr       error
 	netErr       error
 	loadCalls    int
+	loadPaths    []string
 	runCalls     int
 	netCalls     int
 	lastRun      RunSpec
@@ -35,11 +43,15 @@ func newFake() *fakeDocker {
 	return &fakeDocker{present: true, label: "1"}
 }
 
-func (f *fakeDocker) ImagePresent(context.Context, string) (bool, error) {
+func (f *fakeDocker) ImagePresent(_ context.Context, ref string) (bool, error) {
+	if v, ok := f.presentByRef[ref]; ok {
+		return v, f.presentErr
+	}
 	return f.present, f.presentErr
 }
-func (f *fakeDocker) Load(context.Context, string) error {
+func (f *fakeDocker) Load(_ context.Context, path string) error {
 	f.loadCalls++
+	f.loadPaths = append(f.loadPaths, path)
 	return f.loadErr
 }
 func (f *fakeDocker) ImageLabel(_ context.Context, _, label string) (string, error) {
@@ -218,11 +230,58 @@ func TestEnsureTransportLoadsAbsentProxyImage(t *testing.T) {
 	f := newFake()
 	f.present = false // proxy image not loaded yet
 
-	if err := EnsureTransport(context.Background(), f, testConfig()); err != nil {
+	cfg := testConfig()
+	if err := EnsureTransport(context.Background(), f, cfg); err != nil {
 		t.Fatalf("EnsureTransport: %v", err)
 	}
 	if f.loadCalls != 1 {
-		t.Errorf("load calls = %d, want 1 (absent proxy image loaded)", f.loadCalls)
+		t.Fatalf("load calls = %d, want 1 (absent proxy image loaded)", f.loadCalls)
+	}
+	if f.loadPaths[0] != cfg.ProxyImageTar {
+		t.Errorf("loaded %q, want the proxy tarball %q", f.loadPaths[0], cfg.ProxyImageTar)
+	}
+	// A regression that loads the image and returns early (skipping Run) must
+	// fail here — loading is not the end of the absent-image path, launching is.
+	if f.runCalls != 1 {
+		t.Fatalf("run calls = %d, want 1 (proxy launched after load)", f.runCalls)
+	}
+	if f.lastRun.Name != "malmo-docker-proxy" {
+		t.Errorf("ran %q, want the proxy after loading its image", f.lastRun.Name)
+	}
+}
+
+// TestFirstBootSequenceLoadsEachImageFromItsOwnTarball mirrors host-agent's
+// first-boot order — EnsureTransport then Launch — on a fresh box where both the
+// proxy and brain images are absent. It proves each is loaded from its *own*
+// tarball (proxy ← ProxyImageTar, brain ← ImageTar), which a single shared
+// present bool can't express: the per-ref fake distinguishes the two refs the
+// way production's CLIDocker does.
+func TestFirstBootSequenceLoadsEachImageFromItsOwnTarball(t *testing.T) {
+	cfg := testConfig()
+	f := newFake()
+	f.presentByRef = map[string]bool{
+		cfg.ProxyImage: false, // both absent on a fresh box → both load
+		cfg.Image:      false,
+	}
+
+	if err := EnsureTransport(context.Background(), f, cfg); err != nil {
+		t.Fatalf("EnsureTransport: %v", err)
+	}
+	if err := Launch(context.Background(), f, cfg); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	want := []string{cfg.ProxyImageTar, cfg.ImageTar}
+	if len(f.loadPaths) != len(want) {
+		t.Fatalf("load paths = %v, want %v", f.loadPaths, want)
+	}
+	for i, w := range want {
+		if f.loadPaths[i] != w {
+			t.Errorf("load[%d] = %q, want %q", i, f.loadPaths[i], w)
+		}
+	}
+	// Proxy then brain — two distinct containers, in order.
+	if len(f.runSpecs) != 2 || f.runSpecs[0].Name != "malmo-docker-proxy" || f.runSpecs[1].Name != "malmo-brain" {
+		t.Errorf("ran %d containers (%+v), want [malmo-docker-proxy malmo-brain]", len(f.runSpecs), f.runSpecs)
 	}
 }
 
