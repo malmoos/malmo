@@ -21,7 +21,7 @@ TEST_DIR="${REPO_ROOT}/dev/test-qemu"
 WORK="${REPO_ROOT}/.dev/qemu"
 EXTRA="${TEST_DIR}/mkosi.extra"
 CANARY="${WORK}/.malmo-medium-ready"
-CANARY_VERSION="v19"  # bump when mkosi.conf changes require a clean rebuild
+CANARY_VERSION="v20"  # bump when mkosi.conf changes require a clean rebuild
 PASSPHRASE_FILE="${TEST_DIR}/mkosi.passphrase"  # LUKS recovery key (slice 0023); gitignored
 IMAGE_OUT="${WORK}/malmo-medium.raw"
 SSH_KEY="${WORK}/ssh-key"
@@ -206,6 +206,7 @@ mkdir -p "$EXTRA/etc/systemd/system" \
          "$EXTRA/usr/lib/malmo" \
          "$EXTRA/root/.ssh" \
          "$EXTRA/etc/ssh/sshd_config.d" \
+         "$EXTRA/etc/pam.d" \
          "$EXTRA/etc/malmo/secrets" \
          "$EXTRA/usr/local/bin"
 
@@ -276,6 +277,14 @@ Environment=MALMO_PROXY_IMAGE_TAR=/var/lib/malmo/control-plane-images/docker-soc
 Environment=MALMO_CONTROL_PLANE_DIR=/var/lib/malmo/control-plane
 Environment=MALMO_DASHBOARD_UI_UPSTREAM=malmo-ui:80
 EOF
+
+# PAM service for host-agent-real's verify-password (#166). pamverifier dials
+# the "malmo" PAM service; install the canonical stack (auth+account via
+# pam_unix) so the headless first-run admin authenticates against /etc/shadow.
+# Without it pam_start("malmo") falls back to /etc/pam.d/other (deny) and /login
+# 401s. The malmo group + sudo group it needs are provisioned at build time
+# (mkosi.postinst.chroot + the sudo package in mkosi.conf).
+cp "${REPO_ROOT}/dev/pam/malmo" "$EXTRA/etc/pam.d/malmo"
 
 # storage-verify binary.
 cp "$VERIFY_BIN" "$EXTRA/usr/lib/malmo/malmo-storage-verify"
