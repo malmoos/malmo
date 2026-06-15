@@ -125,7 +125,7 @@ services:
 
 // TestLiveMySQLProvisioning mirrors TestLivePostgresProvisioning for the MySQL
 // family: a real mysql:8.0 service container is lazily spun up, the per-app
-// DB+user is provisioned via docker-exec of the image's own client, the user
+// DB+user is provisioned via a one-shot run of the image's own client, the user
 // connects over TCP with the injected password, and the DB is dropped on
 // uninstall. MariaDB shares the code path (only the image, client binaries, and
 // root-password env var differ), so one live engine suffices.
@@ -221,7 +221,7 @@ services:
 // and proves the redis alias end-to-end: the manifest declares `type: redis,
 // version: "7"`, which normalizes to a real valkey/valkey:8 service container
 // (never upstream redis). The container is lazily spun up with an external
-// aclfile, the per-app ACL user is provisioned via docker-exec valkey-cli, that
+// aclfile, the per-app ACL user is provisioned via a one-shot valkey-cli, that
 // user authenticates and reads/writes the keyspace with the injected password,
 // and ACL DELUSER removes it on uninstall.
 //

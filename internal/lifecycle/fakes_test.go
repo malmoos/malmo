@@ -56,10 +56,16 @@ type fakeDocker struct {
 	serviceUpErr      error
 	controlPlaneUpErr error
 
-	// exec drives Exec: it returns scripted output/error per invocation. Default
-	// (nil) returns ("", nil) — used by readiness polls (pg_isready) and psql
-	// provisioning, both of which only care about the error.
-	exec func(container string, args []string) (string, error)
+	// runOneOff drives RunOneOff: it returns scripted output/error per invocation
+	// (matched on args). Default (nil) returns ("", nil) — provisioning only cares
+	// about the error. containerHealth, when set, overrides the readiness status
+	// ContainerHealth returns (default "healthy", so waitServiceReady passes).
+	runOneOff func(image, network, envFile string, args []string) (string, error)
+	// containerHealth overrides the status ContainerHealth returns (default
+	// "healthy"); containerHealthErr forces its error path (readiness inspect
+	// fails). When both are set the error wins.
+	containerHealth    string
+	containerHealthErr error
 
 	calls []call
 }
@@ -146,12 +152,23 @@ func (f *fakeDocker) ControlPlaneUp(_ context.Context, dir, project string) (str
 	return "", nil
 }
 
-func (f *fakeDocker) Exec(_ context.Context, container string, args []string) (string, error) {
-	f.record("Exec", container, strings.Join(args, " "))
-	if f.exec != nil {
-		return f.exec(container, args)
+func (f *fakeDocker) RunOneOff(_ context.Context, image, network, envFile string, args []string) (string, error) {
+	f.record("RunOneOff", image, network, envFile, strings.Join(args, " "))
+	if f.runOneOff != nil {
+		return f.runOneOff(image, network, envFile, args)
 	}
 	return "", nil
+}
+
+func (f *fakeDocker) ContainerHealth(_ context.Context, container string) (string, error) {
+	f.record("ContainerHealth", container)
+	if f.containerHealthErr != nil {
+		return "", f.containerHealthErr
+	}
+	if f.containerHealth != "" {
+		return f.containerHealth, nil
+	}
+	return "healthy", nil
 }
 
 func (f *fakeDocker) ComposeDown(_ context.Context, dir, project string) (string, error) {

@@ -144,6 +144,9 @@ type Manager struct {
 	healthWait time.Duration
 	// healthPoll is the inter-poll interval; production uses 2s.
 	healthPoll time.Duration
+	// serviceReadyWait bounds the managed-service readiness poll; production uses
+	// serviceReadyTimeout. Overridable in tests (mirrors healthWait).
+	serviceReadyWait time.Duration
 
 	// instLocks serializes lifecycle ops on a single existing instance
 	// (APP_LIFECYCLE.md # concurrency — one op at a time per instance). Stop,
@@ -160,7 +163,8 @@ func NewManager(st *store.Store, cat *catalog.Catalog, host HostDriver, cd Caddy
 		admit: admission.Check, bus: bus, stateDir: stateDir,
 		sharedRoot: defaultSharedRoot,
 		healthWait: healthWaitTimeout, healthPoll: 2 * time.Second,
-		instLocks: map[string]*sync.Mutex{},
+		serviceReadyWait: serviceReadyTimeout,
+		instLocks:        map[string]*sync.Mutex{},
 	}
 }
 

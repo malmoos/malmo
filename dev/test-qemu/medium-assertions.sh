@@ -369,6 +369,29 @@ grep -qE ' (200|401)' <<<"$api_status" \
 
 echo "control-plane M1b: stack up, proxy boundary held, dashboard + /api reachable"
 
+# --- managed-DB provisioning transport (#185): the brain provisions per-app
+# databases/roles by running the engine's client in a one-shot `docker run --rm`
+# container (output capture = a container *attach*), NOT a `docker exec` into the
+# long-running service container — because the socket-proxy denies the EXEC
+# family (CONTROL_PLANE.md # Docker socket exposure; DECISIONS.md 2026-06-15).
+# Exercise that exact capability against the *real* booted proxy, from the
+# brain's own vantage (its DOCKER_HOST is the proxy): a one-shot run+attach+rm
+# must succeed and a `docker exec` must still be refused. The full provision/
+# drop/readiness round-trip is covered by the dockerlive suite and is the M2
+# app-install lane in the VM; this is the transport-capability check #185 turns
+# on. The malmo-brain image is reused as both the docker-client context (it ships
+# the docker CLI) and the throwaway run-image (it ships /bin/sh) — no extra image
+# is bundled.
+oneshot="$(docker exec malmo-brain docker run --rm --entrypoint sh malmo-brain -c 'echo MALMO_ONESHOT_OK' 2>&1 || true)"
+grep -q 'MALMO_ONESHOT_OK' <<<"$oneshot" \
+    || fail "one-shot 'docker run --rm' (managed-DB provisioning transport) failed through the proxy: $oneshot"
+# EXEC must stay denied — the proxy boundary the provisioning re-architecture was
+# built to respect rather than widen.
+execout="$(docker exec malmo-brain docker exec malmo-caddy true 2>&1 || true)"
+grep -qE '403|[Ff]orbidden|denied' <<<"$execout" \
+    || fail "docker exec is NOT denied through the proxy (EXEC boundary breached): $execout"
+echo "managed-DB #185: one-shot run+attach permitted through the proxy, EXEC still denied"
+
 case "$PHASE" in
     first-boot)
         # The run-once enrollment unit (malmo-tpm-enroll.service) is

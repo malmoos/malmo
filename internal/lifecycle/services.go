@@ -17,15 +17,22 @@ package lifecycle
 // version: Redis 7.4+ is RSALv2/SSPLv1 and Redis 8+ is AGPLv3, both on malmo's
 // avoid-list (DECISIONS.md 2026-06-13).
 //
-// Provisioning runs through `docker exec` of the service's own client (psql /
-// mysql / mariadb / valkey-cli, DockerDriver.Exec) rather than a Go client, so
-// the brain never joins the service's Docker network (DECISIONS.md 2026-06-02 —
-// control plane off app-reachable networks). Inside the official postgres image
-// the local unix socket trusts the postgres superuser, so no password is needed
-// for the exec'd psql; the MySQL-family images export the root password to the
-// container environment, which the exec'd shell expands in place; the Valkey
-// superuser password rides REDISCLI_AUTH in the container environment, which
-// valkey-cli reads automatically — none appear in host-side argv.
+// Provisioning runs the service's own client (psql / mysql / mariadb /
+// valkey-cli) in a throwaway one-shot container — `docker run --rm --network
+// malmo-svc-<k>-<v> --env-file <serviceDir>/.env <serviceImage> <client …>`
+// (DockerDriver.RunOneOff) — rather than a Go SQL client or a `docker exec` into
+// the long-running service container. Two constraints shape this: the brain
+// never joins the service's Docker network (only the ephemeral container does —
+// DECISIONS.md 2026-06-02, control plane off app-reachable networks), and the
+// docker-socket-proxy that fronts the brain's only Docker path denies the EXEC
+// family, so `docker exec` is unavailable in production (DECISIONS.md 2026-06-14;
+// CONTROL_PLANE.md # Docker socket exposure). The client connects over TCP to
+// the service's <kind>-<version>.malmo.internal alias, so it authenticates with
+// a password: the superuser password rides --env-file (the same .env the service
+// compose uses) and a wrapper `sh -c` remaps it to the client's expected env var
+// (PGPASSWORD / MYSQL_PWD / REDISCLI_AUTH) so it never reaches host argv; the
+// per-app credential rides argv (base64url, no shell/SQL-quoting hazards), as it
+// did under docker exec.
 
 import (
 	"context"
@@ -101,7 +108,8 @@ func serviceName(kind, version string) string {
 	return kind + "-" + strings.ReplaceAll(version, ".", "-")
 }
 
-// serviceContainerName is the brain's docker-exec management handle.
+// serviceContainerName is the compose container_name and the brain's handle for
+// the readiness poll's `docker inspect` (the brain no longer execs into it).
 func serviceContainerName(kind, version string) string {
 	return "malmo-svc-" + serviceName(kind, version)
 }
@@ -244,40 +252,30 @@ func (m *Manager) ensureServiceInstance(ctx context.Context, kind, version strin
 	return nil
 }
 
-// serviceReadyProbe is the per-kind in-container readiness command. Postgres:
-// `pg_isready` over the local socket (exit 0 = accepting connections), which
-// also clears the initdb window. MySQL family: an admin ping over TCP only —
-// during first-boot init the entrypoint runs a temporary socket-only server
-// (--skip-networking) that a socket ping would mistake for ready. Valkey: a
-// `valkey-cli ping` that must return PONG — valkey-cli authenticates as the
-// default user via REDISCLI_AUTH from the container env, so a NOAUTH reply (no
-// PONG) keeps the probe waiting rather than passing falsely.
-func serviceReadyProbe(kind string) []string {
-	if t, ok := mysqlTools[kind]; ok {
-		return []string{"sh", "-c", fmt.Sprintf(
-			`MYSQL_PWD="$%s" exec %s ping -h127.0.0.1 --protocol=TCP -uroot --silent`,
-			t.rootPWVar, t.admin)}
-	}
-	if kind == "valkey" {
-		return []string{"sh", "-c", "valkey-cli ping | grep -q PONG"}
-	}
-	return []string{"pg_isready", "-U", "postgres", "-q"}
-}
-
-// waitServiceReady polls the service container's own readiness probe until it
-// passes or the timeout elapses.
+// waitServiceReady polls the service container's healthcheck status until it
+// reports "healthy" or the timeout elapses. The per-engine healthcheck is
+// defined in the service compose (pg_isready / a TCP admin ping / valkey-cli
+// ping) and runs inside the container via Docker's own healthcheck mechanism —
+// not an API exec — so it works under the socket-proxy; the brain only reads the
+// status (a CONTAINERS inspect). An inspect error (the container may not be
+// registered the instant `up -d` returns) is transient: keep polling until the
+// deadline rather than failing fast.
 func (m *Manager) waitServiceReady(ctx context.Context, kind, version string) error {
 	container := serviceContainerName(kind, version)
-	deadline := time.Now().Add(serviceReadyTimeout)
+	deadline := time.Now().Add(m.serviceReadyWait)
 	var last string
 	for {
-		out, err := m.docker.Exec(ctx, container, serviceReadyProbe(kind))
-		if err == nil {
+		health, err := m.docker.ContainerHealth(ctx, container)
+		if err == nil && health == "healthy" {
 			return nil
 		}
-		last = strings.TrimSpace(out)
+		if err != nil {
+			last = err.Error()
+		} else {
+			last = health
+		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%s not ready after %s (last: %s)", container, serviceReadyTimeout, last)
+			return fmt.Errorf("%s not ready after %s (last: %s)", container, m.serviceReadyWait, last)
 		}
 		select {
 		case <-ctx.Done():
@@ -304,48 +302,77 @@ func (m *Manager) provisionDB(ctx context.Context, kind, version, name, password
 	}
 }
 
+// clientWrapper is the per-engine `sh -c` script the one-shot container runs: it
+// remaps the service superuser password (delivered by --env-file under the .env
+// var name) to the env var the client reads, then execs the client over TCP to
+// the service's DNS alias. The per-command tokens (psql -c statements, the mysql
+// -e SQL, the valkey-cli ACL args) ride positional "$@", so the wrapper shell
+// never reparses them. Keeping the superuser password in an env var (not argv)
+// mirrors the old in-container expansion; the client connects over TCP — there
+// is no local socket in a separate one-shot container — hence the explicit -h.
+func clientWrapper(kind, version string) string {
+	alias := serviceDNSAlias(kind, version)
+	if kind == "valkey" {
+		return fmt.Sprintf(`REDISCLI_AUTH="$VALKEY_SUPERUSER_PASSWORD" exec valkey-cli -h %s "$@"`, alias)
+	}
+	if t, ok := mysqlTools[kind]; ok {
+		return fmt.Sprintf(`MYSQL_PWD="$%s" exec %s -uroot -h %s "$@"`, t.rootPWVar, t.client, alias)
+	}
+	return fmt.Sprintf(`PGPASSWORD="$POSTGRES_SUPERUSER_PASSWORD" exec psql -h %s -U postgres -v ON_ERROR_STOP=1 "$@"`, alias)
+}
+
+// runServiceClient runs the service's own client (psql / mysql / mariadb /
+// valkey-cli) in a one-shot container joined to the service's internal network,
+// to provision or drop a per-app credential. The throwaway container — not the
+// brain — joins the app-reachable network, and it replaces a `docker exec` the
+// socket-proxy denies (see the file header). args are the client's positional
+// arguments, appended after clientWrapper's `sh -c <script> sh`.
+func (m *Manager) runServiceClient(ctx context.Context, kind, version string, args ...string) (string, error) {
+	image := serviceImageRepo[kind] + ":" + version
+	net := serviceNetworkName(kind, version)
+	envFile := filepath.Join(m.serviceDir(kind, version), ".env")
+	full := append([]string{"sh", "-c", clientWrapper(kind, version), "sh"}, args...)
+	return m.docker.RunOneOff(ctx, image, net, envFile, full)
+}
+
 // provisionPostgresDB creates a login role and an owned database inside the
-// shared Postgres container via docker-exec psql. ON_ERROR_STOP makes the
-// multi-statement run fail fast; the role owns only its own database, which is
-// the per-app isolation boundary (SERVICE_PROVISIONING.md # Per-app isolation).
+// shared Postgres instance via a one-shot psql container. ON_ERROR_STOP makes
+// the run fail fast; the role owns only its own database, which is the per-app
+// isolation boundary (SERVICE_PROVISIONING.md # Per-app isolation).
 func (m *Manager) provisionPostgresDB(ctx context.Context, version, dbName, password string) error {
-	container := serviceContainerName("postgres", version)
 	// Each statement goes in its own -c: CREATE DATABASE cannot run inside a
 	// transaction block, and psql wraps a single multi-statement -c in one
 	// transaction. Repeated -c runs each in its own (ON_ERROR_STOP still halts
 	// the run on the first failure). The role owns only its own database — the
 	// per-app isolation boundary.
-	if out, err := m.docker.Exec(ctx, container, []string{
-		"psql", "-U", "postgres", "-v", "ON_ERROR_STOP=1",
+	if out, err := m.runServiceClient(ctx, "postgres", version,
 		"-c", fmt.Sprintf(`CREATE ROLE "%s" LOGIN PASSWORD '%s'`, dbName, password),
 		"-c", fmt.Sprintf(`CREATE DATABASE "%s" OWNER "%s"`, dbName, dbName),
-	}); err != nil {
+	); err != nil {
 		return fmt.Errorf("psql: %w\n%s", err, out)
 	}
 	return nil
 }
 
 // provisionMySQLDB creates a database and a scoped user inside the shared
-// MySQL/MariaDB container via docker-exec of the image's own client. The SQL
-// rides as a positional parameter ($1) so the shell never parses it (backticks
-// in a double-quoted script would be command substitution); the client's batch
-// mode stops at the first error (psql's ON_ERROR_STOP equivalent). The user
-// gets ALL on its own database only — the per-app isolation boundary.
+// MySQL/MariaDB instance via a one-shot run of the image's own client. The SQL
+// rides as a positional parameter (clientWrapper's "$@" → the client's -e arg)
+// so the wrapper shell never parses it (backticks in a double-quoted script
+// would be command substitution); the client's batch mode stops at the first
+// error (psql's ON_ERROR_STOP equivalent). The user gets ALL on its own database
+// only — the per-app isolation boundary.
 func (m *Manager) provisionMySQLDB(ctx context.Context, kind, version, dbName, password string) error {
 	t := mysqlTools[kind]
-	container := serviceContainerName(kind, version)
 	sql := fmt.Sprintf("CREATE DATABASE `%s`; CREATE USER '%s'@'%%' IDENTIFIED BY '%s'; GRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'%%'",
 		dbName, dbName, password, dbName, dbName)
-	if out, err := m.docker.Exec(ctx, container, []string{
-		"sh", "-c", fmt.Sprintf(`MYSQL_PWD="$%s" exec %s -uroot -e "$1"`, t.rootPWVar, t.client), "sh", sql,
-	}); err != nil {
+	if out, err := m.runServiceClient(ctx, kind, version, "-e", sql); err != nil {
 		return fmt.Errorf("%s: %w\n%s", t.client, err, out)
 	}
 	return nil
 }
 
 // provisionValkeyACL creates the per-app ACL user inside the shared Valkey
-// container via docker-exec valkey-cli. The user gets the full keyspace (~*) and
+// instance via a one-shot valkey-cli. The user gets the full keyspace (~*) and
 // all pub/sub channels (&*) — Valkey denies channels by default — and every
 // command except @admin and the keyspace-destruction commands, so a compromised
 // app can't touch the ACL system, CONFIG, SHUTDOWN, or replication and subvert
@@ -356,22 +383,22 @@ func (m *Manager) provisionMySQLDB(ctx context.Context, kind, version, dbName, p
 // blocks cross-app *destruction*, not cross-app reads; per-app key confidentiality
 // is the deferred isolation hardening (NEXT.md # Managed-service per-app key
 // isolation, SERVICE_PROVISIONING.md # Per-app isolation). The credential is the
-// per-app isolation boundary, revoked by ACL DELUSER on uninstall. valkey-cli runs
-// as the default (superuser) account, authenticated by REDISCLI_AUTH from the
-// container env; the per-app password rides argv as the ACL `>password` token
+// per-app isolation boundary, revoked by ACL DELUSER on uninstall. The one-shot
+// valkey-cli runs as the default (superuser) account, authenticated by
+// REDISCLI_AUTH (clientWrapper remaps it from VALKEY_SUPERUSER_PASSWORD in the
+// --env-file); the per-app password rides argv as the ACL `>password` token
 // (base64url, no shell hazards) — only the superuser password is kept out of
 // argv. ACL SAVE persists the user to the aclfile so it survives a service
 // restart (Valkey ACLs live in the config, not the keyspace, unlike
 // Postgres/MySQL accounts).
 func (m *Manager) provisionValkeyACL(ctx context.Context, version, username, password string) error {
-	container := serviceContainerName("valkey", version)
-	if out, err := m.docker.Exec(ctx, container, []string{
-		"valkey-cli", "ACL", "SETUSER", username, "on", ">" + password,
+	if out, err := m.runServiceClient(ctx, "valkey", version,
+		"ACL", "SETUSER", username, "on", ">"+password,
 		"~*", "&*", "+@all", "-@admin", "-flushall", "-flushdb", "-swapdb",
-	}); err != nil {
+	); err != nil {
 		return fmt.Errorf("valkey acl setuser: %w\n%s", err, out)
 	}
-	if out, err := m.docker.Exec(ctx, container, []string{"valkey-cli", "ACL", "SAVE"}); err != nil {
+	if out, err := m.runServiceClient(ctx, "valkey", version, "ACL", "SAVE"); err != nil {
 		return fmt.Errorf("valkey acl save: %w\n%s", err, out)
 	}
 	return nil
@@ -386,22 +413,18 @@ func (m *Manager) dropServiceGrants(ctx context.Context, instanceID string, gran
 		if !provisionedKinds[g.Kind] {
 			continue
 		}
-		container := serviceContainerName(g.Kind, g.Version)
-		// One exec per command. Postgres: separate -c per statement — DROP
+		// One one-shot run per arg set. Postgres: separate -c per statement — DROP
 		// DATABASE, like CREATE, cannot run inside a transaction block, and FORCE
-		// terminates any straggler connection. MySQL family: one batch run, same $1
-		// shape as provisioning. Valkey: ACL DELUSER then ACL SAVE (persist the
+		// terminates any straggler connection. MySQL family: one batch run, same
+		// -e shape as provisioning. Valkey: ACL DELUSER then ACL SAVE (persist the
 		// removal to the aclfile).
-		cmds := [][]string{{
-			"psql", "-U", "postgres", "-v", "ON_ERROR_STOP=1",
+		argSets := [][]string{{
 			"-c", fmt.Sprintf(`DROP DATABASE IF EXISTS "%s" WITH (FORCE)`, g.DBName),
 			"-c", fmt.Sprintf(`DROP ROLE IF EXISTS "%s"`, g.RoleName),
 		}}
-		if t, ok := mysqlTools[g.Kind]; ok {
+		if _, ok := mysqlTools[g.Kind]; ok {
 			sql := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`; DROP USER IF EXISTS '%s'@'%%'", g.DBName, g.RoleName)
-			cmds = [][]string{{
-				"sh", "-c", fmt.Sprintf(`MYSQL_PWD="$%s" exec %s -uroot -e "$1"`, t.rootPWVar, t.client), "sh", sql,
-			}}
+			argSets = [][]string{{"-e", sql}}
 		}
 		if g.Kind == "valkey" {
 			// DELUSER revokes in memory; SAVE persists the removal to the aclfile.
@@ -411,14 +434,14 @@ func (m *Manager) dropServiceGrants(ctx context.Context, instanceID string, gran
 			// holds it: a harmless orphan, pruned whenever the reconcile loop that
 			// owns the deferred grace-shutdown lands (NEXT.md # Managed-service
 			// lifecycle gaps). Symmetric with the provisioning-side orphan.
-			cmds = [][]string{
-				{"valkey-cli", "ACL", "DELUSER", g.RoleName},
-				{"valkey-cli", "ACL", "SAVE"},
+			argSets = [][]string{
+				{"ACL", "DELUSER", g.RoleName},
+				{"ACL", "SAVE"},
 			}
 		}
 		failed := false
-		for _, cmd := range cmds {
-			if out, err := m.docker.Exec(ctx, container, cmd); err != nil {
+		for _, args := range argSets {
+			if out, err := m.runServiceClient(ctx, g.Kind, g.Version, args...); err != nil {
 				slog.Warn("drop managed-service grant", "instance_id", instanceID,
 					"service", g.LogicalName, "kind", g.Kind, "err", err, "output", strings.TrimSpace(out))
 				failed = true
@@ -493,7 +516,8 @@ func (m *Manager) writeServiceDir(kind, version, superuserPW string) error {
 // postgresServiceCompose renders the shared-Postgres compose. The network is
 // external (the brain creates it `--internal` before `up`); the service joins it
 // under the postgres-<version>.malmo.internal alias apps use in their DSN, and
-// pg_isready backs the healthcheck. container_name is the brain's exec handle.
+// pg_isready backs the healthcheck the brain polls for readiness. container_name
+// is the brain's inspect handle.
 func postgresServiceCompose(version string) string {
 	container := serviceContainerName("postgres", version)
 	netName := serviceNetworkName("postgres", version)
@@ -529,7 +553,7 @@ networks:
 
 // mysqlServiceCompose renders the shared MySQL/MariaDB compose — same shape as
 // postgresServiceCompose: external --internal network, versioned DNS alias,
-// fixed container_name exec handle. The healthcheck pings over TCP only so the
+// fixed container_name inspect handle. The healthcheck pings over TCP only so the
 // init-time socket-only bootstrap server doesn't read as ready; $$ defers the
 // env expansion to the container shell.
 func mysqlServiceCompose(kind, version string) string {
@@ -567,12 +591,13 @@ networks:
 
 // valkeyServiceCompose renders the shared Valkey compose — same shape as the SQL
 // services: external --internal network, versioned DNS alias, fixed
-// container_name exec handle. Valkey runs with an external aclfile on the data
+// container_name inspect handle. Valkey runs with an external aclfile on the data
 // volume so per-app ACL users persist across restarts (Valkey ACLs are config,
 // not keyspace); the default (superuser) account is bootstrapped into that file
 // by writeServiceDir. REDISCLI_AUTH (valkey-cli honors the redis env var name)
-// carries the superuser password into the container env so the brain's exec'd
-// valkey-cli and the healthcheck authenticate without it ever reaching argv.
+// carries the superuser password into the service container's env so its
+// healthcheck authenticates without it ever reaching argv (the brain's one-shot
+// valkey-cli gets the same password via --env-file, remapped by clientWrapper).
 func valkeyServiceCompose(version string) string {
 	container := serviceContainerName("valkey", version)
 	netName := serviceNetworkName("valkey", version)
