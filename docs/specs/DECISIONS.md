@@ -21,6 +21,21 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-16 — Hosted environment profile: one OS, lean cloud image, not a fork
+
+**Previously:** the spec set described exactly one environment — a BYO x86 box on the user's LAN. A hosted/cloud offering was acknowledged only as a future "cloud VM image" target in `BUILD.md`, with no design.
+
+**Now:** malmo runs in two **environment profiles** — `appliance` (today's default) and `hosted` (a malmo-operated cloud VM, one per tenant, targeting SMBs running OSS apps publicly). The split is structured, not a fork:
+- **Layer 1 (the control plane — brain, UI, Caddy, socket-proxy, protocol, catalog, manifests, lifecycle, auth) is identical across profiles.** It is the product and the migration-portability guarantee.
+- **Layer 2 (base image + `host-agent`) diverges** via a lean `mkosi` cloud image profile (no Avahi/Samba/NetworkManager/cryptsetup-TPM/mergerfs) plus a build-tagged slim cloud `host-agent`. Same repo, same Debian/systemd/Docker substrate, same builder.
+- **Identity stays PAM-sourced** in hosted even though SSH/Samba are gone, to keep Layer 1 and the migration bundle identical.
+- **Hosted v1 networking** is a plain public endpoint, `<slug>.<box-id>.malmo.network` HTTPS, always-on (no `.local`, no toggle, no mesh).
+- **Hosted inverts "closed by default"** to public-by-default / auth-gated, and adopts an **honest convenience tier** trust posture: malmo-operated infra is inside the trust boundary; at-rest encryption defends co-tenant/image-theft, not the operator. Not operator-blind.
+
+**Why:** a hosted on-ramp needs a different runtime environment, but the brain is ~95% of the value and the whole migration story depends on it being the same code. Concentrating divergence in Layer 2 — already the small, swappable layer by design — gets the hosted product without forking the control plane. A different base OS and a one-rootfs-disable-at-runtime approach were both considered and rejected (`ENVIRONMENT.md` # Rejected sections). Commercial concerns (metering, billing, fleet ops, the mesh, a central ingress) are explicitly deferred.
+
+**Affected docs:** new `ENVIRONMENT.md` (anchor); pointer sections added to `FIRST_RUN.md`, `STORAGE.md`, `MALMO_NETWORK.md`, `DISCOVERY.md`, `BOOT.md`, `BUILD.md`, `CONTROL_PLANE.md`, `THREAT_MODEL.md`, `AUTH.md`; `docs/README.md`; `NEXT.md`.
+
 ## 2026-06-16 — ISO build tooling: `mkosi`, not `live-build` (#197)
 
 **Previously:** `BUILD.md` # 2 recommended `live-build` for v1 (fastest out the door, most Debian-blessed), with a migrate-to-`mkosi`-later note for when A/B-immutable updates arrive. The migration cost was judged smaller than the risk of betting v1 on thinner mkosi-on-Debian recipes.

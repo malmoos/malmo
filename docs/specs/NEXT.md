@@ -295,6 +295,20 @@ The `service-down`(caddy) detector (`HEALTH.md` # Detector catalog, locus C) can
 **Context:** `HEALTH.md` # Detector catalog (locus-C Caddy row), `CONTROL_PLANE.md` # Locked: Caddy runs as a container, `DECISIONS.md` 2026-05-31.
 **Why Tier 3:** doesn't block v1 happy-path; a fully-down Caddy is already visibly broken (dashboard unreachable). Pin the self-heal shape now (done); build it after the brain owns Caddy's container lifecycle.
 
+### Hosted profile — the commercial control plane and the deferred network model
+
+`ENVIRONMENT.md` specs the OS-adaptation layer of the `hosted` profile (the lean image, the slim host-agent, provisioning, networking, storage, the export bundle). It deliberately defers everything *outside* the tenant VM. Pin the shape before the hosted product is real: (1) the **provisioning / control API** that creates, configures, resizes, suspends, and tears down tenant VMs; (2) **resource metering → billing** (wiring the brain's existing `/proc`+disk sampling to a billing pipeline, plus pricing tiers — the per-instance cgroup-limit *mechanism* is in `ENVIRONMENT.md`, the metering is not); (3) **fleet management** (centralized OS/brain updates across tenants, abuse handling); (4) the **deferred hosted network model** — the identity-based WireGuard mesh for hosted, a central shared ingress with "no per-VM public IP" routing, and per-app public-vs-login exposure controls (v1 is a plain public auth-gated endpoint). This is net-new infrastructure with no appliance analogue, and where the operational weight of being a data custodian lives.
+
+**Context:** `ENVIRONMENT.md` (the OS-side it builds on), `CONTROL_PLANE.md` (the per-tenant brain it provisions), `MALMO_NETWORK.md` # Deferred (the mesh design it would extend), `APP_LIFECYCLE.md` (where per-instance limits attach).
+**Why Tier 3:** the OS runs in a hosted VM without any of it (v1 is a public endpoint per app); none of it blocks bringing the hosted OS up. It blocks *operating a paid fleet*, so pin the shape before commercial launch.
+
+### Hosted profile — open OS-level questions
+
+Surfaced by `ENVIRONMENT.md`, smaller than the commercial layer but real: (1) **at-rest key custody** — provider volume encryption vs. LUKS keyed from a hosted KMS (vTPM exists on some hypervisors but is pointless under a custodian model); (2) the **headless recovery surface** that replaces the appliance's console-served `malmo-recovery.target` page; (3) whether the **logical export/restore bundle** stays in `ENVIRONMENT.md` or graduates to its own spec, plus its concrete format; (4) the final **profile names** (`appliance`/`hosted` vs alternatives).
+
+**Context:** `ENVIRONMENT.md` # Open questions, `STORAGE.md` (key custody), `BOOT.md` (recovery target).
+**Why Tier 3:** each picks a concrete mechanism for a section `ENVIRONMENT.md` currently leaves open; none blocks the design, but they block implementation of that part of the hosted profile.
+
 ---
 
 ## Tier 4 — Smaller open items

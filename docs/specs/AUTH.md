@@ -2,6 +2,8 @@
 
 > How the malmo dashboard authenticates users, how sessions are managed, and how admin vs. member roles are enforced. Companion to `FIRST_RUN.md`, `MALMO_NETWORK.md`, `CONTROL_PLANE.md`, `SERVICE_PROVISIONING.md`.
 
+> **Environment profiles.** The dashboard auth/session model here is Layer 1 — identical across profiles, and identity stays PAM-sourced in both. What differs in the **hosted** profile: SSH and Samba (the appliance's other PAM consumers) are absent, and the exposure posture is public-by-default / auth-gated. See `ENVIRONMENT.md` # Access & files (hosted).
+
 ## Scope
 
 The malmo session governs **malmo's own surfaces only**:

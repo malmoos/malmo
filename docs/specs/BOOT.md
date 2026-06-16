@@ -2,6 +2,8 @@
 
 > Working spec for malmo's boot sequence — how the box goes from power-on to "dashboard reachable," and what happens when it can't. Companion to `STORAGE.md` (disks, encryption, mount layout), `CONTROL_PLANE.md` (what runs once boot is complete), `HEALTH.md` (how anomalies surface in the running brain), `FIRST_RUN.md` (one-time setup that happens on first boot), `TESTING.md` (how this is validated).
 
+> **Environment profiles.** This doc describes the `appliance` boot chain. The **hosted** profile (cloud VM) drops the TPM-unseal step, NetworkManager, and physical-disk/mergerfs assembly, and reconsiders the recovery target for a headless VM. See `ENVIRONMENT.md` # Boot (hosted).
+
 ## What this doc owns
 
 The ordered chain of systemd units that takes a malmo box from kernel-up to a user-facing dashboard. The synthetic target that signals "storage assembly attempted" (`malmo-storage-ready.target`). The very narrow conditions under which the box routes to `malmo-recovery.target` instead of continuing to a degraded but reachable dashboard.

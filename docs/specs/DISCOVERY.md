@@ -2,6 +2,8 @@
 
 > Working spec for how malmo boxes and their apps are *found* on the local network — hostname resolution, service advertisement, and the publisher daemon. Touches `MALMO_NETWORK.md` (URL schemes, "Use secure URLs" toggle), `APP_LIFECYCLE.md` (reconciler owns Avahi state alongside Caddy), `STORAGE.md` (Samba/SMB advertisement), `FIRST_RUN.md` (Android-household nudge toward secure URLs), `BOOT.md` (Avahi unit ordering).
 
+> **Environment profiles.** This entire doc is `appliance`-only. The **hosted** profile (cloud VM) has no LAN, no Avahi, and no mDNS — apps resolve through public DNS at `<slug>.<box-id>.malmo.network`. See `ENVIRONMENT.md` # Networking & discovery (hosted v1).
+
 ## Stance
 
 Discovery is the bridge between "the box is on the LAN" and "the user can type a URL and reach an app." For the `.local` URL scheme committed in `MALMO_NETWORK.md` (`photos.local`, `notes.local`, …) to work, every app slug must be a name the LAN can resolve *before* HTTP routing happens. There is no shortcut: routers don't host our zones, browsers don't synthesize subdomains, and TLS termination at Caddy is moot if the name never resolves.
