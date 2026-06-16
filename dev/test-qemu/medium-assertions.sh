@@ -369,6 +369,75 @@ grep -qE ' (200|401)' <<<"$api_status" \
 
 echo "control-plane M1b: stack up, proxy boundary held, dashboard + /api reachable"
 
+# --- M1c (#166): headless first-run. POST /setup creates the admin through the
+# real useradd/chpasswd/gpasswd path; POST /login then authenticates that account
+# against /etc/shadow via host-agent verify-password (the brain holds no password
+# hash — AUTH.md). Both go through Caddy on :80, the same scriptable HTTP path the
+# QEMU harness drives with no browser. No curl/jq in the image — hand-build the
+# request over bash /dev/tcp, same idiom as http_status above.
+SETUP_USER=malmoadmin
+SETUP_PASS=malmofirstrunpw1
+setup_body="{\"username\":\"$SETUP_USER\",\"password\":\"$SETUP_PASS\"}"
+
+# http_post PATH HOST JSON -> prints the full HTTP response (status line + headers
+# + body). HTTP/1.0 + Connection: close so the server closes the stream and `cat`
+# returns. Content-Length is the byte length (the body is ASCII, so ${#body} ==
+# bytes).
+http_post() {
+    local body="$3"
+    exec 3<>/dev/tcp/127.0.0.1/80 || return 1
+    printf 'POST %s HTTP/1.0\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' \
+        "$1" "$2" "${#body}" "$body" >&3
+    cat <&3
+    exec 3>&- 3<&-
+}
+
+# 1. /setup. 200 on a fresh box; 409 ("setup has already completed") when this
+# disk has already been through first-run — the medium lane reuses one disk
+# across the first-boot and second-boot phases, so the admin created on boot 1
+# (and the brain's SQLite row with it) is still present on boot 2. A 502 means
+# the host path failed (missing malmo/sudo group, useradd/chpasswd error); poll
+# briefly to ride out brain-not-ready, then surface the body for diagnosis.
+setup_status=""
+setup_resp=""
+for _i in $(seq 1 20); do
+    setup_resp="$(http_post /api/v1/setup malmo.local "$setup_body" 2>/dev/null || true)"
+    setup_status="$(head -1 <<<"$setup_resp" | tr -d '\r')"
+    case "$setup_status" in
+        *" 200"*|*" 409"*) break ;;
+    esac
+    sleep 1
+done
+case "$setup_status" in
+    *" 200"*|*" 409"*) ;;
+    *) fail "/setup did not complete: status='$setup_status' body=$(tr -d '\r' <<<"$setup_resp" | tail -2 | tr '\n' ' ')" ;;
+esac
+
+# 2. The account is a real Linux user: primary group malmo (useradd --gid malmo)
+# and a member of sudo (the first admin is added to sudo at creation —
+# USERS_AND_GROUPS.md # Roles). Proves SetPassword + SetRole hit the real system.
+id "$SETUP_USER" >/dev/null 2>&1 \
+    || fail "admin '$SETUP_USER' not in /etc/passwd after /setup"
+id -nG "$SETUP_USER" 2>/dev/null | grep -qw sudo \
+    || fail "admin '$SETUP_USER' not in sudo group (groups: $(id -nG "$SETUP_USER" 2>/dev/null))"
+id -ng "$SETUP_USER" 2>/dev/null | grep -qx malmo \
+    || fail "admin '$SETUP_USER' primary group is '$(id -ng "$SETUP_USER" 2>/dev/null)', want malmo"
+
+# 3. /login authenticates the account against /etc/shadow via host-agent
+# verify-password (PAM pam_unix, service "malmo"). This is the M1c "Done when".
+# Single attempt: by here useradd+chpasswd have completed (200/409 above), so a
+# correct password logs in first try — and the brain rate-limits failed logins
+# (AUTH.md # Rate limiting), so retrying a real failure would only lock us out.
+# On second-boot the 409 above means the admin and its /etc/shadow entry survived
+# the encrypted-root reboot, so the same credentials authenticate here too.
+login_status="$(http_post /api/v1/login malmo.local "$setup_body" 2>/dev/null | head -1 | tr -d '\r')"
+case "$login_status" in
+    *" 200"*) ;;
+    *) fail "/login (verify-password against /etc/shadow) failed: status='$login_status'" ;;
+esac
+
+echo "control-plane M1c: /setup created the admin, verify-password authenticated it against /etc/shadow"
+
 case "$PHASE" in
     first-boot)
         # The run-once enrollment unit (malmo-tpm-enroll.service) is
