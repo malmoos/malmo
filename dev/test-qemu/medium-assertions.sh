@@ -334,6 +334,26 @@ assert_app_install() {
         *) fail "install whoami did not start: status='$status' body=$(sed -n '/^\r\{0,1\}$/,$p' <<<"$resp" | tr -d '\r' | tail -2 | tr '\n' ' ')" ;;
     esac
 
+    # On any install failure below, dump diagnostics to stdout (the harness
+    # surfaces the assertion script's stdout in the make output): the brain's
+    # install/rollback log carries the actual cause, and docker ps -a shows
+    # whether the app container was created or exited.
+    install_diag() {
+        echo "--- M2 install diagnostics ---"
+        echo "install response (first lines):"; head -3 <<<"$resp" | tr -d '\r'
+        echo "docker ps -a:"; docker ps -a --format '{{.Names}}\t{{.Status}}\t{{.Image}}' 2>&1
+        echo "GET /apps:"; http_get_auth /api/v1/apps 2>/dev/null | sed -n '/^\r\{0,1\}$/,$p' | tr -d '\r' | tail -3
+        echo "brain log (tail 40):"; docker logs malmo-brain 2>&1 | tail -40
+        echo "--- end diagnostics ---"
+    }
+    # http_get_auth: authenticated GET (used by install_diag + below).
+    http_get_auth() {
+        exec 3<>/dev/tcp/127.0.0.1/80 || return 1
+        printf 'GET %s HTTP/1.0\r\nHost: malmo.local\r\nCookie: %s\r\nConnection: close\r\n\r\n' "$1" "$cookie" >&3
+        cat <&3
+        exec 3>&- 3<&-
+    }
+
     # 2. wait for the app route to serve through Caddy. The brain flips the route
     # from splash to the app upstream only after main_service is healthy (whoami
     # has no healthcheck → "none" counts as healthy), so a 200 here means the
@@ -348,7 +368,7 @@ assert_app_install() {
         sleep 1
     done
     grep -q ' 200' <<<"$app_status" \
-        || fail "whoami route not serving through Caddy after 120s: status='$app_status'"
+        || { install_diag; fail "whoami route not serving through Caddy after 120s: status='$app_status'"; }
     grep -qi 'Hostname:' <<<"$app_resp" \
         || fail "whoami.local route did not return the whoami echo page: $(head -1 <<<"$app_status")"
 
