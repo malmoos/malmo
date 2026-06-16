@@ -56,7 +56,7 @@ Full VM boot with a software TPM (`swtpm`). Mature stack — `systemd`'s own CI 
 | host-agent crashloop | Ship a known-broken host-agent in a test variant | `malmo-recovery.target` activates; recovery page reachable on port 80 |
 | nftables coexistence with Docker | Boot, capture `nft list ruleset`, restart Docker, diff | malmo's `inet malmo` table is unchanged across Docker restarts |
 
-Implementation: built on `mkosi qemu` (or the equivalent for whichever image-build tool wins in `BUILD.md`). Each test boots a VM, runs an assertion script via SSH or serial console, tears down.
+Implementation: built on `mkosi qemu` (`mkosi` is the locked image builder — `BUILD.md` # 2, `DECISIONS.md` 2026-06-16). Each test boots a VM, runs an assertion script via SSH or serial console, tears down.
 
 Note on "reboot + unseal" scenarios (the TPM2 unseal happy path, and the slow lane's TPM rot simulation): a reboot that must *withhold* the recovery passphrase on the second boot is realized as **two sequential QEMU processes** sharing one disk overlay + OVMF vars + swtpm state dir (a faithful TPM power cycle — PCRs re-measure identically, SRK/NVRAM persist), not an in-guest `systemctl reboot`. The recovery passphrase is delivered as an SMBIOS type-11 credential fixed at QEMU launch and can't be withheld partway through a single long-lived process, so proving *unattended* unseal (no passphrase, TPM2-only) requires a fresh process with the credential omitted. Realized in slice 0023; see `docs/progress/luks-tpm-enrollment.md`.
 
@@ -129,7 +129,7 @@ Each lane runs strictly cheaper than the next. PR feedback comes from fast + med
 
 - **`swtpm`** (software TPM emulator) for vTPM in QEMU. Mature, widely deployed, supports TPM2 with PCRs.
 - **QEMU** for VM boot, with virtio block devices for disks and a virtual UEFI firmware that supports Secure Boot (so PCR 7 sealing tests are honest).
-- **Drop-in compatibility with `mkosi`'s test mode** (`mkosi qemu`). This is a meaningful weight on the `live-build` vs. `mkosi` call in `BUILD.md` — mkosi's test story is materially better. Calling that out here, not relitigating it.
+- **Drop-in compatibility with `mkosi`'s test mode** (`mkosi qemu`). This test-story weight helped decide the `live-build` vs. `mkosi` call in `BUILD.md` in mkosi's favor (`DECISIONS.md` 2026-06-16) — the same builder now produces the production ISO, the cloud image, and this test lane.
 
 ## Tooling — open
 

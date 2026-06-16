@@ -21,6 +21,24 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-16 — ISO build tooling: `mkosi`, not `live-build` (#197)
+
+**Previously:** `BUILD.md` # 2 recommended `live-build` for v1 (fastest out the door, most Debian-blessed), with a migrate-to-`mkosi`-later note for when A/B-immutable updates arrive. The migration cost was judged smaller than the risk of betting v1 on thinner mkosi-on-Debian recipes.
+
+**Now:** **`mkosi` is the single image builder** — for the install ISO, the cloud VM image, and the QEMU test image. No live-build, no two-builder phase.
+
+**Why:**
+- **The test lane is already mkosi, proven up the whole stack.** `dev/test-qemu/` boots the full control plane under `mkosi qemu`, and `mkosi-repart` already produces a LUKS2+ext4 root that TPM-unseals and switch-roots on a real boot (`luks-tpm-enrollment.md`, `qemu-fullstack-app-install.md`). Shipping live-build for the ISO would mean a *second* builder kept byte-identical with the test image to hold the "live fs == installed fs" invariant (`BUILD.md` # 3) — the exact maintenance burden the invariant exists to avoid. One builder makes it trivially true.
+- **Systemd-native fits malmo.** We depend heavily on systemd (`systemd-cryptenroll` + TPM, UKI, `systemd-boot`, `cryptsetup-initramfs`); mkosi is the systemd team's own tool, so partitioning/LUKS/TPM/UKI-signing are first-class. The same config also emits the cloud VM image (qcow2/raw) the hosted product needs — live-build has no cloud-image story.
+- **A/B-immutable is the stated future** (`SPEC.md` OS update model); live-build has no A/B story, mkosi's disk images A/B-swap natively. v1 stays mutable Debian + a flash-an-ISO install, but mkosi means the A/B future needs no re-tooling.
+- This takes the spec's own stated "alternative to push back on" (mkosi-now), now that the test lane has retired most of the Debian-maturity risk that argued for live-build-first.
+
+**Knowingly accepted:** mkosi's Debian track record is thinner than live-build's, and **a live installer ISO that boots a session is live-build's home turf** — the one part of mkosi's fit not yet proven in-repo (the test lane boots a disk image, not a live-session ISO). Validating that is a follow-up, not a reason to keep two builders. The **OTA orchestrator** is left unchosen (`systemd-sysupdate` is presumptive but unproven vs. Mender/RAUC); it waits for the A/B work. The interactive installer (`# 3` / `FIRST_RUN.md` Phase 1) is unchanged — this decision is only how the bootable artifact is assembled.
+
+**Affected docs:** `BUILD.md` # 2 (recommendation flipped), `NEXT.md` (the "live-build vs mkosi revisit" open item resolved).
+
+---
+
 ## 2026-06-16 — Offline (air-gapped) installs trust the catalog-promised digest of a locally-loaded image (#167)
 
 **Previously:** every install resolved an image's digest by `docker pull` + inspecting the registry `RepoDigest`, then verifying it against the catalog promise. A pull failure was always fatal, and a `docker save`/`load`ed image (which carries no `RepoDigest`) could never be pinned.

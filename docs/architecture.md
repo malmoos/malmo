@@ -140,8 +140,9 @@ So this doc isn't read as a claim about the finished product:
 - **Control-plane stack bring-up — built (M1b, #165), VM-boot acceptance pending.** host-agent seeds the brain's Docker transport (the `malmo-ingress` network + the `docker-socket-proxy`, raw socket `:ro`, `EXEC` denied) before launching the brain, and points it at `DOCKER_HOST=tcp://docker-proxy:2375`; the brain then reconciles Caddy + `malmo-ui` from the staged control-plane compose (`lifecycle.EnsureControlPlane`) and installs the dashboard route (`/api/v1/* → brain`, else → `malmo-ui`). All of it is **production-gated** on `MALMO_CONTROL_PLANE_DIR`/`MALMO_DASHBOARD_UI_UPSTREAM`, so the natively-run dev brain is unchanged (standalone dev Caddy, Vite UI, raw socket). Managed-DB-in-production stays gated on a provisioning re-architecture off `docker exec` (the proxy denies `EXEC` — `DECISIONS.md` 2026-06-14). Unit-tested; a real VM boot pass (`sudo make test-medium-qemu`) is still outstanding.
 - **Storage subsystem.** No `/srv/malmo`, no mergerfs, no LUKS-unlock flow,
   no `malmo-storage-ready.target`. Apps write to wherever Docker puts volumes.
-- **Boot, install ISO, updates.** `live-build`, the release manifest, and the
-  five update streams are all spec-only.
+- **Boot, install ISO, updates.** The `mkosi` image build (`BUILD.md` # 2;
+  proven in the test lane, not yet the production ISO), the release manifest,
+  and the five update streams are all spec-only.
 - **Health / notifications / telemetry / time / discovery beyond stubs.** The
   brain doesn't surface health issues, the bell doesn't exist, no telemetry
   client, no chrony integration.
