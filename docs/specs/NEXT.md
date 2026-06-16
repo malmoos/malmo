@@ -442,7 +442,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 
 **Testing**
 - Boot-test assertion harness language — Go (matches the codebase) vs. Python (richer QEMU/swtpm tooling). Either works; pick before the harness is built. `TESTING.md`.
-- `live-build` vs. `mkosi` revisit weighted by test-story. `mkosi`'s `mkosi qemu` integration materially improves the medium/slow test lanes; if the build choice is being relitigated, this is a non-trivial weight. `BUILD.md`, `TESTING.md`.
+- *(Resolved 2026-06-16 — `mkosi` chosen as the single image builder for the install ISO + cloud VM image + test lane; `live-build` rejected. The `mkosi qemu` test-story weight noted here was a material factor. See `DECISIONS.md` 2026-06-16 and `BUILD.md` # 2.)*
 - **Web-UI (Vue) unit/component test harness — none exists yet.** `web-ui/` ships build tooling only (`vue-tsc --noEmit && vite build`), so all dashboard behavior is verified by type-check + manual run, never an automated assertion. This first bit when the account-ui slice (#13) shipped a 401-handling bug (`changeMyPassword` bouncing the user to login on a wrong current password) that lived entirely in an untested path; the fix added `api.ts`'s `suppressAuthHandler` opt-out with no regression test to pin it. Open decisions before standing one up: runner + environment (vitest + jsdom is the vite-native default) and — load-bearing in this repo — the **dependency-closure / supply-chain question** (the repo deliberately pins transitive deps to pre-May-2026 releases; a new test-runner closure must clear that bar). Once locked, backfill auth-flow regressions first (the `suppressAuthHandler` 401 path; recovery/redemption error surfaces). `WEB_UI.md`, `TESTING.md`.
 
 **Health**
