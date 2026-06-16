@@ -428,6 +428,8 @@ id -ng "$SETUP_USER" 2>/dev/null | grep -qx malmo \
 # Single attempt: by here useradd+chpasswd have completed (200/409 above), so a
 # correct password logs in first try — and the brain rate-limits failed logins
 # (AUTH.md # Rate limiting), so retrying a real failure would only lock us out.
+# On second-boot the 409 above means the admin and its /etc/shadow entry survived
+# the encrypted-root reboot, so the same credentials authenticate here too.
 login_status="$(http_post /api/v1/login malmo.local "$setup_body" 2>/dev/null | head -1 | tr -d '\r')"
 case "$login_status" in
     *" 200"*) ;;
