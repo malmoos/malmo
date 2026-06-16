@@ -213,7 +213,12 @@ func env(key, def string) string {
 
 // envBool reports whether key is set to a truthy value (strconv.ParseBool:
 // 1/t/true/…). Unset or unparseable → false (the safe default — a box with a
-// registry).
+// registry). Deliberately no `def` parameter and no warn-on-unparseable (unlike
+// cmd/brain's envBool): every host-agent caller wants false-on-anything-odd, and
+// host-agent startup must never block or get noisy over a malformed *optional*
+// env. The two are not shared for the same reason `env` isn't — small per-binary
+// helpers, no internal package for two cmd/ consumers (CLAUDE.md # no premature
+// abstraction).
 func envBool(key string) bool {
 	b, err := strconv.ParseBool(os.Getenv(key))
 	return err == nil && b

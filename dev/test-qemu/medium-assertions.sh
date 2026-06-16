@@ -302,10 +302,13 @@ assert_app_install() {
 
     # authenticated request helpers carrying the session cookie.
     app_post() { # PATH JSON -> full response
-        local body="$2"
+        local body="$2" len
+        # Byte length, not ${#body} (shell char count): a multi-byte char would
+        # mis-size Content-Length and the server would truncate/reject the body.
+        len="$(printf '%s' "$body" | wc -c | tr -d ' ')"
         exec 3<>/dev/tcp/127.0.0.1/80 || return 1
         printf 'POST %s HTTP/1.0\r\nHost: malmo.local\r\nCookie: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' \
-            "$1" "$cookie" "${#body}" "$body" >&3
+            "$1" "$cookie" "$len" "$body" >&3
         cat <&3
         exec 3>&- 3<&-
     }
@@ -534,13 +537,15 @@ setup_body="{\"username\":\"$SETUP_USER\",\"password\":\"$SETUP_PASS\"}"
 
 # http_post PATH HOST JSON -> prints the full HTTP response (status line + headers
 # + body). HTTP/1.0 + Connection: close so the server closes the stream and `cat`
-# returns. Content-Length is the byte length (the body is ASCII, so ${#body} ==
-# bytes).
+# returns. Content-Length is the BYTE length (wc -c), not ${#body}'s shell char
+# count — a multi-byte char (e.g. an accented username) would otherwise mis-size
+# the body and the server would truncate/reject it.
 http_post() {
-    local body="$3"
+    local body="$3" len
+    len="$(printf '%s' "$body" | wc -c | tr -d ' ')"
     exec 3<>/dev/tcp/127.0.0.1/80 || return 1
     printf 'POST %s HTTP/1.0\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' \
-        "$1" "$2" "${#body}" "$body" >&3
+        "$1" "$2" "$len" "$body" >&3
     cat <&3
     exec 3>&- 3<&-
 }

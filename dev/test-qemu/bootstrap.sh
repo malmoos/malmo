@@ -21,7 +21,7 @@ TEST_DIR="${REPO_ROOT}/dev/test-qemu"
 WORK="${REPO_ROOT}/.dev/qemu"
 EXTRA="${TEST_DIR}/mkosi.extra"
 CANARY="${WORK}/.malmo-medium-ready"
-CANARY_VERSION="v25"  # bump when mkosi.conf changes require a clean rebuild
+CANARY_VERSION="v26"  # bump when mkosi.conf changes require a clean rebuild
 PASSPHRASE_FILE="${TEST_DIR}/mkosi.passphrase"  # LUKS recovery key (slice 0023); gitignored
 IMAGE_OUT="${WORK}/malmo-medium.raw"
 SSH_KEY="${WORK}/ssh-key"
@@ -351,7 +351,15 @@ cp "$CP_BUNDLE"/*.tar "$EXTRA/var/lib/malmo/control-plane-images/"
 # globs *.tar in the images dir, so dropping whoami.tar there loads it alongside
 # the control-plane images.
 echo "saving whoami app image for the offline full-stack lane..."
-docker pull traefik/whoami:v1.10.3
+# Pull by DIGEST, not the mutable tag: the test catalog promises exactly
+# sha256:43a68d10b9…, and offline mode trusts that promise without re-deriving
+# the manifest digest from the loaded image — so a tag that moved upstream would
+# silently bake the wrong bytes, undetected until an online run. Re-tag so the
+# loaded image carries the v1.10.3 tag the override references (offline-local
+# pins the tag, not the digest — a save/load image has no RepoDigest).
+WHOAMI_REF="traefik/whoami@sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c"
+docker pull "$WHOAMI_REF"
+docker tag "$WHOAMI_REF" traefik/whoami:v1.10.3
 docker save traefik/whoami:v1.10.3 \
     -o "$EXTRA/var/lib/malmo/control-plane-images/whoami.tar"
 

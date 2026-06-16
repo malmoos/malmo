@@ -352,7 +352,7 @@ func envBool(k string, def bool) bool {
 	}
 	b, err := strconv.ParseBool(v)
 	if err != nil {
-		slog.Warn("invalid bool, using default", "var", k, "value", v, "default", def)
+		slog.Warn("unparseable bool env var; using default", "env_var", k, "err", "not a bool")
 		return def
 	}
 	return b

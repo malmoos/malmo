@@ -158,7 +158,11 @@ func resolveOffline(ctx context.Context, docker DockerDriver, image, trusted str
 		return "", false, fmt.Errorf("offline install: image %s is not pullable and has no catalog-promised digest to trust: %w", image, pullErr)
 	}
 	if _, err := docker.ImageInspect(ctx, image); err != nil {
-		return "", false, fmt.Errorf("offline install: image %s is not present locally and not pullable (offline bundle incomplete?): %w", image, pullErr)
+		// Surface BOTH the pull failure and the inspect failure: inspect erroring
+		// usually means the image is genuinely absent (incomplete bundle), but it
+		// could also be the daemon being down or a corrupt image store — wrapping
+		// only pullErr ("registry unreachable") would mask that real cause.
+		return "", false, fmt.Errorf("offline install: image %s is not present locally and not pullable (offline bundle incomplete?): pull: %v; inspect: %w", image, pullErr, err)
 	}
 	return trusted, true, nil
 }
