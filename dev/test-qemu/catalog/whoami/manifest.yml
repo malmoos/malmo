@@ -1,0 +1,36 @@
+# Test-only catalog app for the QEMU full-stack lane (#167). A copy of
+# catalog/whoami with one addition: a documents:write folder grant, so install
+# exercises a *real* use-case-folder bind mount and the "content survives
+# uninstall" assertion has a folder to write into (TESTING.md # Full-stack
+# control-plane integration). The shipping catalog/whoami stays a pure routing
+# smoke test (no folders) — this lives here so the lane's needs don't bend it.
+#
+# Same image + catalog-promised digest as catalog/whoami: the lane bakes that one
+# image into the offline bundle and installs air-gapped (MALMO_OFFLINE_INSTALL),
+# so the promised digest is the trust anchor (APP_LIFECYCLE.md # image digest
+# pinning). whoami never reads /malmo/documents — the bind just has to exist.
+id: whoami
+manifest_version: 1
+name: Whoami
+version: "1.10"
+description:
+  short: "Tiny HTTP server that echoes request info — a routing smoke test."
+icon_glyph: flask-conical
+compose_file: compose.yml
+main_service: whoami
+main_port: 80
+preferred_slugs: [whoami, hello]
+
+permissions:
+  internet: false
+  lan: false
+  folders:
+    - folder: documents
+      mode: write
+      scope: whole
+
+images:
+  traefik/whoami:v1.10.3:
+    digest: sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c
+    download_bytes: 2850040
+    disk_bytes: 6581646

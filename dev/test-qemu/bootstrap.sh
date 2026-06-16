@@ -276,6 +276,12 @@ Environment=MALMO_PROXY_IMAGE=tecnativa/docker-socket-proxy:v0.4.2
 Environment=MALMO_PROXY_IMAGE_TAR=/var/lib/malmo/control-plane-images/docker-socket-proxy.tar
 Environment=MALMO_CONTROL_PLANE_DIR=/var/lib/malmo/control-plane
 Environment=MALMO_DASHBOARD_UI_UPSTREAM=malmo-ui:80
+# M2 (#167): the Door-1 catalog the brain installs whoami from (rides the brain's
+# /var/lib/malmo mount), and offline-install mode — the guest is air-gapped, so
+# the brain trusts the catalog-promised digest of the docker-loaded whoami image
+# instead of pulling (APP_LIFECYCLE.md # image digest pinning).
+Environment=MALMO_CATALOG_DIR=/var/lib/malmo/catalog
+Environment=MALMO_OFFLINE_INSTALL=1
 EOF
 
 # PAM service for host-agent-real's verify-password (#166). pamverifier dials
@@ -336,6 +342,26 @@ CP_BUNDLE="${REPO_ROOT}/.dev/control-plane"
 # Stage the tarballs into the image at /var/lib/malmo/control-plane-images/.
 mkdir -p "$EXTRA/var/lib/malmo/control-plane-images"
 cp "$CP_BUNDLE"/*.tar "$EXTRA/var/lib/malmo/control-plane-images/"
+
+# --- 4c. app image + test catalog for the full-stack app-install lane (M2, #167)
+# The full-stack lane installs a catalog app (whoami) end-to-end, air-gapped. The
+# app image must be a local tarball too (the guest has no registry — the same
+# offline-first requirement as the control-plane images), and the brain needs a
+# catalog to install from (the brain container ships none). The first-boot loader
+# globs *.tar in the images dir, so dropping whoami.tar there loads it alongside
+# the control-plane images.
+echo "saving whoami app image for the offline full-stack lane..."
+docker pull traefik/whoami:v1.10.3
+docker save traefik/whoami:v1.10.3 \
+    -o "$EXTRA/var/lib/malmo/control-plane-images/whoami.tar"
+
+# Stage the test-only catalog at /var/lib/malmo/catalog/ — the brain's
+# MALMO_CATALOG_DIR (set in the host-agent drop-in below) points here, and it
+# rides the brain's /var/lib/malmo bind mount. It's the dev/test-qemu copy of
+# whoami plus a documents:write folder grant (real bind mount + content-survives-
+# uninstall), kept out of the shipping catalog.
+mkdir -p "$EXTRA/var/lib/malmo/catalog"
+cp -r "${TEST_DIR}/catalog/." "$EXTRA/var/lib/malmo/catalog/"
 
 # Stage the control-plane compose + caddy.json at /var/lib/malmo/control-plane/
 # (M1b): the brain runs `docker compose up` here, and Caddy bind-mounts caddy.json
