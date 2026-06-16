@@ -21,7 +21,7 @@ TEST_DIR="${REPO_ROOT}/dev/test-qemu"
 WORK="${REPO_ROOT}/.dev/qemu"
 EXTRA="${TEST_DIR}/mkosi.extra"
 CANARY="${WORK}/.malmo-medium-ready"
-CANARY_VERSION="v20"  # bump when mkosi.conf changes require a clean rebuild
+CANARY_VERSION="v26"  # bump when mkosi.conf changes require a clean rebuild
 PASSPHRASE_FILE="${TEST_DIR}/mkosi.passphrase"  # LUKS recovery key (slice 0023); gitignored
 IMAGE_OUT="${WORK}/malmo-medium.raw"
 SSH_KEY="${WORK}/ssh-key"
@@ -276,6 +276,12 @@ Environment=MALMO_PROXY_IMAGE=tecnativa/docker-socket-proxy:v0.4.2
 Environment=MALMO_PROXY_IMAGE_TAR=/var/lib/malmo/control-plane-images/docker-socket-proxy.tar
 Environment=MALMO_CONTROL_PLANE_DIR=/var/lib/malmo/control-plane
 Environment=MALMO_DASHBOARD_UI_UPSTREAM=malmo-ui:80
+# M2 (#167): the Door-1 catalog the brain installs whoami from (rides the brain's
+# /var/lib/malmo mount), and offline-install mode — the guest is air-gapped, so
+# the brain trusts the catalog-promised digest of the docker-loaded whoami image
+# instead of pulling (APP_LIFECYCLE.md # image digest pinning).
+Environment=MALMO_CATALOG_DIR=/var/lib/malmo/catalog
+Environment=MALMO_OFFLINE_INSTALL=1
 EOF
 
 # PAM service for host-agent-real's verify-password (#166). pamverifier dials
@@ -336,6 +342,34 @@ CP_BUNDLE="${REPO_ROOT}/.dev/control-plane"
 # Stage the tarballs into the image at /var/lib/malmo/control-plane-images/.
 mkdir -p "$EXTRA/var/lib/malmo/control-plane-images"
 cp "$CP_BUNDLE"/*.tar "$EXTRA/var/lib/malmo/control-plane-images/"
+
+# --- 4c. app image + test catalog for the full-stack app-install lane (M2, #167)
+# The full-stack lane installs a catalog app (whoami) end-to-end, air-gapped. The
+# app image must be a local tarball too (the guest has no registry — the same
+# offline-first requirement as the control-plane images), and the brain needs a
+# catalog to install from (the brain container ships none). The first-boot loader
+# globs *.tar in the images dir, so dropping whoami.tar there loads it alongside
+# the control-plane images.
+echo "saving whoami app image for the offline full-stack lane..."
+# Pull by DIGEST, not the mutable tag: the test catalog promises exactly
+# sha256:43a68d10b9…, and offline mode trusts that promise without re-deriving
+# the manifest digest from the loaded image — so a tag that moved upstream would
+# silently bake the wrong bytes, undetected until an online run. Re-tag so the
+# loaded image carries the v1.10.3 tag the override references (offline-local
+# pins the tag, not the digest — a save/load image has no RepoDigest).
+WHOAMI_REF="traefik/whoami@sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c"
+docker pull "$WHOAMI_REF"
+docker tag "$WHOAMI_REF" traefik/whoami:v1.10.3
+docker save traefik/whoami:v1.10.3 \
+    -o "$EXTRA/var/lib/malmo/control-plane-images/whoami.tar"
+
+# Stage the test-only catalog at /var/lib/malmo/catalog/ — the brain's
+# MALMO_CATALOG_DIR (set in the host-agent drop-in below) points here, and it
+# rides the brain's /var/lib/malmo bind mount. It's the dev/test-qemu copy of
+# whoami plus a documents:write folder grant (real bind mount + content-survives-
+# uninstall), kept out of the shipping catalog.
+mkdir -p "$EXTRA/var/lib/malmo/catalog"
+cp -r "${TEST_DIR}/catalog/." "$EXTRA/var/lib/malmo/catalog/"
 
 # Stage the control-plane compose + caddy.json at /var/lib/malmo/control-plane/
 # (M1b): the brain runs `docker compose up` here, and Caddy bind-mounts caddy.json

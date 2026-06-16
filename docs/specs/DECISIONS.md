@@ -21,6 +21,16 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-16 — Offline (air-gapped) installs trust the catalog-promised digest of a locally-loaded image (#167)
+
+**Previously:** every install resolved an image's digest by `docker pull` + inspecting the registry `RepoDigest`, then verifying it against the catalog promise. A pull failure was always fatal, and a `docker save`/`load`ed image (which carries no `RepoDigest`) could never be pinned.
+
+**Now:** the brain has an explicit offline mode (`MALMO_OFFLINE_INSTALL`, off by default). In it, a pull failure is not fatal: if the image is already present locally, the **catalog-promised digest is the pin** — the offline bundle is the trust anchor in place of the absent registry. Two cases stay hard-fails: a genuinely-absent image (incomplete bundle — the missing-image failure the air-gapped lane exists to catch), and a Door-2 install (no catalog promise to trust). A box *with* a registry is unchanged — it pulls and verifies as before.
+
+**Why:** the full-stack QEMU lane (#167) runs the guest air-gapped to prove the offline image bundle is complete, and the production first-boot bootstrap is registry-less by the same offline-first design (`BUILD.md` # First-boot brain bootstrap). With the old unconditional `docker pull`, *any* install on such a box hard-fails — the whole app-install assertion is unreachable. Trusting the catalog digest is sound here because the signed catalog already *is* the version→bytes binding (`APP_STORE.md` # Trust model); offline we simply can't re-derive the manifest digest from a loaded image (it has no `RepoDigest`, and its config `Id` is not the manifest digest), so we trust the promise rather than weaken it. Gating behind an explicit mode — rather than a silent "pull failed, use whatever's local" fallback — keeps an online box from masking a transient registry outage by accepting a stale local image on an update.
+
+**Affected docs:** `APP_LIFECYCLE.md` (# Locked: image digest pinning — the offline paragraph), `docs/progress/offline-install-digest-trust.md`.
+
 ## 2026-06-14 — Socket-proxy ships with EXEC denied; managed-DB-in-production is gated on a provisioning re-architecture (#165)
 
 **Previously:** the control-plane stack (Caddy + malmo-ui + socket-proxy) was specced as a single brain-launched compose, and M1b was blocked on an open question the spike (`socket-proxy-compose-validation.md`) escalated: the socket-proxy denies the Docker `EXEC` family by design, but managed-database provisioning (`internal/lifecycle/services.go`) creates per-app roles/databases by `docker exec`'ing the engine's client (`psql`/`mysql`/`valkey-cli`), so the instant the containerized brain points `DOCKER_HOST` at the proxy, managed-DB provisioning breaks.

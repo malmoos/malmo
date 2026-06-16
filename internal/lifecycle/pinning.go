@@ -17,11 +17,19 @@ type servicePin struct {
 	Service string
 	Image   string // original `image:` ref from the author's compose
 	Digest  string // `sha256:…`
+	// ref is the image reference written into the compose override. Normally the
+	// `name@sha256:…` digest form (byte-deterministic). In offline mode, when the
+	// image was resolved from a docker-loaded local image, it is the original tag
+	// instead: a `docker save`/`load` image carries no RepoDigest, so a digest ref
+	// isn't locally resolvable and `docker compose up` would try to pull it (and
+	// fail, air-gapped). The tag IS present locally; Digest still records the
+	// trusted bytes in SQLite. See resolveImages.
+	ref string
 }
 
-// PinnedRef returns the `name@sha256:…` form to write into the override.
+// PinnedRef returns the image reference to write into the compose override.
 func (p servicePin) PinnedRef() string {
-	return repoOf(p.Image) + "@" + p.Digest
+	return p.ref
 }
 
 // resolveImages pulls each service's image, reads the registry RepoDigest,
@@ -29,7 +37,14 @@ func (p servicePin) PinnedRef() string {
 // stable order. Door-2 callers pass a manifest with an empty Images map; that
 // path is pure TOFU. Failures here happen before any compose up — they roll
 // back the partial install cleanly.
-func resolveImages(ctx context.Context, docker DockerDriver, man *manifest.Manifest, composeBytes []byte) ([]servicePin, error) {
+//
+// When offline is set (a baked, air-gapped box — there is no registry to pull
+// from; CONTROL_PLANE.md # First-boot brain bootstrap, APP_LIFECYCLE.md # image
+// digest pinning), a pull failure is not fatal: if the image is already present
+// locally (the offline bundle docker-loaded it) and the catalog promised a
+// digest, that promise is trusted as the pin — the bundle is the trust anchor
+// in place of the absent registry.
+func resolveImages(ctx context.Context, docker DockerDriver, man *manifest.Manifest, composeBytes []byte, offline bool) ([]servicePin, error) {
 	svcImages, err := serviceImages(composeBytes)
 	if err != nil {
 		return nil, err
@@ -37,15 +52,21 @@ func resolveImages(ctx context.Context, docker DockerDriver, man *manifest.Manif
 
 	// Pull each unique image once.
 	seen := map[string]string{} // image → digest
+	local := map[string]bool{}  // image → resolved from a local-only (offline) image
 	for _, img := range svcImages {
 		if _, done := seen[img]; done {
 			continue
 		}
-		digest, err := pullAndResolve(ctx, docker, img)
+		var promised string
+		if p, ok := man.Images[img]; ok {
+			promised = p.Digest
+		}
+		digest, fromLocal, err := pullAndResolve(ctx, docker, img, promised, offline)
 		if err != nil {
 			return nil, err
 		}
 		seen[img] = digest
+		local[img] = fromLocal
 	}
 
 	// Verify against the catalog's promised digests, if any
@@ -63,28 +84,47 @@ func resolveImages(ctx context.Context, docker DockerDriver, man *manifest.Manif
 
 	pins := make([]servicePin, 0, len(svcImages))
 	for svc, img := range svcImages {
-		pins = append(pins, servicePin{Service: svc, Image: img, Digest: seen[img]})
+		// Digest ref normally; the original tag when the image was resolved from a
+		// docker-loaded local image (offline) — a loaded image has no RepoDigest,
+		// so a digest ref isn't locally resolvable (see servicePin.ref).
+		ref := repoOf(img) + "@" + seen[img]
+		if local[img] {
+			ref = img
+		}
+		pins = append(pins, servicePin{Service: svc, Image: img, Digest: seen[img], ref: ref})
 	}
 	sort.Slice(pins, func(i, j int) bool { return pins[i].Service < pins[j].Service })
 	return pins, nil
 }
 
 // pullAndResolve pulls the image and returns the registry content digest
-// (`sha256:…`). If the image is already in digest form, the pull is still done
-// (to ensure the bytes are local) and the supplied digest is returned.
-func pullAndResolve(ctx context.Context, docker DockerDriver, image string) (string, error) {
+// (`sha256:…`) plus whether it was resolved from a local-only image (the offline
+// fallback — the caller then references it by tag, not digest, in the override).
+// If the image is already in digest form, the pull is still done (to ensure the
+// bytes are local) and the supplied digest is returned.
+//
+// In offline mode a pull failure falls back to the locally-present image — see
+// resolveOffline. promised is the catalog-promised digest for this image (""
+// for a Door-2 / TOFU install), used only on the offline fallback path.
+func pullAndResolve(ctx context.Context, docker DockerDriver, image, promised string, offline bool) (string, bool, error) {
 	if d, ok := digestOf(image); ok {
 		if err := docker.Pull(ctx, image); err != nil {
-			return "", err
+			if offline {
+				return resolveOffline(ctx, docker, image, d, err)
+			}
+			return "", false, err
 		}
-		return d, nil
+		return d, false, nil
 	}
 	if err := docker.Pull(ctx, image); err != nil {
-		return "", err
+		if offline {
+			return resolveOffline(ctx, docker, image, promised, err)
+		}
+		return "", false, err
 	}
 	repoDigests, err := docker.ImageInspect(ctx, image)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	repo := repoOf(image)
 	for _, rd := range repoDigests {
@@ -93,11 +133,38 @@ func pullAndResolve(ctx context.Context, docker DockerDriver, image string) (str
 			continue
 		}
 		if name == repo {
-			return digest, nil
+			return digest, false, nil
 		}
 	}
-	return "", fmt.Errorf("no RepoDigest for %s matched repo %s (got %v) — image may be local-only",
+	return "", false, fmt.Errorf("no RepoDigest for %s matched repo %s (got %v) — image may be local-only",
 		image, repo, repoDigests)
+}
+
+// resolveOffline is the air-gapped fallback when a pull fails: there is no
+// registry, so the digest cannot be resolved from one. If the image is present
+// locally (the offline bundle docker-loaded it — a `docker save`/`load` image
+// carries no RepoDigest, so the normal online path can't pin it) and we hold a
+// trusted digest (the catalog promise, or an explicit `@sha256:` ref), that
+// digest is the pin. The bundle stands in for the registry as the trust anchor.
+//
+// Two failures stay fatal, distinguished from a transient pull error: no
+// trusted digest to fall back on (a Door-2 install can't be pinned offline), or
+// the image is genuinely absent (the bundle is incomplete — this is the
+// hard-fail the air-gapped lane exists to catch). ImageInspect succeeds with an
+// empty RepoDigest list for a loaded image and errors only when it is absent,
+// so it is the presence probe.
+func resolveOffline(ctx context.Context, docker DockerDriver, image, trusted string, pullErr error) (string, bool, error) {
+	if trusted == "" {
+		return "", false, fmt.Errorf("offline install: image %s is not pullable and has no catalog-promised digest to trust: %w", image, pullErr)
+	}
+	if _, err := docker.ImageInspect(ctx, image); err != nil {
+		// Surface BOTH the pull failure and the inspect failure: inspect erroring
+		// usually means the image is genuinely absent (incomplete bundle), but it
+		// could also be the daemon being down or a corrupt image store — wrapping
+		// only pullErr ("registry unreachable") would mask that real cause.
+		return "", false, fmt.Errorf("offline install: image %s is not present locally and not pullable (offline bundle incomplete?): pull: %v; inspect: %w", image, pullErr, err)
+	}
+	return trusted, true, nil
 }
 
 // serviceImages returns service → `image:` reference for every service in the

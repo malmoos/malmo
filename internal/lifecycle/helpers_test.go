@@ -66,9 +66,15 @@ services:
 }
 
 func TestServicePinPinnedRef(t *testing.T) {
-	p := servicePin{Image: "traefik/whoami:v1.10.3", Digest: "sha256:abc"}
-	if got := p.PinnedRef(); got != "traefik/whoami@sha256:abc" {
-		t.Fatalf("PinnedRef = %q", got)
+	// PinnedRef returns the override ref verbatim: the digest form online,
+	// the original tag in the offline-local case (resolveImages sets it).
+	digestPin := servicePin{Image: "traefik/whoami:v1.10.3", Digest: "sha256:abc", ref: "traefik/whoami@sha256:abc"}
+	if got := digestPin.PinnedRef(); got != "traefik/whoami@sha256:abc" {
+		t.Fatalf("PinnedRef (digest) = %q", got)
+	}
+	tagPin := servicePin{Image: "traefik/whoami:v1.10.3", Digest: "sha256:abc", ref: "traefik/whoami:v1.10.3"}
+	if got := tagPin.PinnedRef(); got != "traefik/whoami:v1.10.3" {
+		t.Fatalf("PinnedRef (offline tag) = %q", got)
 	}
 }
 

@@ -33,6 +33,19 @@ ln -sf /etc/systemd/system/malmo-storage-ready.target \
 # package (mkosi.conf), so SetRole's admin -> sudo add has its target too.
 getent group malmo >/dev/null || groupadd -g 3000 malmo
 
+# malmo-app service identity + malmo-shared household group (#167). host-agent's
+# /v1/identity/well-known resolves these by name (usermgr.WellKnownIdentity:
+# user.Lookup("malmo-app") + LookupGroup("malmo-shared")), and the brain calls it
+# for ANY folder app — so without them a folder-app install rolls back with
+# "well-known-identity-failed". Fixed well-known IDs 2000/2001 (APP_ISOLATION.md #
+# Runtime identity — "/v1/identity/well-known: 2000/2001"); a real box provisions
+# them at build, the test image must too. malmo-app is a no-login system account.
+# Idempotent so a rebuild over an existing tree is a no-op.
+getent group malmo-app >/dev/null    || groupadd -g 2000 malmo-app
+getent group malmo-shared >/dev/null || groupadd -g 2001 malmo-shared
+getent passwd malmo-app >/dev/null   || useradd -r -u 2000 -g malmo-app \
+    -M -d /nonexistent -s /usr/sbin/nologin malmo-app
+
 # /etc/pam.d/malmo staged into the image overlay by bootstrap.sh (dev/pam/malmo).
 
 # tmpfiles.d entry for /run/malmo/health (cleaner than the reporter's
