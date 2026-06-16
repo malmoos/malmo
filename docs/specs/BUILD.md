@@ -2,6 +2,8 @@
 
 > Working spec for how malmo ships — from source to a USB stick to a running box. Companion to `SPEC.md`, `CONTROL_PLANE.md`, `FIRST_RUN.md`, `STORAGE.md`.
 
+> **Environment profiles.** This doc describes building the `appliance` install ISO. The same `mkosi` builder also emits a lean **hosted** cloud VM image profile (no Avahi/Samba/NetworkManager/cryptsetup-TPM/mergerfs) paired with a build-tagged slim cloud `host-agent`. See `ENVIRONMENT.md` # How the profile is realized.
+
 This doc is **draft / option-survey**. Most sections present alternatives with a recommendation; locked decisions are called out explicitly. The intent is to surface forks before committing.
 
 ## What this doc covers
