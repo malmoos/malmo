@@ -74,6 +74,8 @@ changelog_url: https://github.com/photoprism/photoprism/releases  # optional; us
 listed: true                      # optional, default true; `false` pulls the app from the store (hidden from browse + uninstallable) while keeping its manifest in the catalog
 ```
 
+**`categories`** is an open-ended list of lowercase kebab-case tags. There is no fixed enum — authors introduce new values as needed (`marketing`, `developer-tools`, `food`, `books`, …). The brain does not validate category values; the store UI uses them for browse filters. Aim for reuse over novelty: check what existing catalog apps already declare before coining a new tag.
+
 **`listed`** controls store visibility. Omitted (or `true`) ⇒ the app appears in the browse grid, has a detail page, and can be installed — the normal case. Setting `listed: false` **pulls the app from the store**: it's hidden from browse, its detail page and install paths return 404, but the manifest stays in the catalog directory — it still parses, lints, and serves its icons/screenshots, and an already-installed instance keeps its dashboard card and stays reconcilable (visibility is resolved by id, not via the filtered browse). This is how a `Blocked` or `Rejected` app is withdrawn without throwing away its adaptation work — e.g. an image that can't yet run under the sandbox, parked until the platform gap or upstream fix lands. It is a curation control, not a per-user or per-role one; there is no "show me unlisted apps" path in v1.
 
 ### B. Runtime

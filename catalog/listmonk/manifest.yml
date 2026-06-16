@@ -1,6 +1,6 @@
 id: listmonk
 manifest_version: 1
-name: listmonk
+name: Listmonk
 version: "6.1.0"
 description:
   short: "Self-hosted newsletter and mailing list manager."
@@ -48,7 +48,6 @@ resources:
 # deliberately not projected here.
 storage:
   data_volumes: [./uploads]
-  estimated_size: 4MB
   app_managed_user_content: true
 
 # listmonk is Postgres-only. The brain provisions a per-app database in the
