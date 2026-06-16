@@ -1,6 +1,6 @@
 # QEMU full-stack app-install assertions, air-gapped (M2 capstone)
 
-- **Status:** done (closes #167; VM-boot acceptance via `sudo make test-medium-qemu`)
+- **Status:** done (closes #167; VM-boot acceptance **PASSED** — `sudo make test-medium-qemu` green on a clean VM, all five assertions)
 - **Date:** 2026-06-16
 - **Specs touched:** none (realizes `TESTING.md` # Full-stack control-plane integration — the assertion table; no spec change)
 
@@ -23,10 +23,13 @@ Runs **before** `assert_network_state` in the second-boot phase so the network t
 ## Verification
 
 - `make check` green; `bash -n` clean on both scripts; the test manifest passes `malmo manifest check`.
-- **VM-boot acceptance is the gate and runs on the user's host** (`sudo make test-medium-qemu` — KVM + swtpm + an mkosi rebuild at CANARY v23). Not run in this environment; the run output is the acceptance signal. The medium-lane `main` baseline (M1b + M1c) was confirmed PASS by the user before this slice; this branch rebuilds the image (whoami + test catalog baked, air-gapped) and adds the M2 phase.
-- **Two bugs surfaced by the VM runs** (both fixed; each is exactly the kind of thing only the real lane reveals):
+- **VM-boot acceptance PASSED** on the user's host (`sudo make test-medium-qemu`, CANARY v25, KVM + swtpm): first boot M0/M1b/M1c + TPM enroll; second boot M0/M1b/M1c + the M2 phase + network-state — `control-plane M2: whoami installed air-gapped, whoami.local resolved, route + bind verified, content survived uninstall`, `medium-lane test: PASS`. The `main` baseline (M1b + M1c) was confirmed PASS before this slice; the air-gap (`restrict=on`) left M1b/M1c/network-state green.
+- **Three bugs surfaced by the VM runs** (all fixed; each is exactly the kind of thing only the real lane reveals — the `install_diag` brain-log dump added in run 3 pinpointed the third):
   1. **`set -u` ordering** (run 1, aborted both boots before any verdict): `ADMIN_DOCS`/`MARKER` interpolated `$SETUP_USER` at top level, *before* the M1c block that sets it. Moved into `assert_app_install` as locals (it runs in second-boot, after that block).
-  2. **Offline pin used a digest ref `compose up` couldn't resolve** (run 2, install rolled back → `whoami.local` 404): the override pinned `traefik/whoami@sha256:…`, but a `docker save`/`load` image has no RepoDigest, so `docker compose up` treated the digest ref as missing and tried to pull it (failing, air-gapped). Fixed in `internal/lifecycle/pinning.go`: in the offline-local case the override references the original **tag** (present locally); the trusted digest is still recorded in SQLite (`servicePin.ref` vs `.Digest`). This is a brain-image change, so CANARY v22→v23 (the brain image is baked + canary-gated).
+  2. **Offline pin used a digest ref `compose up` couldn't resolve** (run 2, install rolled back → `whoami.local` 404): the override pinned `traefik/whoami@sha256:…`, but a `docker save`/`load` image has no RepoDigest, so `docker compose up` treated the digest ref as missing and tried to pull it (failing, air-gapped). Fixed in `internal/lifecycle/pinning.go`: in the offline-local case the override references the original **tag** (present locally); the trusted digest is still recorded in SQLite (`servicePin.ref` vs `.Digest`).
+  3. **Well-known identities absent** (run 4, `install failed … well-known-identity-failed`): the brain calls host-agent `/v1/identity/well-known` for *any* folder app (to get the shared GID), and `usermgr.WellKnownIdentity` looks up the `malmo-app` user + `malmo-shared` group by name — neither existed on the test image (M1c provisioned only `malmo` + `sudo`). Added the fixed well-known IDs 2000/2001 (APP_ISOLATION.md) in `mkosi.postinst.chroot`, as a real box does at build.
+- **`install_diag`** (dumps the install response, `docker ps -a`, `GET /apps`, and the brain log tail to stdout on an install failure) is kept — it is the lane's debugging surface for any future M2 regression and runs only on failure.
+- CANARY bumped v20→v25 across these fixes (offline bundle + brain-image + baked-script + postinst changes are all canary-gated).
 
 ## Known gaps & deviations
 
