@@ -54,8 +54,20 @@ func TestInstallOfflineTrustsPromisedDigest(t *testing.T) {
 	if inst.State != "running" {
 		t.Fatalf("end state = %q, want running", inst.State)
 	}
-	if got, want := overridePin(t, e.stateDir, inst.ID, "whoami"), "traefik/whoami@"+testDigest; got != want {
-		t.Fatalf("override pin = %q, want %q (promised digest)", got, want)
+	// Offline-local: the override references the original TAG, not the digest — a
+	// docker-loaded image has no RepoDigest, so a digest ref isn't locally
+	// resolvable and `compose up` would try to pull it (and fail, air-gapped).
+	if got, want := overridePin(t, e.stateDir, inst.ID, "whoami"), testImage; got != want {
+		t.Fatalf("override pin = %q, want %q (the local tag, not the digest)", got, want)
+	}
+	// The trusted digest is still recorded in SQLite (the catalog promise stands
+	// as the version→bytes record even though the override uses the tag).
+	imgs, err := e.store.GetInstanceImages(inst.ID)
+	if err != nil {
+		t.Fatalf("InstanceImages: %v", err)
+	}
+	if len(imgs) != 1 || imgs[0].Digest != testDigest {
+		t.Fatalf("stored images = %+v, want one with digest %s", imgs, testDigest)
 	}
 	// The pull was attempted (and failed) before the local presence probe.
 	want := []string{"Pull", "ImageInspect", "ComposeUp"}
