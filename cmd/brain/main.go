@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,6 +63,7 @@ func main() {
 	// rather than opening a parallel Docker client (issue #35).
 	dock := lifecycle.NewCLIDocker()
 	life := lifecycle.NewManager(st, cat, host, cd, dock, bus, cfg.stateDir)
+	life.SetOfflineInstall(cfg.offlineInstall)
 
 	// Production: the brain owns the control-plane stack (Caddy + malmo-ui) and
 	// brings it up from the compose staged by host-agent before it configures any
@@ -273,6 +275,7 @@ type config struct {
 	logFormat              string
 	healthPollPeriod       time.Duration
 	notifyPrunePeriod      time.Duration
+	offlineInstall         bool
 }
 
 func loadConfig() config {
@@ -297,6 +300,11 @@ func loadConfig() config {
 		logFormat:              env("MALMO_LOG_FORMAT", "text"),
 		healthPollPeriod:       envDuration("MALMO_HEALTH_POLL", 60*time.Second),
 		notifyPrunePeriod:      envDuration("MALMO_NOTIFY_PRUNE", time.Hour),
+		// A baked, air-gapped box has no registry: it docker-loads every image
+		// from the offline bundle and trusts the catalog-promised digest on a pull
+		// failure (CONTROL_PLANE.md # First-boot brain bootstrap). Off by default —
+		// a box with a registry pulls and verifies against it.
+		offlineInstall: envBool("MALMO_OFFLINE_INSTALL", false),
 	}
 }
 
@@ -333,6 +341,21 @@ func env(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// envBool parses a boolean env var (strconv.ParseBool: 1/t/true/0/f/false, …).
+// An unset var uses def; a set-but-unparseable value warns and uses def.
+func envBool(k string, def bool) bool {
+	v := os.Getenv(k)
+	if v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		slog.Warn("invalid bool, using default", "var", k, "value", v, "default", def)
+		return def
+	}
+	return b
 }
 
 // pullSystemHealth fetches host-agent's system health report and reconciles it
