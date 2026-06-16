@@ -23,7 +23,8 @@ Runs **before** `assert_network_state` in the second-boot phase so the network t
 ## Verification
 
 - `make check` green; `bash -n` clean on both scripts; the test manifest passes `malmo manifest check`.
-- **VM-boot acceptance is the gate and runs on the user's host** (`sudo make test-medium-qemu` — KVM + swtpm + an mkosi rebuild at CANARY v21). Not run in this environment; the run output is the acceptance signal. The medium-lane `main` baseline (M1b + M1c) was confirmed PASS by the user before this slice; this branch rebuilds the image (whoami + test catalog baked, air-gapped) and adds the M2 phase.
+- **VM-boot acceptance is the gate and runs on the user's host** (`sudo make test-medium-qemu` — KVM + swtpm + an mkosi rebuild at CANARY v22). Not run in this environment; the run output is the acceptance signal. The medium-lane `main` baseline (M1b + M1c) was confirmed PASS by the user before this slice; this branch rebuilds the image (whoami + test catalog baked, air-gapped) and adds the M2 phase.
+- **First VM run found a `set -u` bug** (fixed): `ADMIN_DOCS`/`MARKER` interpolated `$SETUP_USER` at top level, *before* the M1c block that sets it, so the script aborted on both boots before any verdict. Moved into `assert_app_install` as locals (it runs in second-boot, after that block). The abort preempted everything, so the re-run is the first real exercise of M1b/M1c/M2/network-state under `restrict=on`. CANARY v21→v22 forces the fixed (baked) assertion script to rebake.
 
 ## Known gaps & deviations
 

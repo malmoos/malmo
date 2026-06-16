@@ -281,11 +281,15 @@ assert_network_state() {
 # scope=personal, not household: a level-0 VM has no data drive, so the shared
 # tree (/srv/malmo/shared) household would force doesn't exist; personal binds
 # the admin's own ~/Documents, which the brain creates at install.
-APP_SLUG=whoami
-ADMIN_DOCS="/home/${SETUP_USER}/Documents"
-MARKER="${ADMIN_DOCS}/survives-uninstall.txt"
-
 assert_app_install() {
+    # Locals (not top-level): ADMIN_DOCS interpolates $SETUP_USER, which the M1c
+    # block sets — and under `set -u` an unbound reference aborts the whole
+    # script. This function only runs in second-boot, after that block, so the
+    # var is bound here; defining these at top level fires before it is set.
+    local APP_SLUG=whoami
+    local ADMIN_DOCS="/home/${SETUP_USER}/Documents"
+    local MARKER="${ADMIN_DOCS}/survives-uninstall.txt"
+
     # 0. authenticate. M1c proved /login returns 200; here we keep the session
     # cookie (install authorizes on the session — no elevation needed for
     # install). Set-Cookie: malmo_session=<tok>; …  → "malmo_session=<tok>".
