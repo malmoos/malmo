@@ -93,6 +93,13 @@ The *mechanism* — a manifest `secrets:` declaration → brain generates a CSPR
 
 ## Tier 3 — Defer-able, but pin the shape
 
+### Align the QEMU test lane to Trixie (currently Bookworm)
+
+`BUILD.md` # 1 locks Debian Trixie (13) as the product base, and the cloud-image profile (#196 C1b) targets Trixie. But the existing medium lane (`dev/test-qemu/mkosi.conf`) is still `Release=bookworm`. C1b carries a "fall back to Bookworm if Trixie fights mkosi" escape hatch, so the cloud image could silently land on Bookworm and diverge from the product spec with no tracking. Once the cloud image validates Trixie, align the test lane to Trixie too (or, if Trixie proves unworkable, record the Bookworm decision in `DECISIONS.md` rather than leaving it implicit in one issue).
+
+**Context:** `BUILD.md` # 1, `dev/test-qemu/mkosi.conf`, #196 C1b (#203).
+**Why Tier 3:** doesn't block cloud bring-up (either base boots); the risk is a silent spec/reality drift on the base release. Pin the resolution when C1b/C2 confirm Trixie.
+
 ### Factory reset / repurpose / "start over"
 
 Explicitly undocumented today — `USERS_AND_GROUPS.md` # Known gaps admits "we don't have a clean 'reset everything except user content' story yet; treat reinstall + restore from backup as the floor." This is an end-to-end lifecycle gap: resale, household handoff, "I broke it and want a clean slate." It has a security dimension beyond UX — securely destroying LUKS keyslots so the outgoing drive is unreadable — so it's not purely a dashboard flow. Both Synology and Umbrel treat reset/repurpose as standard. Open: scope (full wipe vs. reset-config-keep-content vs. reset-keep-nothing), where it lives in the UI (Settings → Advanced, gated by fresh password), and the key-destruction mechanics.
