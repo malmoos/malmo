@@ -1,0 +1,68 @@
+# Twenty adapted for malmo's Tier-3 sandbox (cap_drop: ALL, no-new-privileges,
+# brain-pinned user:). Upstream's compose runs `server` + `worker` alongside a
+# bundled postgres:16 and a redis, and publishes host port 3000. malmo drops the
+# host port (the brain routes to main_port 3000), drops the two bundled
+# datastores and declares managed Postgres + Redis (→ Valkey) in the manifest
+# instead, and converts the shared `server-local-data` named volume to a
+# relative ./data/local-storage bind — Twenty's STORAGE_TYPE=local attachment
+# store, shared read/write by the server and the worker.
+#
+# Env rewiring (the brain injects the values; the compose maps them to Twenty's
+# own names):
+#   PG_DATABASE_URL  -> ${MALMO_SERVICE_DATABASE_DSN}  (managed Postgres 16)
+#   REDIS_URL        -> ${MALMO_SERVICE_CACHE_DSN}      (managed Valkey 8; redis:// scheme)
+#   SERVER_URL       -> ${MALMO_APP_URL}                (http://<slug>.local)
+#   ENCRYPTION_KEY   -> ${MALMO_SECRET_ENCRYPTION_KEY}  (CSPRNG, generated once at install)
+#
+# The server runs DB migrations on boot (DISABLE_DB_MIGRATIONS left unset) and
+# owns cron registration; the worker disables both (they already ran on the
+# server) and drains the BullMQ job queue out of Redis. EMAIL_* and Google/
+# Microsoft OAuth env are intentionally omitted. EMAIL_DRIVER is a boot-validated
+# enum that defaults to `logger` (no-send) when unset, so Twenty boots clean and
+# the admin configures SMTP in-app under Settings -> Emails (persisted to the DB).
+# It can't be auto-wired from malmo's MALMO_MAIL_* provider: gating the enum to ""
+# on an unbound box fails config validation at boot (see the PR's Platform gaps).
+# OAuth SSO needs operator-supplied developer-app credentials malmo has no env
+# surface for. Password + magic-link auth and the full CRM work without either.
+services:
+  server:
+    image: twentycrm/twenty:v2.13.2
+    environment:
+      NODE_PORT: 3000
+      SERVER_URL: ${MALMO_APP_URL}
+      PG_DATABASE_URL: ${MALMO_SERVICE_DATABASE_DSN}
+      REDIS_URL: ${MALMO_SERVICE_CACHE_DSN}
+      ENCRYPTION_KEY: ${MALMO_SECRET_ENCRYPTION_KEY}
+      STORAGE_TYPE: local
+    volumes:
+      - ./data/local-storage:/app/packages/twenty-server/.local-storage:rw
+    healthcheck:
+      test: curl --fail http://localhost:3000/healthz
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      # First boot runs schema migrations before the server listens (~55s on a
+      # warm box, longer on the low-end hardware malmo targets). During the start
+      # period failing probes don't count toward `retries`, so a slow migration
+      # can't wedge the worker's depends_on: service_healthy gate. 150s matches
+      # the manifest's 180s migration bound (250s total window vs 190s at 90s).
+      start_period: 150s
+    restart: unless-stopped
+
+  worker:
+    image: twentycrm/twenty:v2.13.2
+    command: ["yarn", "worker:prod"]
+    environment:
+      SERVER_URL: ${MALMO_APP_URL}
+      PG_DATABASE_URL: ${MALMO_SERVICE_DATABASE_DSN}
+      REDIS_URL: ${MALMO_SERVICE_CACHE_DSN}
+      ENCRYPTION_KEY: ${MALMO_SECRET_ENCRYPTION_KEY}
+      STORAGE_TYPE: local
+      DISABLE_DB_MIGRATIONS: "true" # migrations run on the server
+      DISABLE_CRON_JOBS_REGISTRATION: "true" # cron is registered on the server
+    volumes:
+      - ./data/local-storage:/app/packages/twenty-server/.local-storage:rw
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
