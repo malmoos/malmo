@@ -5,7 +5,9 @@ version: "6.1.0"
 description:
   short: "Self-hosted newsletter and mailing list manager."
   long: |
-    listmonk is a high-performance newsletter and mailing list manager that runs entirely on your own hardware. Build and segment subscriber lists, design campaigns in a visual editor, send to thousands of recipients, and track opens and clicks — without handing your audience or your content to a third-party email-marketing service. A single fast Go binary backs a modern dashboard, and malmo provisions and manages the PostgreSQL database it needs automatically, so there is nothing to set up. On the first visit you create the super-admin account, then connect your own SMTP provider under Settings to start sending.
+    listmonk is a high-performance newsletter and mailing list manager that runs entirely on your own hardware. Build and segment subscriber lists, design campaigns in a visual editor, send to thousands of recipients, and track opens and clicks — without handing your audience or your content to a third-party email-marketing service. A single fast Go binary backs a modern dashboard, and malmo provisions and manages the PostgreSQL database it needs automatically, so there is nothing to set up. On the first visit you create the super-admin account, then add your SMTP server inside listmonk to start sending.
+
+    Note on outgoing email: listmonk does not use malmo's shared Outgoing email settings. It manages its own SMTP servers in its own interface (Settings → SMTP), where you enter your mail provider's host, port, and credentials directly. This is a listmonk design choice — its mail configuration lives only in its own database, not in environment malmo can supply — so the malmo-wide email account you may have set for other apps does not apply here.
 
     Note: listmonk bakes this app's address into every outbound email — unsubscribe, click-tracking, view-in-browser, and archive links. Because that address is your home network's `.local` name, recipients off your network can't open those links until remote access is available. Sending still works; only the links back into listmonk are reachable on your LAN for now.
 icon: ./icon.svg
