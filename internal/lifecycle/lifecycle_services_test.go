@@ -428,18 +428,32 @@ func TestWaitServiceReadyTimesOut(t *testing.T) {
 	}
 }
 
-// TestWaitServiceReadyAbortsOnContext covers the inspect-error and cancellation
-// branches: a failing health inspect keeps the poll going (it isn't fatal), and
-// a cancelled context aborts the wait with the context error rather than
-// spinning to the deadline.
+// TestWaitServiceReadyAbortsOnContext covers two cancellation paths: (a) a
+// failing health inspect keeps the poll going (transient, not fatal), and when
+// the context is cancelled the wait returns context.Canceled rather than
+// spinning to the deadline; (b) same with a healthy-but-not-yet-ready status
+// ("starting"), confirming the select branch fires independently of inspect
+// errors.
 func TestWaitServiceReadyAbortsOnContext(t *testing.T) {
-	e := newTestEnv(t)
-	e.docker.containerHealthErr = fmt.Errorf("inspect boom")
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := e.m.waitServiceReady(ctx, "postgres", "15"); err != context.Canceled {
-		t.Fatalf("want context.Canceled, got %v", err)
-	}
+	t.Run("inspect error + cancelled ctx", func(t *testing.T) {
+		e := newTestEnv(t)
+		e.docker.containerHealthErr = fmt.Errorf("inspect boom")
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := e.m.waitServiceReady(ctx, "postgres", "15"); err != context.Canceled {
+			t.Fatalf("want context.Canceled, got %v", err)
+		}
+	})
+	t.Run("starting + cancelled ctx", func(t *testing.T) {
+		e := newTestEnv(t)
+		e.docker.containerHealth = "starting"
+		e.m.healthPoll = time.Millisecond
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := e.m.waitServiceReady(ctx, "postgres", "15"); err != context.Canceled {
+			t.Fatalf("want context.Canceled, got %v", err)
+		}
+	})
 }
 
 func readInstanceEnv(t *testing.T, e *testEnv, id string) string {

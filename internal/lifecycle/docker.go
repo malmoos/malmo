@@ -218,9 +218,9 @@ func (cliDocker) RunOneOff(ctx context.Context, image, network, envFile string, 
 
 func (cliDocker) ContainerHealth(ctx context.Context, container string) (string, error) {
 	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f",
-		`{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}`, container).Output()
+		`{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}`, container).CombinedOutput()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w\n%s", err, strings.TrimSpace(string(out)))
 	}
 	return strings.TrimSpace(string(out)), nil
 }
