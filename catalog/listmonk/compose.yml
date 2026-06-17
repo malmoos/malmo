@@ -1,0 +1,41 @@
+# listmonk adapted for malmo's Tier-3 sandbox (cap_drop: ALL,
+# no-new-privileges, brain-pinned user:). Upstream's compose runs listmonk
+# alongside its own postgres:17-alpine and publishes host port 9000; malmo
+# drops the host port (the brain routes to main_port), drops the bundled
+# database and declares managed Postgres in the manifest instead, and keeps
+# the relative ./uploads bind for admin-uploaded campaign media.
+#
+# The command is upstream's verbatim: --install --idempotent installs the
+# schema once against the (empty) managed database on first boot, --upgrade
+# runs migrations on later image bumps, then the server starts. --config ''
+# makes listmonk read configuration from the LISTMONK_* env vars only, so no
+# config-file bind is needed. The pool tuning vars (max_open/max_idle/
+# max_lifetime) are kept because --config '' suppresses config.toml's
+# defaults — they must come from the environment.
+#
+# Entrypoint is rootless-clean: PUID defaults to 0, but under the brain's
+# pinned non-root uid `id -u` is never 0, so su-exec is skipped and the
+# process execs directly as the pinned user; the boot-time `chown -R /listmonk`
+# is guarded by `if !` and only warns when it can't change ownership.
+#
+# SMTP is not wired here: listmonk configures outgoing mail in-app
+# (Settings -> SMTP), persisted in the database, not via env — so malmo's
+# mail injection does not apply.
+services:
+  app:
+    image: listmonk/listmonk:v6.1.0
+    command: [sh, -c, "./listmonk --install --idempotent --yes --config '' && ./listmonk --upgrade --yes --config '' && ./listmonk --config ''"]
+    environment:
+      LISTMONK_app__address: 0.0.0.0:9000
+      LISTMONK_db__host: ${MALMO_SERVICE_DATABASE_HOST}
+      LISTMONK_db__port: ${MALMO_SERVICE_DATABASE_PORT}
+      LISTMONK_db__user: ${MALMO_SERVICE_DATABASE_USER}
+      LISTMONK_db__password: ${MALMO_SERVICE_DATABASE_PASSWORD}
+      LISTMONK_db__database: ${MALMO_SERVICE_DATABASE_NAME}
+      LISTMONK_db__ssl_mode: disable
+      LISTMONK_db__max_open: 25
+      LISTMONK_db__max_idle: 25
+      LISTMONK_db__max_lifetime: 300s
+      TZ: Etc/UTC
+    volumes:
+      - ./uploads:/listmonk/uploads:rw

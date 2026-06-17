@@ -1,0 +1,70 @@
+# NocoDB adapted for malmo's Tier-3 sandbox. The image defaults to root
+# (Config.User is empty) and writes its data dir as root, so it runs cleanly
+# under cap_drop: ALL + no-new-privileges against malmo's root-created ./data
+# bind — no nonroot-data-ownership remap needed (same shape as open-webui).
+# Verified booting, migrating, and serving under the sandbox.
+#
+# Two containers, one image: `nocodb` serves the API/dashboard; `worker` runs
+# background jobs (automations, webhooks, scheduled syncs) with
+# NC_WORKER_CONTAINER set. Both share ./data and the same DB/Redis/mail env;
+# worker waits for nocodb to pass its healthcheck so startup migrations run
+# once, on the main service, before the worker connects.
+#
+# Database + cache are malmo-managed: the brain provisions a per-app Postgres
+# database and a Valkey (Redis-compatible) keyspace and injects
+# MALMO_SERVICE_*. NC_DB takes NocoDB's own xc connection format, built from
+# the discrete Postgres fields — the injected password is base64url and the
+# database name is a sanitized SQL identifier, both safe unescaped in the
+# query string. NC_REDIS_URL takes the injected redis:// DSN verbatim.
+x-nocodb-environment: &nocodb-environment
+  NC_DB: "pg://${MALMO_SERVICE_DATABASE_HOST}:${MALMO_SERVICE_DATABASE_PORT}?u=${MALMO_SERVICE_DATABASE_USER}&p=${MALMO_SERVICE_DATABASE_PASSWORD}&d=${MALMO_SERVICE_DATABASE_NAME}"
+  NC_REDIS_URL: ${MALMO_SERVICE_CACHE_DSN}
+  # JWT signing key (manifest `secrets: [{name: key}]`, injected as
+  # MALMO_SECRET_KEY). NocoDB defaults to storing NC_AUTH_JWT_SECRET in its
+  # nc_meta Postgres table, so sessions survive restarts without this; we
+  # inject it explicitly for catalog consistency and so a reinstall produces a
+  # deterministic session invalidation rather than silently regenerating.
+  NC_AUTH_JWT_SECRET: ${MALMO_SECRET_KEY}
+  # Public URL baked into invite/share/webhook links and OAuth redirects. The
+  # brain injects the routed .local URL; those links resolve on the LAN only
+  # until remote access ships (app-url-injection — see manifest long desc).
+  NC_SITE_URL: ${MALMO_APP_URL}
+  # Self-hosted: opt out of upstream usage telemetry (malmo data-ownership
+  # posture, same as open-webui).
+  NC_DISABLE_TELE: "true"
+  # Outgoing mail (manifest `mail:` block). NocoDB initializes its SMTP plugin
+  # only when FROM + HOST + PORT are all set, so unbound (the vars are absent)
+  # it simply sends no mail and the app runs; bound, the brain injects the
+  # MALMO_MAIL_* fields. NC_SMTP_SECURE is implicit TLS (smtps/465) vs
+  # STARTTLS — the brain's MALMO_MAIL_USE_SSL projection of the provider's
+  # encryption mode.
+  NC_SMTP_FROM: "${MALMO_MAIL_FROM:-}"
+  NC_SMTP_HOST: "${MALMO_MAIL_HOST:-}"
+  NC_SMTP_PORT: "${MALMO_MAIL_PORT:-}"
+  NC_SMTP_USERNAME: "${MALMO_MAIL_USER:-}"
+  NC_SMTP_PASSWORD: "${MALMO_MAIL_PASSWORD:-}"
+  NC_SMTP_SECURE: "${MALMO_MAIL_USE_SSL:-false}"
+
+services:
+  nocodb:
+    image: nocodb/nocodb:2026.06.1
+    environment: *nocodb-environment
+    volumes:
+      - ./data:/usr/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 --spider http://localhost:8080/api/v1/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  worker:
+    image: nocodb/nocodb:2026.06.1
+    environment:
+      <<: *nocodb-environment
+      NC_WORKER_CONTAINER: "true"
+    depends_on:
+      nocodb:
+        condition: service_healthy
+    volumes:
+      - ./data:/usr/app/data

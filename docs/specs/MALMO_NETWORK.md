@@ -2,6 +2,8 @@
 
 > The cloud-side surface that supports the malmo OS. Companion to `SPEC.md`. Owns DNS, certs, enrollment, and (deferred) the identity-based mesh for remote access.
 
+> **Environment profiles.** This doc describes the `appliance` profile, where `.local` is the foundation and `<slug>.<box-id>.malmo.network` HTTPS is an opt-in toggle. In the **hosted** profile (cloud VM) there is no `.local` and no toggle: `<slug>.<box-id>.malmo.network` public HTTPS is always-on and the only scheme, enrolled automatically at provision. The wildcard-cert ACME DNS-01 mechanism is the same. See `ENVIRONMENT.md` # Networking & discovery (hosted v1).
+
 ## Scope
 
 malmo.network is a small set of cloud services run by malmo, used by every box that opts in. It is **not** a control plane for boxes — it never sees app traffic or app data, only DNS lookups and cert-renewal metadata.

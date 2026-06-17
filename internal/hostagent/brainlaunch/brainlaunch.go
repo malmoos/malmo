@@ -125,6 +125,17 @@ type Config struct {
 	// MALMO_DASHBOARD_UI_UPSTREAM; its presence is what makes the brain install
 	// the dashboard route. Empty leaves the brain without a dashboard route.
 	UIUpstream string
+	// CatalogDir is the Door-1 catalog the brain installs apps from, passed as
+	// MALMO_CATALOG_DIR. It must live under DataDir (the default does) so it is
+	// already visible in the brain via the DataDir bind mount — the brain only
+	// reads it (manifests, icons), so no separate mount is needed. Empty leaves
+	// the brain on its own default (./catalog), which is empty in a container.
+	CatalogDir string
+	// OfflineInstall sets MALMO_OFFLINE_INSTALL on the brain — trust the
+	// catalog-promised digest of a locally-loaded image when its pull fails
+	// (APP_LIFECYCLE.md # image digest pinning). Set on a baked, registry-less
+	// box (the air-gapped QEMU lane); off on a box with a registry.
+	OfflineInstall bool
 }
 
 // Launch runs the first-boot brain bootstrap. It is idempotent: a brain
@@ -284,6 +295,17 @@ func runSpec(cfg Config) RunSpec {
 		{Key: "MALMO_CADDY_PROBE_URL", Value: "http://malmo-caddy"},
 		{Key: "MALMO_CONTROL_PLANE_DIR", Value: cfg.ControlPlaneDir},
 		{Key: "MALMO_DASHBOARD_UI_UPSTREAM", Value: cfg.UIUpstream},
+	}
+	// The Door-1 catalog (under DataDir, already mounted — see Config.CatalogDir).
+	// Set only when configured so an unset CatalogDir leaves the brain on its own
+	// default rather than pointing it at an empty "".
+	if cfg.CatalogDir != "" {
+		env = append(env, EnvVar{Key: "MALMO_CATALOG_DIR", Value: cfg.CatalogDir})
+	}
+	// Air-gapped install mode (registry-less box). Emit only when set — the brain
+	// defaults it off (a box with a registry pulls + verifies as usual).
+	if cfg.OfflineInstall {
+		env = append(env, EnvVar{Key: "MALMO_OFFLINE_INSTALL", Value: "true"})
 	}
 	return RunSpec{
 		Name:    cfg.ContainerName,

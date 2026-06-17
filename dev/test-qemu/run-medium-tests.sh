@@ -242,11 +242,24 @@ qemu_base_args() {
         # DHCP addresses differ. MACs are pinned because the in-image
         # config partitions networkd vs NM by MAC, not by the
         # slot-dependent predictable interface name.
-        -netdev "user,id=mn1,hostfwd=tcp::${SSH_PORT}-:22"
+        #
+        # restrict=on AIR-GAPS the guest (#167): SLIRP routes no guest packets
+        # to the host or the outside, so a missing bundled image hard-fails
+        # instead of silently pulling from Docker Hub — proving the offline
+        # image bundle is complete (TESTING.md # Full-stack control-plane
+        # integration). It does NOT affect explicit forwarding rules (the SSH
+        # hostfwd still works) or SLIRP's own DHCP (the NM LAN NICs still get
+        # leases), so the network-state and SSH assertions are unaffected.
+        # NOTE: this is a permanent fixture — hermeticity is the point. A future
+        # assertion that genuinely needs outbound (e.g. an online registry-pull /
+        # update-path test) would hard-fail SILENTLY under restrict=on; such a
+        # test must drop restrict on its own netdev (or run in a separate,
+        # non-air-gapped lane), not relax it here.
+        -netdev "user,id=mn1,restrict=on,hostfwd=tcp::${SSH_PORT}-:22"
         -device "virtio-net-pci,netdev=mn1,mac=52:54:00:6d:6c:01"
-        -netdev "user,id=mn2,net=10.0.3.0/24"
+        -netdev "user,id=mn2,restrict=on,net=10.0.3.0/24"
         -device "virtio-net-pci,netdev=mn2,mac=52:54:00:6d:6c:02"
-        -netdev "user,id=mn3,net=10.0.4.0/24"
+        -netdev "user,id=mn3,restrict=on,net=10.0.4.0/24"
         -device "virtio-net-pci,netdev=mn3,mac=52:54:00:6d:6c:03"
         -no-reboot
     )

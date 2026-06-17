@@ -279,5 +279,5 @@ clean: stop caddy-down
 	@# mounts, so instances/<id>/data is root-owned on the host — same as prod,
 	@# where the privileged uninstall path removes it. A plain `rm` as the dev
 	@# user can't, so reclaim it via a throwaway root container first. No sudo.
-	-@docker run --rm -v $(abspath $(DEV_DIR)/state):/state alpine:3 rm -rf /state/instances 2>/dev/null || true
+	-@docker run --rm -v $(abspath $(DEV_DIR)/state):/state alpine:3 rm -rf /state 2>/dev/null || true
 	rm -rf $(DEV_DIR)/state

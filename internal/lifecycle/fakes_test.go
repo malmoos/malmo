@@ -42,6 +42,7 @@ type fakeDocker struct {
 	mu sync.Mutex
 
 	digests       map[string]string // image → digest returned by ImageInspect
+	loaded        map[string]bool   // image present locally with NO RepoDigest (docker-loaded)
 	pullErr       map[string]error  // per-image Pull error (nil = success)
 	composeUp     func(ctx context.Context, dir, project string) (string, error)
 	inspect       func(id, mainService string) (running bool, health string, err error)
@@ -73,6 +74,7 @@ type fakeDocker struct {
 func newFakeDocker() *fakeDocker {
 	return &fakeDocker{
 		digests:   map[string]string{},
+		loaded:    map[string]bool{},
 		pullErr:   map[string]error{},
 		psManaged: map[string]bool{},
 	}
@@ -118,11 +120,16 @@ func (f *fakeDocker) Pull(_ context.Context, image string) error {
 
 func (f *fakeDocker) ImageInspect(_ context.Context, image string) (RepoDigests, error) {
 	f.record("ImageInspect", image)
-	d, ok := f.digests[image]
-	if !ok {
-		return nil, fmt.Errorf("fakeDocker: no digest scripted for %q", image)
+	if d, ok := f.digests[image]; ok {
+		return RepoDigests{repoOf(image) + "@" + d}, nil
 	}
-	return RepoDigests{repoOf(image) + "@" + d}, nil
+	// A docker-loaded (offline-bundle) image is present but carries no
+	// RepoDigest — inspect succeeds with an empty list, mirroring the CLI.
+	if f.loaded[image] {
+		return RepoDigests{}, nil
+	}
+	// Absent: inspect errors, as `docker image inspect` does for a missing image.
+	return nil, fmt.Errorf("fakeDocker: image %q not present", image)
 }
 
 func (f *fakeDocker) ComposeUp(ctx context.Context, dir, project string) (string, error) {

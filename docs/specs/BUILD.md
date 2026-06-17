@@ -2,6 +2,8 @@
 
 > Working spec for how malmo ships — from source to a USB stick to a running box. Companion to `SPEC.md`, `CONTROL_PLANE.md`, `FIRST_RUN.md`, `STORAGE.md`.
 
+> **Environment profiles.** This doc describes building the `appliance` install ISO. The same `mkosi` builder also emits a lean **hosted** cloud VM image profile (no Avahi/Samba/NetworkManager/cryptsetup-TPM/mergerfs) paired with a build-tagged slim cloud `host-agent`. See `ENVIRONMENT.md` # How the profile is realized.
+
 This doc is **draft / option-survey**. Most sections present alternatives with a recommendation; locked decisions are called out explicitly. The intent is to surface forks before committing.
 
 ## What this doc covers
@@ -90,7 +92,9 @@ Implemented as a drop-in at `/etc/nftables.d/malmo-ssh.conf`, owned by the `.deb
 
 ## 2. ISO build tooling
 
-This is the largest open fork. Four real options:
+**Decided (2026-06-16): Option C — `mkosi`.** It is malmo's single image builder, for the install ISO, the cloud VM image, and the QEMU test image alike. See "Decision" below; `DECISIONS.md` 2026-06-16 carries the delta. The four options below are kept as the record that produced the call.
+
+The fork, as it stood — four real options:
 
 ### Option A — `live-build`
 
@@ -123,16 +127,27 @@ Roll our own. What Ubuntu's modern installers do under the hood.
 - **Cons:** We become the maintainers of an ISO builder. Many person-weeks to match what live-build gives for free.
 - **Verdict:** Reject. Premature DIY for a problem with mature solutions.
 
-### Recommendation
+### Decision (2026-06-16): Option C — `mkosi`
 
-**Option A (`live-build`) for v1, with an eye toward migrating to Option C (`mkosi`) when we move to A/B immutable updates.**
+**Locked: mkosi is the single image builder** — for the install ISO, the cloud VM image, and the QEMU test image. This overturns the earlier "live-build-for-v1, migrate-to-mkosi-later" recommendation (`DECISIONS.md` 2026-06-16). One builder, one config, one artifact definition for every target.
 
-Reasoning:
-- live-build gets v1 out the door fastest with the least surprise.
-- mkosi is the better long-term fit but its Debian support is thinner — picking it now means writing recipes that don't exist yet in the wider community.
-- The migration cost from live-build → mkosi is real but bounded: both produce the same kind of artifact. The cost we'd avoid by skipping live-build (learning two tools) is smaller than the cost of betting v1 on mkosi-on-Debian and discovering a sharp edge.
+Why mkosi-now rather than live-build-then-migrate:
 
-**Alternative to push back on:** if you'd rather take the migration hit upfront, mkosi-now is defensible. The deciding question is whether v1 ship date or future-migration cost matters more.
+- **The test lane is already mkosi, all the way up the stack.** `dev/test-qemu/` builds the full control plane (`host-agent → brain → Caddy + UI`), boots it under `mkosi qemu`, and `mkosi-repart` already produces a LUKS2+ext4 root that TPM-unseals and switch-roots (`TESTING.md` # Full-stack control-plane integration; `docs/progress/luks-tpm-enrollment.md`). Shipping live-build for the ISO would mean maintaining a *second* builder that must stay byte-identical with the test image to hold the "live fs == installed fs" invariant (# 3). mkosi makes that invariant trivially true — there is one artifact.
+- **Systemd-native is the right substrate for malmo.** We lean hard on systemd — `systemd-cryptenroll` + TPM unseal, UKI, `systemd-boot`, `cryptsetup-initramfs`. mkosi is the systemd team's own image tool, so partitioning / LUKS / TPM / UKI-signing are first-class rather than bolted on. (Umbrel, on the same Debian base, assembles a Docker-built rootfs + Rugix + Mender to get the equivalent; mkosi collapses that into one pipeline.)
+- **One config emits every target.** The same mkosi definition produces the flashable install ISO **and** a cloud VM image (qcow2 / raw) for the hosted-in-cloud product. live-build has no cloud-image story; that would be a third path.
+- **A/B-immutable is the stated future** (`SPEC.md` OS update model). live-build has no A/B story; mkosi's disk-image output A/B-swaps natively. We are **not** shipping A/B in v1 — v1 is mutable Debian + a flash-an-ISO install — but picking mkosi now means that future lands with no re-tooling.
+
+What this decision **does not** settle (kept open — see `NEXT.md`):
+
+- **The OTA update orchestrator.** mkosi's presumptive partner is `systemd-sysupdate`, but that is *not* chosen here. Umbrel uses Mender, Home Assistant OS uses RAUC — both with a deeper production track record than `systemd-sysupdate` for Debian appliances. Naming the orchestrator waits for the A/B work.
+- **The interactive installer is unchanged.** mkosi vs live-build is only *how the bootable artifact is assembled* — malmo still ships the guided first-run installer of # 3 / `FIRST_RUN.md` Phase 1 (disk selection, recovery passphrase, confirm-wipe). The USB stick boots that installer, which writes the OS to the machine's internal disk. We are **not** adopting the competitors' direct-flash-the-image-onto-the-target model.
+
+Knowingly accepted costs:
+
+- mkosi's Debian support is thinner than live-build's (it is better-trodden for Fedora / Arch). The LUKS/TPM bring-up already paid down the riskiest part of that on a real Debian boot, but expect occasional sharp edges a live-build user would not hit.
+- **A live installer ISO that boots a session is live-build's home turf** (the Tails / Kali pattern), and is the one part of mkosi's fit not yet proven in-repo — the test lane boots a *disk image*, not a live-session ISO carrying the kiosk installer (# 3). Validating mkosi's live-ISO output is a follow-up, not a reason to keep a second builder.
+  - **⚠ Resolved 2026-06-17 (#199): mkosi emits no ISO — and malmo no longer wants one.** Investigating this exact follow-up found mkosi 26's output formats are `{confext,cpio,directory,disk,esp,none,portable,sysext,tar,uki,oci,addon}` — there is **no `iso`/ISO9660 format** (and no `xorriso`/El-Torito code in the package). mkosi builds GPT *disk* images. The call (maintainer, 2026-06-17): **drop the literal `.iso` entirely; the bootable artifacts are disk images** — a `qcow2`/`raw` for the cloud VM and a `raw` `dd`'d to a USB stick for bare metal. Optical-media / CD-DVD boot is explicitly out of scope. The "live fs == installed fs" invariant (# 3) is unaffected — a `Format=disk` root is what gets booted/laid down — and "mkosi is the single builder" holds exactly (this is mkosi's native distribution model). The cloud VM image is the **priority** target; bare-metal USB follows (`#196` epic ordering). See `DECISIONS.md` 2026-06-17 and `progress/iso-mkosi-finding.md`.
 
 ---
 
@@ -170,7 +185,7 @@ ZimaOS and a couple of other appliance OSes use this exact pattern. It's well-tr
 
 ### Decision: live filesystem == installed filesystem
 
-The same squashfs the live ISO boots from is what gets copied to disk. No separate "live image" vs. "installable image." Means everything we test in the live environment is what runs post-install. Standard live-build pattern.
+The same root filesystem the live ISO boots from is what gets copied to disk. No separate "live image" vs. "installable image." Means everything we test in the live environment is what runs post-install. With one mkosi-built artifact (# 2) this invariant is structural rather than a discipline to maintain across two builders.
 
 ---
 
@@ -247,7 +262,8 @@ Same as the brain (# 5 Distribution): **bundled in the ISO for offline first-boo
 
 ### Per-release artifacts
 
-- `malmo-vX.Y.Z-amd64.iso` — the installer ISO.
+- `malmo-vX.Y.Z-amd64.qcow2` — the **cloud VM image** (priority target; the hosted product provisions tenants from it — `ENVIRONMENT.md` # Provisioning). Emitted by mkosi `Format=disk`.
+- `malmo-vX.Y.Z-amd64.raw` — the **bare-metal install medium**, `dd`'d / flashed to a USB stick (the "old laptop in the pantry" path). Same mkosi `Format=disk` rootfs; not optical media (no `.iso` — see # 2's 2026-06-17 resolution and `DECISIONS.md`).
 - `malmo-host-agent_X.Y.Z_amd64.deb` — published to `apt.malmo.network`.
 - `registry.malmo.network/malmo/brain:vX.Y.Z` — the brain image. `latest` tag advances on stable channel.
 - `registry.malmo.network/malmo/ui:vX.Y.Z` — the dashboard image. Versioned independently of the brain; both bundled in the ISO for offline first-boot.
@@ -283,10 +299,11 @@ Not locking specifics, but the rough shape:
             └──► ui image ────────► registry.malmo.network  (caddy:alpine + bundle, see WEB_UI.md)
                                      │
                                      ▼
-                          live-build ISO assembly
+                          mkosi image assembly (Format=disk)
                                      │
                                      ▼
-                       malmo-vX.Y.Z-amd64.iso
+                  malmo-vX.Y.Z-amd64.qcow2 (cloud VM, priority)
+                  malmo-vX.Y.Z-amd64.raw   (bare-metal USB)
                                      │
                                      ▼
                               releases.malmo.network
@@ -304,13 +321,13 @@ GitHub Actions or self-hosted CI — TBD, not architecturally interesting at thi
 - **Base: Debian stable (currently Trixie / 13).**
 - **Kernel: Debian backports kernel** for hardware support on BYO x86.
 - **Non-free firmware bundled** for Wi-Fi and GPU support out of the box.
-- **ISO tooling: `live-build` for v1.** Migrate to `mkosi` when we move to A/B immutable updates. Conscious near-term-risk-reduction tradeoff over future-migration cost.
+- **Image tooling: `mkosi`** (decided 2026-06-16, `DECISIONS.md`). One builder for the cloud VM image, the bare-metal USB install image, and the QEMU test lane; systemd-native, and A/B-ready for the immutable future. Overturns the earlier live-build-for-v1 recommendation. **(⚠ #199, 2026-06-17 resolved: mkosi has no ISO9660 output — it builds GPT *disk* images, and malmo no longer ships a literal `.iso`. Artifacts are a `qcow2`/`raw` cloud image (priority) and a `raw` USB image; CD/DVD/optical boot is out of scope. See # 2's resolution + `DECISIONS.md` 2026-06-17.)**
 - **Installer execution model: kiosk web installer.** Minimal compositor (`cage` / `weston --kiosk`) + Chromium pointed at a local installer service. Closest production reference: Fedora's Anaconda Web UI.
 - **Docker package source: `docker-ce` from Docker's official apt repo.** Revisit if Docker Inc. policy changes; swap to `docker.io` is a one-line apt source change.
 - **`host-agent` ships as a Debian package** from our own apt repo, not as a container.
 - **`malmo-brain` ships as an OCI image**, `debian:trixie-slim` runtime with the `docker` CLI + Compose plugin bundled (the brain shells out to them; distroless can't host them — `DECISIONS.md` 2026-06-13), from our own registry, also bundled in the ISO for offline first-boot.
 - **`malmo-ui` ships as a second OCI image** (`caddy:alpine` + baked UI bundle), versioned independently of the brain, from our own registry, also bundled in the ISO. Launched by the brain, not host-agent (`CONTROL_PLANE.md`).
-- **Same squashfs serves both the live (installer) environment and the installed system.**
+- **Same root filesystem serves both the live (installer) environment and the installed system.**
 - **SSH daemon enabled at boot; no account can authenticate until per-user opt-in** (`AUTH.md` # SSH access). Root login disabled.
 - **Channels: stable only in v1, no beta, no nightly.** Beta is additive when triggered (see `RELEASE_MANIFEST.md`).
 - **Versioning: SemVer for components, CalVer for the ISO.**

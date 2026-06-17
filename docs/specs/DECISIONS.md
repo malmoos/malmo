@@ -31,6 +31,51 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 **Affected docs:** `SERVICE_PROVISIONING.md` (# Implementation status, # Locked: provisioning), `CONTROL_PLANE.md` (# Locked: Docker socket exposure — managed-DB gate lifted). Implementation: `internal/lifecycle` (`docker.go` `RunOneOff`/`ContainerHealth` replacing `Exec`; `services.go` `runServiceClient`/`clientWrapper`, health-poll readiness), realized by `docs/progress/managed-db-one-shot-provisioning.md`.
 
+## 2026-06-16 — Hosted environment profile: one OS, lean cloud image, not a fork
+
+**Previously:** the spec set described exactly one environment — a BYO x86 box on the user's LAN. A hosted/cloud offering was acknowledged only as a future "cloud VM image" target in `BUILD.md`, with no design.
+
+**Now:** malmo runs in two **environment profiles** — `appliance` (today's default) and `hosted` (a malmo-operated cloud VM, one per tenant, targeting SMBs running OSS apps publicly). The split is structured, not a fork:
+- **Layer 1 (the control plane — brain, UI, Caddy, socket-proxy, protocol, catalog, manifests, lifecycle, auth) is identical across profiles.** It is the product and the migration-portability guarantee.
+- **Layer 2 (base image + `host-agent`) diverges** via a lean `mkosi` cloud image profile (no Avahi/Samba/NetworkManager/cryptsetup-TPM/mergerfs) plus a build-tagged slim cloud `host-agent`. Same repo, same Debian/systemd/Docker substrate, same builder.
+- **Identity stays PAM-sourced** in hosted even though SSH/Samba are gone, to keep Layer 1 and the migration bundle identical.
+- **Hosted v1 networking** is a plain public endpoint, `<slug>.<box-id>.malmo.network` HTTPS, always-on (no `.local`, no toggle, no mesh).
+- **Hosted inverts "closed by default"** to public-by-default / auth-gated, and adopts an **honest convenience tier** trust posture: malmo-operated infra is inside the trust boundary; at-rest encryption defends co-tenant/image-theft, not the operator. Not operator-blind.
+
+**Why:** a hosted on-ramp needs a different runtime environment, but the brain is ~95% of the value and the whole migration story depends on it being the same code. Concentrating divergence in Layer 2 — already the small, swappable layer by design — gets the hosted product without forking the control plane. A different base OS and a one-rootfs-disable-at-runtime approach were both considered and rejected (`ENVIRONMENT.md` # Rejected sections). Commercial concerns (metering, billing, fleet ops, the mesh, a central ingress) are explicitly deferred.
+
+**Affected docs:** new `ENVIRONMENT.md` (anchor); pointer sections added to `FIRST_RUN.md`, `STORAGE.md`, `MALMO_NETWORK.md`, `DISCOVERY.md`, `BOOT.md`, `BUILD.md`, `CONTROL_PLANE.md`, `THREAT_MODEL.md`, `AUTH.md`; `docs/README.md`; `NEXT.md`.
+
+## 2026-06-16 — ISO build tooling: `mkosi`, not `live-build` (#197)
+
+**Previously:** `BUILD.md` # 2 recommended `live-build` for v1 (fastest out the door, most Debian-blessed), with a migrate-to-`mkosi`-later note for when A/B-immutable updates arrive. The migration cost was judged smaller than the risk of betting v1 on thinner mkosi-on-Debian recipes.
+
+**Now:** **`mkosi` is the single image builder** — for the install ISO, the cloud VM image, and the QEMU test image. No live-build, no two-builder phase.
+
+**Why:**
+- **The test lane is already mkosi, proven up the whole stack.** `dev/test-qemu/` boots the full control plane under `mkosi qemu`, and `mkosi-repart` already produces a LUKS2+ext4 root that TPM-unseals and switch-roots on a real boot (`luks-tpm-enrollment.md`, `qemu-fullstack-app-install.md`). Shipping live-build for the ISO would mean a *second* builder kept byte-identical with the test image to hold the "live fs == installed fs" invariant (`BUILD.md` # 3) — the exact maintenance burden the invariant exists to avoid. One builder makes it trivially true.
+- **Systemd-native fits malmo.** We depend heavily on systemd (`systemd-cryptenroll` + TPM, UKI, `systemd-boot`, `cryptsetup-initramfs`); mkosi is the systemd team's own tool, so partitioning/LUKS/TPM/UKI-signing are first-class. The same config also emits the cloud VM image (qcow2/raw) the hosted product needs — live-build has no cloud-image story.
+- **A/B-immutable is the stated future** (`SPEC.md` OS update model); live-build has no A/B story, mkosi's disk images A/B-swap natively. v1 stays mutable Debian + a flash-an-ISO install, but mkosi means the A/B future needs no re-tooling.
+- This takes the spec's own stated "alternative to push back on" (mkosi-now), now that the test lane has retired most of the Debian-maturity risk that argued for live-build-first.
+
+**Knowingly accepted:** mkosi's Debian track record is thinner than live-build's, and **a live installer ISO that boots a session is live-build's home turf** — the one part of mkosi's fit not yet proven in-repo (the test lane boots a disk image, not a live-session ISO). Validating that is a follow-up, not a reason to keep two builders. The **OTA orchestrator** is left unchosen (`systemd-sysupdate` is presumptive but unproven vs. Mender/RAUC); it waits for the A/B work. The interactive installer (`# 3` / `FIRST_RUN.md` Phase 1) is unchanged — this decision is only how the bootable artifact is assembled.
+
+**Resolved 2026-06-17 (#199):** the flagged follow-up was investigated and turned up a sharper finding — **mkosi has no ISO output format at all** (its `OutputFormat` enum is `{confext,cpio,directory,disk,esp,none,portable,sysext,tar,uki,oci,addon}`; it builds GPT *disk* images). This decision's core — mkosi as the single builder — stands and gets *stronger*: **malmo ships disk images, not an `.iso`.** The maintainer's call (2026-06-17): drop the literal `.iso` entirely. The bootable artifacts are a `qcow2`/`raw` **cloud VM image** and a `raw` image `dd`'d to a **USB stick** for bare metal; CD/DVD/optical boot is out of scope (the original `.iso` requirement was loose terminology inherited from the live-build era, not a product need). The "live fs == installed fs" invariant (`BUILD.md` # 3) survives — a `Format=disk` root is what gets booted and laid down. **Priority order** (per the #196 epic): the cloud VM image lands first — it has no installer/kiosk/LUKS-on-target at all (`ENVIRONMENT.md`: the cloud image *is* the installed system) — and the bare-metal USB + kiosk-installer path follows. Detailed in `progress/iso-mkosi-finding.md`.
+
+**Affected docs:** `BUILD.md` # 2 (recommendation flipped; # 2/# 6/locked-decisions reconciled to disk-image artifacts for the #199 resolution), `NEXT.md` (the "live-build vs mkosi revisit" open item resolved; the transient Tier-1 "ISO packaging path" item resolved and removed).
+
+---
+
+## 2026-06-16 — Offline (air-gapped) installs trust the catalog-promised digest of a locally-loaded image (#167)
+
+**Previously:** every install resolved an image's digest by `docker pull` + inspecting the registry `RepoDigest`, then verifying it against the catalog promise. A pull failure was always fatal, and a `docker save`/`load`ed image (which carries no `RepoDigest`) could never be pinned.
+
+**Now:** the brain has an explicit offline mode (`MALMO_OFFLINE_INSTALL`, off by default). In it, a pull failure is not fatal: if the image is already present locally, the **catalog-promised digest is the pin** — the offline bundle is the trust anchor in place of the absent registry. Two cases stay hard-fails: a genuinely-absent image (incomplete bundle — the missing-image failure the air-gapped lane exists to catch), and a Door-2 install (no catalog promise to trust). A box *with* a registry is unchanged — it pulls and verifies as before.
+
+**Why:** the full-stack QEMU lane (#167) runs the guest air-gapped to prove the offline image bundle is complete, and the production first-boot bootstrap is registry-less by the same offline-first design (`BUILD.md` # First-boot brain bootstrap). With the old unconditional `docker pull`, *any* install on such a box hard-fails — the whole app-install assertion is unreachable. Trusting the catalog digest is sound here because the signed catalog already *is* the version→bytes binding (`APP_STORE.md` # Trust model); offline we simply can't re-derive the manifest digest from a loaded image (it has no `RepoDigest`, and its config `Id` is not the manifest digest), so we trust the promise rather than weaken it. Gating behind an explicit mode — rather than a silent "pull failed, use whatever's local" fallback — keeps an online box from masking a transient registry outage by accepting a stale local image on an update.
+
+**Affected docs:** `APP_LIFECYCLE.md` (# Locked: image digest pinning — the offline paragraph), `docs/progress/offline-install-digest-trust.md`.
+
 ## 2026-06-14 — Socket-proxy ships with EXEC denied; managed-DB-in-production is gated on a provisioning re-architecture (#165)
 
 **Previously:** the control-plane stack (Caddy + malmo-ui + socket-proxy) was specced as a single brain-launched compose, and M1b was blocked on an open question the spike (`socket-proxy-compose-validation.md`) escalated: the socket-proxy denies the Docker `EXEC` family by design, but managed-database provisioning (`internal/lifecycle/services.go`) creates per-app roles/databases by `docker exec`'ing the engine's client (`psql`/`mysql`/`valkey-cli`), so the instant the containerized brain points `DOCKER_HOST` at the proxy, managed-DB provisioning breaks.

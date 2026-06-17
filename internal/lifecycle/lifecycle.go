@@ -140,6 +140,14 @@ type Manager struct {
 	// their on-disk preparation.
 	sharedRoot string
 
+	// offlineInstall trusts the catalog-promised digest of a locally-present
+	// image when its pull fails, rather than treating the failure as fatal. Set
+	// on a baked, air-gapped box where the offline bundle docker-loaded every
+	// image and there is no registry to pull from (CONTROL_PLANE.md # First-boot
+	// brain bootstrap). Off by default — a box with a registry pulls and
+	// verifies against it as usual. See resolveImages.
+	offlineInstall bool
+
 	// healthWait is overridable in tests; production uses healthWaitTimeout.
 	healthWait time.Duration
 	// healthPoll is the inter-poll interval; production uses 2s.
@@ -167,6 +175,12 @@ func NewManager(st *store.Store, cat *catalog.Catalog, host HostDriver, cd Caddy
 		instLocks:        map[string]*sync.Mutex{},
 	}
 }
+
+// SetOfflineInstall enables (or disables) the air-gapped install fallback —
+// trusting the catalog-promised digest of a locally-present image when its pull
+// fails. cmd/brain wires this from MALMO_OFFLINE_INSTALL; it is a box-level mode
+// (a baked, registry-less box), not a per-install option. See offlineInstall.
+func (m *Manager) SetOfflineInstall(v bool) { m.offlineInstall = v }
 
 // lockInstance acquires the per-instance lock (creating it on first use) and
 // returns the unlock func. Callers `defer unlock()`. See instLocks.
@@ -403,7 +417,7 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	// pinning). Runs before the override is written so we generate it once
 	// with `image: name@sha256:…` pins rather than write-then-rewrite.
 	step("resolving_digests")
-	pins, err := resolveImages(ctx, m.docker, man, composeBytes)
+	pins, err := resolveImages(ctx, m.docker, man, composeBytes, m.offlineInstall)
 	if err != nil {
 		return rollback(fmt.Errorf("resolve digests: %w", err))
 	}

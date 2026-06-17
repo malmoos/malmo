@@ -9,6 +9,8 @@
 > - Web UI codebase, stack, deploy model → **`WEB_UI.md`**
 >
 > This doc stays at the architectural-overview level: what the control plane is, its layered shape, and the brain's deployment-time decisions.
+>
+> **Environment profiles.** The control plane described here is **Layer 1** — identical across the `appliance` and `hosted` profiles. Only Layer 2 (the base image and `host-agent`) diverges; the hosted profile ships a build-tagged slim cloud `host-agent` and leaves brain / Caddy / `malmo-ui` / socket-proxy unchanged. See `ENVIRONMENT.md` # Two layers, treated differently.
 
 ## What the control plane is responsible for
 

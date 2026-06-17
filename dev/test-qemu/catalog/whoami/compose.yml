@@ -1,0 +1,8 @@
+# Author's compose, held verbatim by malmo (copy of catalog/whoami/compose.yml).
+# traefik/whoami echoes the HTTP request it received — proves the Caddy route
+# reaches the right container. The documents bind (from the manifest folder
+# grant) is injected by the brain into the override; whoami ignores it.
+services:
+  whoami:
+    image: traefik/whoami:v1.10.3
+    command: ["--port=80"]
