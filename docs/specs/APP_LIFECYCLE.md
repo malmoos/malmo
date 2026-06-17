@@ -160,6 +160,8 @@ All app installs end up running against a `compose.override.yml` that pins every
 
 Updates re-resolve (catalog for Door-1, fresh inspect for Door-2). The previous digest is kept in SQLite to power one-generation rollback.
 
+**Offline (air-gapped) installs trust the catalog promise directly.** A baked box with no registry — the first-boot bootstrap, and the air-gapped QEMU full-stack lane (`TESTING.md` # Full-stack control-plane integration) — `docker load`s every image from the offline bundle and cannot `docker pull`. In this mode (the brain's `MALMO_OFFLINE_INSTALL`), a pull failure is not fatal: if the image is already present locally, the **catalog-promised digest is the pin** — the offline bundle stands in for the registry as the trust anchor (a `docker save`/`load` image carries no `RepoDigest`, so the normal inspect-against-registry path can't resolve one). Two cases still hard-fail, to keep the air-gap honest: an image that is genuinely absent (the bundle is incomplete — the missing-image hard-fail the lane exists to catch), and a Door-2 install (no catalog promise to trust offline). Off by default: a box with a registry pulls and verifies against it as before.
+
 ## Locked: install transaction
 
 ```

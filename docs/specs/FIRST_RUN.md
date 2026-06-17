@@ -2,6 +2,8 @@
 
 > Working spec for what happens between "user downloads the ISO" and "user is on the dashboard." Companion to `SPEC.md`, `CONTROL_PLANE.md`, `APP_MANIFEST.md`, `SERVICE_PROVISIONING.md`, `APP_ISOLATION.md`, `STORAGE.md`.
 
+> **Environment profiles.** This doc describes the `appliance` profile (BYO box, USB install). In the **hosted** profile (malmo-operated cloud VM) there is no installer — the box is provisioned from a cloud image and configured at first boot, and the wizard is trimmed to admin account + time zone. See `ENVIRONMENT.md` # Provisioning & first-boot (hosted).
+
 ## Phases
 
 First-run is three distinct surfaces:

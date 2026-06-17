@@ -268,6 +268,162 @@ assert_network_state() {
     kill "$mnv_pid" 2>/dev/null
 }
 
+# --- M2 full-stack app install (#167) -----------------------------------
+# Installs the catalog app whoami end-to-end with NO guest internet (the netdevs
+# run restrict=on — run-medium-tests.sh), proving: the offline image bundle is
+# complete (a pull would hard-fail; the brain trusts the catalog-promised digest
+# of the docker-loaded image — MALMO_OFFLINE_INSTALL), the container runs,
+# whoami.local resolves, the app's route returns its page through Caddy, a real
+# use-case-folder bind mount lands, and content under it survives uninstall
+# (STORAGE.md # Files are first-class). The socket-proxy boundary is asserted in
+# the M1b block above. Driven over Caddy :80, same /dev/tcp idiom as M1b/M1c.
+#
+# scope=personal, not household: a level-0 VM has no data drive, so the shared
+# tree (/srv/malmo/shared) household would force doesn't exist; personal binds
+# the admin's own ~/Documents, which the brain creates at install.
+assert_app_install() {
+    # Locals (not top-level): ADMIN_DOCS interpolates $SETUP_USER, which the M1c
+    # block sets — and under `set -u` an unbound reference aborts the whole
+    # script. This function only runs in second-boot, after that block, so the
+    # var is bound here; defining these at top level fires before it is set.
+    local APP_SLUG=whoami
+    local ADMIN_DOCS="/home/${SETUP_USER}/Documents"
+    local MARKER="${ADMIN_DOCS}/survives-uninstall.txt"
+
+    # 0. authenticate. M1c proved /login returns 200; here we keep the session
+    # cookie (install authorizes on the session — no elevation needed for
+    # install). Set-Cookie: malmo_session=<tok>; …  → "malmo_session=<tok>".
+    local login_resp cookie
+    login_resp="$(http_post /api/v1/login malmo.local "$setup_body" 2>/dev/null || true)"
+    cookie="$(grep -i '^Set-Cookie:' <<<"$login_resp" \
+        | sed -E 's/^[Ss]et-[Cc]ookie:[[:space:]]*([^;]*).*/\1/' | tr -d '\r' | head -1)"
+    [ -n "$cookie" ] \
+        || fail "no session cookie from /login: $(head -1 <<<"$login_resp" | tr -d '\r')"
+
+    # authenticated request helpers carrying the session cookie.
+    app_post() { # PATH JSON -> full response
+        local body="$2" len
+        # Byte length, not ${#body} (shell char count): a multi-byte char would
+        # mis-size Content-Length and the server would truncate/reject the body.
+        len="$(printf '%s' "$body" | wc -c | tr -d ' ')"
+        exec 3<>/dev/tcp/127.0.0.1/80 || return 1
+        printf 'POST %s HTTP/1.0\r\nHost: malmo.local\r\nCookie: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' \
+            "$1" "$cookie" "$len" "$body" >&3
+        cat <&3
+        exec 3>&- 3<&-
+    }
+    app_delete() { # PATH -> status line
+        exec 3<>/dev/tcp/127.0.0.1/80 || return 1
+        printf 'DELETE %s HTTP/1.0\r\nHost: malmo.local\r\nCookie: %s\r\nConnection: close\r\n\r\n' "$1" "$cookie" >&3
+        head -1 <&3 | tr -d '\r'
+        exec 3>&- 3<&-
+    }
+    # GET an arbitrary Host through Caddy (the app route) -> full response.
+    host_get() { # PATH HOST -> full response
+        exec 3<>/dev/tcp/127.0.0.1/80 || return 1
+        printf 'GET %s HTTP/1.0\r\nHost: %s\r\nConnection: close\r\n\r\n' "$1" "$2" >&3
+        cat <&3
+        exec 3>&- 3<&-
+    }
+
+    # 1. install. 202 Accepted starts the install job; the brain pulls (fails,
+    # air-gapped) then trusts the catalog digest of the loaded image, brings the
+    # container up, publishes whoami.local, flips the route to the app.
+    local resp status
+    resp="$(app_post /api/v1/apps '{"manifest_id":"whoami","scope":"personal"}' 2>/dev/null || true)"
+    status="$(head -1 <<<"$resp" | tr -d '\r')"
+    case "$status" in
+        *" 202"*|*" 200"*) ;;
+        *) fail "install whoami did not start: status='$status' body=$(sed -n '/^\r\{0,1\}$/,$p' <<<"$resp" | tr -d '\r' | tail -2 | tr '\n' ' ')" ;;
+    esac
+
+    # On any install failure below, dump diagnostics to stdout (the harness
+    # surfaces the assertion script's stdout in the make output): the brain's
+    # install/rollback log carries the actual cause, and docker ps -a shows
+    # whether the app container was created or exited.
+    install_diag() {
+        echo "--- M2 install diagnostics ---"
+        echo "install response (first lines):"; head -3 <<<"$resp" | tr -d '\r'
+        echo "docker ps -a:"; docker ps -a --format '{{.Names}}\t{{.Status}}\t{{.Image}}' 2>&1
+        echo "GET /apps:"; http_get_auth /api/v1/apps 2>/dev/null | sed -n '/^\r\{0,1\}$/,$p' | tr -d '\r' | tail -3
+        echo "brain log (tail 40):"; docker logs malmo-brain 2>&1 | tail -40
+        echo "--- end diagnostics ---"
+    }
+    # http_get_auth: authenticated GET (used by install_diag + below).
+    http_get_auth() {
+        exec 3<>/dev/tcp/127.0.0.1/80 || return 1
+        printf 'GET %s HTTP/1.0\r\nHost: malmo.local\r\nCookie: %s\r\nConnection: close\r\n\r\n' "$1" "$cookie" >&3
+        cat <&3
+        exec 3>&- 3<&-
+    }
+
+    # 2. wait for the app route to serve through Caddy. The brain flips the route
+    # from splash to the app upstream only after main_service is healthy (whoami
+    # has no healthcheck → "none" counts as healthy), so a 200 here means the
+    # whole install transaction converged: image trusted offline, compose up,
+    # route flipped. whoami echoes the request — assert its body, not just 200,
+    # so we know we reached whoami and not a stale splash/catch-all.
+    local app_resp app_status=""
+    for _i in $(seq 1 120); do
+        app_resp="$(host_get / "${APP_SLUG}.local" 2>/dev/null || true)"
+        app_status="$(head -1 <<<"$app_resp" | tr -d '\r')"
+        grep -q ' 200' <<<"$app_status" && grep -qi 'Hostname:' <<<"$app_resp" && break
+        sleep 1
+    done
+    grep -q ' 200' <<<"$app_status" \
+        || { install_diag; fail "whoami route not serving through Caddy after 120s: status='$app_status'"; }
+    grep -qi 'Hostname:' <<<"$app_resp" \
+        || fail "whoami.local route did not return the whoami echo page: $(head -1 <<<"$app_status")"
+
+    # 3. whoami.local resolves in-guest via avahi (the per-app mDNS record the
+    # brain published, on the NM LAN interfaces). Use avahi-resolve-host-name
+    # (avahi-utils) — no libnss-mdns / getent dependency. Poll: publish races the
+    # route flip slightly.
+    local resolved=""
+    for _i in $(seq 1 30); do
+        resolved="$(avahi-resolve-host-name -4 "${APP_SLUG}.local" 2>/dev/null | awk '{print $2}')"
+        [ -n "$resolved" ] && break
+        sleep 1
+    done
+    [ -n "$resolved" ] \
+        || fail "${APP_SLUG}.local did not resolve via avahi-resolve-host-name"
+
+    # 4. a real use-case-folder bind mount landed. whoami is a FROM-scratch image
+    # (no shell → no docker exec), so assert host-side: the running container's
+    # Mounts carry /malmo/documents bound from the admin's personal ~/Documents
+    # (scope=personal). Resolve the container by malmo's instance-id label.
+    local cname inst_id mounts
+    cname="$(docker ps --format '{{.Names}}' | grep -E "^malmo-.*-${APP_SLUG}\$" | head -1)"
+    [ -n "$cname" ] || fail "no running whoami container (docker ps: $(docker ps --format '{{.Names}}' | tr '\n' ' '))"
+    inst_id="$(docker inspect "$cname" --format '{{ index .Config.Labels "malmo.instance_id" }}' 2>/dev/null)"
+    [ -n "$inst_id" ] || fail "whoami container $cname has no malmo.instance_id label"
+    mounts="$(docker inspect "$cname" --format '{{range .Mounts}}{{.Destination}}={{.Source}}{{"\n"}}{{end}}' 2>/dev/null)"
+    grep -qx "/malmo/documents=${ADMIN_DOCS}" <<<"$mounts" \
+        || fail "documents bind mount missing/wrong (want /malmo/documents=${ADMIN_DOCS}); mounts: $(tr '\n' ' ' <<<"$mounts")"
+
+    # 5. content survives uninstall. Write a marker into the bound host folder
+    # (the brain created + chowned it at install), uninstall the app, and assert
+    # the file outlives it — uninstalling never deletes user content.
+    echo "malmo-m2-survives" > "$MARKER" || fail "could not write marker $MARKER"
+    local del_status
+    del_status="$(app_delete "/api/v1/apps/${inst_id}" 2>/dev/null || true)"
+    case "$del_status" in
+        *" 202"*|*" 200"*) ;;
+        *) fail "uninstall whoami did not start: status='$del_status'" ;;
+    esac
+    # Wait for the container to be gone (uninstall = compose down -v + teardown).
+    local gone=""
+    for _i in $(seq 1 60); do
+        docker ps --format '{{.Names}}' | grep -qE "^malmo-.*-${APP_SLUG}\$" || { gone=1; break; }
+        sleep 1
+    done
+    [ -n "$gone" ] || fail "whoami container still running 60s after uninstall"
+    test -f "$MARKER" \
+        || fail "user content $MARKER did NOT survive uninstall (files-are-first-class violated)"
+
+    echo "control-plane M2: whoami installed air-gapped, ${APP_SLUG}.local resolved, route + bind verified, content survived uninstall"
+}
+
 # --- TEMPORARY (M0, #163): control-plane images baked + loaded.
 # This is NOT a permanent medium-lane assertion — the automated control-plane
 # checks belong to the full-stack lane (M2). It is here to verify the M0
@@ -369,6 +525,77 @@ grep -qE ' (200|401)' <<<"$api_status" \
 
 echo "control-plane M1b: stack up, proxy boundary held, dashboard + /api reachable"
 
+# --- M1c (#166): headless first-run. POST /setup creates the admin through the
+# real useradd/chpasswd/gpasswd path; POST /login then authenticates that account
+# against /etc/shadow via host-agent verify-password (the brain holds no password
+# hash — AUTH.md). Both go through Caddy on :80, the same scriptable HTTP path the
+# QEMU harness drives with no browser. No curl/jq in the image — hand-build the
+# request over bash /dev/tcp, same idiom as http_status above.
+SETUP_USER=malmoadmin
+SETUP_PASS=malmofirstrunpw1
+setup_body="{\"username\":\"$SETUP_USER\",\"password\":\"$SETUP_PASS\"}"
+
+# http_post PATH HOST JSON -> prints the full HTTP response (status line + headers
+# + body). HTTP/1.0 + Connection: close so the server closes the stream and `cat`
+# returns. Content-Length is the BYTE length (wc -c), not ${#body}'s shell char
+# count — a multi-byte char (e.g. an accented username) would otherwise mis-size
+# the body and the server would truncate/reject it.
+http_post() {
+    local body="$3" len
+    len="$(printf '%s' "$body" | wc -c | tr -d ' ')"
+    exec 3<>/dev/tcp/127.0.0.1/80 || return 1
+    printf 'POST %s HTTP/1.0\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' \
+        "$1" "$2" "$len" "$body" >&3
+    cat <&3
+    exec 3>&- 3<&-
+}
+
+# 1. /setup. 200 on a fresh box; 409 ("setup has already completed") when this
+# disk has already been through first-run — the medium lane reuses one disk
+# across the first-boot and second-boot phases, so the admin created on boot 1
+# (and the brain's SQLite row with it) is still present on boot 2. A 502 means
+# the host path failed (missing malmo/sudo group, useradd/chpasswd error); poll
+# briefly to ride out brain-not-ready, then surface the body for diagnosis.
+setup_status=""
+setup_resp=""
+for _i in $(seq 1 20); do
+    setup_resp="$(http_post /api/v1/setup malmo.local "$setup_body" 2>/dev/null || true)"
+    setup_status="$(head -1 <<<"$setup_resp" | tr -d '\r')"
+    case "$setup_status" in
+        *" 200"*|*" 409"*) break ;;
+    esac
+    sleep 1
+done
+case "$setup_status" in
+    *" 200"*|*" 409"*) ;;
+    *) fail "/setup did not complete: status='$setup_status' body=$(tr -d '\r' <<<"$setup_resp" | tail -2 | tr '\n' ' ')" ;;
+esac
+
+# 2. The account is a real Linux user: primary group malmo (useradd --gid malmo)
+# and a member of sudo (the first admin is added to sudo at creation —
+# USERS_AND_GROUPS.md # Roles). Proves SetPassword + SetRole hit the real system.
+id "$SETUP_USER" >/dev/null 2>&1 \
+    || fail "admin '$SETUP_USER' not in /etc/passwd after /setup"
+id -nG "$SETUP_USER" 2>/dev/null | grep -qw sudo \
+    || fail "admin '$SETUP_USER' not in sudo group (groups: $(id -nG "$SETUP_USER" 2>/dev/null))"
+id -ng "$SETUP_USER" 2>/dev/null | grep -qx malmo \
+    || fail "admin '$SETUP_USER' primary group is '$(id -ng "$SETUP_USER" 2>/dev/null)', want malmo"
+
+# 3. /login authenticates the account against /etc/shadow via host-agent
+# verify-password (PAM pam_unix, service "malmo"). This is the M1c "Done when".
+# Single attempt: by here useradd+chpasswd have completed (200/409 above), so a
+# correct password logs in first try — and the brain rate-limits failed logins
+# (AUTH.md # Rate limiting), so retrying a real failure would only lock us out.
+# On second-boot the 409 above means the admin and its /etc/shadow entry survived
+# the encrypted-root reboot, so the same credentials authenticate here too.
+login_status="$(http_post /api/v1/login malmo.local "$setup_body" 2>/dev/null | head -1 | tr -d '\r')"
+case "$login_status" in
+    *" 200"*) ;;
+    *) fail "/login (verify-password against /etc/shadow) failed: status='$login_status'" ;;
+esac
+
+echo "control-plane M1c: /setup created the admin, verify-password authenticated it against /etc/shadow"
+
 case "$PHASE" in
     first-boot)
         # The run-once enrollment unit (malmo-tpm-enroll.service) is
@@ -403,6 +630,10 @@ case "$PHASE" in
         # proof above is load-bearing.
         journalctl -b --no-pager 2>/dev/null \
             | grep -iE 'tpm2|cryptsetup' | tail -5 || true
+        # M2 (#167): the full-stack app install. Runs before assert_network_state
+        # so the network test's interface disconnect / IP renumber can't disturb
+        # whoami's mDNS resolution mid-assertion.
+        assert_app_install
         assert_network_state
         ;;
     combined) ;;

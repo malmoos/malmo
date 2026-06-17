@@ -2,6 +2,8 @@
 
 > Working spec for how malmo lays out storage, what disks the user sees, and how encryption works. Companion to `SPEC.md`, `CONTROL_PLANE.md`, `APP_MANIFEST.md`, `SERVICE_PROVISIONING.md`, `APP_ISOLATION.md`.
 
+> **Environment profiles.** This doc describes the `appliance` profile (physical OS + data drives, LUKS+TPM, mergerfs). The **hosted** profile (cloud VM) uses virtual block volumes with provider/KMS encryption — no mergerfs, no add/eject, no canary, no TPM seal, and a different at-rest threat model. See `ENVIRONMENT.md` # Storage (hosted).
+
 ## Stance
 
 NAS power users have TrueNAS, Unraid, Proxmox, HexOS. malmo is not trying to be a NAS. The storage story optimizes for the home user who has one or two disks and wants apps and shared folders that just work.

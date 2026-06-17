@@ -87,7 +87,7 @@ For slices that integrate with a real external system (Docker, PAM, systemd, Cad
 
 A change is not complete until its docs are in the **same change** (CLAUDE.md # Documentation discipline). Concretely:
 
-1. **Write a progress entry.** Add the next-numbered `docs/progress/NNNN-<slug>.md` following the template in [`../progress/README.md`](../progress/README.md) # Entry template (status, date, specs touched, what was done, how it maps to specs, known gaps, what's next). Progress entries are **append-only history** — never retro-edit an earlier one; link back to it instead.
+1. **Write a progress entry.** Add `docs/progress/<slug>.md` (ADR-style, kebab-slug, not numbered) following the template in [`../progress/README.md`](../progress/README.md) # Entry template (status, date, specs touched, what was done, how it maps to specs, known gaps, what's next). Progress entries are **append-only history** — never retro-edit an earlier one; link back to it instead.
    - Be honest in "Known gaps & deviations." Every "handled" claim must be verifiable in the diff — don't assume symmetry between similar code paths.
 2. **Update the indexes** in the same change: add your entry to the table + "Latest" list in [`../progress/README.md`](../progress/README.md) and [`../README.md`](../README.md), and re-order the **Up next** queue if you consumed or added a follow-up. A doc not linked from the map is a bug.
 3. **Update the spec** you touched if behavior realized or diverged from it. Update the root [`../../README.md`](../../README.md) quickstart if the dev workflow changed.
@@ -122,7 +122,7 @@ PR body must include **`Closes #<N>`** — do not delete this line. It is the on
 
 - [ ] Behavior works in the inner loop (`make dev`), and integration-tested against the real system if it touches one.
 - [ ] Tests added at the right layer; `make check` green (frontend changes: `make check-web` too).
-- [ ] Progress entry written (`docs/progress/NNNN-…`); indexes in both READMEs updated; Up-next re-ordered if needed.
+- [ ] Progress entry written (`docs/progress/<slug>.md`, kebab-slug, not numbered); indexes in both READMEs updated; Up-next re-ordered if needed.
 - [ ] Spec doc updated if behavior realized/diverged; `DECISIONS.md` entry if a locked decision flipped.
 - [ ] No `§`, no hard-wrapped markdown, `log/slog` only, conventions per CLAUDE.md.
 - [ ] No out-of-scope changes; any out-of-scope finding has an existing or new issue filed, not a fix in this PR.

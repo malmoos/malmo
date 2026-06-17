@@ -19,7 +19,7 @@ Each entry: one-sentence shape, the doc it touches, and *why this tier*. The doc
 
 *(Last audit: 2026-05-31 — Tier 1 is **clear of product-surface gaps**. The dashboard-shell gap was resolved by `DASHBOARD.md` (logged-in IA + owner-scoped apps model; `DECISIONS.md` 2026-05-29), and the in-dashboard file-manager gap is now resolved by `FILES.md` (ops execute as the user's UID in host-agent; own + Shared scope; `DECISIONS.md` 2026-05-31). The infrastructure spine (boot/storage/health/updates/auth) is well-specified. Remaining work is implementation, not design — slice queue lives in [`../progress/README.md`](../progress/README.md) # Up next. Promote an item here into Tier 1 if a new blocking design gap appears.)*
 
-*(No open Tier-1 design topics. Items resolved out of this tier are recorded in `DECISIONS.md`.)*
+*(No open Tier-1 design topics. Items resolved out of this tier are recorded in `DECISIONS.md` — including the 2026-06-17 #199 resolution that mkosi emits no `.iso` and malmo ships disk images instead, cloud VM image first.)*
 
 ---
 
@@ -92,6 +92,13 @@ The *mechanism* — a manifest `secrets:` declaration → brain generates a CSPR
 ---
 
 ## Tier 3 — Defer-able, but pin the shape
+
+### Align the QEMU test lane to Trixie (currently Bookworm)
+
+`BUILD.md` # 1 locks Debian Trixie (13) as the product base, and the cloud-image profile (#196 C1b) targets Trixie. But the existing medium lane (`dev/test-qemu/mkosi.conf`) is still `Release=bookworm`. C1b carries a "fall back to Bookworm if Trixie fights mkosi" escape hatch, so the cloud image could silently land on Bookworm and diverge from the product spec with no tracking. Once the cloud image validates Trixie, align the test lane to Trixie too (or, if Trixie proves unworkable, record the Bookworm decision in `DECISIONS.md` rather than leaving it implicit in one issue).
+
+**Context:** `BUILD.md` # 1, `dev/test-qemu/mkosi.conf`, #196 C1b (#203).
+**Why Tier 3:** doesn't block cloud bring-up (either base boots); the risk is a silent spec/reality drift on the base release. Pin the resolution when C1b/C2 confirm Trixie.
 
 ### Factory reset / repurpose / "start over"
 
@@ -295,6 +302,20 @@ The `service-down`(caddy) detector (`HEALTH.md` # Detector catalog, locus C) can
 **Context:** `HEALTH.md` # Detector catalog (locus-C Caddy row), `CONTROL_PLANE.md` # Locked: Caddy runs as a container, `DECISIONS.md` 2026-05-31.
 **Why Tier 3:** doesn't block v1 happy-path; a fully-down Caddy is already visibly broken (dashboard unreachable). Pin the self-heal shape now (done); build it after the brain owns Caddy's container lifecycle.
 
+### Hosted profile — the commercial control plane and the deferred network model
+
+`ENVIRONMENT.md` specs the OS-adaptation layer of the `hosted` profile (the lean image, the slim host-agent, provisioning, networking, storage, the export bundle). It deliberately defers everything *outside* the tenant VM. Pin the shape before the hosted product is real: (1) the **provisioning / control API** that creates, configures, resizes, suspends, and tears down tenant VMs; (2) **resource metering → billing** (wiring the brain's existing `/proc`+disk sampling to a billing pipeline, plus pricing tiers — the per-instance cgroup-limit *mechanism* is in `ENVIRONMENT.md`, the metering is not); (3) **fleet management** (centralized OS/brain updates across tenants, abuse handling); (4) the **deferred hosted network model** — the identity-based WireGuard mesh for hosted, a central shared ingress with "no per-VM public IP" routing, and per-app public-vs-login exposure controls (v1 is a plain public auth-gated endpoint). This is net-new infrastructure with no appliance analogue, and where the operational weight of being a data custodian lives.
+
+**Context:** `ENVIRONMENT.md` (the OS-side it builds on), `CONTROL_PLANE.md` (the per-tenant brain it provisions), `MALMO_NETWORK.md` # Deferred (the mesh design it would extend), `APP_LIFECYCLE.md` (where per-instance limits attach).
+**Why Tier 3:** the OS runs in a hosted VM without any of it (v1 is a public endpoint per app); none of it blocks bringing the hosted OS up. It blocks *operating a paid fleet*, so pin the shape before commercial launch.
+
+### Hosted profile — open OS-level questions
+
+Surfaced by `ENVIRONMENT.md`, smaller than the commercial layer but real: (1) **at-rest key custody** — provider volume encryption vs. LUKS keyed from a hosted KMS (vTPM exists on some hypervisors but is pointless under a custodian model); (2) the **headless recovery surface** that replaces the appliance's console-served `malmo-recovery.target` page; (3) whether the **logical export/restore bundle** stays in `ENVIRONMENT.md` or graduates to its own spec, plus its concrete format; (4) the final **profile names** (`appliance`/`hosted` vs alternatives).
+
+**Context:** `ENVIRONMENT.md` # Open questions, `STORAGE.md` (key custody), `BOOT.md` (recovery target).
+**Why Tier 3:** each picks a concrete mechanism for a section `ENVIRONMENT.md` currently leaves open; none blocks the design, but they block implementation of that part of the hosted profile.
+
 ---
 
 ## Tier 4 — Smaller open items
@@ -442,7 +463,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 
 **Testing**
 - Boot-test assertion harness language — Go (matches the codebase) vs. Python (richer QEMU/swtpm tooling). Either works; pick before the harness is built. `TESTING.md`.
-- `live-build` vs. `mkosi` revisit weighted by test-story. `mkosi`'s `mkosi qemu` integration materially improves the medium/slow test lanes; if the build choice is being relitigated, this is a non-trivial weight. `BUILD.md`, `TESTING.md`.
+- *(Resolved 2026-06-16 — `mkosi` chosen as the single image builder for the install ISO + cloud VM image + test lane; `live-build` rejected. The `mkosi qemu` test-story weight noted here was a material factor. See `DECISIONS.md` 2026-06-16 and `BUILD.md` # 2.)*
 - **Web-UI (Vue) unit/component test harness — none exists yet.** `web-ui/` ships build tooling only (`vue-tsc --noEmit && vite build`), so all dashboard behavior is verified by type-check + manual run, never an automated assertion. This first bit when the account-ui slice (#13) shipped a 401-handling bug (`changeMyPassword` bouncing the user to login on a wrong current password) that lived entirely in an untested path; the fix added `api.ts`'s `suppressAuthHandler` opt-out with no regression test to pin it. Open decisions before standing one up: runner + environment (vitest + jsdom is the vite-native default) and — load-bearing in this repo — the **dependency-closure / supply-chain question** (the repo deliberately pins transitive deps to pre-May-2026 releases; a new test-runner closure must clear that bar). Once locked, backfill auth-flow regressions first (the `suppressAuthHandler` 401 path; recovery/redemption error surfaces). `WEB_UI.md`, `TESTING.md`.
 
 **Health**

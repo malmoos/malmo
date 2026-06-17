@@ -33,6 +33,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/malmoos/malmo/internal/hostagent"
@@ -196,6 +197,10 @@ func brainLaunchConfig(sockPath string) brainlaunch.Config {
 		ProxyContainerName: "malmo-docker-proxy",
 		ControlPlaneDir:    controlPlaneDir,
 		UIUpstream:         env("MALMO_DASHBOARD_UI_UPSTREAM", "malmo-ui:80"),
+		// The Door-1 catalog the brain installs from, staged under dataDir so it
+		// rides the brain's DataDir mount (brainlaunch.Config.CatalogDir).
+		CatalogDir:     env("MALMO_CATALOG_DIR", filepath.Join(dataDir, "catalog")),
+		OfflineInstall: envBool("MALMO_OFFLINE_INSTALL"),
 	}
 }
 
@@ -204,4 +209,17 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// envBool reports whether key is set to a truthy value (strconv.ParseBool:
+// 1/t/true/…). Unset or unparseable → false (the safe default — a box with a
+// registry). Deliberately no `def` parameter and no warn-on-unparseable (unlike
+// cmd/brain's envBool): every host-agent caller wants false-on-anything-odd, and
+// host-agent startup must never block or get noisy over a malformed *optional*
+// env. The two are not shared for the same reason `env` isn't — small per-binary
+// helpers, no internal package for two cmd/ consumers (CLAUDE.md # no premature
+// abstraction).
+func envBool(key string) bool {
+	b, err := strconv.ParseBool(os.Getenv(key))
+	return err == nil && b
 }

@@ -2,6 +2,8 @@
 
 > The security lens for the whole spec. `AUTH.md`, `APP_ISOLATION.md`, `STORAGE.md`, `MALMO_NETWORK.md`, and `USERS_AND_GROUPS.md` each defend against an attacker; this doc writes down *who that attacker is*, *what we protect*, and — most importantly — *what we deliberately don't defend against*. It is a checking framework and a place to point when arguing edge cases.
 
+> **Environment profiles.** This doc's posture is the `appliance` one: the user owns the hardware, and the box is closed-by-default. The **hosted** profile (cloud VM) differs on two load-bearing points — malmo-operated infra is inside the trust boundary (an honest convenience tier, not operator-blind), and the exposure posture inverts to public-by-default / auth-gated. See `ENVIRONMENT.md` # Threat model (hosted) and # Public-by-default, auth-gated.
+
 ## Stance — this doc owns no mitigations
 
 Every "how we defend X" lives in the doc that owns X. This document is an **index of what we defend and what we don't**; the other docs are the *how*. If reading this makes us want to change a defense, that's the threat model doing its job — but the change lands in the owning doc, and an entry goes in `DECISIONS.md`. The threat model documents; it does not decide.

@@ -88,6 +88,7 @@ func testConfig() Config {
 		ProxyContainerName: "malmo-docker-proxy",
 		ControlPlaneDir:    "/var/lib/malmo/control-plane",
 		UIUpstream:         "malmo-ui:80",
+		CatalogDir:         "/var/lib/malmo/catalog",
 	}
 }
 
@@ -164,8 +165,36 @@ func TestLaunchRunSpec(t *testing.T) {
 	if v := envVal(s.Env, "MALMO_DASHBOARD_UI_UPSTREAM"); v != "malmo-ui:80" {
 		t.Errorf("MALMO_DASHBOARD_UI_UPSTREAM = %q, want malmo-ui:80", v)
 	}
+	// The Door-1 catalog the brain installs from — under DataDir, so it rides the
+	// data-dir mount (no separate Mount entry).
+	if v := envVal(s.Env, "MALMO_CATALOG_DIR"); v != "/var/lib/malmo/catalog" {
+		t.Errorf("MALMO_CATALOG_DIR = %q, want /var/lib/malmo/catalog", v)
+	}
+	// OfflineInstall defaults off → the brain gets no MALMO_OFFLINE_INSTALL.
+	if v := envVal(s.Env, "MALMO_OFFLINE_INSTALL"); v != "" {
+		t.Errorf("MALMO_OFFLINE_INSTALL = %q, want unset when OfflineInstall is false", v)
+	}
 	if hasMount(s.Mounts, "/var/run/docker.sock", "/var/run/docker.sock") {
 		t.Error("brain must NOT mount the raw Docker socket")
+	}
+}
+
+// On a baked, air-gapped box the brain is launched in offline-install mode; an
+// unset catalog dir leaves MALMO_CATALOG_DIR off rather than pointing at "".
+func TestLaunchRunSpecOfflineAndNoCatalog(t *testing.T) {
+	f := newFake()
+	cfg := testConfig()
+	cfg.OfflineInstall = true
+	cfg.CatalogDir = ""
+	if err := Launch(context.Background(), f, cfg); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	s := f.lastRun
+	if v := envVal(s.Env, "MALMO_OFFLINE_INSTALL"); v != "true" {
+		t.Errorf("MALMO_OFFLINE_INSTALL = %q, want true", v)
+	}
+	if v := envVal(s.Env, "MALMO_CATALOG_DIR"); v != "" {
+		t.Errorf("MALMO_CATALOG_DIR = %q, want unset when CatalogDir is empty", v)
 	}
 }
 
