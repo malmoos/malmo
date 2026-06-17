@@ -19,7 +19,7 @@ Each entry: one-sentence shape, the doc it touches, and *why this tier*. The doc
 
 *(Last audit: 2026-05-31 — Tier 1 is **clear of product-surface gaps**. The dashboard-shell gap was resolved by `DASHBOARD.md` (logged-in IA + owner-scoped apps model; `DECISIONS.md` 2026-05-29), and the in-dashboard file-manager gap is now resolved by `FILES.md` (ops execute as the user's UID in host-agent; own + Shared scope; `DECISIONS.md` 2026-05-31). The infrastructure spine (boot/storage/health/updates/auth) is well-specified. Remaining work is implementation, not design — slice queue lives in [`../progress/README.md`](../progress/README.md) # Up next. Promote an item here into Tier 1 if a new blocking design gap appears.)*
 
-*(No open Tier-1 design topics. Items resolved out of this tier are recorded in `DECISIONS.md`.)*
+*(No open Tier-1 design topics. Items resolved out of this tier are recorded in `DECISIONS.md` — including the 2026-06-17 #199 resolution that mkosi emits no `.iso` and malmo ships disk images instead, cloud VM image first.)*
 
 ---
 
