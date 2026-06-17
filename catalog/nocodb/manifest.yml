@@ -64,6 +64,14 @@ services:
     type: redis
     version: "7"
 
+# NocoDB stores NC_AUTH_JWT_SECRET in its nc_meta Postgres table by default,
+# so the signing key survives restarts without injection. We inject it
+# explicitly anyway (MALMO_SECRET_KEY → NC_AUTH_JWT_SECRET) for consistency
+# with the rest of the catalog and so a reinstall produces a deterministic
+# invalidation rather than silently regenerating sessions.
+secrets:
+  - name: key
+
 # NocoDB sends member invites and notifications by email when bound to an
 # outgoing-mail provider — the compose maps MALMO_MAIL_* onto NC_SMTP_*.
 # Unbound, NocoDB's SMTP plugin stays uninitialized and the app runs.

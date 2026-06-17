@@ -19,6 +19,12 @@
 x-nocodb-environment: &nocodb-environment
   NC_DB: "pg://${MALMO_SERVICE_DATABASE_HOST}:${MALMO_SERVICE_DATABASE_PORT}?u=${MALMO_SERVICE_DATABASE_USER}&p=${MALMO_SERVICE_DATABASE_PASSWORD}&d=${MALMO_SERVICE_DATABASE_NAME}"
   NC_REDIS_URL: ${MALMO_SERVICE_CACHE_DSN}
+  # JWT signing key (manifest `secrets: [{name: key}]`, injected as
+  # MALMO_SECRET_KEY). NocoDB defaults to storing NC_AUTH_JWT_SECRET in its
+  # nc_meta Postgres table, so sessions survive restarts without this; we
+  # inject it explicitly for catalog consistency and so a reinstall produces a
+  # deterministic session invalidation rather than silently regenerating.
+  NC_AUTH_JWT_SECRET: ${MALMO_SECRET_KEY}
   # Public URL baked into invite/share/webhook links and OAuth redirects. The
   # brain injects the routed .local URL; those links resolve on the LAN only
   # until remote access ships (app-url-injection — see manifest long desc).
