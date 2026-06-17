@@ -3,8 +3,9 @@ package lifecycle
 // Managed-service provisioning (SERVICE_PROVISIONING.md # Tier 1): an app that
 // declares `services.database: {type: postgres}` gets a per-app database+role in
 // the shared Postgres instance, with credentials injected as
-// MALMO_SERVICE_DATABASE_*. Driven against the fake docker driver (whose Exec
-// default succeeds — pg_isready ready, psql CREATE ok).
+// MALMO_SERVICE_DATABASE_*. Driven against the fake docker driver (whose
+// RunOneOff default succeeds and ContainerHealth defaults to "healthy", so the
+// readiness poll passes and the psql CREATE one-shot returns ok).
 
 import (
 	"context"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/malmoos/malmo/internal/store"
 )
@@ -110,7 +112,7 @@ func TestInstallProvisionsPostgres(t *testing.T) {
 		t.Fatalf("grant = %+v", g)
 	}
 
-	// The brain issued CREATE ROLE / CREATE DATABASE via docker-exec psql.
+	// The brain issued CREATE ROLE / CREATE DATABASE via a one-shot psql container.
 	if !e.docker.hasCall("CREATE DATABASE") {
 		t.Fatalf("no provisioning psql call; calls: %v", e.docker.Calls())
 	}
@@ -298,7 +300,7 @@ func TestInstallProvisionsValkeyNative(t *testing.T) {
 // is identical whether the engine was reached via the redis alias or natively.
 func assertValkeyProvisioned(t *testing.T, e *testEnv, inst store.Instance, g store.ServiceGrant) {
 	t.Helper()
-	// The brain created the per-app ACL user and persisted it via docker-exec
+	// The brain created the per-app ACL user and persisted it via a one-shot
 	// valkey-cli (full keyspace, no @admin), then ACL SAVE'd it.
 	if !e.docker.hasCall("ACL SETUSER "+g.RoleName) || !e.docker.hasCall("+@all -@admin") {
 		t.Fatalf("no valkey ACL SETUSER call; calls: %v", e.docker.Calls())
@@ -379,15 +381,15 @@ func TestUninstallDropsValkeyACL(t *testing.T) {
 	}
 }
 
-// TestRedisProvisioningExecFailures forces each redis-cli provisioning command
+// TestRedisProvisioningExecFailures forces each valkey-cli provisioning command
 // to fail and asserts install surfaces the error (and rolls back). Targets the
-// ACL substrings so the readiness probe (`redis-cli ping`) still passes — only
-// the SETUSER / SAVE execs fail.
+// ACL substrings; readiness is a separate ContainerHealth poll (default
+// "healthy"), so only the SETUSER / SAVE one-shot runs fail.
 func TestRedisProvisioningExecFailures(t *testing.T) {
 	for _, fail := range []string{"ACL SETUSER", "ACL SAVE"} {
 		t.Run(fail, func(t *testing.T) {
 			e := newTestEnv(t)
-			e.docker.exec = func(_ string, args []string) (string, error) {
+			e.docker.runOneOff = func(_, _, _ string, args []string) (string, error) {
 				if strings.Contains(strings.Join(args, " "), fail) {
 					return "boom", fmt.Errorf("forced %s failure", fail)
 				}
@@ -409,6 +411,49 @@ func TestRedisProvisioningExecFailures(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestWaitServiceReadyTimesOut covers the readiness-poll failure path: when the
+// service container never reports "healthy" (the per-engine compose healthcheck,
+// read via ContainerHealth — faked as a stuck "starting"), waitServiceReady
+// polls until its deadline and returns a "not ready" error rather than hanging.
+func TestWaitServiceReadyTimesOut(t *testing.T) {
+	e := newTestEnv(t)
+	e.docker.containerHealth = "starting" // never becomes healthy
+	e.m.serviceReadyWait = 20 * time.Millisecond
+	e.m.healthPoll = time.Millisecond
+	err := e.m.waitServiceReady(context.Background(), "postgres", "15")
+	if err == nil || !strings.Contains(err.Error(), "not ready") {
+		t.Fatalf("want a 'not ready' timeout error, got %v", err)
+	}
+}
+
+// TestWaitServiceReadyAbortsOnContext covers two cancellation paths: (a) a
+// failing health inspect keeps the poll going (transient, not fatal), and when
+// the context is cancelled the wait returns context.Canceled rather than
+// spinning to the deadline; (b) same with a healthy-but-not-yet-ready status
+// ("starting"), confirming the select branch fires independently of inspect
+// errors.
+func TestWaitServiceReadyAbortsOnContext(t *testing.T) {
+	t.Run("inspect error + cancelled ctx", func(t *testing.T) {
+		e := newTestEnv(t)
+		e.docker.containerHealthErr = fmt.Errorf("inspect boom")
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := e.m.waitServiceReady(ctx, "postgres", "15"); err != context.Canceled {
+			t.Fatalf("want context.Canceled, got %v", err)
+		}
+	})
+	t.Run("starting + cancelled ctx", func(t *testing.T) {
+		e := newTestEnv(t)
+		e.docker.containerHealth = "starting"
+		e.m.healthPoll = time.Millisecond
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := e.m.waitServiceReady(ctx, "postgres", "15"); err != context.Canceled {
+			t.Fatalf("want context.Canceled, got %v", err)
+		}
+	})
 }
 
 func readInstanceEnv(t *testing.T, e *testEnv, id string) string {

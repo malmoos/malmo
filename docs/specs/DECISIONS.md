@@ -21,6 +21,16 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-15 — Managed-service provisioning runs in a one-shot client container, not `docker exec` (#185)
+
+**Previously:** the brain provisioned per-app databases/roles by `docker exec`'ing the service's own client inside the shared service container (`DockerDriver.Exec`, 2026-06-05). The 2026-06-14 call then shipped the socket-proxy with the `EXEC` family **denied**, which breaks that path the instant the containerized brain points `DOCKER_HOST` at the proxy — so managed-DB-in-production was gated on re-architecting provisioning off `docker exec` (two candidate shapes named: engine-over-TCP from the brain, or a one-shot provisioning container).
+
+**Now:** provisioning runs the service's own client (`psql` / `mysql` / `mariadb` / `valkey-cli`) in a **throwaway one-shot container** — `docker run --rm --network malmo-svc-<k>-<v> --env-file <serviceDir>/.env <serviceImage> <client …>` (`DockerDriver.RunOneOff`). The ephemeral container — not the brain — joins the service's internal network and connects over TCP to the `<kind>-<version>.malmo.internal` alias. The service superuser password rides `--env-file` (the same `.env` the service compose uses) and a wrapper `sh -c` remaps it to the client's env var (`PGPASSWORD` / `MYSQL_PWD` / `REDISCLI_AUTH`), so it never reaches host argv; the per-app credential rides argv as before. Readiness moved from an exec'd probe to polling the service's compose-declared healthcheck via `docker inspect` (`ContainerHealth`, a CONTAINERS read the proxy allows). The `EXEC` family stays **denied** — this resolves the 2026-06-14 gate without widening the allowlist. Dev (native raw socket) is unchanged.
+
+**Why:** of the two candidate shapes, the one-shot container preserves *both* reasons the 2026-06-05 decision gave against a Go SQL client — (a) no new Go driver dependency (reuse the engine's own image client) and (b) the brain stays off the app-reachable `malmo-svc-*` network (only the `--rm` container joins it) — while the engine-over-TCP shape would have violated (b). It is also minimal-change: the SQL/ACL command shapes and quoting are identical to the exec path; only the Docker transport differs. Empirically de-risked end-to-end through the M0 proxy allowlist (a foreground `docker run --rm` with output capture survives — `/containers/{id}/attach` is gated by `CONTAINERS=1`, not the denied `EXEC`), and the `dockerlive` suite provisions/connects/drops for Postgres, MySQL, and Valkey against real Docker.
+
+**Affected docs:** `SERVICE_PROVISIONING.md` (# Implementation status, # Locked: provisioning), `CONTROL_PLANE.md` (# Locked: Docker socket exposure — managed-DB gate lifted). Implementation: `internal/lifecycle` (`docker.go` `RunOneOff`/`ContainerHealth` replacing `Exec`; `services.go` `runServiceClient`/`clientWrapper`, health-poll readiness), realized by `docs/progress/managed-db-one-shot-provisioning.md`.
+
 ## 2026-06-16 — Hosted environment profile: one OS, lean cloud image, not a fork
 
 **Previously:** the spec set described exactly one environment — a BYO x86 box on the user's LAN. A hosted/cloud offering was acknowledged only as a future "cloud VM image" target in `BUILD.md`, with no design.

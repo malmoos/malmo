@@ -202,8 +202,9 @@ const dockerSockPath = "/var/run/docker.sock"
 // proxyAllowlist is the docker-socket-proxy env allowlist — the endpoint
 // families the brain needs to manage app + control-plane containers, kept in
 // sync with dev/control-plane/compose.yml. EXEC and host-bind mounts stay denied
-// (the proxy defaults them off); managed-DB provisioning via `docker exec` is
-// gated on a re-architecture (DECISIONS.md 2026-06-14 — defer EXEC).
+// (the proxy defaults them off); managed-DB provisioning runs the engine's
+// client in a one-shot `docker run` container (CONTAINERS/POST), not `docker
+// exec`, so it needs no EXEC (DECISIONS.md 2026-06-15 — re-architected off exec).
 func proxyAllowlist() []EnvVar {
 	return []EnvVar{
 		{Key: "POST", Value: "1"},

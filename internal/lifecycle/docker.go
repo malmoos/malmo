@@ -36,12 +36,23 @@ type DockerDriver interface {
 	// of this project: it is host-agent-seeded transport (the brain cannot bring
 	// up its own sole Docker path), launched separately before the brain.
 	ControlPlaneUp(ctx context.Context, dir, project string) (string, error)
-	// Exec runs a command inside a named container (`docker exec <name> <args…>`)
+	// RunOneOff runs an ephemeral client container against a managed service
+	// (`docker run --rm --network <network> --env-file <envFile> <image> <args…>`)
 	// and returns combined output. The brain uses it to provision per-app
-	// databases/roles via the service container's own client (e.g. psql), so it
-	// never has to join the service's Docker network (DECISIONS.md 2026-06-02 —
-	// control plane off app-reachable networks).
-	Exec(ctx context.Context, container string, args []string) (string, error)
+	// databases/roles by running the service's own client (e.g. psql) in a
+	// throwaway container joined to the service network — the *container* joins
+	// it, never the brain (DECISIONS.md 2026-06-02 — control plane off
+	// app-reachable networks). It replaces `docker exec`, which the
+	// docker-socket-proxy denies (CONTROL_PLANE.md # Docker socket exposure;
+	// DECISIONS.md 2026-06-14). --env-file carries the service superuser password
+	// out of host argv; --rm removes the container on exit.
+	RunOneOff(ctx context.Context, image, network, envFile string, args []string) (string, error)
+	// ContainerHealth reads a container's healthcheck status by name
+	// (`docker inspect -f {{.State.Health.Status}}`): "healthy", "starting",
+	// "unhealthy", or "none" when the container declares no healthcheck. Used to
+	// poll a managed service to readiness without an in-container exec — the
+	// service compose already defines the per-engine healthcheck.
+	ContainerHealth(ctx context.Context, container string) (string, error)
 	Inspect(ctx context.Context, instanceID, mainService string) (running bool, health string, err error)
 	NetworkCreate(ctx context.Context, name string, internal bool) error
 	NetworkRemove(ctx context.Context, name string) error
@@ -199,10 +210,19 @@ func (cliDocker) ControlPlaneUp(ctx context.Context, dir, project string) (strin
 	return string(out), err
 }
 
-func (cliDocker) Exec(ctx context.Context, container string, args []string) (string, error) {
-	full := append([]string{"exec", container}, args...)
+func (cliDocker) RunOneOff(ctx context.Context, image, network, envFile string, args []string) (string, error) {
+	full := append([]string{"run", "--rm", "--network", network, "--env-file", envFile, image}, args...)
 	out, err := exec.CommandContext(ctx, "docker", full...).CombinedOutput()
 	return string(out), err
+}
+
+func (cliDocker) ContainerHealth(ctx context.Context, container string) (string, error) {
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f",
+		`{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}`, container).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%w\n%s", err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (cliDocker) Inspect(ctx context.Context, instanceID, mainService string) (bool, string, error) {
