@@ -41,11 +41,12 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
-      # First boot runs schema migrations before the server listens (~1 min on a
+      # First boot runs schema migrations before the server listens (~55s on a
       # warm box, longer on the low-end hardware malmo targets). During the start
       # period failing probes don't count toward `retries`, so a slow migration
-      # can't wedge the worker's depends_on: service_healthy gate.
-      start_period: 90s
+      # can't wedge the worker's depends_on: service_healthy gate. 150s matches
+      # the manifest's 180s migration bound (250s total window vs 190s at 90s).
+      start_period: 150s
     restart: unless-stopped
 
   worker:

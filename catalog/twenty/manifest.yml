@@ -24,7 +24,7 @@ changelog_url: https://github.com/twentyhq/twenty/releases
 compose_file: compose.yml
 main_service: server
 main_port: 3000
-preferred_slugs: [twenty, crm]
+preferred_slugs: [twenty, crm, twenty-crm]
 
 # /healthz is Twenty's cheap liveness route (the upstream compose probes it too).
 # First boot runs the NestJS server's schema migrations against the freshly
