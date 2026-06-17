@@ -50,7 +50,9 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 **Knowingly accepted:** mkosi's Debian track record is thinner than live-build's, and **a live installer ISO that boots a session is live-build's home turf** — the one part of mkosi's fit not yet proven in-repo (the test lane boots a disk image, not a live-session ISO). Validating that is a follow-up, not a reason to keep two builders. The **OTA orchestrator** is left unchosen (`systemd-sysupdate` is presumptive but unproven vs. Mender/RAUC); it waits for the A/B work. The interactive installer (`# 3` / `FIRST_RUN.md` Phase 1) is unchanged — this decision is only how the bootable artifact is assembled.
 
-**Affected docs:** `BUILD.md` # 2 (recommendation flipped), `NEXT.md` (the "live-build vs mkosi revisit" open item resolved).
+**Update 2026-06-17 (#199):** the flagged follow-up was investigated and turned up a sharper finding — **mkosi has no ISO output format at all** (its `OutputFormat` enum is `{confext,cpio,directory,disk,esp,none,portable,sysext,tar,uki,oci,addon}`; it builds GPT *disk* images, `dd`'d to USB). This decision's core — mkosi as the single builder for the disk image, cloud VM image, and test lane — stands; what is *not* settled is how the literal install `.iso` (`BUILD.md` # 6) is packaged. The "live fs == installed fs" invariant survives (a `Format=disk` root is what the installer lays down). The three candidate paths (ship the raw disk and drop `.iso` / `xorriso` post-wrap for a true `.iso` / `live-build` for the ISO only) are the maintainer's call — tracked in `NEXT.md` Tier 1, detailed in `progress/iso-mkosi-finding.md`. Finding-only; no lane built.
+
+**Affected docs:** `BUILD.md` # 2 (recommendation flipped; # 2/# 6/locked-decisions caveated for the #199 ISO-output finding), `NEXT.md` (the "live-build vs mkosi revisit" open item resolved; new Tier-1 "ISO packaging path" item).
 
 ---
 

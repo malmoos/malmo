@@ -147,6 +147,7 @@ Knowingly accepted costs:
 
 - mkosi's Debian support is thinner than live-build's (it is better-trodden for Fedora / Arch). The LUKS/TPM bring-up already paid down the riskiest part of that on a real Debian boot, but expect occasional sharp edges a live-build user would not hit.
 - **A live installer ISO that boots a session is live-build's home turf** (the Tails / Kali pattern), and is the one part of mkosi's fit not yet proven in-repo — the test lane boots a *disk image*, not a live-session ISO carrying the kiosk installer (# 3). Validating mkosi's live-ISO output is a follow-up, not a reason to keep a second builder.
+  - **⚠ Update 2026-06-17 (#199): mkosi emits no ISO at all.** Investigating this exact follow-up found mkosi 26's output formats are `{confext,cpio,directory,disk,esp,none,portable,sysext,tar,uki,oci,addon}` — there is **no `iso`/ISO9660 format** (and no `xorriso`/El-Torito code in the package). mkosi builds GPT *disk* images meant to be `dd`'d to USB; the literal `.iso` artifact this doc names (# 6) is not an mkosi output. The "live fs == installed fs" invariant (# 3) is unaffected — a `Format=disk` root is what the installer lays down — but the ISO *packaging* needs a chosen path: ship the raw disk as the USB medium and drop `.iso`, or wrap mkosi's rootfs with a post-step `xorriso`/`grub-mkrescue` for a true hybrid `.iso` (which reopens "single builder"). Tracked in `NEXT.md` (Tier 1) and detailed in `progress/iso-mkosi-finding.md`; the path is the maintainer's call.
 
 ---
 
@@ -261,7 +262,7 @@ Same as the brain (# 5 Distribution): **bundled in the ISO for offline first-boo
 
 ### Per-release artifacts
 
-- `malmo-vX.Y.Z-amd64.iso` — the installer ISO.
+- `malmo-vX.Y.Z-amd64.iso` — the installer ISO. **(⚠ #199: mkosi emits no ISO — see # 2's 2026-06-17 update; this artifact's format is pending a path choice, likely a raw `.img` flashed to USB.)**
 - `malmo-host-agent_X.Y.Z_amd64.deb` — published to `apt.malmo.network`.
 - `registry.malmo.network/malmo/brain:vX.Y.Z` — the brain image. `latest` tag advances on stable channel.
 - `registry.malmo.network/malmo/ui:vX.Y.Z` — the dashboard image. Versioned independently of the brain; both bundled in the ISO for offline first-boot.
@@ -318,7 +319,7 @@ GitHub Actions or self-hosted CI — TBD, not architecturally interesting at thi
 - **Base: Debian stable (currently Trixie / 13).**
 - **Kernel: Debian backports kernel** for hardware support on BYO x86.
 - **Non-free firmware bundled** for Wi-Fi and GPU support out of the box.
-- **ISO tooling: `mkosi`** (decided 2026-06-16, `DECISIONS.md`). One builder for the install ISO, the cloud VM image, and the QEMU test lane; systemd-native, and A/B-ready for the immutable future. Overturns the earlier live-build-for-v1 recommendation.
+- **ISO tooling: `mkosi`** (decided 2026-06-16, `DECISIONS.md`). One builder for the install ISO, the cloud VM image, and the QEMU test lane; systemd-native, and A/B-ready for the immutable future. Overturns the earlier live-build-for-v1 recommendation. **(⚠ #199, 2026-06-17: mkosi has no ISO9660 output — it builds GPT *disk* images. The "single builder" call stands for the disk/VM/test artifacts; the literal `.iso` packaging is unresolved — see # 2's update + `NEXT.md` Tier 1.)**
 - **Installer execution model: kiosk web installer.** Minimal compositor (`cage` / `weston --kiosk`) + Chromium pointed at a local installer service. Closest production reference: Fedora's Anaconda Web UI.
 - **Docker package source: `docker-ce` from Docker's official apt repo.** Revisit if Docker Inc. policy changes; swap to `docker.io` is a one-line apt source change.
 - **`host-agent` ships as a Debian package** from our own apt repo, not as a container.

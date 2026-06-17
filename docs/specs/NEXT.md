@@ -19,7 +19,17 @@ Each entry: one-sentence shape, the doc it touches, and *why this tier*. The doc
 
 *(Last audit: 2026-05-31 — Tier 1 is **clear of product-surface gaps**. The dashboard-shell gap was resolved by `DASHBOARD.md` (logged-in IA + owner-scoped apps model; `DECISIONS.md` 2026-05-29), and the in-dashboard file-manager gap is now resolved by `FILES.md` (ops execute as the user's UID in host-agent; own + Shared scope; `DECISIONS.md` 2026-05-31). The infrastructure spine (boot/storage/health/updates/auth) is well-specified. Remaining work is implementation, not design — slice queue lives in [`../progress/README.md`](../progress/README.md) # Up next. Promote an item here into Tier 1 if a new blocking design gap appears.)*
 
-*(No open Tier-1 design topics. Items resolved out of this tier are recorded in `DECISIONS.md`.)*
+### ISO packaging path — mkosi emits no ISO (#199)
+
+**Surfaced 2026-06-17 (#199, part of #196 installable-malmo epic).** The 2026-06-16 decision locked mkosi as the single image builder "for the install ISO" (`BUILD.md` # 2, `DECISIONS.md`), and the release artifact is named `malmo-vX.Y.Z-amd64.iso` (`BUILD.md` # 6). Investigating #199 found the load-bearing assumption is **false**: mkosi 26 has no `iso`/ISO9660 output format (its `OutputFormat` enum is `{confext,cpio,directory,disk,esp,none,portable,sysext,tar,uki,oci,addon}`; no `xorriso`/El-Torito anywhere in the package). mkosi builds GPT *disk* images intended to be `dd`'d to USB. The "live fs == installed fs" invariant (`BUILD.md` # 3) is unaffected — a `Format=disk` root is exactly what the installer lays on disk — but the literal `.iso` packaging is blocked. **Blocking** because the installable-malmo arc (M2/M3, kiosk installer) builds on a bootable install medium that does not yet exist in a chosen form.
+
+Three candidate paths (full detail + recommendation in `progress/iso-mkosi-finding.md`):
+
+1. **Ship the `Format=disk` raw image as the USB medium; drop the literal `.iso`.** mkosi-native, no new tooling, holds "single builder" exactly. Rename the artifact + retire "ISO" vocabulary in `BUILD.md`. *(Recommended in the finding — mkosi's own distribution model, and what UEFI boots directly.)*
+2. **Thin `xorriso` / `grub-mkrescue` post-step wrapping mkosi's rootfs into a true hybrid `.iso`.** Literal isohybrid `.iso`; reopens "mkosi is the **single** builder" and needs a `DECISIONS.md` ratification of the post-step.
+3. **`live-build` for the ISO only.** Reopens #197; brings back the two-builder maintenance burden the 2026-06-16 call chose mkosi to avoid.
+
+Owner: onel (#199 reassigned). Once the path is chosen, the live-boot lane + QEMU boot acceptance (#199's original "Done when") follows, unblocked of the false assumption.
 
 ---
 
