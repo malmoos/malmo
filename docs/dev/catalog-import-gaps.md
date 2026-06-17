@@ -178,6 +178,14 @@ Unlike `docs/progress/` entries (frozen ADR snapshots), this file is **mutable b
 - **Why malmo can't satisfy it (v1):** ~~the brain prepared only `./data`~~ — **fixed.** This is the `nonroot-data-ownership` mechanism finally generalized past the single dir.
 - **Status:** implemented (#147; `APP_ISOLATION.md` # Runtime identity & data ownership, # Volumes; `docs/progress/prepare-every-bind-dir.md`). The brain now parses the compose's `volumes:`, and before `compose up` creates + chowns **every** declared relative (`./…`) bind source to the runtime uid (absolute use-case folder binds are excluded — they're user-owned and election-managed). The dev seam (fake host-agent) now resolves the operator's own uid/gid + home, so the dev brain owns what it creates and the chowns are no-op successes. Paperless-ngx's multi-dir + redis binds now boot clean under `make dev` with no manual chown. Note the *other* paperless gaps (`runtime-self-patch`, `smtp-relay`) and the poznote/postiz image-internal-path gaps are unrelated and stay where they are — #147 fixes only the brain-prepares-its-own-bind-dirs facet.
 
+### app-url-injection — nocodb (2026-06-15)
+
+- **Severity:** degraded
+- **Trigger:** `NC_SITE_URL` — NocoDB bakes its public URL into member-invite emails, shared-view/embed links, webhook payload URLs, and OAuth redirect URIs.
+- **What breaks:** every link NocoDB emits back into itself points at malmo's `.local` mDNS name, which is link-local — it resolves only for a device on the home network. Invites and shared views opened from off-LAN don't load, and OAuth providers reject `.local` redirect URIs. The dashboard, bases, and the REST API are fully usable on the LAN; only outbound/cross-network links degrade.
+- **Why malmo can't satisfy it (v1):** unlike `docuseal` (bare-host var that double-stamps the scheme) and `listmonk` (in-app DB setting with nothing to wire), NocoDB's `NC_SITE_URL` is a full-URL env var, so the *mapping* is clean — the compose sets `NC_SITE_URL: ${MALMO_APP_URL}` and NocoDB receives the correct `http://<slug>.local`. The residual gap is purely that the only inbound address malmo can supply is the `.local` mDNS name, which is link-local and HTTP-only (`DISCOVERY.md`); there is no public/remote URL to inject until remote access ships. Same wall as `app-url-injection — docuseal`, reached from the other direction (mapping works, the value itself is LAN-bound).
+- **Status:** open — degraded, gated on public/remote-URL access. Compose maps the injected URL (correct for on-LAN use); user-facing limitation noted in `catalog/nocodb/manifest.yml` long description. Revisit when remote access ships.
+
 ### app-url-injection — listmonk (2026-06-15)
 
 - **Severity:** degraded
