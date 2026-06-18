@@ -63,7 +63,11 @@ type harness struct {
 // helpers directly (resolveOwnerScope, checkDuplicate) instead of over HTTP.
 func (h *harness) srvServer() *Server { return h.apiSrv }
 
-func newHarness(t *testing.T) *harness {
+// newHarness builds the in-process auth test stack. Optional opts run against
+// the *Server after construction but before it starts listening, so they can
+// set startup-time state (e.g. SetEnvironment for the hosted /setup gate)
+// without racing the request goroutines.
+func newHarness(t *testing.T, opts ...func(*Server)) *harness {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "api.db"))
 	if err != nil {
@@ -157,6 +161,9 @@ func newHarness(t *testing.T) *harness {
 	// SystemStatus the footprint reads.
 	life := lifecycle.NewManager(st, cat, host, nil, nil, bus, t.TempDir())
 	srv := NewServer(st, cat, life, bus, authMgr, host, audit.New(st), nil, live, nil)
+	for _, opt := range opts {
+		opt(srv)
+	}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 

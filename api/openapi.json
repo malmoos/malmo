@@ -1794,6 +1794,9 @@
             "readOnly": true,
             "type": "string"
           },
+          "bootstrap_secret": {
+            "type": "string"
+          },
           "password": {
             "type": "string"
           },
@@ -1955,6 +1958,9 @@
             ],
             "format": "uri",
             "readOnly": true,
+            "type": "string"
+          },
+          "box_id": {
             "type": "string"
           },
           "created_at": {
