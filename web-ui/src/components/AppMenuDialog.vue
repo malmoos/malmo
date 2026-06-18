@@ -68,12 +68,41 @@ const busy = computed(() => stop.isPending.value || start.isPending.value);
 // as the instance prop updates from the invalidated query.)
 const brokenIcon = ref(false);
 
+// Focus trap: keeps keyboard navigation inside the card so Tab/Shift-Tab cannot
+// reach tiles behind the overlay. cardRef targets the card div; focusableEls
+// collects interactive descendants in DOM order.
+const cardRef = ref<HTMLElement | null>(null);
+
+function focusableEls() {
+  return Array.from(
+    cardRef.value?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]),a[href],[tabindex]:not([tabindex="-1"])'
+    ) ?? []
+  );
+}
+
+function trapFocus(e: KeyboardEvent) {
+  if (e.key !== "Tab") return;
+  const els = focusableEls();
+  if (!els.length) return;
+  const first = els[0]!;
+  const last = els[els.length - 1]!;
+  if (e.shiftKey) {
+    if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+  } else {
+    if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
+}
+
 // Escape closes the popup — expected of a transient overlay (the backdrop click
 // and the X button are the other two dismissals).
 function onKey(e: KeyboardEvent) {
   if (e.key === "Escape") emit("close");
 }
-onMounted(() => window.addEventListener("keydown", onKey));
+onMounted(() => {
+  window.addEventListener("keydown", onKey);
+  focusableEls()[0]?.focus();
+});
 onUnmounted(() => window.removeEventListener("keydown", onKey));
 </script>
 
@@ -83,7 +112,11 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
       class="fixed inset-0 z-50 grid place-items-center bg-black/40 px-4"
       @click.self="emit('close')"
     >
-      <div class="w-full max-w-sm space-y-5 rounded-xl border border-border bg-card p-6 shadow-lg">
+      <div
+        ref="cardRef"
+        class="w-full max-w-sm space-y-5 rounded-xl border border-border bg-card p-6 shadow-lg"
+        @keydown="trapFocus"
+      >
         <!-- Header: logo · name/description · close -->
         <div class="flex items-start gap-4">
           <div
@@ -146,11 +179,13 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
           </RouterLink>
         </div>
 
-        <!-- Action error surface (job failure / 409 / host 5xx) -->
-        <p v-if="stop.isError.value" class="text-sm text-destructive">
+        <!-- Action error surface (job failure / 409 / host 5xx). Gated to the
+             state where the relevant button is visible so a stale stop error
+             doesn't linger after the user successfully starts the app. -->
+        <p v-if="running && stop.isError.value" class="text-sm text-destructive">
           Couldn't stop: {{ (stop.error.value as Error)?.message }}
         </p>
-        <p v-if="start.isError.value" class="text-sm text-destructive">
+        <p v-if="!running && start.isError.value" class="text-sm text-destructive">
           Couldn't start: {{ (start.error.value as Error)?.message }}
         </p>
       </div>
