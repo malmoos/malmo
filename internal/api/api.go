@@ -27,6 +27,7 @@ import (
 	"github.com/malmoos/malmo/internal/hostclient"
 	"github.com/malmoos/malmo/internal/lifecycle"
 	"github.com/malmoos/malmo/internal/manifest"
+	"github.com/malmoos/malmo/internal/profile"
 	"github.com/malmoos/malmo/internal/protocol"
 	"github.com/malmoos/malmo/internal/store"
 	"github.com/malmoos/malmo/internal/systemlive"
@@ -47,6 +48,16 @@ type Server struct {
 	streams  *streamCap
 	limiter  *rateLimiter
 	jobs     *Jobs
+
+	// Environment profile and hosted-only provisioning identity, set once at
+	// startup via SetEnvironment (ENVIRONMENT.md # Provisioning). On appliance
+	// these stay zero-valued and every hosted seam is a no-op. boxID is surfaced
+	// on /me; bootstrapSecretHash (hex sha256 of the seeded one-time secret)
+	// gates /setup. An empty bootstrapSecretHash on a hosted box means "no seed
+	// yet" — /setup stays closed.
+	profile             profile.Profile
+	boxID               string
+	bootstrapSecretHash string
 }
 
 func NewServer(
@@ -69,6 +80,19 @@ func NewServer(
 		limiter: newRateLimiter(time.Now),
 		jobs:    newJobs(),
 	}
+}
+
+// SetEnvironment records the resolved environment profile and, on a hosted box,
+// its provisioning identity (ENVIRONMENT.md # Provisioning). cmd/brain calls it
+// once at startup after reading the profile marker and (on hosted) the seed.
+// box-id is surfaced on /me; bootstrapSecretHash is the hex sha256 of the
+// seeded one-time admin-bootstrap secret that gates /setup — empty means the
+// hosted box has no seed yet. Appliance leaves both empty, so every hosted seam
+// is a no-op. Not concurrency-guarded: called before the server starts serving.
+func (s *Server) SetEnvironment(prof profile.Profile, boxID, bootstrapSecretHash string) {
+	s.profile = prof
+	s.boxID = boxID
+	s.bootstrapSecretHash = bootstrapSecretHash
 }
 
 // OpenAPI document identity. Shared by Handler (live serving) and

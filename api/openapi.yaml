@@ -1276,6 +1276,8 @@ components:
           format: uri
           readOnly: true
           type: string
+        bootstrap_secret:
+          type: string
         password:
           type: string
         username:
@@ -1391,6 +1393,8 @@ components:
             - https://example.com/schemas/UserDTO.json
           format: uri
           readOnly: true
+          type: string
+        box_id:
           type: string
         created_at:
           format: int64
