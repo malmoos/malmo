@@ -29,6 +29,7 @@ import (
 	"github.com/malmoos/malmo/internal/lifecycle"
 	"github.com/malmoos/malmo/internal/manifest"
 	"github.com/malmoos/malmo/internal/notify"
+	"github.com/malmoos/malmo/internal/profile"
 	"github.com/malmoos/malmo/internal/protocol"
 	"github.com/malmoos/malmo/internal/store"
 	"github.com/malmoos/malmo/internal/systemlive"
@@ -43,6 +44,14 @@ const caddyReadyTimeout = 10 * time.Second
 func main() {
 	cfg := loadConfig()
 	installLogger(cfg.logLevel, cfg.logFormat)
+
+	// Resolve the environment profile once at startup (ENVIRONMENT.md # How the
+	// profile is realized). An unmarked box resolves to appliance — the no-op
+	// default — so `make dev` and existing appliance boxes are unchanged. No
+	// behavioral seam consults prof yet; each hosted behavior branches on it when
+	// its own feature lands (C1b/C1c and beyond, #196).
+	prof := profile.Read(cfg.profilePath)
+	slog.Info("environment profile resolved", "profile", string(prof))
 
 	if err := os.MkdirAll(cfg.stateDir, 0o755); err != nil {
 		fatal("create state dir", "err", err)
@@ -276,6 +285,7 @@ type config struct {
 	healthPollPeriod       time.Duration
 	notifyPrunePeriod      time.Duration
 	offlineInstall         bool
+	profilePath            string
 }
 
 func loadConfig() config {
@@ -305,6 +315,10 @@ func loadConfig() config {
 		// failure (CONTROL_PLANE.md # First-boot brain bootstrap). Off by default —
 		// a box with a registry pulls and verifies against it.
 		offlineInstall: envBool("MALMO_OFFLINE_INSTALL", false),
+		// Environment-profile marker (ENVIRONMENT.md # How the profile is realized).
+		// The image stamps /etc/malmo/profile; the path is overridable for tests and
+		// `make dev`, where no marker exists and the brain defaults to appliance.
+		profilePath: env("MALMO_PROFILE_PATH", profile.DefaultMarkerPath),
 	}
 }
 
