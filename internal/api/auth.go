@@ -281,7 +281,11 @@ func (s *Server) setup(ctx context.Context, in *struct {
 	// other processing (ENVIRONMENT.md # Admin bootstrap). Runs ahead of the
 	// empty-box CreateFirstAdmin guard so a caller without the secret never
 	// reaches first-admin creation. Appliance is a no-op — byte-unchanged.
-	if err := s.gateBootstrap(ctx, in.Body.BootstrapSecret, username); err != nil {
+	// Trim the submitted secret to match ReadSeed, which trims the seeded value
+	// before hashing: an out-of-band hand-off (cloud console copy-paste) commonly
+	// carries trailing whitespace, and an untrimmed compare would 401 a correct
+	// secret against the trimmed stored hash.
+	if err := s.gateBootstrap(ctx, strings.TrimSpace(in.Body.BootstrapSecret), username); err != nil {
 		return nil, err
 	}
 

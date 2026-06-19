@@ -135,6 +135,22 @@ func TestLoadHostedEnvironment_MalformedSeedStaysClosed(t *testing.T) {
 	}
 }
 
+// Defensive: the hash-before-box-id ordering makes a persisted box-id with no
+// hash unreachable, but if it ever happens (the hash row gone, or a read error)
+// the gate stays closed (empty hash ⇒ 503) rather than opening — and never
+// loads a usable identity without its secret.
+func TestLoadHostedEnvironment_FrozenIdentityMissingHashStaysClosed(t *testing.T) {
+	bm := newFakeBoxMeta()
+	bm.m[store.BoxMetaBoxID] = "cindy-fox" // box-id present, hash row absent
+	boxID, hash := loadHostedEnvironment(profile.Hosted, bm, "/nonexistent/seed.json")
+	if boxID != "cindy-fox" {
+		t.Errorf("box_id = %q; want cindy-fox (identity still frozen)", boxID)
+	}
+	if hash != "" {
+		t.Errorf("hash = %q; want empty so the gate stays closed", hash)
+	}
+}
+
 // A persist failure on the hash leaves the gate closed and never writes box-id —
 // so the next boot re-ingests cleanly rather than seeing a box-id with no secret.
 func TestLoadHostedEnvironment_HashPersistFailureStaysClosed(t *testing.T) {

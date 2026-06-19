@@ -21,6 +21,20 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-20 — Admin-bootstrap secret is handed off out-of-band, not served by the brain (#206)
+
+**Previously:** C3a (#206) left the hand-off open ("coordinate with C4"). The design review raised the obvious candidate — the brain serves the one-time bootstrap secret to the browser at first boot (à la a provider's one-time root-password page), which would necessarily be an unauthenticated, pre-admin endpoint with an expiry.
+
+**Now:** **the brain never serves the bootstrap secret over any endpoint.** It only ever *consumes* it: `POST /setup` takes the secret in a `bootstrap_secret` body field and constant-time-compares its hash against the seeded one. The secret reaches the operator **out-of-band** — the cloud control plane surfaces it once (the cloud console, the way a VPS hands over an initial root password) at provision time. This is the contract C4's trimmed setup wizard consumes: the wizard adds a `bootstrap_secret` field to the first-admin step and submits it — **it does not invent its own one-time-bootstrap URL**, and the brain grows no secret-serving endpoint.
+
+**Why:**
+- A brain-served secret endpoint would have to be unauthenticated and reachable before any admin exists — exactly the public surface a hosted box is trying to close. It would also duplicate, in-guest, a one-time-display the control plane already owns at provision time (cloud-side CL5), splitting the secret's custody across two places.
+- The seed already delivers the secret into the box; the operator already gets it from the place that provisioned the box. Routing it back out through the brain to the same operator adds attack surface for no gain.
+- Splitting custody cleanly — control plane surfaces the plaintext once (with the expiry), the brain stores only the hash and never re-emits it — keeps the plaintext's lifetime owned by exactly one side.
+- The headless/QEMU path consumes the same contract: the test harness reads the secret from the injected seed and POSTs it to `/setup`; no special endpoint.
+
+**Affected docs:** `ENVIRONMENT.md` (# Provisioning & first-boot, "Admin bootstrap — as built" → "Operator hand-off"), `FIRST_RUN.md` (# Step 2, hosted marker). Realized by `docs/progress/hosted-setup-gate.md` (#206/C3a). The cloud-side one-time surfacing with expiry is `malmoos/cloud` CL5.
+
 ## 2026-06-19 — Hosted cloud image: firewall is the cloud provider's security groups, not shipped `nftables` (#203)
 
 **Previously:** the appliance ships `nftables` whose sole job is LAN-scoping SSH/SMB (`BUILD.md` # SSH — RFC1918 + mesh only). The hosted cut list drops `nftables` (`ENVIRONMENT.md` # How the profile is realized), which left an implicit gap: with no host firewall, the Docker daemon publishes container ports to `0.0.0.0` by default, so on a public-by-default cloud VM an app's published port could be reachable with nothing in front of it. #203's review flagged that this must be a stated decision, not an omission.

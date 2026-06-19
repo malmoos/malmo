@@ -73,6 +73,20 @@ func TestHostedSetup_CorrectSecretCreatesAdmin(t *testing.T) {
 	}
 }
 
+// An out-of-band hand-off (cloud-console copy-paste) commonly carries trailing
+// whitespace. ReadSeed trims the seeded secret before hashing, so /setup must
+// trim the submitted value too — otherwise a correct secret 401s against the
+// trimmed stored hash.
+func TestHostedSetup_TrimsSurroundingWhitespace(t *testing.T) {
+	h := hostedHarness(t)
+	resp := h.do("POST", "/api/v1/setup", map[string]string{
+		"username": "andrei", "password": "hunter2", "bootstrap_secret": "  " + hostedSecret + "\n",
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("setup with whitespace-padded correct secret = %d; want 200", resp.StatusCode)
+	}
+}
+
 func TestHostedSetup_WrongSecretRejectedAndAudited(t *testing.T) {
 	h := hostedHarness(t)
 	resp := h.do("POST", "/api/v1/setup", map[string]string{

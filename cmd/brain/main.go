@@ -306,8 +306,18 @@ func loadHostedEnvironment(prof profile.Profile, bm boxMetaStore, seedPath strin
 	}
 	if id, err := bm.GetBoxMeta(store.BoxMetaBoxID); err == nil {
 		hash, hErr := bm.GetBoxMeta(store.BoxMetaBootstrapSecretHash)
-		if hErr != nil && !errors.Is(hErr, store.ErrNotFound) {
-			slog.Error("hosted: read persisted bootstrap hash failed; /setup stays closed", "err", hErr)
+		if hErr != nil {
+			// The hash is persisted *before* the box-id (the box-id is the
+			// commit marker), so a box-id with no hash should be unreachable.
+			// If it happens anyway (a store read error, or the hash row gone),
+			// log it loudly — the gate stays closed (503) and the silent symptom
+			// would otherwise be an unexplained "not provisioned" on a box that
+			// already has an identity.
+			if errors.Is(hErr, store.ErrNotFound) {
+				slog.Error("hosted: box-id persisted but bootstrap hash missing; /setup stays closed", "box_id", id)
+			} else {
+				slog.Error("hosted: read persisted bootstrap hash failed; /setup stays closed", "err", hErr)
+			}
 			return id, ""
 		}
 		return id, hash
