@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/malmoos/malmo/internal/audit"
 	"github.com/malmoos/malmo/internal/auth"
+	"github.com/malmoos/malmo/internal/profile"
 	"github.com/malmoos/malmo/internal/store"
 )
 
@@ -98,6 +101,10 @@ type UserDTO struct {
 	Role           string `json:"role"`
 	CreatedAt      int64  `json:"created_at"`
 	SingleUserMode *bool  `json:"single_user_mode,omitempty"`
+	// BoxID is the hosted box's provisioned identity (ENVIRONMENT.md #
+	// Provisioning). Empty (and omitted) on appliance, so appliance responses
+	// are byte-unchanged.
+	BoxID string `json:"box_id,omitempty"`
 }
 
 func userDTO(u store.User) UserDTO {
@@ -118,6 +125,7 @@ func (s *Server) fullUserDTO(u store.User) (UserDTO, error) {
 	}
 	single := count == 1
 	dto.SingleUserMode = &single
+	dto.BoxID = s.boxID // "" on appliance ⇒ omitted
 	return dto, nil
 }
 
@@ -218,6 +226,31 @@ func (s *Server) authUsers(ctx context.Context, _ *struct{}) (*struct {
 	return out, nil
 }
 
+// gateBootstrap enforces the hosted-profile admin-bootstrap secret on /setup.
+// On appliance it is a no-op (open-on-empty-box). On hosted: a box with no
+// seeded secret is not yet provisioned to accept setup, so it stays closed →
+// 503 (never falling back to the appliance's open /setup); a missing or wrong
+// secret → 401, audited as an elevation-class failure (CLAUDE.md # elevation-
+// class mutations audit success and failure). The supplied secret is hashed and
+// constant-time compared against the stored hex sha256, so neither a timing side
+// channel nor the at-rest value can recover it.
+func (s *Server) gateBootstrap(ctx context.Context, supplied, username string) error {
+	if s.profile != profile.Hosted {
+		return nil
+	}
+	if s.bootstrapSecretHash == "" {
+		return huma.Error503ServiceUnavailable("box is not provisioned for setup")
+	}
+	suppliedHash := sha256.Sum256([]byte(supplied))
+	suppliedHex := hex.EncodeToString(suppliedHash[:])
+	if subtle.ConstantTimeCompare([]byte(suppliedHex), []byte(s.bootstrapSecretHash)) != 1 {
+		s.auditor.Record(ctx, audit.ActionSetupFailure, audit.Target{Kind: "user"},
+			map[string]any{"username": username}, false)
+		return huma.Error401Unauthorized("invalid admin bootstrap secret")
+	}
+	return nil
+}
+
 // setup creates the first admin. Two ordering invariants matter here:
 // (1) brain commits first, so the empty-table guard fences any concurrent
 // caller atomically (store.CreateFirstAdmin uses a transaction); (2) the
@@ -229,6 +262,10 @@ func (s *Server) setup(ctx context.Context, in *struct {
 	Body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
+		// BootstrapSecret is the one-time secret seeded at provision time. It is
+		// required only in the hosted profile (gateBootstrap); appliance ignores
+		// it entirely, so an appliance request need not send it.
+		BootstrapSecret string `json:"bootstrap_secret,omitempty"`
 	}
 }) (*struct {
 	SetCookie string `header:"Set-Cookie"`
@@ -239,6 +276,19 @@ func (s *Server) setup(ctx context.Context, in *struct {
 }, error) {
 	username := strings.TrimSpace(in.Body.Username)
 	password := in.Body.Password
+
+	// Hosted profile: the seeded admin-bootstrap secret gates /setup before any
+	// other processing (ENVIRONMENT.md # Admin bootstrap). Runs ahead of the
+	// empty-box CreateFirstAdmin guard so a caller without the secret never
+	// reaches first-admin creation. Appliance is a no-op — byte-unchanged.
+	// Trim the submitted secret to match ReadSeed, which trims the seeded value
+	// before hashing: an out-of-band hand-off (cloud console copy-paste) commonly
+	// carries trailing whitespace, and an untrimmed compare would 401 a correct
+	// secret against the trimmed stored hash.
+	if err := s.gateBootstrap(ctx, strings.TrimSpace(in.Body.BootstrapSecret), username); err != nil {
+		return nil, err
+	}
+
 	if username == "" || password == "" {
 		return nil, huma.Error422UnprocessableEntity("username and password are required")
 	}

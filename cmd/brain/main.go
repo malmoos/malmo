@@ -5,6 +5,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -201,7 +204,15 @@ func main() {
 	// active follow to the process lifetime.
 	applogs := applog.NewRegistry(pollCtx, host)
 
+	// Hosted profile: ingest the first-boot provisioning seed (box-id + the
+	// admin-bootstrap secret) and hand the resolved identity to the API, which
+	// gates /setup on it (ENVIRONMENT.md # Provisioning). Appliance is a no-op:
+	// boxID/bootstrapHash stay empty and /setup keeps its open-on-empty-box
+	// behavior.
+	boxID, bootstrapHash := loadHostedEnvironment(prof, st, cfg.seedPath)
+
 	srv := api.NewServer(st, cat, life, bus, authMgr, host, auditor, healthMgr, live, applogs)
+	srv.SetEnvironment(prof, boxID, bootstrapHash)
 	httpSrv := &http.Server{Handler: srv.Handler()}
 
 	// Bind the listener before advertising the dashboard route to Caddy. Once the
@@ -268,6 +279,83 @@ func fatal(msg string, args ...any) {
 	os.Exit(1)
 }
 
+// boxMetaStore is the brain's consumer-side slice of the store the hosted-seed
+// ingestion needs (CLAUDE.md: interfaces live with the consumer). *store.Store
+// satisfies it; tests pass a fake to drive each branch without a real database.
+type boxMetaStore interface {
+	GetBoxMeta(key string) (string, error)
+	SetBoxMeta(key, value string) error
+}
+
+// loadHostedEnvironment resolves the hosted box's provisioning identity
+// (ENVIRONMENT.md # Provisioning) for the /setup gate. It returns the box-id and
+// the hex sha256 of the admin-bootstrap secret; both empty mean "no gate"
+// (appliance, or a hosted box not yet provisioned — which keeps /setup closed,
+// never falling back to the appliance's open behavior).
+//
+// On appliance it is a no-op. On hosted: a box-id already persisted is the
+// install's frozen identity (MALMO_NETWORK.md) — load it and the stored hash and
+// ignore the seed on every subsequent boot. Otherwise this is the first hosted
+// boot: read the seed, persist the hash *then* the box-id (box-id last as the
+// commit marker, so a crash mid-write re-ingests next boot rather than leaving a
+// box-id with no secret), and return them. An absent or unreadable seed logs and
+// returns empty — the brain stays pre-setup rather than crashing.
+func loadHostedEnvironment(prof profile.Profile, bm boxMetaStore, seedPath string) (boxID, secretHash string) {
+	if prof != profile.Hosted {
+		return "", ""
+	}
+	if id, err := bm.GetBoxMeta(store.BoxMetaBoxID); err == nil {
+		hash, hErr := bm.GetBoxMeta(store.BoxMetaBootstrapSecretHash)
+		if hErr != nil {
+			// The hash is persisted *before* the box-id (the box-id is the
+			// commit marker), so a box-id with no hash should be unreachable.
+			// If it happens anyway (a store read error, or the hash row gone),
+			// log it loudly — the gate stays closed (503) and the silent symptom
+			// would otherwise be an unexplained "not provisioned" on a box that
+			// already has an identity.
+			if errors.Is(hErr, store.ErrNotFound) {
+				slog.Error("hosted: box-id persisted but bootstrap hash missing; /setup stays closed", "box_id", id)
+			} else {
+				slog.Error("hosted: read persisted bootstrap hash failed; /setup stays closed", "err", hErr)
+			}
+			return id, ""
+		}
+		return id, hash
+	} else if !errors.Is(err, store.ErrNotFound) {
+		slog.Error("hosted: read persisted box-id failed; staying pre-setup", "err", err)
+		return "", ""
+	}
+
+	seed, err := profile.ReadSeed(seedPath)
+	if errors.Is(err, profile.ErrSeedAbsent) {
+		slog.Warn("hosted box has no provisioning seed; /setup stays closed until one lands", "src", seedPath)
+		return "", ""
+	}
+	if err != nil {
+		slog.Error("hosted: provisioning seed unreadable; staying pre-setup", "src", seedPath, "err", err)
+		return "", ""
+	}
+
+	hash := sha256Hex(seed.AdminBootstrapSecret)
+	if err := bm.SetBoxMeta(store.BoxMetaBootstrapSecretHash, hash); err != nil {
+		slog.Error("hosted: persist bootstrap hash failed; staying pre-setup", "err", err)
+		return "", ""
+	}
+	if err := bm.SetBoxMeta(store.BoxMetaBoxID, seed.BoxID); err != nil {
+		slog.Error("hosted: persist box-id failed; staying pre-setup", "err", err)
+		return "", ""
+	}
+	slog.Info("hosted: provisioning seed ingested", "box_id", seed.BoxID)
+	return seed.BoxID, hash
+}
+
+// sha256Hex returns the hex-encoded SHA-256 of s. Used to store the admin-
+// bootstrap secret as a hash, never plaintext (ENVIRONMENT.md # Admin bootstrap).
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
 type config struct {
 	listen                 string
 	stateDir               string
@@ -286,6 +374,7 @@ type config struct {
 	notifyPrunePeriod      time.Duration
 	offlineInstall         bool
 	profilePath            string
+	seedPath               string
 }
 
 func loadConfig() config {
@@ -319,6 +408,10 @@ func loadConfig() config {
 		// The image stamps /etc/malmo/profile; the path is overridable for tests and
 		// `make dev`, where no marker exists and the brain defaults to appliance.
 		profilePath: env("MALMO_PROFILE_PATH", profile.DefaultMarkerPath),
+		// Hosted first-boot provisioning seed (ENVIRONMENT.md # Provisioning). Read
+		// only when profile == hosted; absent on appliance. Overridable for tests
+		// and the cloud-lane harness.
+		seedPath: env("MALMO_SEED_PATH", profile.DefaultSeedPath),
 	}
 }
 

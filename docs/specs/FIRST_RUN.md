@@ -69,6 +69,8 @@ Other Step 1 details:
 
 ### Step 2 — First admin
 
+> **Hosted.** On the appliance, the trust that lets *this* person create the founding admin is physical presence at the box during first boot. A hosted cloud VM has no such gate, so the first admin's creation is gated on a **one-time admin-bootstrap secret** delivered in the provisioning seed (`ENVIRONMENT.md` # Provisioning & first-boot, "Admin bootstrap"). The operator receives the secret out-of-band (the cloud console, like a VPS root password) and enters it alongside the first admin's name + password; the brain constant-time-compares it against the seeded secret's hash before creating the account. Until a seed lands the box reports "not provisioned" and `/setup` is closed; once the first admin exists the gate is spent. The brain stores only the secret's hash, never the plaintext, and never serves it. Everything else in this step (the account itself, the recovery code) is identical to the appliance.
+
 - Two fields: **first name** + **password**. That's it.
 - The first user created is automatically an admin. Admins can create more users (admins or members) later in Settings. Admins are added to the Linux `sudo` group (rescue path when the dashboard is broken); members are unprivileged. See `USERS_AND_GROUPS.md`.
 - No username field — the display name is what the user types and what the UI shows everywhere. See "Identity & display names" below for how this maps to the underlying OS user.

@@ -1310,6 +1310,7 @@ export interface components {
              * @example https://example.com/schemas/SetupRequest.json
              */
             readonly $schema?: string;
+            bootstrap_secret?: string;
             password: string;
             username: string;
         };
@@ -1371,6 +1372,7 @@ export interface components {
              * @example https://example.com/schemas/UserDTO.json
              */
             readonly $schema?: string;
+            box_id?: string;
             /** Format: int64 */
             created_at: number;
             id: string;
