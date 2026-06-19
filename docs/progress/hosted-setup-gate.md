@@ -1,0 +1,41 @@
+# Hosted first-boot seed + admin-bootstrap gate on /setup (C3a)
+
+- **Status:** done
+- **Date:** 2026-06-19
+- **Specs touched:** `ENVIRONMENT.md` (# Provisioning & first-boot — as-built mechanism added), `FIRST_RUN.md` (hosted per-step markers)
+
+Part of the cloud-VM track in #196. The C1 profile foundation is in place — the [profile marker + brain reader](hosted-profile-marker.md) (C1a #202), the [lean hosted mkosi image](hosted-profile-marker.md)'s sibling C1b #203, and the [slim cloud host-agent](hosted-profile-marker.md)'s sibling C1c #204 (all three OPEN, not yet merged). This is **C3a** (#206): the brain-side first-boot provisioning seed and the `/setup` gate that consumes it. On a hosted box there is no "whoever is physically present during first boot" trust to lean on (`ENVIRONMENT.md` # Provisioning, the "Admin bootstrap" bullet), so the first admin's creation is gated on a one-time secret delivered in the provisioning seed — closing the public-open-`/setup` window a hosted box would otherwise have.
+
+This slice is **brain-side core only**. The cloud-lane wiring that actually *delivers* the seed onto a booted VM (a `dev/cloud/` SMBIOS / systemd-credential injection, exercised end-to-end in QEMU) is **deferred** — `dev/cloud/` exists only on the unmerged C1b branch, the boot harness is C2 (#205, which does not exist yet), and the QEMU outer loop is blocked on this box by #189. So this PR is **"Part of #206", not "Closes"**; the cloud-lane exercise is tracked as a follow-up.
+
+## What was done
+
+- **`internal/profile/seed.go` (new)** — the first-boot provisioning seed contract. `Seed{BoxID, AdminBootstrapSecret, Enrollment json.RawMessage}` read from JSON at `DefaultSeedPath` (`/var/lib/malmo/seed.json`). `ReadSeed(path)` returns a typed `ErrSeedAbsent` when the file is missing (the not-yet-provisioned case, which keeps `/setup` closed rather than crashing) and a hard error on a malformed or field-incomplete seed (a present-but-broken seed is an operator error, not "no seed"). `Enrollment` is carried as raw JSON and **deliberately unconsumed** — it reserves the `*.<box-id>.malmo.network` DNS-01 enrollment payload for C3b without forcing a schema now.
+- **`internal/store/` (box_meta)** — a small `box_meta(key TEXT PRIMARY KEY, value TEXT)` KV table in `migrate()`, with `GetBoxMeta`/`SetBoxMeta` (upsert) and the key constants `BoxMetaBoxID` / `BoxMetaBootstrapSecretHash`. The brain persists the box-id and the **SHA-256 hex of the bootstrap secret — never the plaintext**.
+- **`cmd/brain/main.go` (ingestion)** — `loadHostedEnvironment(prof, store, seedPath)`, called once at startup, resolves the hosted box's provisioning identity for the gate. Appliance is a no-op (empty box-id + hash ⇒ no gate). On hosted: a box-id already persisted is the install's **frozen identity** — load it (and the stored hash) and ignore the seed on every later boot; otherwise this is the first hosted boot — read the seed, persist the **hash *then* the box-id** (box-id last as the commit marker, so a crash mid-write re-ingests next boot rather than stranding a box-id with no secret), and hand both to the API. An absent or unreadable seed logs and returns empty — the brain stays pre-setup, never falling back to the appliance's open behavior. New `seedPath` config (env `MALMO_SEED_PATH`).
+- **`internal/api/` (the gate)** — `Server` gained `profile` / `boxID` / `bootstrapSecretHash`, set via a `SetEnvironment` **setter** (not a `NewServer` parameter — it avoids touching ~6 positional call sites). `gateBootstrap` runs inside `/setup` *before* the empty-box check, only when `profile == hosted`:
+  - no seed yet (`bootstrapSecretHash == ""`) → **503** (`box is not provisioned for setup`) — a hosted box must never fall through to appliance open-on-empty-box;
+  - missing or wrong secret → **401**, audited `audit.ActionSetupFailure` (success=false), mirroring `login.failure`;
+  - correct secret → proceeds to the normal first-admin creation.
+  The secret arrives in the request body as `bootstrap_secret`; the compare is **constant-time** (`crypto/subtle`) over the SHA-256 hex. Because the gate sits ahead of the existing empty-box guard, it is **naturally one-time**: once the first admin exists, even the correct secret gets the usual 409. `UserDTO` gained `box_id,omitempty`, surfaced on hosted only. **Appliance `/setup` is byte-unchanged** — the gate is a no-op and `box_id` is omitted.
+- **Operator hand-off.** The brain never serves the secret over any endpoint. The operator receives it out-of-band (the cloud console, the way a VPS hands over an initial root password) and types it into the setup wizard, which sends it as the `bootstrap_secret` body field.
+- **Codegen** — `make openapi` and `npm run gen:api` regenerated; the only deltas are `bootstrap_secret` on the setup request and `box_id` on `UserDTO`.
+- **Tests** — `internal/profile/seed_test.go` (valid / whitespace-trim / absent→`ErrSeedAbsent` / malformed / missing-or-blank box-id / missing-or-blank secret / unreadable-is-hard-error / enrollment-preserved); `internal/store/box_meta_test.go` (unset→`ErrNotFound`, roundtrip, upsert); `internal/api/auth_hosted_test.go` (the gate matrix: correct→200 + box-id surfaced, wrong→401 audited, missing→401 audited, no-seed→503, one-time→409, appliance ignores the secret and omits box-id); `cmd/brain/main_hosted_test.go` (appliance no-op, first-boot ingest with hash-before-box-id ordering + no plaintext, frozen-identity ignores the seed, absent/malformed seed stays closed, hash-persist failure stays closed). `make check` green.
+
+## How it maps to the specs
+
+- Realizes `ENVIRONMENT.md` # Provisioning & first-boot — the "first-boot configuration" seed (box-id + one-time admin-bootstrap secret + reserved enrollment) and the "Admin bootstrap" bullet ("the bootstrap secret gates who gets to create that first account, replacing the appliance's 'whoever is physically at the box during first boot' trust"). The as-built mechanism (seed path, `box_meta`, hash-not-plaintext, the 503/401 gate, operator out-of-band hand-off) was added to that section in this change.
+- Stays inside the Layer-1 / Layer-2 split (`ENVIRONMENT.md` # Two layers): the brain is profile-aware only at one narrow new seam (`gateBootstrap`); the appliance path is untouched. PAM stays the identity source — the gate decides *who may create* the first admin, not *how* it is created.
+- The frozen box-id mirrors the appliance's "name is frozen at enrollment" rule (`MALMO_NETWORK.md`): the persisted box-id is the install's permanent identity.
+
+## Known gaps & deviations
+
+- **No seed-delivery path is exercised.** Nothing in this PR puts a `seed.json` onto a real booted VM. The SMBIOS / systemd-credential injection (`dev/cloud/`) and the QEMU end-to-end proof are deferred — see the opening paragraph. On `make dev` and every appliance box the seed path simply doesn't exist and the gate is inert.
+- **`enrollment` is reserved, not used.** The seed carries it as raw JSON; C3b consumes it for the `*.<box-id>.malmo.network` DNS-01 cert.
+- **Key custody for the secret at rest is the store's, not the seed's.** The seed file holds the plaintext secret until first boot ingests it; hardening the on-disk seed lifetime (e.g. shredding it post-ingest) is a cloud-lane concern, deferred with the delivery path.
+
+## What's next
+
+- **Cloud-lane seed delivery (follow-up issue, depends on C2 #205).** Inject `seed.json` into a booted hosted VM (SMBIOS / systemd credential) and assert the gate end-to-end in QEMU. Blocked here by #189.
+- **C3b — seeded enrollment + DNS-01 cert.** Consume the reserved `enrollment` payload: enroll `*.<box-id>.malmo.network` at first boot and drive Caddy's ACME DNS-01 from it (`ENVIRONMENT.md` # Networking & discovery, "Certs").
+- **C4 — the trimmed hosted setup wizard.** The web-ui side: the wizard drops the network / storage / enrollment steps and adds the bootstrap-secret field to the first-admin step (`ENVIRONMENT.md` # Provisioning, "Setup wizard, trimmed").

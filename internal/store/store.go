@@ -298,6 +298,15 @@ func (s *Store) migrate() error {
 			user_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			category  TEXT NOT NULL,
 			PRIMARY KEY (user_id, category)
+		);
+		-- box_meta: a tiny key/value table for singleton box-level facts that
+		-- aren't per-instance and don't warrant their own table. Today it holds
+		-- the hosted-profile provisioning identity (ENVIRONMENT.md # Provisioning):
+		-- the box-id and the hash of the one-time admin-bootstrap secret. The
+		-- appliance profile never writes a row, so the table stays empty there.
+		CREATE TABLE IF NOT EXISTS box_meta (
+			key   TEXT PRIMARY KEY,
+			value TEXT NOT NULL
 		);`)
 	if err != nil {
 		return err
@@ -838,6 +847,35 @@ func (s *Store) UserCount() (int, error) {
 func (s *Store) HasAnyUser() (bool, error) {
 	n, err := s.UserCount()
 	return n > 0, err
+}
+
+// Box-level metadata keys for the box_meta KV table. Set on a hosted box from
+// the first-boot seed (ENVIRONMENT.md # Provisioning); absent on appliance.
+const (
+	BoxMetaBoxID               = "box_id"
+	BoxMetaBootstrapSecretHash = "admin_bootstrap_secret_hash"
+)
+
+// GetBoxMeta returns the value stored under key, or ErrNotFound when unset.
+func (s *Store) GetBoxMeta(key string) (string, error) {
+	var v string
+	err := s.db.QueryRow(`SELECT value FROM box_meta WHERE key=?`, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("scan box_meta: %w", err)
+	}
+	return v, nil
+}
+
+// SetBoxMeta upserts a box-level metadata value. Idempotent: re-writing the
+// same key with the same value is a no-op from the caller's view.
+func (s *Store) SetBoxMeta(key, value string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO box_meta (key, value) VALUES (?,?)
+		 ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
+	return err
 }
 
 // CreateSession persists a freshly issued session. Caller picks the token.
