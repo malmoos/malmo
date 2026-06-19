@@ -239,6 +239,11 @@ func (s *Server) gateBootstrap(ctx context.Context, supplied, username string) e
 		return nil
 	}
 	if s.bootstrapSecretHash == "" {
+		// 503 is a system-state condition ("seed not yet delivered"), not an
+		// authorization decision — nobody is authorized or unauthorized yet.
+		// Auditing it would conflate "not ready" with "unauthorized attempt" and
+		// generate noise during normal provisioning races. The security-relevant
+		// signal is the 401 (wrong/missing secret), which is audited below.
 		return huma.Error503ServiceUnavailable("box is not provisioned for setup")
 	}
 	suppliedHash := sha256.Sum256([]byte(supplied))
