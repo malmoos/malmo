@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 )
@@ -55,7 +56,7 @@ type Seed struct {
 func ReadSeed(path string) (Seed, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return Seed{}, ErrSeedAbsent
 		}
 		return Seed{}, fmt.Errorf("read seed: %w", err)

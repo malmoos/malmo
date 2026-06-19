@@ -306,7 +306,14 @@ func loadHostedEnvironment(prof profile.Profile, bm boxMetaStore, seedPath strin
 	}
 	if id, err := bm.GetBoxMeta(store.BoxMetaBoxID); err == nil {
 		hash, hErr := bm.GetBoxMeta(store.BoxMetaBootstrapSecretHash)
-		if hErr != nil && !errors.Is(hErr, store.ErrNotFound) {
+		if errors.Is(hErr, store.ErrNotFound) {
+			// box-id present without its companion hash — shouldn't occur under
+			// normal write ordering (hash is committed before box-id) but could
+			// indicate a partial DB restore or manual row deletion.
+			slog.Warn("hosted: box-id persisted but bootstrap hash missing; /setup stays closed", "box_id", id)
+			return id, ""
+		}
+		if hErr != nil {
 			slog.Error("hosted: read persisted bootstrap hash failed; /setup stays closed", "err", hErr)
 			return id, ""
 		}
