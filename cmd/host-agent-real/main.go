@@ -49,6 +49,7 @@ import (
 	"github.com/malmoos/malmo/internal/hostagent/rampressure"
 	"github.com/malmoos/malmo/internal/hostagent/rebootrequired"
 	"github.com/malmoos/malmo/internal/hostagent/servicehealth"
+	"github.com/malmoos/malmo/internal/hostagent/timezonemgr"
 	"github.com/malmoos/malmo/internal/hostagent/usermgr"
 	"github.com/malmoos/malmo/internal/protocol"
 )
@@ -104,6 +105,11 @@ func main() {
 	a.Reboot = rebootrequired.New()
 	a.System = procsource.New()
 	a.Net = prov
+	// Timezone applies to BOTH profiles (host config, not LAN/discovery), so it
+	// stays in the shared real-agent wiring. When the build-tagged slim
+	// host-agent split lands (#204), this line belongs in both the appliance and
+	// hosted wiring — it is a kept-in-both seam, not an appliance-only one.
+	a.Timezone = &timezonemgr.LinuxTimezoneManager{}
 
 	// Align avahi-daemon with the current LAN set once at startup, then keep
 	// it aligned from the NetworkManager watcher. Startup failure is non-fatal:

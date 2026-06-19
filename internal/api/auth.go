@@ -180,21 +180,42 @@ func (s *Server) registerAuth(api huma.API) {
 
 // --- handlers ------------------------------------------------------------
 
+// authStateBody is the public bootstrap probe (GET /api/v1/auth/state). The
+// web-ui reads it before any session exists to route between the setup wizard,
+// login, and the dashboard. Profile drives the wizard's profile-aware step set
+// (ENVIRONMENT.md # Provisioning — the hosted wizard is trimmed); FirstRunComplete
+// keeps the wizard up until Done even after the admin exists (FIRST_RUN.md #
+// Phase 3 — distinct from HasUsers).
+type authStateBody struct {
+	HasUsers         bool   `json:"has_users"`
+	Profile          string `json:"profile"`
+	FirstRunComplete bool   `json:"first_run_complete"`
+}
+
 func (s *Server) authState(ctx context.Context, _ *struct{}) (*struct {
-	Body struct {
-		HasUsers bool `json:"has_users"`
-	}
+	Body authStateBody
 }, error) {
 	has, err := s.store.HasAnyUser()
 	if err != nil {
 		return nil, huma.Error500InternalServerError("store read failed", err)
 	}
+	complete, err := s.store.FirstRunComplete()
+	if err != nil {
+		return nil, huma.Error500InternalServerError("store read failed", err)
+	}
 	out := &struct {
-		Body struct {
-			HasUsers bool `json:"has_users"`
-		}
+		Body authStateBody
 	}{}
 	out.Body.HasUsers = has
+	// An unset profile reports as appliance, mirroring profile.Read()'s default
+	// and the gateBootstrap "!= Hosted ⇒ appliance" treatment, so the probe
+	// always names a concrete profile for the wizard's step-set selection.
+	prof := s.profile
+	if prof == "" {
+		prof = profile.Appliance
+	}
+	out.Body.Profile = string(prof)
+	out.Body.FirstRunComplete = complete
 	return out, nil
 }
 
@@ -266,6 +287,11 @@ func (s *Server) setup(ctx context.Context, in *struct {
 		// required only in the hosted profile (gateBootstrap); appliance ignores
 		// it entirely, so an appliance request need not send it.
 		BootstrapSecret string `json:"bootstrap_secret,omitempty"`
+		// SkipRecoveryCode opts out of a dashboard recovery code (FIRST_RUN.md #
+		// Step 2a — the on-by-default toggle turned off, behind the explicit
+		// "you won't be able to recover your account" confirmation). Optional;
+		// the default-false path generates the code exactly as before.
+		SkipRecoveryCode bool `json:"skip_recovery_code,omitempty"`
 	}
 }) (*struct {
 	SetCookie string `header:"Set-Cookie"`
@@ -292,9 +318,20 @@ func (s *Server) setup(ctx context.Context, in *struct {
 		return nil, err
 	}
 
-	recoveryCode, recoveryHash, err := newRecoveryCode()
-	if err != nil {
-		return nil, huma.Error500InternalServerError("recovery code", err)
+	// Recovery code is on by default (FIRST_RUN.md # Step 2a). On opt-out no code
+	// is generated: the admin row keeps an empty recovery_hash and recover()
+	// fails closed (an empty hash never matches a supplied code). err is declared
+	// at function scope so the later fullUserDTO assignment can reuse it.
+	var (
+		recoveryCode string
+		recoveryHash string
+		err          error
+	)
+	if !in.Body.SkipRecoveryCode {
+		recoveryCode, recoveryHash, err = newRecoveryCode()
+		if err != nil {
+			return nil, huma.Error500InternalServerError("recovery code", err)
+		}
 	}
 
 	u := store.User{

@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -854,6 +855,15 @@ func (s *Store) HasAnyUser() (bool, error) {
 const (
 	BoxMetaBoxID               = "box_id"
 	BoxMetaBootstrapSecretHash = "admin_bootstrap_secret_hash"
+	// BoxMetaTelemetryConsent records the box-wide telemetry opt-in chosen at
+	// first-run (FIRST_RUN.md # Step 4, TELEMETRY.md). Absent ⇒ false (off by
+	// default — TELEMETRY.md # Locked). Both profiles.
+	BoxMetaTelemetryConsent = "telemetry_consent"
+	// BoxMetaFirstRunComplete marks the setup wizard as finished (FIRST_RUN.md
+	// # Phase 3 — "the wizard never reappears"). Distinct from HasAnyUser: an
+	// admin can exist mid-wizard, but the wizard is done only when this is set.
+	// This is the bootstrap-complete marker C5 asserts. Both profiles.
+	BoxMetaFirstRunComplete = "first_run_complete"
 )
 
 // GetBoxMeta returns the value stored under key, or ErrNotFound when unset.
@@ -876,6 +886,42 @@ func (s *Store) SetBoxMeta(key, value string) error {
 		`INSERT INTO box_meta (key, value) VALUES (?,?)
 		 ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
+}
+
+// getBoxMetaBool reads a boolean box_meta flag. An unset key is the zero value
+// (false) rather than an error — the uncapped/not-yet-chosen common case.
+func (s *Store) getBoxMetaBool(key string) (bool, error) {
+	v, err := s.GetBoxMeta(key)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return v == "true", nil
+}
+
+// TelemetryConsent reports the box-wide telemetry opt-in (TELEMETRY.md). Unset
+// ⇒ false (off by default).
+func (s *Store) TelemetryConsent() (bool, error) {
+	return s.getBoxMetaBool(BoxMetaTelemetryConsent)
+}
+
+// SetTelemetryConsent records the box-wide telemetry opt-in chosen at first-run
+// (or later from Settings → Privacy).
+func (s *Store) SetTelemetryConsent(enabled bool) error {
+	return s.SetBoxMeta(BoxMetaTelemetryConsent, strconv.FormatBool(enabled))
+}
+
+// FirstRunComplete reports whether the setup wizard has finished (FIRST_RUN.md
+// # Phase 3). Unset ⇒ false.
+func (s *Store) FirstRunComplete() (bool, error) {
+	return s.getBoxMetaBool(BoxMetaFirstRunComplete)
+}
+
+// SetFirstRunComplete marks the setup wizard finished so it never reappears.
+func (s *Store) SetFirstRunComplete() error {
+	return s.SetBoxMeta(BoxMetaFirstRunComplete, "true")
 }
 
 // CreateSession persists a freshly issued session. Caller picks the token.

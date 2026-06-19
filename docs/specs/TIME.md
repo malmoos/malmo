@@ -49,7 +49,7 @@ Boxes with no working RTC at all (rare on x86, possible on future ARM ports) are
 
 `/etc/localtime` symlinked via `timedatectl set-timezone <zone>`. Affects journald display, cron, anything reading `time.Local`.
 
-- **First-run:** auto-detected via IP geolocation in the setup wizard (already specced in `FIRST_RUN.md` Step 3). If no internet at first-run, fall back to picking from a list.
+- **First-run:** auto-detected from the setup device's browser (`Intl`) and pre-selected in a full IANA picker the user can override; the brain applies the choice through a host-agent `timedatectl set-timezone` seam (as built — C4; `FIRST_RUN.md` Step 3). This replaces the originally-specced IP-geolocation detection — no geo-IP dependency, works offline.
 - **Override:** Settings → System → Time. Always available.
 
 ### Container TZ

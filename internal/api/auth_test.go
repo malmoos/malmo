@@ -51,7 +51,11 @@ type harness struct {
 	// (closes the 0015/0016 orphan-on-rollback gap; see
 	// docs/progress/0017-host-agent-delete-user.md).
 	deleteCalls *[]string
-	apiSrv      *Server // the underlying api.Server, for direct method tests
+	// tzCalls records every timezone passed to the host-agent
+	// /v1/system/set-timezone mock. Guarded by pmu. Lets the first-run
+	// wizard's time-zone step assert the value reached the host seam.
+	tzCalls *[]string
+	apiSrv  *Server // the underlying api.Server, for direct method tests
 	// catalogDir is the root the harness's catalog reads from. catalog.Load
 	// hits the filesystem on each call, so tests write manifest fixtures into
 	// this dir *after* construction and the live server picks them up — no need
@@ -135,6 +139,15 @@ func newHarness(t *testing.T, opts ...func(*Server)) *harness {
 			},
 		})
 	})
+	tzCalls := []string{}
+	mux.HandleFunc("POST /v1/system/set-timezone", func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.SetTimezoneRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		pmu.Lock()
+		tzCalls = append(tzCalls, req.Timezone)
+		pmu.Unlock()
+		_ = json.NewEncoder(w).Encode(struct{}{})
+	})
 	hostHTTP := &http.Server{Handler: mux}
 	go func() { _ = hostHTTP.Serve(ln) }()
 	t.Cleanup(func() { _ = hostHTTP.Close() })
@@ -168,7 +181,7 @@ func newHarness(t *testing.T, opts ...func(*Server)) *harness {
 	t.Cleanup(ts.Close)
 
 	jar, _ := newJar()
-	return &harness{srv: ts, jar: jar, t: t, pwds: pwds, pmu: &pmu, st: st, deleteCalls: &deleteCalls, apiSrv: srv, catalogDir: catDir}
+	return &harness{srv: ts, jar: jar, t: t, pwds: pwds, pmu: &pmu, st: st, deleteCalls: &deleteCalls, tzCalls: &tzCalls, apiSrv: srv, catalogDir: catDir}
 }
 
 func (h *harness) do(method, path string, body any) *http.Response {
@@ -611,6 +624,49 @@ func TestSetupRollsBackOnSetRoleFailure(t *testing.T) {
 	if !found {
 		t.Fatal("setup.failure audit event not recorded")
 	}
+}
+
+// TestSetupSkipRecoveryCode covers the FIRST_RUN.md # Step 2a opt-out: when the
+// admin turns the recovery-code toggle off, /setup returns an empty code, stores
+// an empty recovery hash, and recover() fails closed (no code can ever match an
+// empty hash, so the account is unrecoverable by design).
+func TestSetupSkipRecoveryCode(t *testing.T) {
+	h := newHarness(t)
+
+	resp := h.do("POST", "/api/v1/setup", map[string]any{
+		"username": "andrei", "password": "hunter2", "skip_recovery_code": true,
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("setup with skip_recovery_code = %d; want 200", resp.StatusCode)
+	}
+	body := decodeJSON[struct {
+		User         UserDTO `json:"user"`
+		RecoveryCode string  `json:"recovery_code"`
+	}](t, resp)
+	if body.RecoveryCode != "" {
+		t.Fatalf("recovery_code = %q; want empty on opt-out", body.RecoveryCode)
+	}
+
+	// Stored hash is empty — the opt-out leaves nothing to match against.
+	u, err := h.st.GetUserByUsername("andrei")
+	if err != nil {
+		t.Fatalf("lookup andrei: %v", err)
+	}
+	if u.RecoveryHash != "" {
+		t.Fatalf("recovery hash = %q; want empty on opt-out", u.RecoveryHash)
+	}
+
+	// recover() must fail closed: a well-formed code can never match an empty hash.
+	h.do("POST", "/api/v1/logout", nil).Body.Close()
+	resp = h.do("POST", "/api/v1/recover", map[string]string{
+		"username":      "andrei",
+		"recovery_code": "000000000000000000000000",
+		"new_password":  "newpass99",
+	})
+	if resp.StatusCode != 401 {
+		t.Fatalf("recover against opted-out account = %d; want 401 (fails closed)", resp.StatusCode)
+	}
+	resp.Body.Close()
 }
 
 func TestListAuditAdminSeesAll(t *testing.T) {

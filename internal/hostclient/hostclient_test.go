@@ -91,6 +91,18 @@ func startFakeAuthAgent(t *testing.T) string {
 		})
 	})
 
+	mux.HandleFunc("POST /v1/system/set-timezone", func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.SetTimezoneRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Timezone == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(protocol.Error{Code: "bad-request", Message: "timezone required"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(struct{}{})
+	})
+
 	mux.HandleFunc("GET /v1/identity/well-known", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(protocol.WellKnownIdentityResponse{
 			MalmoAppUID:    2000,
@@ -260,6 +272,19 @@ func TestSetRole(t *testing.T) {
 	}
 	if err := c.SetRole(ctx, "alice", "superuser"); err == nil {
 		t.Fatal("SetRole(bogus role) = nil; want error")
+	}
+}
+
+func TestSetTimezone(t *testing.T) {
+	c := New(startFakeAuthAgent(t))
+	ctx := context.Background()
+
+	if err := c.SetTimezone(ctx, "Europe/Stockholm"); err != nil {
+		t.Fatalf("SetTimezone: %v", err)
+	}
+	// The agent rejects a blank zone with 400; the client surfaces it as an error.
+	if err := c.SetTimezone(ctx, ""); err == nil {
+		t.Fatal("SetTimezone(empty) = nil; want error")
 	}
 }
 

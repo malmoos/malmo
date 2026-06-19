@@ -77,6 +77,12 @@ func (c *Client) DeleteUser(ctx context.Context, user string) error {
 	return c.do(ctx, "POST", "/v1/auth/delete-user", protocol.DeleteUserRequest{User: user}, nil)
 }
 
+// SetTimezone sets the host system timezone (TIME.md # System TZ). tz is an IANA
+// zone name; the host-agent validates its shape and shells out to timedatectl.
+func (c *Client) SetTimezone(ctx context.Context, tz string) error {
+	return c.do(ctx, "POST", "/v1/system/set-timezone", protocol.SetTimezoneRequest{Timezone: tz}, nil)
+}
+
 // ErrUnknownUser is returned by ResolveHome when the host reports the user
 // does not exist. The brain maps this to an installation error, not a retry.
 // Check with errors.Is — the value is stable across versions.

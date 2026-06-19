@@ -62,21 +62,6 @@ components:
         - action
         - success
       type: object
-    Auth-stateResponse:
-      additionalProperties: false
-      properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          examples:
-            - https://example.com/schemas/Auth-stateResponse.json
-          format: uri
-          readOnly: true
-          type: string
-        has_users:
-          type: boolean
-      required:
-        - has_users
-      type: object
     Auth-usersResponse:
       additionalProperties: false
       properties:
@@ -95,6 +80,27 @@ components:
             - "null"
       required:
         - users
+      type: object
+    AuthStateBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/AuthStateBody.json
+          format: uri
+          readOnly: true
+          type: string
+        first_run_complete:
+          type: boolean
+        has_users:
+          type: boolean
+        profile:
+          type: string
+      required:
+        - has_users
+        - profile
+        - first_run_complete
       type: object
     Author:
       additionalProperties: false
@@ -1266,6 +1272,36 @@ components:
       required:
         - provider_id
       type: object
+    Set-system-timezoneRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/Set-system-timezoneRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        timezone:
+          type: string
+      required:
+        - timezone
+      type: object
+    Set-telemetry-consentRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/Set-telemetry-consentRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        enabled:
+          type: boolean
+      required:
+        - enabled
+      type: object
     SetupRequest:
       additionalProperties: false
       properties:
@@ -1280,6 +1316,8 @@ components:
           type: string
         password:
           type: string
+        skip_recovery_code:
+          type: boolean
         username:
           type: string
       required:
@@ -1754,7 +1792,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Auth-stateResponse"
+                $ref: "#/components/schemas/AuthStateBody"
           description: OK
         default:
           content:
@@ -1843,6 +1881,19 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       summary: Permission/scope plan for installing a catalog app
+  /api/v1/first-run/complete:
+    post:
+      operationId: complete-first-run
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Mark the setup wizard finished so it never reappears (admin only)
   /api/v1/health:
     get:
       operationId: list-health-issues
@@ -2313,6 +2364,44 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       summary: Per-disk storage usage (used/total bytes) for the system-resources panel
+  /api/v1/system/timezone:
+    post:
+      operationId: set-system-timezone
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Set-system-timezoneRequest"
+        required: true
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Set the host system timezone (admin only)
+  /api/v1/telemetry/consent:
+    post:
+      operationId: set-telemetry-consent
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Set-telemetry-consentRequest"
+        required: true
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Set the box-wide telemetry opt-in (admin only)
   /api/v1/users:
     get:
       operationId: list-users

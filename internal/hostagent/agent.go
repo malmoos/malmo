@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -202,6 +203,14 @@ type UserManager interface {
 	ReleaseAppService(uid int) error
 }
 
+// TimezoneManager is a consumer-side interface for setting the host system
+// timezone behind POST /v1/system/set-timezone (TIME.md # System TZ). Lives here
+// because the setTimezone handler is the consumer. Provider:
+// timezonemgr.LinuxTimezoneManager (timedatectl). Applies to both profiles.
+type TimezoneManager interface {
+	SetTimezone(tz string) error
+}
+
 // Agent is the HTTP handler set for host-agent. It holds both the
 // PasswordVerifier (swapped per binary) and the in-memory fake maps used by
 // setPassword / setRole / deleteUser when UserMgr is nil (the fake binary).
@@ -318,6 +327,13 @@ type Agent struct {
 	// over DBus) vs FakeNetState. When nil, interfaces reports empty — "not
 	// measured", matching the other nil-able reporters.
 	Net NetState
+
+	// Timezone, when non-nil, backs POST /v1/system/set-timezone. Swapped per
+	// binary: timezonemgr.LinuxTimezoneManager (real timedatectl) in
+	// cmd/host-agent-real vs nil in the fake binary, where the handler accepts
+	// and logs the request without touching the host clock config (the dev inner
+	// loop has no system timezone to own).
+	Timezone TimezoneManager
 }
 
 // SystemSampler is a consumer-side interface for the raw system-resources
@@ -356,6 +372,7 @@ func (a *Agent) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/auth/set-password", a.setPassword)
 	mux.HandleFunc("POST /v1/auth/set-role", a.setRole)
 	mux.HandleFunc("POST /v1/auth/delete-user", a.deleteUser)
+	mux.HandleFunc("POST /v1/system/set-timezone", a.setTimezone)
 	mux.HandleFunc("GET /v1/health/system", a.systemHealth)
 	mux.HandleFunc("GET /v1/journal/follow", a.journalFollow)
 	mux.HandleFunc("GET /v1/users/{username}/home", a.resolveHome)
@@ -757,6 +774,52 @@ func (a *Agent) setRole(w http.ResponseWriter, r *http.Request) {
 	a.persistLocked()
 	a.mu.Unlock()
 	slog.Info("set-role", "user", req.User, "role", req.Role)
+	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+// validTimezone screens an IANA zone name to the shape timedatectl accepts
+// (e.g. "Europe/Stockholm", "America/Argentina/Buenos_Aires", "Etc/GMT+5",
+// "UTC"). It is a syntactic gate, not a zone-database lookup — timedatectl still
+// rejects an unknown-but-well-formed name. Bounds the input, blocks path
+// traversal, and restricts the alphabet to letters/digits/`_+/-`.
+func validTimezone(tz string) bool {
+	if tz == "" || len(tz) > 64 || strings.Contains(tz, "..") ||
+		strings.HasPrefix(tz, "/") || strings.HasSuffix(tz, "/") {
+		return false
+	}
+	for _, r := range tz {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '_' || r == '/' || r == '+' || r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// setTimezone sets the host system timezone (TIME.md # System TZ). When Timezone
+// is wired (cmd/host-agent-real) it delegates to timedatectl; otherwise (the
+// fake binary) it accepts and logs the request without touching the host — the
+// dev inner loop has no system clock config to own. Applies to both profiles.
+func (a *Agent) setTimezone(w http.ResponseWriter, r *http.Request) {
+	var req protocol.SetTimezoneRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	if !validTimezone(req.Timezone) {
+		writeErr(w, http.StatusBadRequest, "bad-request", "timezone is required and must be a valid IANA zone name")
+		return
+	}
+
+	if a.Timezone != nil {
+		if err := a.Timezone.SetTimezone(req.Timezone); err != nil {
+			slog.Error("set-timezone: manager error", "err", err)
+			writeErr(w, http.StatusInternalServerError, "set-timezone-failed", "set-timezone failed")
+			return
+		}
+	}
+	slog.Info("set-timezone", "timezone", req.Timezone)
 	writeJSON(w, http.StatusOK, struct{}{})
 }
 

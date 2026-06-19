@@ -1,63 +1,53 @@
 <script setup lang="ts">
-import { ref } from "vue";
-import { setup, setupComplete } from "./auth";
-import type { ApiError } from "./api";
+// First-run wizard shell (FIRST_RUN.md Phase 2; ENVIRONMENT.md # Provisioning —
+// "Setup wizard, trimmed"). It owns the step cursor and renders one step at a
+// time; each step emits `next` when satisfied. The Done step latches the
+// first-run-complete marker (auth.finishFirstRun) and the App.vue gate then
+// swaps the wizard for the dashboard.
+import { computed, ref } from "vue";
+import { useAuth } from "./auth";
+import AdminStep from "./setup/AdminStep.vue";
+import TimezoneStep from "./setup/TimezoneStep.vue";
+import TelemetryStep from "./setup/TelemetryStep.vue";
+import DoneStep from "./setup/DoneStep.vue";
 
-// FIRST_RUN.md # Step 2 says the user types a first name + password and
-// display-name is shown everywhere. For the single-user walking-skeleton
-// phase we skip the name entirely — only a password — and hardcode the slug
-// to "admin". The multi-user UI (and the user-list login screen from
-// AUTH.md # Login screen UX) is downstream of this.
-const password = ref("");
-const submitting = ref(false);
-const error = ref("");
-// AUTH.md # Recovery: the recovery code is shown exactly once. We display it
-// after setup succeeds and require an explicit "I've saved it" click before
-// continuing — the brain has only the hash, so this is the user's one chance.
-const recoveryCode = ref<string | null>(null);
+const { hasUsers, profile } = useAuth();
 
-async function submit() {
-  error.value = "";
-  submitting.value = true;
-  try {
-    const res = await setup("admin", password.value);
-    recoveryCode.value = res.recovery_code;
-  } catch (e) {
-    error.value = (e as ApiError).message || "Setup failed";
-  } finally {
-    submitting.value = false;
-  }
-}
+// Profile-aware step set. Today both profiles share this list; bare-metal B4
+// prepends the appliance-only Network/WiFi + Enrollment steps ahead of "admin"
+// without touching this shell (ENVIRONMENT.md # Two layers). On a resumed wizard
+// the admin already exists (created in a prior session, or before this marker on
+// an upgraded box), so the admin step is skipped — its endpoint would 409.
+const adminExists = hasUsers.value === true;
+const steps = adminExists
+  ? (["timezone", "telemetry", "done"] as const)
+  : (["admin", "timezone", "telemetry", "done"] as const);
 
-function acknowledge() {
-  setupComplete();
+const index = ref(0);
+const current = computed(() => steps[index.value]);
+
+function next() {
+  if (index.value < steps.length - 1) index.value++;
 }
 </script>
 
 <template>
   <main class="auth">
     <h1>malmo</h1>
-    <form v-if="!recoveryCode" @submit.prevent="submit">
-      <h2>Set your password</h2>
-      <p class="hint">This is the only account on the box — the admin.</p>
-      <label>
-        Password
-        <input v-model="password" type="password" autocomplete="new-password" required autofocus />
-      </label>
-      <button type="submit" :disabled="submitting">
-        {{ submitting ? "Creating…" : "Continue" }}
-      </button>
-      <p v-if="error" class="error">{{ error }}</p>
-    </form>
-
-    <form v-else @submit.prevent="acknowledge">
-      <h2>Save your recovery code</h2>
-      <p class="hint">
-        Write this down. If you lose your password, this is the only way back in —
-        we don't store the code itself, just a hash.
-      </p>
-      <div class="recovery">{{ recoveryCode }}</div>
-      <button type="submit">I've saved it — continue</button>
-    </form>
+    <p class="step-count">Step {{ index + 1 }} of {{ steps.length }}</p>
+    <AdminStep v-if="current === 'admin'" :profile="profile ?? 'appliance'" @next="next" />
+    <TimezoneStep v-else-if="current === 'timezone'" @next="next" />
+    <TelemetryStep v-else-if="current === 'telemetry'" @next="next" />
+    <DoneStep v-else-if="current === 'done'" />
   </main>
 </template>
+
+<style>
+.auth .step-count {
+  text-align: center;
+  color: #999;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  margin: -0.75rem 0 1rem;
+}
+</style>

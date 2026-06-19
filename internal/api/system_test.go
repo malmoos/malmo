@@ -89,3 +89,92 @@ func TestSystemStorage_MemberAllowed(t *testing.T) {
 		t.Fatalf("member: want 2 disks, got %+v", body.Disks)
 	}
 }
+
+// --- set-system-timezone (first-run wizard's time-zone step) -------------
+
+// TestSetTimezone_AdminSucceeds: an admin's choice is forwarded to the
+// host-agent seam verbatim and the endpoint answers 204.
+func TestSetTimezone_AdminSucceeds(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+
+	resp := h.do("POST", "/api/v1/system/timezone", map[string]string{"timezone": "Europe/Stockholm"})
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("POST /system/timezone: want 204, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	h.pmu.Lock()
+	got := append([]string(nil), *h.tzCalls...)
+	h.pmu.Unlock()
+	if len(got) != 1 || got[0] != "Europe/Stockholm" {
+		t.Fatalf("host SetTimezone calls = %v; want one [Europe/Stockholm]", got)
+	}
+}
+
+// TestSetTimezone_EmptyRejected: a blank or whitespace-only zone is a 422 that
+// never reaches the host (the wizard always sends a real zone).
+func TestSetTimezone_EmptyRejected(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+
+	for _, tz := range []string{"", "   "} {
+		resp := h.do("POST", "/api/v1/system/timezone", map[string]string{"timezone": tz})
+		if resp.StatusCode != http.StatusUnprocessableEntity {
+			t.Errorf("timezone %q: want 422, got %d", tz, resp.StatusCode)
+		}
+		resp.Body.Close()
+	}
+	h.pmu.Lock()
+	n := len(*h.tzCalls)
+	h.pmu.Unlock()
+	if n != 0 {
+		t.Fatalf("host SetTimezone called %d times on rejected input; want 0", n)
+	}
+}
+
+// TestSetTimezone_MemberForbidden: timezone is box config, admin-only — a
+// member gets 403 (unlike the storage read, which has no role gate).
+func TestSetTimezone_MemberForbidden(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+	h.addMember("u_bob001", "bob", "bobpass")
+	h.loginAs("bob", "bobpass")
+
+	resp := h.do("POST", "/api/v1/system/timezone", map[string]string{"timezone": "Europe/Stockholm"})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("member POST /system/timezone: want 403, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+// TestSetTimezone_Unauthenticated: no session is a 401 from the middleware
+// (the route is not on the public allowlist).
+func TestSetTimezone_Unauthenticated(t *testing.T) {
+	h := newHarness(t)
+	resp := h.do("POST", "/api/v1/system/timezone", map[string]string{"timezone": "Europe/Stockholm"})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated POST /system/timezone: want 401, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+// TestSetTimezone_HostError_502: a host-agent failure (dead socket) surfaces as
+// 502, mirroring the storage read's posture.
+func TestSetTimezone_HostError_502(t *testing.T) {
+	s := &Server{host: hostclient.New(filepath.Join(t.TempDir(), "absent.sock"))}
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{
+		User: store.User{ID: "u_x", Role: store.RoleAdmin},
+	})
+	in := &struct {
+		Body struct {
+			Timezone string `json:"timezone"`
+		}
+	}{}
+	in.Body.Timezone = "Europe/Stockholm"
+	_, err := s.setSystemTimezone(ctx, in)
+	var se huma.StatusError
+	if !errors.As(err, &se) || se.GetStatus() != http.StatusBadGateway {
+		t.Fatalf("want 502, got %v", err)
+	}
+}

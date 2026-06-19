@@ -73,7 +73,7 @@ export const api = {
 type Schemas = components["schemas"];
 
 export type User = Schemas["UserDTO"];
-export type AuthState = Schemas["Auth-stateResponse"];
+export type AuthState = Schemas["AuthStateBody"];
 export type SetupResult = Schemas["SetupResponse"];
 export type CatalogEntry = Schemas["Entry"];
 export type CatalogDetail = Schemas["Detail"];

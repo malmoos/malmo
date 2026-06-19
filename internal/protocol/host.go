@@ -214,6 +214,15 @@ type SetRoleRequest struct {
 	Role string `json:"role"`
 }
 
+// SetTimezoneRequest is POST /v1/system/set-timezone. Sets the host system
+// timezone via `timedatectl set-timezone` (TIME.md # System TZ). Timezone is an
+// IANA zone name (e.g. "Europe/Stockholm"); the host-agent validates its shape
+// before shelling out. Applies to both profiles — timezone is host config, not
+// LAN/discovery state.
+type SetTimezoneRequest struct {
+	Timezone string `json:"timezone"`
+}
+
 // HealthCategory is the report/reconcile taxonomy carried on the wire by
 // SystemHealth. It is a *separate axis* from the brain's issue category
 // (health.Category: storage | state | network | version | capacity, which

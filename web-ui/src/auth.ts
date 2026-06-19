@@ -14,6 +14,14 @@ import { api, setUnauthenticatedHandler, type AuthState, type SetupResult, type 
 
 const currentUser = ref<User | null>(null);
 const hasUsers = ref<boolean | null>(null);
+// firstRunComplete latches at the wizard's Done step (FIRST_RUN.md # Phase 3).
+// It — not hasUsers — gates the wizard: the admin can exist mid-wizard (time
+// zone / telemetry still ahead), so App.vue keeps the wizard up until this flips.
+const firstRunComplete = ref<boolean | null>(null);
+// profile is the resolved environment profile ("appliance" | "hosted",
+// ENVIRONMENT.md). The wizard reads it to pick its step set and to show the
+// admin-bootstrap-secret field on hosted only.
+const profile = ref<string | null>(null);
 const booted = ref(false);
 
 setUnauthenticatedHandler(() => {
@@ -24,6 +32,8 @@ export async function bootstrap() {
   if (booted.value) return;
   const state = await api.get<AuthState>("/auth/state");
   hasUsers.value = state.has_users;
+  firstRunComplete.value = state.first_run_complete;
+  profile.value = state.profile;
   if (state.has_users) {
     try {
       currentUser.value = await api.get<User>("/me");
@@ -41,24 +51,38 @@ export async function login(username: string, password: string) {
 }
 
 // setup creates the admin and returns the recovery code. We deliberately do
-// NOT set currentUser here — the Setup view needs to stay mounted to display
-// the recovery code once. Call setupComplete() after the user acknowledges.
+// NOT set currentUser here — the wizard has more steps (time zone, telemetry)
+// and stays mounted until finishFirstRun() at Done. /setup mints the session
+// cookie, so the later admin-gated wizard steps are authorized. skipRecovery
+// opts out of a recovery code (FIRST_RUN.md # Step 2a); secret is the hosted
+// admin-bootstrap secret (empty/omitted on appliance).
 let pendingSetupUser: User | null = null;
-export async function setup(username: string, password: string): Promise<SetupResult> {
-  const res = await api.post<SetupResult>("/setup", { username, password });
+export async function setup(
+  username: string,
+  password: string,
+  opts?: { skipRecovery?: boolean; secret?: string },
+): Promise<SetupResult> {
+  const body: Record<string, unknown> = { username, password };
+  if (opts?.skipRecovery) body.skip_recovery_code = true;
+  if (opts?.secret) body.bootstrap_secret = opts.secret;
+  const res = await api.post<SetupResult>("/setup", body);
   pendingSetupUser = res.user;
   return res;
 }
 
-// setupComplete is called after the user acknowledges the recovery code.
-// We delay flipping hasUsers/currentUser until now so the App.vue router
-// keeps showing the Setup view across the create-then-acknowledge transition.
-export function setupComplete() {
+// finishFirstRun latches the first-run-complete marker at the Done step and only
+// then flips into the dashboard (FIRST_RUN.md # Phase 3). Centralizing the flip
+// here keeps App.vue's gate honest: the wizard stays mounted across every step
+// until this resolves. Works for both a fresh box (currentUser comes from the
+// just-created admin) and a resumed wizard (currentUser already set by bootstrap).
+export async function finishFirstRun() {
+  await api.post("/first-run/complete");
   if (pendingSetupUser) {
     currentUser.value = pendingSetupUser;
-    hasUsers.value = true;
     pendingSetupUser = null;
   }
+  hasUsers.value = true;
+  firstRunComplete.value = true;
 }
 
 export async function logout() {
@@ -123,6 +147,8 @@ export function useAuth() {
   return {
     currentUser: computed(() => currentUser.value),
     hasUsers: computed(() => hasUsers.value),
+    firstRunComplete: computed(() => firstRunComplete.value),
+    profile: computed(() => profile.value),
     booted: computed(() => booted.value),
     singleUserMode: computed(() => currentUser.value?.single_user_mode ?? false),
     refreshCurrentUser,

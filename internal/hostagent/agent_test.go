@@ -345,6 +345,78 @@ func TestSetRole_InvalidRole(t *testing.T) {
 	}
 }
 
+// --- set-timezone tests ---
+
+type stubTimezoneMgr struct {
+	calls []string
+	err   error
+}
+
+func (s *stubTimezoneMgr) SetTimezone(tz string) error {
+	s.calls = append(s.calls, tz)
+	return s.err
+}
+
+func TestSetTimezone_DelegatesToManagerWhenSet(t *testing.T) {
+	mgr := &stubTimezoneMgr{}
+	a := New(&stubVerifier{}, NewFakePublisher(".local"))
+	a.Timezone = mgr
+	mux := http.NewServeMux()
+	a.Mount(mux)
+
+	w := post(t, mux, "/v1/system/set-timezone", protocol.SetTimezoneRequest{Timezone: "Europe/Stockholm"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	if len(mgr.calls) != 1 || mgr.calls[0] != "Europe/Stockholm" {
+		t.Errorf("SetTimezone not called as expected: %+v", mgr.calls)
+	}
+}
+
+func TestSetTimezone_ManagerError_Returns500(t *testing.T) {
+	mgr := &stubTimezoneMgr{err: errors.New("timedatectl: Failed to set time zone: Invalid or unknown")}
+	a := New(&stubVerifier{}, NewFakePublisher(".local"))
+	a.Timezone = mgr
+	mux := http.NewServeMux()
+	a.Mount(mux)
+
+	w := post(t, mux, "/v1/system/set-timezone", protocol.SetTimezoneRequest{Timezone: "Europe/Stockholm"})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", w.Code)
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte("timedatectl")) {
+		t.Errorf("response leaked system detail: %s", w.Body.String())
+	}
+}
+
+// The fake binary wires no TimezoneManager; the handler must still accept the
+// request (200) so the dev inner loop and tests can drive the wizard's TZ step.
+func TestSetTimezone_NoManager_Accepts(t *testing.T) {
+	_, mux := newTestAgent(&stubVerifier{})
+	w := post(t, mux, "/v1/system/set-timezone", protocol.SetTimezoneRequest{Timezone: "America/New_York"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+}
+
+func TestSetTimezone_InvalidShape(t *testing.T) {
+	mgr := &stubTimezoneMgr{}
+	a := New(&stubVerifier{}, NewFakePublisher(".local"))
+	a.Timezone = mgr
+	mux := http.NewServeMux()
+	a.Mount(mux)
+
+	for _, tz := range []string{"", "../etc/evil", "/Europe/Stockholm", "Europe/Stockholm;rm -rf", "Europe/Stockholm/"} {
+		w := post(t, mux, "/v1/system/set-timezone", protocol.SetTimezoneRequest{Timezone: tz})
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("tz %q: want 400, got %d", tz, w.Code)
+		}
+	}
+	if len(mgr.calls) != 0 {
+		t.Errorf("manager called for invalid input: %+v", mgr.calls)
+	}
+}
+
 // --- delete-user tests ---
 
 func TestDeleteUser_RemovesFromFakeMap(t *testing.T) {

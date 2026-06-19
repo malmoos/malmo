@@ -46,6 +46,13 @@ No language picker (English-only v1). No license screen (TBD with legal but not 
 
 First boot lands on a local web UI at `malmo.local` (mDNS) or the box's LAN IP. The wizard is one-shot, a few steps, and disappears once done.
 
+**Per-profile step set (as built — C4, `ENVIRONMENT.md` # Provisioning).** The wizard's steps are profile-aware:
+
+- **appliance** (BYO box, USB install): Network → First admin (+ recovery) → Time zone → Telemetry → Secure URLs & enrollment → Done.
+- **hosted** (malmo-operated cloud VM): First admin (+ recovery) → Time zone → Telemetry → Done. Network, storage, and Secure-URLs/enrollment are dropped — a hosted box boots from a cloud image with networking already up and enrollment seeded (C3a/C3b), so they are not wizard steps.
+
+So **First admin + recovery (Step 2 / 2a), Time zone (Step 3), Telemetry (Step 4), and Done (Step 6) run in both profiles**; **Network (Step 1)** and **Secure URLs & enrollment (Step 5)** are **appliance-only**. C4 built the shared step shell plus the both-profiles steps (and the first-run-complete marker that gates the wizard — distinct from "an admin exists", since the admin is created mid-wizard); the appliance-only Network/enrollment steps are bare-metal **B4**, which reuses the shell.
+
 ### Step 1 — Network
 
 The wizard branches on what the box has:
@@ -94,9 +101,9 @@ The recovery code is **separate from the LUKS recovery passphrase** (`STORAGE.md
 
 ### Step 3 — Time zone
 
-- **Auto-detected via IP geolocation.** No prompt if successful.
-- If the box has no internet at first-run, the wizard falls back to asking the user to pick from a list.
-- Always overridable from Settings later.
+- **Auto-detected from the setup device's browser** (`Intl.DateTimeFormat().resolvedOptions().timeZone`), pre-selected in a full IANA zone picker the user can override. As built (C4) this replaces the originally-specified IP-geolocation detection: it needs no geo-IP backend dependency, works offline, and the device running the wizard shares the box's locale in the common "old laptop on the same LAN" case. The detected zone is always shown (not silently applied) so a wrong guess is one tap to fix.
+- If the browser can't supply a zone, the picker defaults to UTC; the manual list is always present.
+- The chosen zone is sent to the brain, which sets it on the host via a `timedatectl` seam (`internal/hostagent`). Always overridable from Settings later.
 
 Full time / NTP model in `TIME.md`. NTP itself (chrony with NTS sources) is up by the time the wizard runs — no user-facing NTP configuration at first-run.
 
