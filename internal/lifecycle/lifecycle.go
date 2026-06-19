@@ -25,6 +25,7 @@ import (
 	"github.com/malmoos/malmo/internal/events"
 	"github.com/malmoos/malmo/internal/hostclient"
 	"github.com/malmoos/malmo/internal/manifest"
+	"github.com/malmoos/malmo/internal/profile"
 	"github.com/malmoos/malmo/internal/protocol"
 	"github.com/malmoos/malmo/internal/store"
 
@@ -148,6 +149,12 @@ type Manager struct {
 	// verifies against it as usual. See resolveImages.
 	offlineInstall bool
 
+	// profile is the resolved environment profile (ENVIRONMENT.md). It gates the
+	// one profile-divergent lifecycle behavior so far: whether an app's CPU is
+	// capped under resource limits (hosted only — APP_ISOLATION.md # Resource
+	// limits says CPU is never capped on the appliance). Defaults to appliance.
+	profile profile.Profile
+
 	// healthWait is overridable in tests; production uses healthWaitTimeout.
 	healthWait time.Duration
 	// healthPoll is the inter-poll interval; production uses 2s.
@@ -173,6 +180,7 @@ func NewManager(st *store.Store, cat *catalog.Catalog, host HostDriver, cd Caddy
 		healthWait: healthWaitTimeout, healthPoll: 2 * time.Second,
 		serviceReadyWait: serviceReadyTimeout,
 		instLocks:        map[string]*sync.Mutex{},
+		profile:          profile.Appliance,
 	}
 }
 
@@ -181,6 +189,12 @@ func NewManager(st *store.Store, cat *catalog.Catalog, host HostDriver, cd Caddy
 // fails. cmd/brain wires this from MALMO_OFFLINE_INSTALL; it is a box-level mode
 // (a baked, registry-less box), not a per-install option. See offlineInstall.
 func (m *Manager) SetOfflineInstall(v bool) { m.offlineInstall = v }
+
+// SetProfile sets the resolved environment profile, gating profile-divergent
+// lifecycle behavior (currently only that resource-limit CPU capping is
+// hosted-only). cmd/brain wires this from the profile marker at startup;
+// appliance is the default. See profile and resourceLimitsStanza.
+func (m *Manager) SetProfile(p profile.Profile) { m.profile = p }
 
 // lockInstance acquires the per-instance lock (creating it on first use) and
 // returns the unlock func. Callers `defer unlock()`. See instLocks.
@@ -611,9 +625,13 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 		}
 	}
 
-	// 7. Generate override (with pins + isolation) + .env.
+	// 7. Generate override (with pins + isolation + any resource policy) + .env.
 	step("generating_override")
-	if err := m.writeOverride(id, man, composeBytes, pins, iso); err != nil {
+	lim, limErr := m.store.GetResourceLimits(id)
+	if limErr != nil {
+		return rollback(fmt.Errorf("get resource limits: %w", limErr))
+	}
+	if err := m.writeOverride(id, man, composeBytes, pins, iso, lim); err != nil {
 		return rollback(fmt.Errorf("override: %w", err))
 	}
 	if err := m.writeEnv(id, slug, iso); err != nil {
@@ -1106,12 +1124,36 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		switch inst.State {
 		case "running":
 			if !actual[inst.ID] {
+				// Patch in the current resource-limit policy before bringing a
+				// drifted instance up, so the recreated container is bounded.
+				if _, err := m.reapplyResourceLimits(inst.ID); err != nil {
+					slog.Warn("reconcile: re-apply resource limits",
+						"instance_id", inst.ID, "err", err)
+				}
 				slog.Info("reconcile: starting drifted instance",
 					"instance_id", inst.ID, "reason", "no containers")
 				if out, err := m.docker.ComposeUp(ctx, m.instanceDir(inst.ID), "malmo-"+inst.ID); err != nil {
 					slog.Warn("reconcile: compose up",
 						"instance_id", inst.ID, "err", err, "output", out)
 					continue
+				}
+			} else {
+				// Containers already up: re-apply the resource-limit policy and
+				// recreate the app only if it changed, so a policy change takes
+				// effect here without a reinstall (ENVIRONMENT.md # Per-instance
+				// resource limits).
+				changed, err := m.reapplyResourceLimits(inst.ID)
+				if err != nil {
+					slog.Warn("reconcile: re-apply resource limits",
+						"instance_id", inst.ID, "err", err)
+				} else if changed {
+					slog.Info("reconcile: re-applying resource-limit policy",
+						"instance_id", inst.ID)
+					if out, err := m.docker.ComposeUp(ctx, m.instanceDir(inst.ID), "malmo-"+inst.ID); err != nil {
+						slog.Warn("reconcile: compose up",
+							"instance_id", inst.ID, "err", err, "output", out)
+						continue
+					}
 				}
 			}
 			// Re-assert Caddy + mDNS. Track Avahi replay outcome for the
@@ -1316,7 +1358,7 @@ func (m *Manager) writeInstanceDir(id string, man *manifest.Manifest, composeByt
 // attachment, plus the `image: name@sha256:…` pin per service (digest pinning
 // — APP_LIFECYCLE.md). main_service additionally joins the ingress network
 // with a per-instance alias so Caddy can reach exactly this instance.
-func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes []byte, pins []servicePin, iso isolation) error {
+func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes []byte, pins []servicePin, iso isolation, lim store.ResourceLimits) error {
 	svcs, err := parseComposeServices(composeBytes)
 	if err != nil {
 		return err
@@ -1379,6 +1421,14 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 		// fixed exec handle (services.go).
 		if svc == man.MainService {
 			entry["container_name"] = fmt.Sprintf("malmo-%s-%s", id, man.MainService)
+			// Per-instance cgroup limits (ENVIRONMENT.md # Per-instance resource
+			// limits) clamp the app's main container. Omitted when no policy is
+			// set, so the app bursts freely by default (APP_ISOLATION.md #
+			// Resource limits). reapplyResourceLimits patches this same stanza on
+			// reconcile when the policy later changes.
+			if stanza := resourceLimitsStanza(m.profile, lim); stanza != nil {
+				entry["deploy"] = stanza
+			}
 		}
 		// Forced restart, EXCEPT for author-declared terminating jobs and
 		// completion-gate targets (#92). main_service is always forced — a paranoid

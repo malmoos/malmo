@@ -47,9 +47,9 @@ func main() {
 
 	// Resolve the environment profile once at startup (ENVIRONMENT.md # How the
 	// profile is realized). An unmarked box resolves to appliance — the no-op
-	// default — so `make dev` and existing appliance boxes are unchanged. No
-	// behavioral seam consults prof yet; each hosted behavior branches on it when
-	// its own feature lands (C1b/C1c and beyond, #196).
+	// default — so `make dev` and existing appliance boxes are unchanged. The
+	// resolved profile is handed to the lifecycle manager below; each hosted
+	// behavior branches on it when its own feature lands (#196).
 	prof := profile.Read(cfg.profilePath)
 	slog.Info("environment profile resolved", "profile", string(prof))
 
@@ -73,6 +73,7 @@ func main() {
 	dock := lifecycle.NewCLIDocker()
 	life := lifecycle.NewManager(st, cat, host, cd, dock, bus, cfg.stateDir)
 	life.SetOfflineInstall(cfg.offlineInstall)
+	life.SetProfile(prof) // gates the hosted-only resource-limit CPU cap (#211)
 
 	// Production: the brain owns the control-plane stack (Caddy + malmo-ui) and
 	// brings it up from the compose staged by host-agent before it configures any

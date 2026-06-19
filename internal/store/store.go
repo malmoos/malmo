@@ -134,6 +134,18 @@ func (s *Store) migrate() error {
 			PRIMARY KEY (instance_id, name),
 			FOREIGN KEY (instance_id) REFERENCES instances(id) ON DELETE CASCADE
 		);
+		-- instance_resource_limits: the per-instance cgroup limit policy applied
+		-- to the app's main service (ENVIRONMENT.md # Per-instance resource
+		-- limits). At most one row per instance; absence means uncapped burst,
+		-- the default (APP_ISOLATION.md # Resource limits). memory_bytes maps to
+		-- the container's HostConfig.Memory and nano_cpus to NanoCpus; 0 leaves
+		-- that dimension uncapped. Cascades with the app instance so uninstall
+		-- reclaims it.
+		CREATE TABLE IF NOT EXISTS instance_resource_limits (
+			instance_id  TEXT    PRIMARY KEY REFERENCES instances(id) ON DELETE CASCADE,
+			memory_bytes INTEGER NOT NULL DEFAULT 0,
+			nano_cpus    INTEGER NOT NULL DEFAULT 0
+		);
 		-- service_instances: one shared managed-service container per type+version
 		-- (SERVICE_PROVISIONING.md # Tier 1). The brain spins these up lazily and
 		-- owns the superuser credential it provisions per-app databases with. Not
