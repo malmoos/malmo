@@ -15,7 +15,7 @@ export MALMO_AGENT_SOCK := $(AGENT_SOCK)
 export MALMO_STATE_DIR := $(STATE_DIR)
 export MALMO_CATALOG_DIR := ./catalog
 
-.PHONY: build host-agent brain host-agent-real brain-image ui-image control-plane-images build-cloud-image check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-netstate test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev stop openapi openapi-check clean check-state-owner help
+.PHONY: build host-agent brain host-agent-real host-agent-real-hosted brain-image ui-image control-plane-images build-cloud-image check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-netstate test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev stop openapi openapi-check clean check-state-owner help
 
 # msteinert/pam v2.1.0 uses RTLD_NEXT, a GNU extension that requires
 # _GNU_SOURCE at C compile time. Apply globally; harmless to non-cgo builds.
@@ -28,6 +28,7 @@ help:
 	@echo "make fmt         - rewrite Go sources into gofmt-canonical form (autofix)"
 	@echo "make dev         - all three foreground procs in one terminal (recommended)"
 	@echo "make build       - compile brain + host-agent"
+	@echo "make host-agent-real-hosted - build the slim hosted-cloud host-agent (-tags hosted; #204/C1c)"
 	@echo "make control-plane-images - build malmo-brain + malmo-ui images and docker-save the control-plane bundle to .dev/"
 	@echo "make build-cloud-image - build the lean hosted cloud VM image via mkosi (no boot; #203)"
 	@echo "make net         - create the malmo-ingress docker network"
@@ -88,6 +89,16 @@ host-agent:
 
 host-agent-real:
 	$(GO) build -o $(DEV_DIR)/host-agent-real ./cmd/host-agent-real
+
+# Slim hosted-cloud host-agent (ENVIRONMENT.md # How the profile is realized —
+# "A build-tagged slim cloud host-agent"; #204/C1c). The same production binary
+# with the appliance's LAN/discovery stack — NetworkManager (netstate) + Avahi
+# mDNS publish (avahipublisher) + the network watcher — compiled out via
+# `-tags hosted`; the kept seams (PAM verify, user mgmt, health/system reporters,
+# per-app logs, reboot, brain launch) are identical. Linux + CGO + libpam0g-dev,
+# same as host-agent-real. The cloud image build (#203/C1b, #205/C2) consumes it.
+host-agent-real-hosted:
+	$(GO) build -tags hosted -o $(DEV_DIR)/host-agent-real-hosted ./cmd/host-agent-real
 
 brain:
 	$(GO) build -o $(DEV_DIR)/brain ./cmd/brain
