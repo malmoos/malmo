@@ -15,7 +15,7 @@ export MALMO_AGENT_SOCK := $(AGENT_SOCK)
 export MALMO_STATE_DIR := $(STATE_DIR)
 export MALMO_CATALOG_DIR := ./catalog
 
-.PHONY: build host-agent brain host-agent-real brain-image ui-image control-plane-images check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-netstate test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev stop openapi openapi-check clean check-state-owner help
+.PHONY: build host-agent brain host-agent-real brain-image ui-image control-plane-images build-cloud-image check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-netstate test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev stop openapi openapi-check clean check-state-owner help
 
 # msteinert/pam v2.1.0 uses RTLD_NEXT, a GNU extension that requires
 # _GNU_SOURCE at C compile time. Apply globally; harmless to non-cgo builds.
@@ -29,6 +29,7 @@ help:
 	@echo "make dev         - all three foreground procs in one terminal (recommended)"
 	@echo "make build       - compile brain + host-agent"
 	@echo "make control-plane-images - build malmo-brain + malmo-ui images and docker-save the control-plane bundle to .dev/"
+	@echo "make build-cloud-image - build the lean hosted cloud VM image via mkosi (no boot; #203)"
 	@echo "make net         - create the malmo-ingress docker network"
 	@echo "make caddy       - start the dev Caddy reverse proxy (container)"
 	@echo "make run-agent   - run the fake host-agent (foreground)"
@@ -170,6 +171,17 @@ test-boot-chain-nspawn:
 # See docs/progress/0021-qemu-medium-lane-scaffolding.md.
 test-medium-qemu:
 	sudo -E ./dev/test-qemu/run-medium-tests.sh
+
+# Build the lean hosted cloud-VM image (C1b, #203) via mkosi and assert it is
+# genuinely lean (no NetworkManager/Avahi/Samba/mergerfs/cryptsetup/tpm2-tools)
+# with the /etc/malmo/profile=hosted marker baked in. Output: a raw GPT disk
+# image under .dev/cloud/. This is the image *definition* slice only — the
+# qcow2 packaging + QEMU boot proof (control plane up) are #205/C2, and the
+# slim cloud host-agent it boots is #204/C1c. Needs mkosi v22+; bootstrap.sh
+# prints an install pointer if anything is missing.
+# See docs/progress/hosted-cloud-image.md.
+build-cloud-image:
+	./dev/cloud/bootstrap.sh
 
 # End-to-end Caddy routing verification. Assumes `make dev` is running.
 # Tests Host-header routing, confirms path-based routing does NOT work,

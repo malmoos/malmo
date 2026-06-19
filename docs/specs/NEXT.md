@@ -100,6 +100,13 @@ The *mechanism* — a manifest `secrets:` declaration → brain generates a CSPR
 **Context:** `BUILD.md` # 1, `dev/test-qemu/mkosi.conf`, #196 C1b (#203).
 **Why Tier 3:** doesn't block cloud bring-up (either base boots); the risk is a silent spec/reality drift on the base release. Pin the resolution when C1b/C2 confirm Trixie.
 
+### In-guest `nftables` default-deny for hosted (belt-and-suspenders)
+
+The hosted cloud image ships **no host firewall** — L3/L4 filtering is the cloud provider's security groups / VPC firewall, recorded as an explicit operator requirement (`DECISIONS.md` 2026-06-19, #203). That is the right default for a provider-fronted VM, but it leaves the Docker-publishes-to-`0.0.0.0` behavior acceptable *only* because the provider firewall is assumed present. If a hosted target ever lacks a security-group layer (a bare provider, an on-prem "hosted-style" deploy), a minimal in-guest `nftables` default-deny (admit 443 + the ACME/redirect 80, drop the rest) would be the in-VM backstop. Pin the ruleset shape and the host-agent seam that would own it before that scenario is real.
+
+**Context:** `DECISIONS.md` 2026-06-19, `ENVIRONMENT.md` # Public-by-default, `BUILD.md` # SSH (the appliance `nftables` posture it would *not* reuse — different subjects).
+**Why Tier 3:** not needed for the provider-fronted v1 (the security group covers it); it is a hardening option for a provider posture v1 doesn't target. No bring-up dependency.
+
 ### Factory reset / repurpose / "start over"
 
 Explicitly undocumented today — `USERS_AND_GROUPS.md` # Known gaps admits "we don't have a clean 'reset everything except user content' story yet; treat reinstall + restore from backup as the floor." This is an end-to-end lifecycle gap: resale, household handoff, "I broke it and want a clean slate." It has a security dimension beyond UX — securely destroying LUKS keyslots so the outgoing drive is unreadable — so it's not purely a dashboard flow. Both Synology and Umbrel treat reset/repurpose as standard. Open: scope (full wipe vs. reset-config-keep-content vs. reset-keep-nothing), where it lives in the UI (Settings → Advanced, gated by fresh password), and the key-destruction mechanics.

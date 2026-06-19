@@ -21,6 +21,19 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-19 — Hosted cloud image: firewall is the cloud provider's security groups, not shipped `nftables` (#203)
+
+**Previously:** the appliance ships `nftables` whose sole job is LAN-scoping SSH/SMB (`BUILD.md` # SSH — RFC1918 + mesh only). The hosted cut list drops `nftables` (`ENVIRONMENT.md` # How the profile is realized), which left an implicit gap: with no host firewall, the Docker daemon publishes container ports to `0.0.0.0` by default, so on a public-by-default cloud VM an app's published port could be reachable with nothing in front of it. #203's review flagged that this must be a stated decision, not an omission.
+
+**Now:** **hosted v1 relies solely on the cloud provider's security groups / VPC firewall for L3/L4 network filtering — it ships no host `nftables`.** This is recorded as an **explicit operator requirement**: a hosted tenant VM must be provisioned behind a provider firewall that admits only the intended public surface (443, and 80 for the ACME/redirect path), and the control plane's provisioning is responsible for that posture. malmo's own gate at the edge stays **authentication**, per the public-by-default/auth-gated position (`ENVIRONMENT.md` # Public-by-default, auth-gated) — the security group is the network-reachability boundary, app/dashboard login is the access boundary.
+
+**Why:**
+- `nftables` on the appliance exists *only* to LAN-scope SSH/SMB. Hosted ships neither SSH (off in v1 — no LAN to scope to) nor SMB, so the rule set it would carry has no subjects. Re-deriving a public-VM ruleset would be net-new security machinery, not a port of the appliance's.
+- A cloud VM already sits behind a provider security-group layer that is the idiomatic, operator-controllable place for L3/L4 filtering — duplicating it in-guest with a second, drift-prone ruleset buys little and can mask a misconfigured security group. `ENVIRONMENT.md` already frames public exposure as "the cloud provider's security-group concern."
+- Stating it as an operator requirement keeps the gap from being silent: the Docker-publishes-to-0.0.0.0 behavior is acceptable *only* because the provider firewall is assumed in front. The alternative — shipping a minimal in-guest `nftables` default-deny — is **not** rejected forever; it is deferred as a belt-and-suspenders hardening item (`NEXT.md`) if a provider-firewall assumption ever proves too weak (e.g. a target host with no security-group layer).
+
+**Affected docs:** `ENVIRONMENT.md` (# Public-by-default — the security-group requirement made explicit), `NEXT.md` (deferred in-guest-`nftables` hardening item). Realized by `docs/progress/hosted-cloud-image.md` (#203/C1b); the lean image's omission of `nftables`/`network-manager`/etc. is asserted by `dev/cloud/bootstrap.sh`.
+
 ## 2026-06-15 — Managed-service provisioning runs in a one-shot client container, not `docker exec` (#185)
 
 **Previously:** the brain provisioned per-app databases/roles by `docker exec`'ing the service's own client inside the shared service container (`DockerDriver.Exec`, 2026-06-05). The 2026-06-14 call then shipped the socket-proxy with the `EXEC` family **denied**, which breaks that path the instant the containerized brain points `DOCKER_HOST` at the proxy — so managed-DB-in-production was gated on re-architecting provisioning off `docker exec` (two candidate shapes named: engine-over-TCP from the brain, or a one-shot provisioning container).

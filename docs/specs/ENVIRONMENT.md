@@ -94,6 +94,7 @@ The appliance is **closed by default**: no app or service is publicly exposed, a
 
 - The apps **are** publicly reachable. Reaching them over the internet is the entire reason an SMB chooses hosted.
 - The gate is **authentication**, not network-unreachability. Apps that ship their own login carry it; the malmo dashboard sits behind the malmo login. The reverse proxy serves the public endpoint; the app or the dashboard decides who gets in.
+- **Network filtering is the cloud provider's, not the box's.** Hosted ships no host firewall — `nftables` is in the cut list (# How the profile is realized), because its appliance job is LAN-scoping SSH/SMB and hosted drops both. L3/L4 filtering is the **provider's security group / VPC firewall**, and provisioning every tenant behind one that admits only the intended public surface (443, plus 80 for the ACME/redirect path) is an **explicit operator requirement**: without it, Docker's default publish-to-`0.0.0.0` would expose an app's ports directly. A minimal in-guest `nftables` backstop for provider postures that lack security groups is deferred (`DECISIONS.md` 2026-06-19, `NEXT.md`).
 - This is a deliberate product position for the hosted profile, not a regression of the appliance's posture. The appliance stays closed-by-default; the hosted box is open-but-authenticated.
 
 Per-app "expose to anonymous users vs require a malmo session in front" controls are a later refinement (# Deferred). v1 is "the endpoint exists and is auth-gated."
