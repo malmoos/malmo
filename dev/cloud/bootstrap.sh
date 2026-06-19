@@ -8,8 +8,10 @@
 #   2. Stage Docker's apt repo (trixie pocket) + signing key into the
 #      auto-detected mkosi.pkgmngr/ tree so docker-ce resolves at build time.
 #   3. `mkosi build` → a raw GPT disk image under .dev/cloud/.
-#   4. Assert the appliance cut list is absent from the package manifest and
-#      the /etc/malmo/profile marker reads `hosted`.
+#   4. Assert the appliance cut list is absent from the package manifest
+#      (nftables included — ENVIRONMENT.md # How the profile is realized)
+#      and source-sanity-check the committed ExtraTrees marker reads `hosted`
+#      (image-delivery verified end-to-end in #189/C2, not here).
 #
 # Runs unprivileged: mkosi escalates for the disk ops it needs.
 set -euo pipefail
@@ -86,6 +88,7 @@ import json, sys
 cuts = {
     "network-manager", "avahi-daemon", "avahi-utils", "samba",
     "mergerfs", "cryptsetup", "tpm2-tools", "openssh-server",
+    "nftables",
 }
 with open(sys.argv[1]) as f:
     data = json.load(f)
@@ -98,10 +101,15 @@ if present:
 print(f"lean check passed — none of {sorted(cuts)} are installed")
 PY
 
+# Source-sanity check: verify the committed ExtraTrees source file reads `hosted`
+# so a stale or accidentally blanked file fails fast before the next build.
+# This does NOT assert delivery into the baked image — ExtraTrees delivery is
+# verified end-to-end in #189/C2 (boot proof). Mounting the image here is
+# intentionally out of scope for this slice.
 MARKER="${CLOUD_DIR}/mkosi.extra/etc/malmo/profile"
 if [ "$(tr -d '[:space:]' < "$MARKER")" != "hosted" ]; then
-    echo "profile marker $MARKER does not contain 'hosted'" >&2
+    echo "source-sanity check failed: $MARKER does not read 'hosted'" >&2
     exit 1
 fi
-echo "profile marker OK (/etc/malmo/profile = hosted)"
+echo "source-sanity check passed: ExtraTrees source $MARKER reads 'hosted'"
 echo "hosted cloud image built: $(ls -1 "$WORK"/*.raw 2>/dev/null | head -n1 || echo "<see $WORK>")"
