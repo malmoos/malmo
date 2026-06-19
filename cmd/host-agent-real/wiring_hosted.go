@@ -14,6 +14,7 @@ import (
 	"github.com/malmoos/malmo/internal/hostagent/rebootrequired"
 	"github.com/malmoos/malmo/internal/hostagent/servicehealth"
 	"github.com/malmoos/malmo/internal/hostagent/usermgr"
+	"github.com/malmoos/malmo/internal/protocol"
 )
 
 // buildAgent wires the slim hosted-cloud host integration (ENVIRONMENT.md
@@ -30,7 +31,7 @@ import (
 // has a single provider-managed NIC and no `.local` discovery (ENVIRONMENT.md
 // # Networking & discovery). LUKS/TPM unlock, the Samba allowlist, and nftables
 // LAN-scoping are likewise absent: those packages aren't even installed in the
-// hosted image (#203/C1b), so there is nothing here to wire.
+// hosted image (#203/C1b + #205/C2), so there is nothing here to wire.
 //
 // Net is left nil: with no NetworkManager there is no LAN set to report.
 // GET /v1/discovery/state then reports an empty interfaces list ("not
@@ -69,5 +70,5 @@ func buildAgent() (*hostagent.Agent, func()) {
 // still-mounted publish/unpublish routes can't nil-panic on a stray call.
 type noopPublisher struct{}
 
-func (noopPublisher) Publish(slug string) (string, error) { return slug, nil }
+func (noopPublisher) Publish(slug string) (string, error) { return slug + protocol.AppHostSuffix, nil }
 func (noopPublisher) Unpublish(string) error              { return nil }
