@@ -197,8 +197,11 @@ EOF
 echo "building cloud boot-proof image via mkosi (first run takes a few minutes)..."
 # Re-own the staged tree + work dir to the caller; mkosi runs as $CALLER and
 # auto-sudos for privileged ops. mkosi preserves mode inside the image regardless.
+# NOT $CP_BUNDLE: mkosi reads the tarball *copies* staged under $EXTRA, never the
+# bundle itself, and it is shared with the medium lane (test-medium-qemu) — leave
+# its ownership alone, as that lane does.
 if [ -n "$CALLER" ]; then
-    chown -R "$CALLER":"$(id -gn "$CALLER")" "$EXTRA" "$WORK" "$PKGMNGR" "$CP_BUNDLE"
+    chown -R "$CALLER":"$(id -gn "$CALLER")" "$EXTRA" "$WORK" "$PKGMNGR"
 fi
 MKOSI_BIN="$(command -v mkosi || true)"
 [ -n "$MKOSI_BIN" ] || { echo "mkosi disappeared from PATH" >&2; exit 1; }
