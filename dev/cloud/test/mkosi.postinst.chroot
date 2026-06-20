@@ -74,6 +74,11 @@ enable_unit /etc/systemd/system/host-agent.service host-agent.service
 # First-boot control-plane image loader (reused verbatim from the medium lane).
 enable_unit /etc/systemd/system/malmo-load-images.service malmo-load-images.service
 
+# First-boot provisioning-seed materializer (C3a cloud-lane, #220). Lands the
+# SMBIOS-delivered seed at /var/lib/malmo/seed.json before host-agent launches
+# the brain; no-ops on an un-seeded boot.
+enable_unit /etc/systemd/system/malmo-seed.service malmo-seed.service
+
 # The serial-driven boot self-check (C2). Runs once after the stack should be up,
 # polls it, and writes its verdict to /dev/console for the QEMU harness to grep.
 enable_unit /etc/systemd/system/malmo-cloud-assertions.service malmo-cloud-assertions.service
@@ -93,6 +98,7 @@ getent passwd malmo-app   >/dev/null || useradd -r -u 2000 -g malmo-app \
 chmod 0755 /usr/lib/malmo/host-agent-real 2>/dev/null || true
 chmod 0755 /usr/lib/malmo/load-control-plane-images.sh 2>/dev/null || true
 chmod 0755 /usr/local/bin/cloud-assertions.sh 2>/dev/null || true
+chmod 0755 /usr/local/bin/malmo-seed-materialize.sh 2>/dev/null || true
 
 # Pre-commit machine-id so systemd doesn't treat first boot as uninitialized and
 # launch the interactive firstboot wizard (it blocks sysinit waiting on input).

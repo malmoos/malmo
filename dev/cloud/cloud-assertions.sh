@@ -1,30 +1,49 @@
 #!/bin/bash
-# Cloud boot-proof in-VM assertions (C2, #205). Baked into the image at
-# /usr/local/bin/cloud-assertions.sh and run once at first boot by
-# malmo-cloud-assertions.service. Writes a single verdict line to the serial
-# console for dev/cloud/run-cloud-tests.sh to grep:
+# Cloud boot-proof in-VM assertions (C2, #205; seed/gate scenarios C3a, #220).
+# Baked into the boot-proof image at /usr/local/bin/cloud-assertions.sh and run on
+# each boot by malmo-cloud-assertions.service. Writes a single verdict line to the
+# serial console for dev/cloud/run-cloud-tests.sh to grep:
 #
 #     MALMO_CLOUD_ASSERTIONS: PASS
 #     MALMO_CLOUD_ASSERTIONS: FAIL: <reason>
 #
-# The cloud analogue of dev/test-qemu/medium-assertions.sh, trimmed to the
-# control-plane-up proof (ENVIRONMENT.md # Provisioning — "C2 asserts the brain
-# serves, not that an admin exists"): systemd userspace up with no failed units,
-# PSI live, the baked control-plane images loaded, the four containers running,
-# the dashboard answering through Caddy, and the hosted /setup gate returning 503
-# (no seed yet — the open-/setup window stays closed; ENVIRONMENT.md # Admin
-# bootstrap — as built). No app-install, no admin, no SSH (all later / hosted-cut).
+# The cloud analogue of dev/test-qemu/medium-assertions.sh. Every boot first does
+# the control-plane-up proof (systemd userspace up with no failed units, PSI live,
+# the baked control-plane images loaded, the four containers running, the dashboard
+# + /api answering through Caddy), then asserts the hosted /setup admin-bootstrap
+# gate (ENVIRONMENT.md # Admin bootstrap — as built) for the scenario the harness
+# selected via the malmo.assert credential:
 #
-# -u + pipefail but NOT -e: every check is `... || fail`. Reads only — safe to
-# run once on a real provisioned boot.
+#     unseeded         no seed ingested → POST /setup ⇒ 503 (gate armed, closed)
+#     seeded           seed on disk → wrong secret ⇒ 401, correct ⇒ 200 + box_id
+#     frozen:<box-id>  reboot with a DIFFERENT seed → /login still reports <box-id>
+#                      (the brain's persisted identity is frozen; the new seed is
+#                      ignored), and seed.json on disk holds the new, ignored box-id
+#
+# On PASS the script powers the box off cleanly (the serial-only analogue of the
+# medium lane's SSH `systemctl poweroff`) so the brain's SQLite box-id write flushes
+# to the persisted overlay before the harness boots the next scenario.
+#
+# -u + pipefail but NOT -e: every check is `... || fail`. The gate POSTs create at
+# most one admin (the seeded scenario); all other checks are reads.
 set -uo pipefail
 
 SENTINEL=/dev/console
-MARKER=/var/lib/malmo/.cloud-assertions-done
+SEED=/var/lib/malmo/seed.json
 # Brain default dashboard host (MALMO_DASHBOARD_HOST); host-agent does not
 # override it, so the brain installs the dashboard route under this Host. The
 # assertion is a Host-header route match over localhost — no DNS/mDNS involved.
 DASH_HOST=malmo.local
+# First-admin credentials the seeded scenario creates and the frozen scenario logs
+# back in with (a fresh process each boot; these constants are the only shared
+# state besides the persisted disk). pam_unix has no complexity policy, but keep a
+# realistic password. validateUsername only bars '--'/'xn--' prefixes.
+SETUP_USER=admin
+SETUP_PW=malmo-setup-pw-2026
+# Which scenario to assert — set by the harness over SMBIOS (ImportCredential=
+# malmo.assert in the unit). Absent/empty ⇒ unseeded (the bare boot-proof default).
+MODE="$(tr -d '\r\n' < "${CREDENTIALS_DIRECTORY:-/nonexistent}/malmo.assert" 2>/dev/null || true)"
+[ -n "$MODE" ] || MODE=unseeded
 
 emit() { echo "MALMO_CLOUD_ASSERTIONS: $1" > "$SENTINEL" 2>/dev/null || true; }
 # Dump control-plane state to the serial console on failure — the brain's
@@ -85,18 +104,20 @@ fail() {
     echo "cloud-assertions FAIL: $*" >&2
     diag
     emit "FAIL: $*"
-    mkdir -p "$(dirname "$MARKER")" 2>/dev/null || true
-    : > "$MARKER" 2>/dev/null || true
+    # No poweroff on failure: leave the VM up so run-cloud-tests.sh can scrape the
+    # serial diag, then kill it and keep the run artifacts.
     exit 1
 }
 ok() {
     emit "PASS"
-    mkdir -p "$(dirname "$MARKER")" 2>/dev/null || true
-    : > "$MARKER" 2>/dev/null || true
+    # Clean poweroff so the brain's SQLite writes (the persisted box-id) flush to
+    # the qcow2 overlay before the harness boots the next scenario over it. --no-block
+    # so this oneshot's ExecStart returns; systemd then runs an orderly shutdown.
+    systemctl --no-block poweroff 2>/dev/null || true
     exit 0
 }
 
-echo "cloud-assertions: starting boot-proof checks"
+echo "cloud-assertions: starting boot-proof checks (mode=${MODE})"
 
 # --- 1. no control-plane unit has failed.
 # NOTE: we deliberately do NOT gate on `systemctl is-system-running == running`:
@@ -178,6 +199,25 @@ http_post_status() { # PATH HOST JSON -> status line
     head -1 <&3
     exec 3>&- 3<&-
 }
+# Like http_post_status but returns the FULL response (status line + headers +
+# body) so the gate scenarios can read box_id out of the JSON body, not just the
+# status. The body is single-line JSON from the brain, so a `tail -1` grabs it.
+http_post() { # PATH HOST JSON -> full response
+    local body="$3" len
+    len="$(printf '%s' "$body" | wc -c | tr -d ' ')"
+    exec 3<>/dev/tcp/127.0.0.1/80 || return 1
+    printf 'POST %s HTTP/1.0\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' \
+        "$1" "$2" "$len" "$body" >&3
+    cat <&3
+    exec 3>&- 3<&-
+}
+# Extract a JSON string field's value from a compact one-line document. The seed
+# the harness generates is compact and its fields (box_id, admin_bootstrap_secret)
+# are plain strings with no embedded quotes, so a targeted sed is sufficient (no
+# jq in the lean image).
+json_str() { # FILE KEY -> value
+    sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" | head -1
+}
 
 # --- 7. the dashboard SPA answers through Caddy (the control-plane-up proof).
 # The brain flips/installs the dashboard route a beat after Caddy comes up, so poll.
@@ -200,18 +240,77 @@ for _i in $(seq 1 60); do
 done
 grep -qE ' (200|401)' <<<"$api" || fail "/api not routed to the brain through Caddy: status='$api'"
 
-# --- 9. the hosted /setup gate is armed: no seed ingested → 503, NOT the
-# appliance's open empty-box behavior (ENVIRONMENT.md # Admin bootstrap). This is
-# the proof the brain resolved profile=hosted in its container (host-agent mounts
-# the marker; brainlaunch.Config.ProfileMarkerPath) — an appliance-mode brain
-# would 409/200 here and leave first-caller-becomes-admin open.
+# --- 9. the hosted /setup admin-bootstrap gate (ENVIRONMENT.md # Admin bootstrap).
+# The brain resolved profile=hosted in its container (host-agent mounts the marker;
+# brainlaunch.Config.ProfileMarkerPath) and gates /setup on the seeded secret. The
+# scenario the harness selected (MODE) decides what to assert.
+
+# Wait until /setup answers definitively — the brain ran its synchronous seed
+# ingestion before it began serving, so a settled /setup means ingestion is done.
+# A deliberately-wrong secret is a safe probe: it never reaches first-admin creation
+# (unseeded ⇒ 503, seeded/frozen ⇒ 401), so no admin is created here.
 setup=""
 for _i in $(seq 1 30); do
-    setup="$(http_post_status /api/v1/setup "$DASH_HOST" '{"username":"probe","password":"probe-pw-123"}' 2>/dev/null || true)"
+    setup="$(http_post_status /api/v1/setup "$DASH_HOST" \
+        '{"username":"probe","password":"probe-pw-once","bootstrap_secret":"definitely-wrong"}' 2>/dev/null || true)"
     grep -qE ' (503|401|409|200)' <<<"$setup" && break
     sleep 1
 done
-grep -q ' 503' <<<"$setup" || fail "hosted /setup gate not armed: status='$setup' (want 503; an appliance-mode brain would 409/200 — profile marker not reaching the container?)"
 
-echo "cloud-assertions: control plane up, dashboard + /api served through Caddy, hosted /setup gate armed (503)"
+case "$MODE" in
+unseeded)
+    # No seed ingested → 503, NOT the appliance's open empty-box 200/409. Proof the
+    # gate stays closed until a seed lands (never falling back to open /setup).
+    grep -q ' 503' <<<"$setup" || fail "unseeded /setup gate not armed: status='$setup' (want 503; an appliance-mode brain would 409/200 — profile marker not reaching the container?)"
+    echo "cloud-assertions: hosted /setup gate armed (503, unprovisioned)"
+    ;;
+seeded)
+    [ -f "$SEED" ] || fail "seeded mode but $SEED absent (seed materializer did not run?)"
+    box_id="$(json_str "$SEED" box_id)"
+    secret="$(json_str "$SEED" admin_bootstrap_secret)"
+    [ -n "$box_id" ] && [ -n "$secret" ] || fail "could not read box_id/admin_bootstrap_secret from $SEED"
+
+    # Wrong secret → 401: the seed was ingested (the gate has a hash) and rejects a
+    # bad secret, audited as setup.failure.
+    wrong="$(http_post_status /api/v1/setup "$DASH_HOST" \
+        "{\"username\":\"$SETUP_USER\",\"password\":\"$SETUP_PW\",\"bootstrap_secret\":\"wrong-$secret\"}" 2>/dev/null || true)"
+    grep -q ' 401' <<<"$wrong" || fail "seeded /setup with a wrong secret: status='$wrong' (want 401)"
+
+    # Correct secret → 200: first admin created, and the response surfaces the
+    # provisioned box_id (fullUserDTO; ENVIRONMENT.md # Admin bootstrap — box_id on /me).
+    resp="$(http_post /api/v1/setup "$DASH_HOST" \
+        "{\"username\":\"$SETUP_USER\",\"password\":\"$SETUP_PW\",\"bootstrap_secret\":\"$secret\"}" 2>/dev/null || true)"
+    line="$(printf '%s' "$resp" | head -1)"
+    grep -q ' 200' <<<"$line" || fail "seeded /setup with the correct secret: status='$line' (want 200)"
+    grep -q "\"box_id\":\"$box_id\"" <<<"$resp" || fail "seeded /setup 200 did not surface box_id=$box_id (body: $(printf '%s' "$resp" | tail -1))"
+    echo "cloud-assertions: hosted /setup gate — wrong secret 401, correct secret 200 + box_id=$box_id"
+    ;;
+frozen:*)
+    expect="${MODE#frozen:}"
+    [ -n "$expect" ] || fail "frozen mode missing the expected box-id (MODE='$MODE')"
+    # A DIFFERENT seed was delivered + materialized this boot, but the brain's identity
+    # is frozen in SQLite: it loads the persisted box-id and ignores the new seed. Log
+    # in as the seeded boot's admin (persisted on the shared disk) and assert /me-grade
+    # identity still reports the original box_id, not this boot's seed.
+    login="$(http_post /api/v1/login "$DASH_HOST" \
+        "{\"username\":\"$SETUP_USER\",\"password\":\"$SETUP_PW\"}" 2>/dev/null || true)"
+    line="$(printf '%s' "$login" | head -1)"
+    grep -q ' 200' <<<"$line" || fail "frozen mode: /login status='$line' (want 200 — the seeded boot's admin should persist across the reboot)"
+    grep -q "\"box_id\":\"$expect\"" <<<"$login" || fail "frozen mode: /login box_id != $expect — a re-delivered seed re-keyed the box! (body: $(printf '%s' "$login" | tail -1))"
+    # Confirm the on-disk seed really is this boot's distinct seed (a no-op overwrite
+    # would make the frozen assertion vacuous). A warning, not a failure: the identity
+    # assertion above is the real proof.
+    if [ -f "$SEED" ]; then
+        disk_box="$(json_str "$SEED" box_id)"
+        [ -n "$disk_box" ] && [ "$disk_box" = "$expect" ] && \
+            echo "cloud-assertions: WARN frozen seed.json box_id ($disk_box) == frozen identity — re-delivery not distinct" >&2
+    fi
+    echo "cloud-assertions: frozen identity held across reboot — box_id still $expect (re-delivered seed ignored)"
+    ;;
+*)
+    fail "unknown assert mode '$MODE'"
+    ;;
+esac
+
+echo "cloud-assertions: control plane up, dashboard + /api served through Caddy; gate scenario '$MODE' OK"
 ok

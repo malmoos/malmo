@@ -24,7 +24,7 @@ WORK="${REPO_ROOT}/.dev/cloud-boot"
 EXTRA="${TEST_DIR}/mkosi.extra"
 PKGMNGR="${TEST_DIR}/mkosi.pkgmngr"
 CANARY="${WORK}/.cloud-boot-ready"
-CANARY_VERSION="v11"  # bump when staging/mkosi.conf/repart changes require a clean rebuild
+CANARY_VERSION="v12"  # bump when staging/mkosi.conf/repart changes require a clean rebuild
 IMAGE_OUT="${WORK}/malmo-cloud.raw"
 
 if [ "${EUID:-$(id -u)}" -ne 0 ]; then
@@ -182,6 +182,13 @@ cp "${REPO_ROOT}/dev/control-plane/caddy.json"   "$EXTRA/var/lib/malmo/control-p
 cp "${REPO_ROOT}/dev/cloud/cloud-assertions.sh" "$EXTRA/usr/local/bin/cloud-assertions.sh"
 chmod 0755 "$EXTRA/usr/local/bin/cloud-assertions.sh"
 cp "${TEST_DIR}/malmo-cloud-assertions.service" "$EXTRA/etc/systemd/system/"
+
+# First-boot provisioning-seed materializer + its oneshot (C3a cloud-lane, #220).
+# Lands the SMBIOS-delivered seed at /var/lib/malmo/seed.json before host-agent
+# launches the brain; the postinst enables it.
+cp "${TEST_DIR}/malmo-seed-materialize.sh" "$EXTRA/usr/local/bin/malmo-seed-materialize.sh"
+chmod 0755 "$EXTRA/usr/local/bin/malmo-seed-materialize.sh"
+cp "${TEST_DIR}/malmo-seed.service" "$EXTRA/etc/systemd/system/"
 
 # --- 4. Docker apt repo for the build's package manager (trixie pocket — the
 # cloud image is Release=trixie). Build-host network only; the VM never apt-installs.
