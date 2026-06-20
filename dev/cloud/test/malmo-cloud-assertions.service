@@ -1,0 +1,27 @@
+# Cloud boot-proof self-check (C2, #205). A first-boot oneshot that polls the
+# control plane up and writes its verdict to the serial console, where
+# dev/cloud/run-cloud-tests.sh greps it. Serial-driven (not SSH-driven) because
+# hosted v1 ships no sshd (ENVIRONMENT.md # Access & files); the check runs
+# in-guest over localhost, which is the real control-plane-up proof regardless.
+#
+# Run-once: the marker the script writes short-circuits a re-run, so a real
+# provisioned boot (the qcow2 == this image, the maintainer chose one image)
+# runs it once, harmlessly (side-effect-free reads), then never again.
+[Unit]
+Description=malmo cloud boot-proof self-check (C2)
+After=docker.service host-agent.service malmo-load-images.service
+Wants=docker.service
+ConditionPathExists=!/var/lib/malmo/.cloud-assertions-done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The script polls the control plane up (docker load + brain bootstrap + compose
+# up race this unit) and can run for minutes; the default 90s start timeout would
+# kill it mid-poll before it writes a verdict. No timeout — the QEMU harness owns
+# the outer deadline.
+TimeoutStartSec=0
+ExecStart=/usr/local/bin/cloud-assertions.sh
+
+[Install]
+WantedBy=multi-user.target

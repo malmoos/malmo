@@ -136,6 +136,17 @@ type Config struct {
 	// (APP_LIFECYCLE.md # image digest pinning). Set on a baked, registry-less
 	// box (the air-gapped QEMU lane); off on a box with a registry.
 	OfflineInstall bool
+	// ProfileMarkerPath is the host path of the environment-profile marker
+	// (/etc/malmo/profile — ENVIRONMENT.md # How the profile is realized). The
+	// brain reads it at startup to resolve appliance vs hosted (the /setup gate,
+	// the mDNS-publish skip, …), but it runs in a container that only mounts the
+	// agent socket dir + DataDir — neither covers /etc/malmo — so without this it
+	// always reads "appliance" (the no-op default) regardless of what the image
+	// stamped. host-agent mounts the marker read-only at the same path so the
+	// containerized brain resolves the profile exactly as it would natively.
+	// Empty (an unmarked appliance box, `make dev`) skips the mount; the brain
+	// then resolves appliance, which is correct for an unmarked box.
+	ProfileMarkerPath string
 }
 
 // Launch runs the first-boot brain bootstrap. It is idempotent: a brain
@@ -285,6 +296,17 @@ func proxyRunSpec(cfg Config) RunSpec {
 // it at the proxy, Caddy, and the staged control-plane compose.
 func runSpec(cfg Config) RunSpec {
 	sockDir := filepath.Dir(cfg.SocketPath)
+	mounts := []Mount{
+		{Source: sockDir, Target: sockDir},
+		{Source: cfg.DataDir, Target: cfg.DataDir},
+	}
+	// Mount the environment-profile marker read-only at the same path so the
+	// containerized brain reads it exactly as it would natively (see
+	// Config.ProfileMarkerPath). Skipped when empty — an unmarked box resolves
+	// appliance, the no-op default.
+	if cfg.ProfileMarkerPath != "" {
+		mounts = append(mounts, Mount{Source: cfg.ProfileMarkerPath, Target: cfg.ProfileMarkerPath, ReadOnly: true})
+	}
 	env := []EnvVar{
 		{Key: "MALMO_STATE_DIR", Value: cfg.StateDir},
 		{Key: "MALMO_AGENT_SOCK", Value: cfg.SocketPath},
@@ -312,10 +334,7 @@ func runSpec(cfg Config) RunSpec {
 		Image:   cfg.Image,
 		Restart: "unless-stopped",
 		Network: cfg.Network,
-		Mounts: []Mount{
-			{Source: sockDir, Target: sockDir},
-			{Source: cfg.DataDir, Target: cfg.DataDir},
-		},
-		Env: env,
+		Mounts:  mounts,
+		Env:     env,
 	}
 }
