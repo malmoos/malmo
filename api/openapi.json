@@ -101,12 +101,20 @@
             "readOnly": true,
             "type": "string"
           },
+          "first_run_complete": {
+            "type": "boolean"
+          },
           "has_users": {
             "type": "boolean"
+          },
+          "profile": {
+            "type": "string"
           }
         },
         "required": [
-          "has_users"
+          "has_users",
+          "first_run_complete",
+          "profile"
         ],
         "type": "object"
       },
@@ -171,6 +179,27 @@
         "required": [
           "current_password",
           "new_password"
+        ],
+        "type": "object"
+      },
+      "Complete-first-runResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/Complete-first-runResponse.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "first_run_complete": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "first_run_complete"
         ],
         "type": "object"
       },
@@ -1782,6 +1811,90 @@
         ],
         "type": "object"
       },
+      "Set-telemetryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/Set-telemetryRequest.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "type": "object"
+      },
+      "Set-telemetryResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/Set-telemetryResponse.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "type": "object"
+      },
+      "Set-timezoneRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/Set-timezoneRequest.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "timezone"
+        ],
+        "type": "object"
+      },
+      "Set-timezoneResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/Set-timezoneResponse.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "timezone"
+        ],
+        "type": "object"
+      },
       "SetupRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1799,6 +1912,9 @@
           },
           "password": {
             "type": "string"
+          },
+          "recovery": {
+            "type": "boolean"
           },
           "username": {
             "type": "string"
@@ -3436,6 +3552,34 @@
         "summary": "Bootstrap the first admin (public; allowed only on empty box)"
       }
     },
+    "/api/v1/system/first-run-complete": {
+      "post": {
+        "operationId": "complete-first-run",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Complete-first-runResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Mark the first-run wizard complete so it never reappears (admin)"
+      }
+    },
     "/api/v1/system/storage": {
       "get": {
         "operationId": "get-system-storage",
@@ -3462,6 +3606,82 @@
           }
         },
         "summary": "Per-disk storage usage (used/total bytes) for the system-resources panel"
+      }
+    },
+    "/api/v1/system/telemetry": {
+      "post": {
+        "operationId": "set-telemetry",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Set-telemetryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Set-telemetryResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Record the box-wide telemetry consent choice (admin)"
+      }
+    },
+    "/api/v1/system/timezone": {
+      "post": {
+        "operationId": "set-timezone",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Set-timezoneRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Set-timezoneResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Set the system time zone via host-agent timedatectl (admin)"
       }
     },
     "/api/v1/users": {

@@ -2,7 +2,7 @@
 
 > Working spec for what happens between "user downloads the ISO" and "user is on the dashboard." Companion to `SPEC.md`, `CONTROL_PLANE.md`, `APP_MANIFEST.md`, `SERVICE_PROVISIONING.md`, `APP_ISOLATION.md`, `STORAGE.md`.
 
-> **Environment profiles.** This doc describes the `appliance` profile (BYO box, USB install). In the **hosted** profile (malmo-operated cloud VM) there is no installer — the box is provisioned from a cloud image and configured at first boot, and the wizard is trimmed to admin account + time zone. See `ENVIRONMENT.md` # Provisioning & first-boot (hosted).
+> **Environment profiles.** This doc describes the `appliance` profile (BYO box, USB install). In the **hosted** profile (malmo-operated cloud VM) there is no installer — the box is provisioned from a cloud image and configured at first boot, and the wizard is trimmed to the **first admin account (including the recovery code), time zone, and telemetry consent** — the network, storage, and enrollment steps are gone (NIC from cloud metadata, no disk selection, enrollment done at provision). See `ENVIRONMENT.md` # Provisioning & first-boot (hosted).
 
 ## Phases
 
@@ -46,7 +46,9 @@ No language picker (English-only v1). No license screen (TBD with legal but not 
 
 First boot lands on a local web UI at `malmo.local` (mDNS) or the box's LAN IP. The wizard is one-shot, a few steps, and disappears once done.
 
-### Step 1 — Network
+**Per-profile step set.** The steps below are tagged by where they run. **Appliance:** all of them. **Hosted:** only the profile-independent ones — Step 2 (first admin, incl. 2a recovery), Step 3 (time zone), Step 4 (telemetry), Step 6 (done); Step 1 (network) and Step 5 (secure URLs / enrollment) are gone (`ENVIRONMENT.md` # Provisioning). The wizard renders from a data-driven step list keyed on the profile, so the shared shell serves both. The completion marker that ends the wizard is brain-side (`box_meta.first_run_complete`), set by Step 6 and read by the dashboard via `GET /auth/state` — the wizard runs until that marker is set, so an interrupted wizard resumes rather than dropping the user onto the dashboard.
+
+### Step 1 — Network *(appliance only)*
 
 The wizard branches on what the box has:
 
@@ -109,7 +111,7 @@ Full time / NTP model in `TIME.md`. NTP itself (chrony with NTS sources) is up b
 
 Full spec: `TELEMETRY.md`. The one toggle covers both the usage stream and the crash stream; both go to `telemetry.malmo.network` (a malmo-controlled endpoint, not a third-party SaaS).
 
-### Step 5 — Secure URLs & enrollment (optional)
+### Step 5 — Secure URLs & enrollment (optional) *(appliance only)*
 
 This step is two coupled choices presented as one. Turning on **"Use secure (HTTPS) URLs for my apps"** requires enrolling the box with malmo.network (to get the subdomain + Let's Encrypt cert). They're the same decision for a new user, so the wizard frames them together.
 
