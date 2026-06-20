@@ -1,6 +1,6 @@
 # Hosted first-boot seed delivery + `/setup` gate end-to-end (C3a cloud-lane)
 
-- **Status:** in progress — harness implemented; VM-boot acceptance pending the `sudo make test-cloud-qemu` run on the maintainer env
+- **Status:** done — **VM-boot acceptance PASSED** on the maintainer env (`sudo -E ./dev/cloud/run-cloud-tests.sh`, 2026-06-20, accel=kvm): all three boots report `MALMO_CLOUD_ASSERTIONS: PASS` — un-seeded `/setup` 503, seeded wrong-secret 401 + correct-secret 200 with `box_id=cindy-fox`, and a frozen-identity reboot where a re-delivered different seed (`rusty-hawk`) is ignored and `/login` still reports `cindy-fox`
 - **Date:** 2026-06-20
 - **Specs touched:** `ENVIRONMENT.md` (# Admin bootstrap — as built: the "Deferred" seed-onto-a-VM bullet flipped to realized), `TESTING.md` (# Full-stack control-plane integration — cloud-lane seed delivery + 3-boot scenario documented)
 
@@ -29,13 +29,13 @@ Realizes `ENVIRONMENT.md` # Admin bootstrap — as built: the seed is `{box_id, 
 
 ## Known gaps & deviations
 
-- **VM-boot acceptance:** the harness is the real end-to-end (a booted hosted image, a real brain, a real PAM admin), but the green run is the proof. This entry's status stays *in progress* until `sudo make test-cloud-qemu` reports PASS on the maintainer env; a follow-up entry (or a status flip here before merge) records the result. (#189 — the mkosi-26/Ubuntu-24.04 sandbox EPERM — does not apply on this env.)
+- **VM-boot acceptance passed**, but on **one** maintainer env (Ubuntu 20, KVM). #189 (the mkosi-26/Ubuntu-24.04 sandbox EPERM) does not apply here but still blocks this lane in CI / on a 24.04 box; the cloud lane is not yet wired into automated CI (same status as the medium lane).
 - **`enrollment` still unconsumed.** The seed carries `enrollment` as reserved raw JSON (C3a). This issue does not consume it or pin its sub-shape; the wildcard-cert/DNS-01 pass (C3b) owns that. The seeds the harness generates omit it (it is optional in `ReadSeed`).
 - **Cross-repo seed schema.** The canonical keys are `box_id` / `admin_bootstrap_secret` / `enrollment` (snake_case, owned by `internal/profile.Seed`). That type is in `internal/` and thus not importable by the cloud producer repo — making it importable (or pinning a shared contract) is a cross-repo design item, surfaced on the issue, **not** changed here.
 - **`frozen` re-delivery distinctness** is a warning, not a hard failure: if seed B's box-id ever equalled A's, the identity assertion would still hold but be weaker. The harness uses distinct ids (`cindy-fox` vs `rusty-hawk`) so this never triggers.
 
 ## What's next
 
-- Flip this entry's status (or add a follow-up) once `sudo make test-cloud-qemu` reports PASS.
+- Wire the cloud lane into automated CI (blocked by #189 on 24.04 runners — shared with the medium lane).
 - C3b: consume `enrollment` — Caddy wildcard cert for `*.<box-id>.malmo.network` via ACME DNS-01 from the seeded credentials (`ENVIRONMENT.md` # Networking & discovery).
 - C4/C5: the trimmed hosted setup wizard + the seed→wizard→dashboard end-to-end.
