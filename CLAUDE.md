@@ -111,8 +111,7 @@ Small set of rules. Codified now so we don't have to back them out later.
 ## Working style
 
 - **Always work in a git worktree for local implementations.** Use the `isolation: "worktree"` option when spawning agents, or manually create a worktree (`git worktree add`) before making changes. Never implement directly on the checked-out branch.
-- **When spawning subagents** (implementation, exploration, review), pass `model: "sonnet"` — it keeps cost predictable and is the validated model for this project.
-- **When reviewing a PR** (your own or someone else's), read `docs/dev/code-review.md` end-to-end before looking at any diff — it defines the lenses, severity levels, and what "reviewed" means on this project.
+- **When reviewing a PR** (your own or someone else's), read `docs/dev/code-review.md` end-to-end before looking at any diff — it defines the lenses, severity levels, and what "reviewed" means on this project. Use a sonnet agent for code review (`model: "sonnet"`).
 - This is a spec-led project; precision matters. When proposing a change, name the doc and section.
 - Read the relevant `docs/specs/` doc(s) end-to-end before proposing changes — they cross-reference each other heavily and decisions in one constrain the others. Use `docs/README.md` to find the right one.
 - Push back on tradeoffs; defer to product calls once made (per user preference).
