@@ -30,6 +30,7 @@ QEMU_PID=""
 # invoking user so kept diagnostics are caller-readable.
 CALLER="${SUDO_USER:-}"
 if [ -z "$CALLER" ] || [ "$CALLER" = "root" ]; then CALLER="$(logname 2>/dev/null || true)"; fi
+if [ "$CALLER" = "root" ]; then CALLER=""; fi  # root-shell edge case: no caller to chown back to
 
 dump_serial() {
     [ -r "$QEMU_SERIAL" ] || return 0
