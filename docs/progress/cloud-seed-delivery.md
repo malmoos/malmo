@@ -33,6 +33,7 @@ Realizes `ENVIRONMENT.md` # Admin bootstrap — as built: the seed is `{box_id, 
 - **`enrollment` still unconsumed.** The seed carries `enrollment` as reserved raw JSON (C3a). This issue does not consume it or pin its sub-shape; the wildcard-cert/DNS-01 pass (C3b) owns that. The seeds the harness generates omit it (it is optional in `ReadSeed`).
 - **Cross-repo seed schema.** The canonical keys are `box_id` / `admin_bootstrap_secret` / `enrollment` (snake_case, owned by `internal/profile.Seed`). That type is in `internal/` and thus not importable by the cloud producer repo — making it importable (or pinning a shared contract) is a cross-repo design item, surfaced on the issue, **not** changed here.
 - **`frozen` re-delivery distinctness** is a warning, not a hard failure: if seed B's box-id ever equalled A's, the identity assertion would still hold but be weaker. The harness uses distinct ids (`cindy-fox` vs `rusty-hawk`) so this never triggers.
+- **Clean-shutdown timeout (self-review note).** `run_boot`'s PASS path waits 60s for the guest's clean poweroff, then force-kills QEMU; if a shutdown ever exceeded that under load, the kill could truncate the box-id flush and make boot 3's frozen check flake. Low probability for this minimal image (the real run shut down cleanly well inside the window), so left as-is — the first thing to revisit if the lane goes flaky in CI.
 
 ## What's next
 
