@@ -1,0 +1,33 @@
+# Boot-proof assertion oneshot for the hosted cloud image (#205/C2). Runs the
+# in-VM control-plane-up assertions once at boot, prints a single PASS/FAIL
+# sentinel to the serial console (the host harness greps the captured serial
+# log — the hosted image has no sshd to drive assertions over, unlike the medium
+# lane), then powers the VM off so run-cloud-tests.sh gets a prompt verdict.
+#
+# Credential-gated: it only fires when run-cloud-tests.sh injects the
+# `malmo.cloud-assert` systemd credential over SMBIOS. A plain
+# `make build-cloud-image` or a real cloud boot carries no such credential, so
+# the unit is an inert no-op there (it must never power off a real tenant box).
+[Unit]
+Description=malmo cloud-image boot-proof assertions (test harness only)
+ConditionCredential=malmo.cloud-assert
+After=host-agent.service docker.service malmo-load-images.service
+Wants=host-agent.service
+
+[Service]
+Type=oneshot
+# The script polls internally for the control plane to converge (up to a few
+# minutes across its stages), so the default ~90s oneshot start timeout would
+# SIGTERM it mid-poll and the verdict would never be written. Give it a generous
+# bound; a genuinely stuck boot still tears down via ExecStopPost when it fires.
+TimeoutStartSec=600
+# The script writes the verdict to /dev/console, then exits 0/1. ExecStopPost
+# powers off regardless of that result — the verdict lives in the serial log, not
+# the exit code — so a FAIL (or a timeout kill) still tears the VM down promptly
+# instead of hanging the harness.
+ExecStart=/usr/local/bin/cloud-assertions.sh
+ExecStopPost=/usr/bin/systemctl --no-block poweroff
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

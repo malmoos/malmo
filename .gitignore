@@ -33,6 +33,9 @@ dev/test-qemu/mkosi.passphrase
 dev/cloud/mkosi.pkgmngr/
 dev/cloud/mkosi.tools/
 dev/cloud/mkosi.tools.manifest
+# The boot-proof bake's generated ExtraTree (#205/C2): host-agent + control-plane
+# bundle + units staged by bootstrap.sh, kept separate from the committed marker.
+dev/cloud/mkosi.extra.generated/
 
 # Editor / OS
 .DS_Store

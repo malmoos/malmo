@@ -136,6 +136,17 @@ type Config struct {
 	// (APP_LIFECYCLE.md # image digest pinning). Set on a baked, registry-less
 	// box (the air-gapped QEMU lane); off on a box with a registry.
 	OfflineInstall bool
+
+	// ProfileMarker is the host path to the environment-profile marker
+	// (/etc/malmo/profile — ENVIRONMENT.md # How the profile is realized). When
+	// non-empty it is bind-mounted read-only into the brain at the same path so
+	// the *containerized* brain resolves its profile (`hosted` vs `appliance`)
+	// from the image's marker: the brain otherwise mounts only DataDir + the
+	// socket dir and would read no marker, defaulting to `appliance` regardless
+	// of the image (#205/C2). host-agent sets it only when the marker exists on
+	// the host, so an unmarked appliance box (and `make dev`) leaves it empty —
+	// no mount, brain defaults to appliance, byte-unchanged.
+	ProfileMarker string
 }
 
 // Launch runs the first-boot brain bootstrap. It is idempotent: a brain
@@ -307,15 +318,21 @@ func runSpec(cfg Config) RunSpec {
 	if cfg.OfflineInstall {
 		env = append(env, EnvVar{Key: "MALMO_OFFLINE_INSTALL", Value: "true"})
 	}
+	mounts := []Mount{
+		{Source: sockDir, Target: sockDir},
+		{Source: cfg.DataDir, Target: cfg.DataDir},
+	}
+	// Expose the environment-profile marker to the containerized brain so its
+	// hosted seams resolve (see Config.ProfileMarker). Same-path, read-only.
+	if cfg.ProfileMarker != "" {
+		mounts = append(mounts, Mount{Source: cfg.ProfileMarker, Target: cfg.ProfileMarker, ReadOnly: true})
+	}
 	return RunSpec{
 		Name:    cfg.ContainerName,
 		Image:   cfg.Image,
 		Restart: "unless-stopped",
 		Network: cfg.Network,
-		Mounts: []Mount{
-			{Source: sockDir, Target: sockDir},
-			{Source: cfg.DataDir, Target: cfg.DataDir},
-		},
-		Env: env,
+		Mounts:  mounts,
+		Env:     env,
 	}
 }

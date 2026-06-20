@@ -36,6 +36,7 @@ import (
 
 	"github.com/malmoos/malmo/internal/hostagent"
 	"github.com/malmoos/malmo/internal/hostagent/brainlaunch"
+	"github.com/malmoos/malmo/internal/profile"
 	"github.com/malmoos/malmo/internal/protocol"
 )
 
@@ -116,6 +117,18 @@ func brainLaunchConfig(sockPath string) brainlaunch.Config {
 	// same-path constraint — socket-proxy-compose-validation.md). The proxy image
 	// + bundle default to the names baked by dev/test-qemu / the ISO build.
 	controlPlaneDir := env("MALMO_CONTROL_PLANE_DIR", filepath.Join(dataDir, "control-plane"))
+	// Expose the environment-profile marker to the containerized brain (#205/C2).
+	// The brain selects its hosted vs appliance seams from /etc/malmo/profile but
+	// mounts only the data root, so without this it would resolve `appliance`
+	// regardless of the image. Bind it in only when it exists on the host: an
+	// unmarked appliance box (and `make dev`) leaves it empty → no mount → brain
+	// defaults to appliance, byte-unchanged. The path the host stamps is the same
+	// path the brain reads (profile.DefaultMarkerPath), so a same-path mount lines
+	// the two up without forwarding a separate env knob.
+	profileMarker := profile.DefaultMarkerPath
+	if _, err := os.Stat(profileMarker); err != nil {
+		profileMarker = ""
+	}
 	return brainlaunch.Config{
 		Image:         env("MALMO_BRAIN_IMAGE", "malmo-brain:latest"),
 		ImageTar:      env("MALMO_BRAIN_IMAGE_TAR", filepath.Join(dataDir, "brain-image.tar")),
@@ -134,6 +147,7 @@ func brainLaunchConfig(sockPath string) brainlaunch.Config {
 		// rides the brain's DataDir mount (brainlaunch.Config.CatalogDir).
 		CatalogDir:     env("MALMO_CATALOG_DIR", filepath.Join(dataDir, "catalog")),
 		OfflineInstall: envBool("MALMO_OFFLINE_INSTALL"),
+		ProfileMarker:  profileMarker,
 	}
 }
 

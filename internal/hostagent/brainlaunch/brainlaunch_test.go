@@ -177,6 +177,35 @@ func TestLaunchRunSpec(t *testing.T) {
 	if hasMount(s.Mounts, "/var/run/docker.sock", "/var/run/docker.sock") {
 		t.Error("brain must NOT mount the raw Docker socket")
 	}
+	// ProfileMarker defaults empty (unmarked appliance box) → no marker mount, so
+	// the brain resolves appliance — byte-unchanged from before #205/C2.
+	if hasMount(s.Mounts, "/etc/malmo/profile", "/etc/malmo/profile") {
+		t.Errorf("unset ProfileMarker must not bind the marker: %+v", s.Mounts)
+	}
+}
+
+// A hosted box stamps /etc/malmo/profile; host-agent binds it read-only into the
+// brain at the same path so the containerized brain resolves `hosted` (#205/C2).
+func TestLaunchRunSpecProfileMarkerMount(t *testing.T) {
+	f := newFake()
+	cfg := testConfig()
+	cfg.ProfileMarker = "/etc/malmo/profile"
+	if err := Launch(context.Background(), f, cfg); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	s := f.lastRun
+	var found bool
+	for _, m := range s.Mounts {
+		if m.Source == "/etc/malmo/profile" && m.Target == "/etc/malmo/profile" {
+			found = true
+			if !m.ReadOnly {
+				t.Errorf("profile marker mount must be read-only: %+v", m)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("missing same-path profile marker mount: %+v", s.Mounts)
+	}
 }
 
 // On a baked, air-gapped box the brain is launched in offline-install mode; an

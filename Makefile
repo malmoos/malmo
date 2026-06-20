@@ -15,7 +15,7 @@ export MALMO_AGENT_SOCK := $(AGENT_SOCK)
 export MALMO_STATE_DIR := $(STATE_DIR)
 export MALMO_CATALOG_DIR := ./catalog
 
-.PHONY: build host-agent brain host-agent-real host-agent-real-hosted brain-image ui-image control-plane-images build-cloud-image check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-netstate test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev stop openapi openapi-check clean check-state-owner help
+.PHONY: build host-agent brain host-agent-real host-agent-real-hosted brain-image ui-image control-plane-images build-cloud-image check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-netstate test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu test-cloud-qemu run-agent run-brain net caddy caddy-down ui dev stop openapi openapi-check clean check-state-owner help
 
 # msteinert/pam v2.1.0 uses RTLD_NEXT, a GNU extension that requires
 # _GNU_SOURCE at C compile time. Apply globally; harmless to non-cgo builds.
@@ -43,6 +43,7 @@ help:
 	@echo "make test-usermgr-nspawn - run usermgrtest in systemd-nspawn (needs sudo)"
 	@echo "make test-boot-chain-nspawn - boot dist/systemd units in nspawn + assert shape (needs sudo)"
 	@echo "make test-medium-qemu - QEMU+swtpm boot with real kernel + TPM (needs sudo; first run ~5 min)"
+	@echo "make test-cloud-qemu - QEMU boot the hosted cloud image + assert control plane up (needs sudo; no swtpm/LUKS)"
 	@echo ""
 	@echo "One-terminal: make dev   (Caddy started detached; Ctrl-C stops the rest)"
 	@echo "Four terminals: make caddy ; make run-agent ; make run-brain ; make ui"
@@ -183,16 +184,27 @@ test-boot-chain-nspawn:
 test-medium-qemu:
 	sudo -E ./dev/test-qemu/run-medium-tests.sh
 
-# Build the lean hosted cloud-VM image (C1b, #203) via mkosi and assert it is
-# genuinely lean (no NetworkManager/Avahi/Samba/mergerfs/cryptsetup/tpm2-tools)
-# with the /etc/malmo/profile=hosted marker baked in. Output: a raw GPT disk
-# image under .dev/cloud/. This is the image *definition* slice only — the
-# qcow2 packaging + QEMU boot proof (control plane up) are #205/C2, and the
-# slim cloud host-agent it boots is #204/C1c. Needs mkosi v22+; bootstrap.sh
-# prints an install pointer if anything is missing.
-# See docs/progress/hosted-cloud-image.md.
+# Build the hosted cloud-VM image (C1b #203 + C2 #205) via mkosi and assert it
+# is genuinely lean (no NetworkManager/Avahi/Samba/mergerfs/cryptsetup/tpm2-tools/
+# openssh-server/nftables) with the /etc/malmo/profile=hosted marker baked in.
+# C2 turned the lean image *definition* into a bootable one: it bakes the slim
+# host-agent (-tags hosted), the control-plane image bundle, the first-boot
+# loader + units, and emits both the raw GPT disk and the qcow2 cloud artifact
+# under .dev/cloud/. Needs mkosi v22+, go, docker, qemu-img, libpam0g-dev;
+# bootstrap.sh prints an install pointer if anything is missing.
+# See docs/progress/hosted-cloud-image.md and docs/progress/cloud-image-boot-proof.md.
 build-cloud-image:
 	./dev/cloud/bootstrap.sh
+
+# Boot the hosted cloud image once under QEMU (UEFI, no swtpm, no LUKS) and
+# assert the control plane comes up (#205/C2): systemd userspace + PSI live, the
+# baked control-plane images loaded, the brain running behind the socket-proxy,
+# the dashboard reachable through Caddy, and hosted /setup gated closed (503).
+# Air-gapped (restrict=on) so a missing bundled image hard-fails. Builds the
+# image first (build-cloud-image). VM-boot acceptance runs on the maintainer's
+# env per the medium-lane precedent. See docs/progress/cloud-image-boot-proof.md.
+test-cloud-qemu:
+	sudo -E ./dev/cloud/run-cloud-tests.sh
 
 # End-to-end Caddy routing verification. Assumes `make dev` is running.
 # Tests Host-header routing, confirms path-based routing does NOT work,

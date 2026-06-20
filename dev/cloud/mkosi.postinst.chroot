@@ -1,0 +1,101 @@
+#!/bin/bash
+# Runs inside the hosted cloud image as a chroot (.chroot extension = mkosi v27+
+# chroot mode; the image root is mounted at /). After package install +
+# ExtraTrees copy, before image finalization (#205/C2).
+#
+# The cloud analogue of dev/test-qemu/mkosi.postinst.chroot, trimmed to the
+# hosted profile (ENVIRONMENT.md # How the profile is realized):
+#   - NO NetworkManager / Avahi / sshd / LUKS-TPM enroll (absent from the lean
+#     image — # Networking & discovery). The single NIC is brought up by
+#     systemd-networkd (ships in systemd, no extra package).
+#   - Enable docker + containerd, the first-boot control-plane image loader, and
+#     host-agent (which launches the brain).
+#   - Provision the malmo identity groups + PAM service so the brain's hosted
+#     /setup path works once a seed lands (C3a/#220) — moot for C2's /setup->503
+#     proof but baked for correctness on a real hosted box.
+#   - Enable the QEMU boot-proof assertion oneshot, gated on a systemd credential
+#     so it only fires under the test harness (run-cloud-tests.sh), never on a
+#     plain `make build-cloud-image` or a real cloud boot.
+set -euo pipefail
+
+mkdir -p /etc/systemd/system/multi-user.target.wants
+
+# malmo identity (USERS_AND_GROUPS.md; FIRST_RUN.md # Identity & display names).
+# The brain creates the first admin with `useradd --gid malmo` and host-agent's
+# well-known identity resolves malmo-app/malmo-shared by name, so these must exist
+# before the hosted /setup runs (C3a/#220). Fixed IDs in the malmo-reserved range;
+# idempotent so a rebuild over an existing tree is a no-op.
+getent group malmo >/dev/null        || groupadd -g 3000 malmo
+getent group malmo-app >/dev/null    || groupadd -g 2000 malmo-app
+getent group malmo-shared >/dev/null || groupadd -g 2001 malmo-shared
+getent passwd malmo-app >/dev/null   || useradd -r -u 2000 -g malmo-app \
+    -M -d /nonexistent -s /usr/sbin/nologin malmo-app
+
+# /etc/pam.d/malmo (staged into the image by bootstrap.sh from dev/pam/malmo) is
+# the service host-agent's verify_password dials. Without it pam_start("malmo")
+# falls back to /etc/pam.d/other (deny). Not exercised by C2 (no login), baked for
+# the real hosted login path.
+
+# tmpfiles.d entry for /run/malmo (host-agent's RuntimeDirectory covers
+# /run/malmo, but be explicit so anything writing under it before host-agent
+# starts finds the tree).
+mkdir -p /etc/tmpfiles.d
+cat >/etc/tmpfiles.d/malmo.conf <<'EOF'
+d /run/malmo 0755 root root -
+EOF
+
+# Pre-commit machine-id so systemd doesn't treat first VM boot as "first boot"
+# (the interactive firstboot wizard would block sysinit.target). Same idiom as
+# the medium lane.
+systemd-machine-id-setup 2>/dev/null || \
+    { tr -d '-\n' < /proc/sys/kernel/random/uuid > /etc/machine-id && echo >> /etc/machine-id; }
+systemctl --root=/ mask systemd-firstboot.service >/dev/null 2>&1 || true
+
+# Make the baked scripts executable (ExtraTrees should preserve mode; be defensive).
+chmod 0755 /usr/lib/malmo/host-agent-real 2>/dev/null || true
+chmod 0755 /usr/lib/malmo/load-control-plane-images.sh 2>/dev/null || true
+chmod 0755 /usr/local/bin/cloud-assertions.sh 2>/dev/null || true
+
+# Preset file so a first-boot systemctl-preset-all keeps the stack enabled.
+mkdir -p /usr/lib/systemd/system-preset
+cat > /usr/lib/systemd/system-preset/99-malmo-cloud.preset <<'EOF'
+enable systemd-networkd.service
+enable docker.service
+enable containerd.service
+enable malmo-load-images.service
+enable host-agent.service
+enable malmo-cloud-assert.service
+disable systemd-networkd-wait-online.service
+EOF
+
+# Belt-and-suspenders: drop the .wants symlinks manually (can't run
+# `systemctl enable` in the chroot). Same idiom as the medium lane.
+systemctl --root=/ enable systemd-networkd.service >/dev/null 2>&1 || true
+ln -sf /lib/systemd/system/docker.service \
+    /etc/systemd/system/multi-user.target.wants/docker.service
+ln -sf /lib/systemd/system/containerd.service \
+    /etc/systemd/system/multi-user.target.wants/containerd.service
+ln -sf /etc/systemd/system/malmo-load-images.service \
+    /etc/systemd/system/multi-user.target.wants/malmo-load-images.service
+ln -sf /etc/systemd/system/host-agent.service \
+    /etc/systemd/system/multi-user.target.wants/host-agent.service
+ln -sf /etc/systemd/system/malmo-cloud-assert.service \
+    /etc/systemd/system/multi-user.target.wants/malmo-cloud-assert.service
+
+# Nothing in the image orders against network-online.target; don't let the
+# wait-online unit slow the boot.
+systemctl --root=/ disable systemd-networkd-wait-online.service >/dev/null 2>&1 || true
+
+# Single-NIC bring-up via systemd-networkd, the minimal cloud-native path
+# (ENVIRONMENT.md # Networking & discovery — "a single interface brought up by
+# the minimal cloud-native path"; no NetworkManager). Match the provider NIC by
+# the conventional predictable/eth names; Docker's own bridges (docker0, br-*,
+# veth*) never match, so the daemon keeps managing them.
+mkdir -p /etc/systemd/network
+cat > /etc/systemd/network/20-dhcp.network << 'EOF'
+[Match]
+Name=en* eth*
+
+[Network]
+DHCP=yes
+EOF
