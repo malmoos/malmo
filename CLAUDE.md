@@ -33,6 +33,8 @@ Wire: `browser → web-ui → brain`, and the brain fans out to `docker compose`
 
 ## Developing
 
+**When starting work on any issue, read `docs/dev/contributing.md` first** — it is the authoritative contribution loop (orient → pick → branch → build → test → document → self-review → PR) and includes rules that supplement those in this file. The commands below are a quick reference; contributing.md is the binding guide.
+
 The dev model is **two loops** (full detail in `docs/dev/running-locally.md`):
 
 - **Inner loop (seconds) — all native, no VM.** The brain and dashboard run directly on your machine against the local Docker socket; the host-agent is the fake that speaks the real protocol but stubs host ops. ~90% of development happens here, and it works on macOS, Windows (WSL2), or Linux with no platform-specific setup.
@@ -53,7 +55,9 @@ The inner/outer boundary is also the **cross-platform / Linux-only** boundary. T
 
 **Start every piece of work from a fresh branch off latest `main`:** `git checkout main && git pull && git checkout -b <branch>`. Never commit straight to `main`.
 
-**The contributing loop is `docs/dev/contributing.md`** — branch → build → test → document → PR, including the mandatory `Closes #<N>` rule. Start there before opening a PR. Actionable parallel work lives in [GitHub Issues](https://github.com/malmoos/malmo/issues) (`gh issue list --label P1`).
+Actionable parallel work lives in [GitHub Issues](https://github.com/malmoos/malmo/issues) (`gh issue list --label P1`).
+
+**After opening a PR, run a self-review** using a fresh sonnet agent with no conversation history — it has no attachment to the implementation choices you made. In Claude Code: `/code-review low Read docs/progress/<your-slug>.md first for context, then review the diff per docs/dev/code-review.md.` Address every Block finding before the PR merges; note any disagreements in the progress entry's Known gaps.
 
 ## Documentation discipline
 
@@ -107,6 +111,7 @@ Small set of rules. Codified now so we don't have to back them out later.
 ## Working style
 
 - **Always work in a git worktree for local implementations.** Use the `isolation: "worktree"` option when spawning agents, or manually create a worktree (`git worktree add`) before making changes. Never implement directly on the checked-out branch.
+- **When reviewing a PR** (your own or someone else's), read `docs/dev/code-review.md` end-to-end before looking at any diff — it defines the lenses, severity levels, and what "reviewed" means on this project. Use a sonnet agent for code review (`model: "sonnet"`).
 - This is a spec-led project; precision matters. When proposing a change, name the doc and section.
 - Read the relevant `docs/specs/` doc(s) end-to-end before proposing changes — they cross-reference each other heavily and decisions in one constrain the others. Use `docs/README.md` to find the right one.
 - Push back on tradeoffs; defer to product calls once made (per user preference).

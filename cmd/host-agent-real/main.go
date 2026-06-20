@@ -36,6 +36,7 @@ import (
 
 	"github.com/malmoos/malmo/internal/hostagent"
 	"github.com/malmoos/malmo/internal/hostagent/brainlaunch"
+	"github.com/malmoos/malmo/internal/profile"
 	"github.com/malmoos/malmo/internal/protocol"
 )
 
@@ -116,6 +117,18 @@ func brainLaunchConfig(sockPath string) brainlaunch.Config {
 	// same-path constraint — socket-proxy-compose-validation.md). The proxy image
 	// + bundle default to the names baked by dev/test-qemu / the ISO build.
 	controlPlaneDir := env("MALMO_CONTROL_PLANE_DIR", filepath.Join(dataDir, "control-plane"))
+	// The brain reads the environment-profile marker from inside its container,
+	// which mounts neither /etc/malmo nor anything covering it — so host-agent
+	// must hand it across. Resolve the host marker path (the brain's own default,
+	// overridable for tests) and mount it only when it exists as a regular file:
+	// an unmarked appliance box has no marker, and a same-path bind of a missing
+	// source would make Docker auto-create a root-owned directory there. The brain
+	// reads its default /etc/malmo/profile inside the container, so the mount is
+	// same-path; see brainlaunch.Config.ProfileMarkerPath.
+	profileMarker := env("MALMO_PROFILE_PATH", profile.DefaultMarkerPath)
+	if fi, err := os.Stat(profileMarker); err != nil || !fi.Mode().IsRegular() {
+		profileMarker = ""
+	}
 	return brainlaunch.Config{
 		Image:         env("MALMO_BRAIN_IMAGE", "malmo-brain:latest"),
 		ImageTar:      env("MALMO_BRAIN_IMAGE_TAR", filepath.Join(dataDir, "brain-image.tar")),
@@ -132,8 +145,9 @@ func brainLaunchConfig(sockPath string) brainlaunch.Config {
 		UIUpstream:         env("MALMO_DASHBOARD_UI_UPSTREAM", "malmo-ui:80"),
 		// The Door-1 catalog the brain installs from, staged under dataDir so it
 		// rides the brain's DataDir mount (brainlaunch.Config.CatalogDir).
-		CatalogDir:     env("MALMO_CATALOG_DIR", filepath.Join(dataDir, "catalog")),
-		OfflineInstall: envBool("MALMO_OFFLINE_INSTALL"),
+		CatalogDir:        env("MALMO_CATALOG_DIR", filepath.Join(dataDir, "catalog")),
+		OfflineInstall:    envBool("MALMO_OFFLINE_INSTALL"),
+		ProfileMarkerPath: profileMarker,
 	}
 }
 

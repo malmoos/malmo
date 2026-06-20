@@ -15,7 +15,7 @@ export MALMO_AGENT_SOCK := $(AGENT_SOCK)
 export MALMO_STATE_DIR := $(STATE_DIR)
 export MALMO_CATALOG_DIR := ./catalog
 
-.PHONY: build host-agent brain host-agent-real host-agent-real-hosted brain-image ui-image control-plane-images build-cloud-image check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-netstate test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu run-agent run-brain net caddy caddy-down ui dev stop openapi openapi-check clean check-state-owner help
+.PHONY: build host-agent brain host-agent-real host-agent-real-hosted brain-image ui-image control-plane-images build-cloud-image check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-netstate test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu test-cloud-qemu run-agent run-brain net caddy caddy-down ui dev stop openapi openapi-check clean check-state-owner help
 
 # msteinert/pam v2.1.0 uses RTLD_NEXT, a GNU extension that requires
 # _GNU_SOURCE at C compile time. Apply globally; harmless to non-cgo builds.
@@ -43,6 +43,7 @@ help:
 	@echo "make test-usermgr-nspawn - run usermgrtest in systemd-nspawn (needs sudo)"
 	@echo "make test-boot-chain-nspawn - boot dist/systemd units in nspawn + assert shape (needs sudo)"
 	@echo "make test-medium-qemu - QEMU+swtpm boot with real kernel + TPM (needs sudo; first run ~5 min)"
+	@echo "make test-cloud-qemu - QEMU boot of the hosted cloud image; control plane up (needs sudo; no swtpm/LUKS)"
 	@echo ""
 	@echo "One-terminal: make dev   (Caddy started detached; Ctrl-C stops the rest)"
 	@echo "Four terminals: make caddy ; make run-agent ; make run-brain ; make ui"
@@ -182,6 +183,19 @@ test-boot-chain-nspawn:
 # See docs/progress/0021-qemu-medium-lane-scaffolding.md.
 test-medium-qemu:
 	sudo -E ./dev/test-qemu/run-medium-tests.sh
+
+# Cloud-lane boot proof (C2, #205): build the hosted cloud image, convert it to
+# the qcow2 cloud artifact, and boot it ONCE in QEMU to prove the control plane
+# comes up and serves — no swtpm, no LUKS, no installer ("the disk IS the
+# installed system", ENVIRONMENT.md # Provisioning). The in-VM self-check
+# (cloud-assertions.sh) asserts the baked images loaded, the four control-plane
+# containers run, the dashboard answers through Caddy, and the hosted /setup gate
+# returns 503 (no seed). Air-gapped (restrict=on) so a stray pull hard-fails.
+# Requires mkosi v22+, qemu-system-x86, ovmf, docker, go, libpam0g-dev —
+# bootstrap.sh prints an install pointer if anything is missing.
+# See docs/progress/cloud-vm-boot-proof.md.
+test-cloud-qemu:
+	sudo -E ./dev/cloud/run-cloud-tests.sh
 
 # Build the lean hosted cloud-VM image (C1b, #203) via mkosi and assert it is
 # genuinely lean (no NetworkManager/Avahi/Samba/mergerfs/cryptsetup/tpm2-tools)

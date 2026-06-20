@@ -85,6 +85,10 @@ Assertions (in priority order):
 
 This sub-lane runs in the medium budget when the image is cached; the first build (two extra images) costs more. It is the foundation the slow-lane ISO end-to-end test builds on — same assertions, driven from a real installer flow instead of a pre-baked image.
 
+#### Hosted cloud variant — `dev/cloud/` (C2 #205, seed/gate C3a #220)
+
+The hosted profile (`ENVIRONMENT.md`) has its own full-stack lane (`dev/cloud/run-cloud-tests.sh`, `make test-cloud-qemu`): the same baked-control-plane mechanism, but minus swtpm/LUKS/installer ("the disk IS the installed system") and minus SSH (hosted ships none), so the in-VM self-check (`cloud-assertions.sh`) writes its verdict to the **serial console** and the driver greps it. On top of the C2 control-plane-up proof, the C3a slice exercises the **first-boot provisioning seed + `/setup` admin-bootstrap gate end-to-end**. The seed is delivered the cloud-init way — a systemd credential over **SMBIOS type 11** (`io.systemd.credential.binary:malmo.seed=<base64 JSON>`, the same channel the medium lane uses for the LUKS passphrase; a real cloud uses cloud-init `write_files`, both materializing the same `/var/lib/malmo/seed.json`) — landed by a first-boot `malmo-seed.service` before host-agent launches the brain. A **3-boot sequence over one persisted qcow2 overlay** (so the brain's box-id + first admin survive boot→boot) asserts all four gate properties: un-seeded ⇒ **503**; seeded ⇒ wrong secret **401**, correct secret **200** + `box_id`; and a **frozen-identity reboot** — a *different* seed re-delivered on a later boot is ignored (the box-id is frozen in the brain's SQLite), so `/login` still reports the original box-id. The per-boot scenario is itself selected via a second SMBIOS credential (`malmo.assert`); on PASS the guest powers off cleanly so SQLite flushes before the next boot. This is the serial-driven analogue of the appliance lane's SSH-driven two-process reboot (# Medium lane, the LUKS unseal note).
+
 ## Slow lane — Soak + ISO end-to-end (nightly on `main`)
 
 **What it catches:**
