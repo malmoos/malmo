@@ -865,6 +865,14 @@ const (
 	// # Phase 3) and is distinct from "an admin exists" — completion is more
 	// than the first POST /setup.
 	BoxMetaFirstRunComplete = "first_run_complete"
+	// BoxMetaEnrollment holds the per-box acme-dns credentials (JSON) ingested
+	// from the seed, so later (frozen-identity) boots can reconfigure Caddy's
+	// DNS-01 wildcard issuer without re-reading the seed the brain otherwise
+	// ignores (ENVIRONMENT.md # Networking & discovery; C3b). Stored plaintext at
+	// MVP, matching the cloud producer's posture — a leaked pair only lets an
+	// attacker renew certs for this one box; at-rest encryption is a deferred
+	// hardening item (NEXT.md).
+	BoxMetaEnrollment = "acmedns_enrollment"
 )
 
 // GetBoxMeta returns the value stored under key, or ErrNotFound when unset.

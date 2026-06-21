@@ -1,7 +1,6 @@
 package profile
 
 import (
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -118,22 +117,33 @@ func TestReadSeed_UnreadableIsHardError(t *testing.T) {
 	}
 }
 
-// TestReadSeed_EnrollmentPreserved confirms the reserved enrollment block is
-// carried through verbatim (C3b consumes it later) without ReadSeed validating it.
-func TestReadSeed_EnrollmentPreserved(t *testing.T) {
-	raw := `{"box_id":"cindy-fox","admin_bootstrap_secret":"s3cr3t","enrollment":{"token":"abc","zone":"cindy-fox.malmo.network"}}`
+// TestReadSeed_EnrollmentParsed confirms the acme-dns enrollment block is parsed
+// into typed fields off the cloud producer's wire shape (C3b consumes it for the
+// wildcard cert). The field names must match the cloud's
+// internal/seed.EnrollmentCredentials byte-for-byte.
+func TestReadSeed_EnrollmentParsed(t *testing.T) {
+	raw := `{"box_id":"cindy-fox","admin_bootstrap_secret":"s3cr3t","enrollment":{"subdomain":"abc-123","username":"user","password":"pass"}}`
 	got, err := ReadSeed(writeSeed(t, raw))
 	if err != nil {
 		t.Fatalf("ReadSeed: %v", err)
 	}
-	var enr struct {
-		Token string `json:"token"`
-		Zone  string `json:"zone"`
+	if !got.Enrollment.Complete() {
+		t.Fatalf("enrollment = %+v, want Complete()", got.Enrollment)
 	}
-	if err := json.Unmarshal(got.Enrollment, &enr); err != nil {
-		t.Fatalf("enrollment not preserved as valid JSON: %v", err)
+	if got.Enrollment.Subdomain != "abc-123" || got.Enrollment.Username != "user" || got.Enrollment.Password != "pass" {
+		t.Errorf("enrollment = %+v, want subdomain=abc-123 username=user password=pass", got.Enrollment)
 	}
-	if enr.Token != "abc" || enr.Zone != "cindy-fox.malmo.network" {
-		t.Errorf("enrollment = %+v, want token=abc zone=cindy-fox.malmo.network", enr)
+}
+
+// TestReadSeed_EnrollmentOptional confirms a seed with no enrollment block still
+// parses (box-id + bootstrap gate work) and reports an incomplete enrollment so
+// the cert pass skips rather than handing Caddy a half-configured issuer.
+func TestReadSeed_EnrollmentOptional(t *testing.T) {
+	got, err := ReadSeed(writeSeed(t, `{"box_id":"cindy-fox","admin_bootstrap_secret":"s3cr3t"}`))
+	if err != nil {
+		t.Fatalf("ReadSeed: %v", err)
+	}
+	if got.Enrollment.Complete() {
+		t.Errorf("enrollment = %+v, want !Complete() (absent block)", got.Enrollment)
 	}
 }

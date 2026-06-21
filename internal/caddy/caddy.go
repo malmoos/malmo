@@ -236,8 +236,97 @@ func (c *Client) EnsureServer(ctx context.Context) error {
 	return c.patch(ctx, "/config/apps/http/servers/malmo/routes", []any{})
 }
 
+// EnrollmentCredentials is the per-box acme-dns account Caddy uses to answer the
+// ACME DNS-01 challenge (consumed from the first-boot seed; C3b). Passed as
+// primitives so this package stays decoupled from internal/profile.
+type EnrollmentCredentials struct {
+	Subdomain string
+	Username  string
+	Password  string
+}
+
+// EnsureWildcardTLS configures automatic HTTPS for a hosted box: it provisions a
+// single Let's Encrypt cert covering `subjects` (the dashboard apex
+// "<box-id>.malmo.network" + the wildcard "*.<box-id>.malmo.network") via an
+// ACME DNS-01 challenge solved against acme-dns with the box's seeded
+// credentials, and adds the :443 listener so the host-matched routes serve over
+// it. Hosted-only and always-on (ENVIRONMENT.md # Networking & discovery); the
+// appliance path, which has no enrollment and serves plain-HTTP `.local`, never
+// calls this and keeps its :80-only config.
+//
+// The acme-dns provider sets only this box's own `_acme-challenge` TXT, so
+// renewal (~every 60 days) runs box→acme-dns directly with no malmo control-plane
+// call (cloud specs/ARCHITECTURE.md Contract 2). The challenge `server_url` is a
+// box-side constant (the same acme-dns endpoint for every box), not part of the
+// seeded payload.
+//
+// Idempotent: it removes any prior tls app config and re-puts (the file's
+// remove-then-put idiom), so a re-run at every boot converges cleanly. The DNS
+// provider's JSON shape is pinned to the caddy-dns/acmedns module compiled into
+// the hosted Caddy image; real issuance is verified end-to-end in the cloud
+// on-ramp (cloud #6 / CL6), not in the inner loop where there is no real ACME.
+func (c *Client) EnsureWildcardTLS(ctx context.Context, subjects []string, acmeDNSEndpoint string, enr EnrollmentCredentials) error {
+	tlsApp := map[string]any{
+		"automation": map[string]any{
+			"policies": []any{
+				map[string]any{
+					"subjects": subjects,
+					"issuers": []any{
+						map[string]any{
+							"module": "acme",
+							"challenges": map[string]any{
+								"dns": map[string]any{
+									"provider": map[string]any{
+										"name":       "acmedns",
+										"server_url": acmeDNSEndpoint,
+										"username":   enr.Username,
+										"password":   enr.Password,
+										"subdomain":  enr.Subdomain,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	// Remove-then-put so a re-run replaces the policy cleanly; PUT on a fresh
+	// (deleted) key creates it, matching upsertRoute's idiom. The DELETE is
+	// best-effort — an absent tls app is the first-boot case.
+	_ = c.del(ctx, "/config/apps/tls")
+	if err := c.put(ctx, "/config/apps/tls", tlsApp); err != nil {
+		return fmt.Errorf("caddy: configure wildcard tls: %w", err)
+	}
+	// Add :443 alongside the existing :80 so the same host-matched routes serve
+	// HTTPS. PATCH replaces the listen array the bootstrap config declared as
+	// [":80"].
+	if err := c.patch(ctx, "/config/apps/http/servers/malmo/listen", []any{":80", ":443"}); err != nil {
+		return fmt.Errorf("caddy: add :443 listener: %w", err)
+	}
+	slog.Info("caddy: wildcard TLS configured", "subjects", subjects)
+	return nil
+}
+
 func (c *Client) post(ctx context.Context, path string, body any) error {
 	return c.send(ctx, "POST", path, body)
+}
+
+// del issues a DELETE to a Caddy admin config path, tolerating a not-found
+// (the path was never configured — an absent tls app on first boot). Transport
+// failures are returned.
+func (c *Client) del(ctx context.Context, path string) error {
+	req, err := http.NewRequestWithContext(ctx, "DELETE", c.admin+path, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("caddy admin unreachable: %w", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	return nil
 }
 
 func (c *Client) patch(ctx context.Context, path string, body any) error {
