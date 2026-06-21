@@ -27,6 +27,35 @@ const submitting = ref(false);
 const error = ref("");
 // Held after a successful setup when recovery was on: the code to show once.
 const recoveryCode = ref<string | null>(null);
+// Save-it screen gating (FIRST_RUN.md # Step 2a): Continue stays disabled until
+// the user ticks the acknowledgement, so the single-reveal code isn't skipped past.
+const acknowledged = ref(false);
+const copied = ref(false);
+
+// copyCode copies the recovery code to the clipboard. The Clipboard API needs a
+// secure context — true on hosted (HTTPS) but not on the appliance dashboard
+// (http://*.local) — so fall back to a hidden-textarea execCommand there.
+async function copyCode() {
+  if (!recoveryCode.value) return;
+  try {
+    if (window.isSecureContext && navigator.clipboard) {
+      await navigator.clipboard.writeText(recoveryCode.value);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = recoveryCode.value;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+    copied.value = true;
+    setTimeout(() => (copied.value = false), 2000);
+  } catch {
+    // Clipboard blocked — the code is still on screen to copy by hand.
+  }
+}
 
 async function submit() {
   error.value = "";
@@ -97,7 +126,18 @@ async function submit() {
       Write this down or take a photo. If you forget your password, this code is
       the only way back in — we store only a hash, never the code itself.
     </p>
-    <div class="recovery">{{ recoveryCode }}</div>
-    <button type="submit">I've saved it — continue</button>
+    <div class="recovery-row">
+      <div class="recovery">{{ recoveryCode }}</div>
+      <button type="button" class="copy" @click="copyCode">
+        {{ copied ? "Copied" : "Copy" }}
+      </button>
+    </div>
+
+    <label class="check">
+      <input v-model="acknowledged" type="checkbox" />
+      I have saved this recovery code
+    </label>
+
+    <button type="submit" :disabled="!acknowledged">Continue</button>
   </form>
 </template>

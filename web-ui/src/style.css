@@ -40,6 +40,9 @@ body,
 .auth .error { color: #a11; font-size: 0.85rem; margin: 0; }
 .auth .hint { color: #666; font-size: 0.8rem; margin: 0; }
 .auth .recovery { background: #fff8d9; border: 1px solid #e6d27a; border-radius: 8px; padding: 0.75rem; font-family: ui-monospace, monospace; font-size: 0.9rem; word-break: break-all; }
+.auth .recovery-row { display: flex; align-items: stretch; gap: 0.5rem; }
+.auth .recovery-row .recovery { flex: 1; }
+.auth button.copy { border: 1px solid #cbd5e0; background: #f7fafc; color: #2d3748; border-radius: 8px; padding: 0 0.8rem; cursor: pointer; font-size: 0.85rem; flex-shrink: 0; }
 /* First-run wizard controls (Setup.vue steps). */
 .auth label.check { flex-direction: row; align-items: flex-start; gap: 0.5rem; color: #444; }
 .auth label.check input { width: auto; margin-top: 0.15rem; flex-shrink: 0; }

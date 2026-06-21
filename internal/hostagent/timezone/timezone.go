@@ -25,7 +25,7 @@ func New() *Setter { return &Setter{} }
 // at the privileged boundary — the brain validates the same shape before the
 // call — to keep anything path-traversal-y or otherwise unexpected from
 // reaching timedatectl's argv, even though the exec is shell-free.
-var zoneRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$`)
+var zoneRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+\-]*(/[A-Za-z0-9_+\-]+)*$`)
 
 // SetTimezone applies zone as the system timezone. It validates the zone shape,
 // then runs `timedatectl set-timezone <zone>`, which itself rejects a name not

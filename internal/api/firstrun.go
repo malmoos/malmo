@@ -43,7 +43,7 @@ func (s *Server) registerFirstRun(api huma.API) {
 // "Europe/Stockholm", "UTC"). The privileged host-agent setter re-validates the
 // same shape at the timedatectl boundary; this is the brain-side gate so a bad
 // zone is a clean 422 rather than a host 502.
-var tzRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$`)
+var tzRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+\-]*(/[A-Za-z0-9_+\-]+)*$`)
 
 // setTimezone applies the system time zone (TIME.md # System TZ). Admin-only
 // (FIRST_RUN.md # Roles — "Configure box"). The brain holds no time-zone state

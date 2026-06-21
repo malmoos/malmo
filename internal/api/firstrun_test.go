@@ -71,6 +71,27 @@ func TestSetTimezone_InvalidZone422(t *testing.T) {
 	}
 }
 
+// A comma in the zone name must be a brain-side 422, not a host 502. Regression
+// guard: the validator's character class once read `+-` as an ASCII range that
+// swept in `,`, so a comma slipped past the brain and only timedatectl rejected
+// it (yielding the wrong 502 status for what is malformed input).
+func TestSetTimezone_CommaRejected422(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "hunter2")
+
+	resp := h.do("POST", "/api/v1/system/timezone", map[string]string{"timezone": "Europe/Foo,Bar"})
+	if resp.StatusCode != 422 {
+		t.Fatalf("comma zone = %d; want 422 (brain-side rejection, not host 502)", resp.StatusCode)
+	}
+	resp.Body.Close()
+	h.pmu.Lock()
+	n := len(*h.tzCalls)
+	h.pmu.Unlock()
+	if n != 0 {
+		t.Errorf("host called %d times on comma zone; want 0", n)
+	}
+}
+
 func TestSetTimezone_HostError502(t *testing.T) {
 	h := newHarness(t)
 	h.setupAdmin("alice", "hunter2")
@@ -149,6 +170,16 @@ func TestSetTelemetry_RequiresAdmin(t *testing.T) {
 	resp.Body.Close()
 }
 
+func TestSetTelemetry_RequiresAuth(t *testing.T) {
+	h := newHarness(t) // no session
+
+	resp := h.do("POST", "/api/v1/system/telemetry", map[string]bool{"enabled": true})
+	if resp.StatusCode != 401 {
+		t.Fatalf("unauthenticated set telemetry = %d; want 401", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
 // --- POST /system/first-run-complete --------------------------------------
 
 func TestCompleteFirstRun_PersistsAndReflectedInState(t *testing.T) {
@@ -197,6 +228,16 @@ func TestCompleteFirstRun_RequiresAdmin(t *testing.T) {
 	resp := h.do("POST", "/api/v1/system/first-run-complete", nil)
 	if resp.StatusCode != 403 {
 		t.Fatalf("member complete first run = %d; want 403", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+func TestCompleteFirstRun_RequiresAuth(t *testing.T) {
+	h := newHarness(t) // no session
+
+	resp := h.do("POST", "/api/v1/system/first-run-complete", nil)
+	if resp.StatusCode != 401 {
+		t.Fatalf("unauthenticated complete first run = %d; want 401", resp.StatusCode)
 	}
 	resp.Body.Close()
 }
