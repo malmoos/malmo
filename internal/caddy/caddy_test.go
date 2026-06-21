@@ -112,6 +112,53 @@ func TestEnsureDashboardInstallsSplitRoute(t *testing.T) {
 	}
 }
 
+func TestEnsureWildcardTLS(t *testing.T) {
+	admin := &recordingAdmin{}
+	srv := httptest.NewServer(admin.handler())
+	defer srv.Close()
+	c := New(srv.URL)
+
+	subjects := []string{"cindy-fox.malmo.network", "*.cindy-fox.malmo.network"}
+	enr := EnrollmentCredentials{Subdomain: "abc-123", Username: "u", Password: "p"}
+	if err := c.EnsureWildcardTLS(context.Background(), subjects, "https://auth.malmo.network", enr); err != nil {
+		t.Fatalf("EnsureWildcardTLS: %v", err)
+	}
+
+	// Idempotent remove-then-put of the tls app.
+	if admin.find("DELETE", "/config/apps/tls") == nil {
+		t.Error("expected a DELETE of the tls app before PUT")
+	}
+	put := admin.find("PUT", "/config/apps/tls")
+	if put == nil {
+		t.Fatal("expected a PUT to /config/apps/tls")
+	}
+	policy := put.body["automation"].(map[string]any)["policies"].([]any)[0].(map[string]any)
+	gotSubjects := policy["subjects"].([]any)
+	if len(gotSubjects) != 2 || gotSubjects[0] != subjects[0] || gotSubjects[1] != subjects[1] {
+		t.Errorf("policy subjects = %v, want %v", gotSubjects, subjects)
+	}
+	issuer := policy["issuers"].([]any)[0].(map[string]any)
+	if issuer["module"] != "acme" {
+		t.Errorf("issuer module = %v, want acme", issuer["module"])
+	}
+	provider := issuer["challenges"].(map[string]any)["dns"].(map[string]any)["provider"].(map[string]any)
+	if provider["name"] != "acmedns" {
+		t.Errorf("dns provider = %v, want acmedns", provider["name"])
+	}
+	if provider["server_url"] != "https://auth.malmo.network" {
+		t.Errorf("provider server_url = %v", provider["server_url"])
+	}
+	if provider["username"] != "u" || provider["password"] != "p" || provider["subdomain"] != "abc-123" {
+		t.Errorf("provider creds = %v, want {abc-123 u p}", provider)
+	}
+
+	// The :443 listener is added alongside :80.
+	patch := admin.find("PATCH", "/servers/malmo/listen")
+	if patch == nil {
+		t.Fatal("expected a PATCH of the server listen array")
+	}
+}
+
 func TestWaitReadyReturnsWhenAdminAnswers(t *testing.T) {
 	admin := &recordingAdmin{}
 	srv := httptest.NewServer(admin.handler())
