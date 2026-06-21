@@ -157,7 +157,9 @@ for _i in $(seq 1 60); do
 done
 [ -f /var/lib/malmo/.control-plane-images-loaded ] || fail "control-plane image-load marker never appeared after 60s"
 cp_images="$(docker images --format '{{.Repository}}' 2>&1 || true)"
-for repo in malmo-brain malmo-ui caddy tecnativa/docker-socket-proxy; do
+# Hosted bakes the caddy-dns/acmedns Caddy build (malmo-caddy-acmedns), not stock
+# caddy:2-alpine — the wildcard cert needs the DNS-01 module (os #207/C3b).
+for repo in malmo-brain malmo-ui malmo-caddy-acmedns tecnativa/docker-socket-proxy; do
     grep -qx "$repo" <<<"$cp_images" || fail "baked image '$repo' not loaded (have: $(tr '\n' ' ' <<<"$cp_images"))"
 done
 

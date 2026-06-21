@@ -24,7 +24,7 @@ WORK="${REPO_ROOT}/.dev/cloud-boot"
 EXTRA="${TEST_DIR}/mkosi.extra"
 PKGMNGR="${TEST_DIR}/mkosi.pkgmngr"
 CANARY="${WORK}/.cloud-boot-ready"
-CANARY_VERSION="v12"  # bump when staging/mkosi.conf/repart changes require a clean rebuild
+CANARY_VERSION="v13"  # bump when staging/mkosi.conf/repart changes require a clean rebuild
 IMAGE_OUT="${WORK}/malmo-cloud.raw"
 
 if [ "${EUID:-$(id -u)}" -ne 0 ]; then
@@ -158,6 +158,7 @@ Environment=MALMO_PROXY_IMAGE=tecnativa/docker-socket-proxy:v0.4.2
 Environment=MALMO_PROXY_IMAGE_TAR=/var/lib/malmo/control-plane-images/docker-socket-proxy.tar
 Environment=MALMO_CONTROL_PLANE_DIR=/var/lib/malmo/control-plane
 Environment=MALMO_DASHBOARD_UI_UPSTREAM=malmo-ui:80
+Environment=MALMO_CADDY_IMAGE=malmo-caddy-acmedns:dev
 EOF
 
 # PAM stack for host-agent-real's verify-password (kept in hosted). Without it
@@ -169,6 +170,17 @@ cp "${REPO_ROOT}/dev/pam/malmo" "$EXTRA/etc/pam.d/malmo"
 # medium lane — same offline-first mechanism, TESTING.md # Full-stack control-
 # plane integration). The VM is air-gapped, so every image is a local tarball.
 cp "$CP_BUNDLE"/*.tar "$EXTRA/var/lib/malmo/control-plane-images/"
+# Hosted-only Caddy swap: the wildcard cert needs the caddy-dns/acmedns module
+# (ACME DNS-01 — os #207/C3b), which stock caddy:2-alpine lacks. Build the xcaddy
+# recipe and docker-save it OVER the *staged* caddy.tar — not the shared
+# $CP_BUNDLE copy, which the appliance/medium lane keeps on stock caddy (it does
+# no ACME). The drop-in above sets MALMO_CADDY_IMAGE so the brain's control-plane
+# compose runs this image; load-control-plane-images.sh loads it from the tar
+# regardless of filename (build-host network only; the VM never pulls).
+CADDY_ACMEDNS_IMAGE="malmo-caddy-acmedns:dev"
+echo "building hosted Caddy with the caddy-dns/acmedns module (xcaddy)..."
+docker build -t "$CADDY_ACMEDNS_IMAGE" "${REPO_ROOT}/dev/control-plane/caddy-acmedns/"
+docker save "$CADDY_ACMEDNS_IMAGE" -o "$EXTRA/var/lib/malmo/control-plane-images/caddy.tar"
 cp "${REPO_ROOT}/dev/test-qemu/load-control-plane-images.sh" "$EXTRA/usr/lib/malmo/"
 chmod 0755 "$EXTRA/usr/lib/malmo/load-control-plane-images.sh"
 cp "${REPO_ROOT}/dev/test-qemu/malmo-load-images.service" "$EXTRA/etc/systemd/system/"
