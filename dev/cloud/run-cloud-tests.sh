@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Cloud-lane boot proof + hosted /setup gate end-to-end (C2 #205; C3a cloud-lane
-# #220): build the hosted cloud image, convert it to the qcow2 cloud artifact, and
-# boot it in QEMU to prove the control plane comes up AND the hosted first-boot
-# provisioning seed + admin-bootstrap gate work end-to-end. The cloud analogue of
+# Cloud-lane end-to-end: boot proof + hosted /setup gate + first-run wizard (C2
+# #205; C3a cloud-lane #220; C5 #209): build the hosted cloud image, convert it to
+# the qcow2 cloud artifact, and boot it in QEMU to prove the control plane comes up,
+# the hosted first-boot provisioning seed + admin-bootstrap gate work, AND the new
+# admin can drive the trimmed first-run wizard to completion — the box becomes a
+# working, admin-owned, served, first-run-complete malmo. The cloud analogue of
 # dev/test-qemu/run-medium-tests.sh, MINUS swtpm + LUKS (no TPM/disk encryption in
 # hosted — "the disk IS the installed system", ENVIRONMENT.md # Provisioning), PLUS
-# the seed delivery the medium lane has no analogue for.
+# the seed delivery + wizard the medium lane has no analogue for.
 #
 # Three sequential UEFI boots over ONE persisted qcow2 overlay (so the brain's
 # box-id + first admin carry boot→boot), one virtio NIC with restrict=on (air-
@@ -17,9 +19,13 @@
 #
 #   boot 1  un-seeded   no seed → POST /setup ⇒ 503 (gate armed, stays closed)
 #   boot 2  seeded      seed A over SMBIOS → wrong secret ⇒ 401, correct ⇒ 200 + box_id;
-#                       first admin created and persisted on the overlay
+#                       first admin created and persisted on the overlay, then that
+#                       admin drives the first-run wizard to completion (C4 #208): PAM
+#                       /login → timezone + telemetry → first-run-complete, asserting the
+#                       box is admin-owned, served, marked complete (the C5 #209 bar)
 #   boot 3  frozen      a DIFFERENT seed B delivered, same overlay → the brain ignores
-#                       it (identity frozen in SQLite); /login still reports box_id A
+#                       it (identity frozen in SQLite); /login still reports box_id A and
+#                       first_run_complete persists (the wizard does not reappear)
 #
 # The seed is delivered as a systemd credential over SMBIOS type 11 (the same
 # mechanism the medium lane uses for the LUKS passphrase; on a real cloud the same
@@ -27,7 +33,8 @@
 # /var/lib/malmo/seed.json before host-agent launches the brain.
 #
 # See docs/specs/TESTING.md # Full-stack control-plane integration,
-# docs/progress/cloud-vm-boot-proof.md, and docs/progress/cloud-seed-delivery.md.
+# docs/progress/cloud-vm-boot-proof.md, docs/progress/cloud-seed-delivery.md, and
+# docs/progress/cloud-e2e-test.md.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -225,12 +232,14 @@ echo "boot 1 OK — control plane up, hosted /setup gate armed (503, unprovision
 
 # --- 5. boot 2: seeded. Deliver seed A → the brain ingests it; a wrong secret is
 # 401, the correct secret creates the first admin (200) and the response surfaces
-# box_id A. The admin + box-id persist on the overlay.
+# box_id A. The admin then drives the first-run wizard to completion (PAM /login →
+# timezone + telemetry → first-run-complete). The admin, box-id, and first-run
+# marker persist on the overlay.
 if ! run_boot "seeded" "seeded" -smbios "type=11,value=$(seed_cred "$BOX_ID_A")"; then
     echo "cloud gate proof: ${VERDICT}" >&2
     exit 1
 fi
-echo "boot 2 OK — seed ingested, wrong secret 401, correct secret 200 + box_id=${BOX_ID_A}"
+echo "boot 2 OK — seed ingested (401/200 + box_id=${BOX_ID_A}), first-run wizard completed (PAM login, tz+telemetry, marker set)"
 
 # --- 6. boot 3: frozen identity. Re-deliver a DIFFERENT seed B over the SAME
 # overlay. The brain loads its persisted box-id A from SQLite and ignores the new
@@ -240,8 +249,8 @@ if ! run_boot "frozen" "frozen:${BOX_ID_A}" -smbios "type=11,value=$(seed_cred "
     echo "cloud gate proof: ${VERDICT}" >&2
     exit 1
 fi
-echo "boot 3 OK — frozen identity held across reboot (re-delivered seed B ignored, box_id still ${BOX_ID_A})"
+echo "boot 3 OK — frozen identity held across reboot (re-delivered seed B ignored, box_id still ${BOX_ID_A}, first-run marker persisted)"
 
-echo "cloud gate proof: PASS (un-seeded 503 → seeded 401/200+box_id → frozen reboot)"
+echo "cloud end-to-end: PASS (un-seeded 503 → seeded 401/200+box_id+wizard → frozen reboot)"
 echo "qcow2 cloud artifact: ${QCOW2}"
 exit 0

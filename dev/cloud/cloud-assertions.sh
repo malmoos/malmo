@@ -15,10 +15,15 @@
 # selected via the malmo.assert credential:
 #
 #     unseeded         no seed ingested → POST /setup ⇒ 503 (gate armed, closed)
-#     seeded           seed on disk → wrong secret ⇒ 401, correct ⇒ 200 + box_id
+#     seeded           seed on disk → wrong secret ⇒ 401, correct ⇒ 200 + box_id;
+#                      then the new admin drives the first-run wizard to completion
+#                      (C4 #208): PAM /login → set timezone + telemetry → first-run-
+#                      complete, asserting the box becomes admin-owned and served with
+#                      the marker set and box_id persisted (the C5 #209 acceptance bar)
 #     frozen:<box-id>  reboot with a DIFFERENT seed → /login still reports <box-id>
 #                      (the brain's persisted identity is frozen; the new seed is
-#                      ignored), and seed.json on disk holds the new, ignored box-id
+#                      ignored), seed.json on disk holds the new ignored box-id, and
+#                      first_run_complete persists (the wizard does not reappear)
 #
 # On PASS the script powers the box off cleanly (the serial-only analogue of the
 # medium lane's SSH `systemctl poweroff`) so the brain's SQLite box-id write flushes
@@ -219,6 +224,40 @@ json_str() { # FILE KEY -> value
     sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" | head -1
 }
 
+# Extract the session cookie ("malmo_session=<tok>") from a /login (or /setup)
+# response's Set-Cookie header, dropping the attributes after the first ';'. The
+# wizard's box-configuration endpoints are admin-gated, so they need this cookie.
+session_cookie() { # RESPONSE -> "malmo_session=<tok>"
+    grep -i '^Set-Cookie:' <<<"$1" \
+        | sed -E 's/^[Ss]et-[Cc]ookie:[[:space:]]*([^;]*).*/\1/' | tr -d '\r' | head -1
+}
+# Authenticated POST carrying the session cookie -> full response. An empty body
+# arg is sent as a bodyless POST (Content-Length: 0, no Content-Type) for the
+# no-body endpoints (POST /system/first-run-complete).
+auth_post() { # COOKIE PATH HOST [JSON] -> full response
+    local cookie="$1" path="$2" host="$3" body="${4:-}" len
+    exec 3<>/dev/tcp/127.0.0.1/80 || return 1
+    if [ -n "$body" ]; then
+        len="$(printf '%s' "$body" | wc -c | tr -d ' ')"
+        printf 'POST %s HTTP/1.0\r\nHost: %s\r\nCookie: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' \
+            "$path" "$host" "$cookie" "$len" "$body" >&3
+    else
+        printf 'POST %s HTTP/1.0\r\nHost: %s\r\nCookie: %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n' \
+            "$path" "$host" "$cookie" >&3
+    fi
+    cat <&3
+    exec 3>&- 3<&-
+}
+# Authenticated GET carrying the session cookie -> full response.
+auth_get() { # COOKIE PATH HOST -> full response
+    exec 3<>/dev/tcp/127.0.0.1/80 || return 1
+    printf 'GET %s HTTP/1.0\r\nHost: %s\r\nCookie: %s\r\nConnection: close\r\n\r\n' "$2" "$3" "$1" >&3
+    cat <&3
+    exec 3>&- 3<&-
+}
+# First line of an HTTP response, CR-stripped (for status-line checks/messages).
+status_of() { printf '%s' "$1" | head -1 | tr -d '\r'; }
+
 # --- 7. the dashboard SPA answers through Caddy (the control-plane-up proof).
 # The brain flips/installs the dashboard route a beat after Caddy comes up, so poll.
 spa=""
@@ -284,6 +323,58 @@ seeded)
     grep -q ' 200' <<<"$line" || fail "seeded /setup with the correct secret: status='$line' (want 200)"
     grep -q "\"box_id\":\"$box_id\"" <<<"$resp" || fail "seeded /setup 200 did not surface box_id=$box_id (body: $(printf '%s' "$resp" | tail -1))"
     echo "cloud-assertions: hosted /setup gate — wrong secret 401, correct secret 200 + box_id=$box_id"
+
+    # --- Wizard completion end-to-end (C4 #208; the C5 #209 acceptance bar). The
+    # admin just created drives the trimmed hosted first-run wizard to completion,
+    # turning the seeded box into a working, admin-owned, served, first-run-complete
+    # malmo. The brain endpoints are admin-gated, so first authenticate.
+
+    # PAM login: the new admin authenticates against /etc/shadow via host-agent
+    # verify-password (the real PAM path, not the seed secret). Keep the session
+    # cookie for the admin-gated wizard steps.
+    login="$(http_post /api/v1/login "$DASH_HOST" \
+        "{\"username\":\"$SETUP_USER\",\"password\":\"$SETUP_PW\"}" 2>/dev/null || true)"
+    grep -q ' 200' <<<"$(status_of "$login")" || \
+        fail "PAM /login after setup: status='$(status_of "$login")' (want 200 — verify-password against /etc/shadow)"
+    cookie="$(session_cookie "$login")"
+    [ -n "$cookie" ] || fail "no session cookie from /login (status: $(status_of "$login"))"
+
+    # Wizard step — time zone: a real pass-through to host-agent timedatectl (wired
+    # in the hosted build). 200 proves the step works on the real hosted box, not
+    # only against the fake host-agent. This is the first C4 (#208) endpoint the
+    # lane hits, so its status discriminates the two likely setup mistakes: 404 ⇒
+    # the baked brain image predates C4 (rebuild the control-plane bundle with
+    # MALMO_REBUILD_CP=1); 502 ⇒ timedatectl rejected the zone, i.e. tzdata missing
+    # from the lean image (dev/cloud/mkosi.conf).
+    tz="$(auth_post "$cookie" /api/v1/system/timezone "$DASH_HOST" '{"timezone":"Europe/Stockholm"}' 2>/dev/null || true)"
+    grep -q ' 200' <<<"$(status_of "$tz")" || \
+        fail "wizard set-timezone: status='$(status_of "$tz")' (want 200; 404 ⇒ baked brain predates C4 — rebuild the CP bundle, MALMO_REBUILD_CP=1; 502 ⇒ timedatectl failed — tzdata missing from the image?)"
+
+    # Wizard step — telemetry: record the box-level choice (off; TELEMETRY.md — the
+    # founding admin makes the box-wide decision once).
+    tel="$(auth_post "$cookie" /api/v1/system/telemetry "$DASH_HOST" '{"enabled":false}' 2>/dev/null || true)"
+    grep -q ' 200' <<<"$(status_of "$tel")" || \
+        fail "wizard set-telemetry: status='$(status_of "$tel")' (want 200)"
+
+    # Wizard step — Done: mark first-run complete (the bootstrap marker C5 asserts).
+    done_resp="$(auth_post "$cookie" /api/v1/system/first-run-complete "$DASH_HOST" '' 2>/dev/null || true)"
+    grep -q ' 200' <<<"$(status_of "$done_resp")" || \
+        fail "wizard first-run-complete: status='$(status_of "$done_resp")' (want 200)"
+    grep -q '"first_run_complete":true' <<<"$done_resp" || \
+        fail "first-run-complete 200 did not confirm the marker (body: $(printf '%s' "$done_resp" | tail -1))"
+
+    # The wizard will not reappear: the public bootstrap probe now reports
+    # first_run_complete=true (App.vue gates the wizard on this flag, not has_users).
+    state="$(auth_get "$cookie" /api/v1/auth/state "$DASH_HOST" 2>/dev/null || true)"
+    grep -q '"first_run_complete":true' <<<"$state" || \
+        fail "/auth/state first_run_complete != true after the wizard — it would reappear (body: $(printf '%s' "$state" | tail -1))"
+
+    # box_id is persisted and surfaced on the authenticated identity (/me), not just
+    # echoed by the one-shot /setup response.
+    me="$(auth_get "$cookie" /api/v1/me "$DASH_HOST" 2>/dev/null || true)"
+    grep -q "\"box_id\":\"$box_id\"" <<<"$me" || \
+        fail "/me did not surface persisted box_id=$box_id after the wizard (body: $(printf '%s' "$me" | tail -1))"
+    echo "cloud-assertions: wizard complete — PAM /login 200, tz+telemetry set, first-run-complete; box_id=$box_id persisted on /me; wizard will not reappear"
     ;;
 frozen:*)
     expect="${MODE#frozen:}"
@@ -297,6 +388,12 @@ frozen:*)
     line="$(printf '%s' "$login" | head -1)"
     grep -q ' 200' <<<"$line" || fail "frozen mode: /login status='$line' (want 200 — the seeded boot's admin should persist across the reboot)"
     grep -q "\"box_id\":\"$expect\"" <<<"$login" || fail "frozen mode: /login box_id != $expect — a re-delivered seed re-keyed the box! (body: $(printf '%s' "$login" | tail -1))"
+    # The first-run-complete marker written during the seeded boot survives the
+    # power-cycle: the wizard does not reappear after a reboot (FIRST_RUN.md # Phase 3).
+    fr_cookie="$(session_cookie "$login")"
+    fr_state="$(auth_get "$fr_cookie" /api/v1/auth/state "$DASH_HOST" 2>/dev/null || true)"
+    grep -q '"first_run_complete":true' <<<"$fr_state" || \
+        fail "frozen mode: first_run_complete not persisted across the reboot — the wizard would reappear (body: $(printf '%s' "$fr_state" | tail -1))"
     # Confirm the on-disk seed really is this boot's distinct seed (a no-op overwrite
     # would make the frozen assertion vacuous). A warning, not a failure: the identity
     # assertion above is the real proof.
