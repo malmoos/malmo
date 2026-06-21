@@ -51,7 +51,12 @@ type harness struct {
 	// (closes the 0015/0016 orphan-on-rollback gap; see
 	// docs/progress/0017-host-agent-delete-user.md).
 	deleteCalls *[]string
-	apiSrv      *Server // the underlying api.Server, for direct method tests
+	// tzCalls records every zone passed to the host-agent
+	// /v1/system/set-timezone mock. Guarded by pmu. Lets first-run tests assert
+	// the zone reached the host. The sentinel tzFailSentinel makes the mock
+	// return 500 so the brain's host-502 path is reachable.
+	tzCalls *[]string
+	apiSrv  *Server // the underlying api.Server, for direct method tests
 	// catalogDir is the root the harness's catalog reads from. catalog.Load
 	// hits the filesystem on each call, so tests write manifest fixtures into
 	// this dir *after* construction and the live server picks them up — no need
@@ -112,6 +117,22 @@ func newHarness(t *testing.T, opts ...func(*Server)) *harness {
 		pmu.Unlock()
 		_ = json.NewEncoder(w).Encode(struct{}{})
 	})
+	// tzFailSentinel is a syntactically-valid zone (passes the brain's tzRe) that
+	// the mock answers with 500, so first-run tests can drive the host-502 path.
+	tzCalls := []string{}
+	mux.HandleFunc("POST /v1/system/set-timezone", func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.SetTimezoneRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Zone == tzFailSentinel {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(protocol.Error{Code: "set-timezone-failed", Message: "boom"})
+			return
+		}
+		pmu.Lock()
+		tzCalls = append(tzCalls, req.Zone)
+		pmu.Unlock()
+		_ = json.NewEncoder(w).Encode(struct{}{})
+	})
 	deleteCalls := []string{}
 	mux.HandleFunc("POST /v1/auth/delete-user", func(w http.ResponseWriter, r *http.Request) {
 		var req protocol.DeleteUserRequest
@@ -168,7 +189,7 @@ func newHarness(t *testing.T, opts ...func(*Server)) *harness {
 	t.Cleanup(ts.Close)
 
 	jar, _ := newJar()
-	return &harness{srv: ts, jar: jar, t: t, pwds: pwds, pmu: &pmu, st: st, deleteCalls: &deleteCalls, apiSrv: srv, catalogDir: catDir}
+	return &harness{srv: ts, jar: jar, t: t, pwds: pwds, pmu: &pmu, st: st, deleteCalls: &deleteCalls, tzCalls: &tzCalls, apiSrv: srv, catalogDir: catDir}
 }
 
 func (h *harness) do(method, path string, body any) *http.Response {

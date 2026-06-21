@@ -72,6 +72,12 @@ func (c *Client) SetRole(ctx context.Context, user, role string) error {
 	return c.do(ctx, "POST", "/v1/auth/set-role", protocol.SetRoleRequest{User: user, Role: role}, nil)
 }
 
+// SetTimezone applies the system timezone via host-agent (timedatectl set-timezone).
+// zone is an IANA tz database name; the brain validates it before calling.
+func (c *Client) SetTimezone(ctx context.Context, zone string) error {
+	return c.do(ctx, "POST", "/v1/system/set-timezone", protocol.SetTimezoneRequest{Zone: zone}, nil)
+}
+
 // DeleteUser removes the user. Idempotent: unknown user returns nil.
 func (c *Client) DeleteUser(ctx context.Context, user string) error {
 	return c.do(ctx, "POST", "/v1/auth/delete-user", protocol.DeleteUserRequest{User: user}, nil)

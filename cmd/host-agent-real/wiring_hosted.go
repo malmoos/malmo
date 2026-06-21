@@ -13,6 +13,7 @@ import (
 	"github.com/malmoos/malmo/internal/hostagent/rampressure"
 	"github.com/malmoos/malmo/internal/hostagent/rebootrequired"
 	"github.com/malmoos/malmo/internal/hostagent/servicehealth"
+	"github.com/malmoos/malmo/internal/hostagent/timezone"
 	"github.com/malmoos/malmo/internal/hostagent/usermgr"
 	"github.com/malmoos/malmo/internal/protocol"
 )
@@ -47,6 +48,7 @@ func buildAgent() (*hostagent.Agent, func()) {
 		noopPublisher{},
 	)
 	a.UserMgr = &usermgr.LinuxUserManager{}
+	a.Timezone = timezone.New()
 	a.Health = healthsource.New(healthsource.DefaultPath)
 	a.Services = servicehealth.New()
 	a.Time = clockhealth.New()

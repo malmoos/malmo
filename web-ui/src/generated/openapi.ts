@@ -621,6 +621,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/first-run-complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark the first-run wizard complete so it never reappears (admin) */
+        post: operations["complete-first-run"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/system/storage": {
         parameters: {
             query?: never;
@@ -632,6 +649,40 @@ export interface paths {
         get: operations["get-system-storage"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/telemetry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record the box-wide telemetry consent choice (admin) */
+        post: operations["set-telemetry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/timezone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set the system time zone via host-agent timedatectl (admin) */
+        post: operations["set-timezone"];
         delete?: never;
         options?: never;
         head?: never;
@@ -729,7 +780,9 @@ export interface components {
              * @example https://example.com/schemas/Auth-stateResponse.json
              */
             readonly $schema?: string;
+            first_run_complete: boolean;
             has_users: boolean;
+            profile: string;
         };
         "Auth-usersResponse": {
             /**
@@ -753,6 +806,15 @@ export interface components {
             readonly $schema?: string;
             current_password: string;
             new_password: string;
+        };
+        "Complete-first-runResponse": {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/Complete-first-runResponse.json
+             */
+            readonly $schema?: string;
+            first_run_complete: boolean;
         };
         ConfigStruct: {
             folders?: components["schemas"]["FolderElection"][] | null;
@@ -1303,6 +1365,42 @@ export interface components {
             readonly $schema?: string;
             provider_id: string;
         };
+        "Set-telemetryRequest": {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/Set-telemetryRequest.json
+             */
+            readonly $schema?: string;
+            enabled: boolean;
+        };
+        "Set-telemetryResponse": {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/Set-telemetryResponse.json
+             */
+            readonly $schema?: string;
+            enabled: boolean;
+        };
+        "Set-timezoneRequest": {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/Set-timezoneRequest.json
+             */
+            readonly $schema?: string;
+            timezone: string;
+        };
+        "Set-timezoneResponse": {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/Set-timezoneResponse.json
+             */
+            readonly $schema?: string;
+            timezone: string;
+        };
         SetupRequest: {
             /**
              * Format: uri
@@ -1312,6 +1410,7 @@ export interface components {
             readonly $schema?: string;
             bootstrap_secret?: string;
             password: string;
+            recovery?: boolean;
             username: string;
         };
         SetupResponse: {
@@ -2657,6 +2756,35 @@ export interface operations {
             };
         };
     };
+    "complete-first-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Complete-first-runResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     "get-system-storage": {
         parameters: {
             query?: never;
@@ -2673,6 +2801,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SystemStorageDTO"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "set-telemetry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Set-telemetryRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Set-telemetryResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "set-timezone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Set-timezoneRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Set-timezoneResponse"];
                 };
             };
             /** @description Error */

@@ -1,63 +1,41 @@
 <script setup lang="ts">
-import { ref } from "vue";
-import { setup, setupComplete } from "./auth";
-import type { ApiError } from "./api";
+// First-run wizard shell (FIRST_RUN.md # Phase 2). Renders one step at a time
+// and advances on each step's `done` event. The step list is data-driven on
+// purpose: this C4 slice ships the trimmed hosted set, and the same four steps
+// serve the appliance too (ENVIRONMENT.md # Provisioning — "Telemetry consent
+// stays as specced"). The appliance's network/storage and the enrollment step
+// (FIRST_RUN.md # Step 1 / Step 5) are spliced into this list by a later change
+// (B4) per profile, without touching the shell.
+import { ref, computed, markRaw, type Component } from "vue";
+import { useAuth } from "./auth";
+import AdminStep from "./setup/AdminStep.vue";
+import TimezoneStep from "./setup/TimezoneStep.vue";
+import TelemetryStep from "./setup/TelemetryStep.vue";
+import DoneStep from "./setup/DoneStep.vue";
 
-// FIRST_RUN.md # Step 2 says the user types a first name + password and
-// display-name is shown everywhere. For the single-user walking-skeleton
-// phase we skip the name entirely — only a password — and hardcode the slug
-// to "admin". The multi-user UI (and the user-list login screen from
-// AUTH.md # Login screen UX) is downstream of this.
-const password = ref("");
-const submitting = ref(false);
-const error = ref("");
-// AUTH.md # Recovery: the recovery code is shown exactly once. We display it
-// after setup succeeds and require an explicit "I've saved it" click before
-// continuing — the brain has only the hash, so this is the user's one chance.
-const recoveryCode = ref<string | null>(null);
+const { hasUsers } = useAuth();
 
-async function submit() {
-  error.value = "";
-  submitting.value = true;
-  try {
-    const res = await setup("admin", password.value);
-    recoveryCode.value = res.recovery_code;
-  } catch (e) {
-    error.value = (e as ApiError).message || "Setup failed";
-  } finally {
-    submitting.value = false;
-  }
-}
+const steps: Component[] = [
+  markRaw(AdminStep),
+  markRaw(TimezoneStep),
+  markRaw(TelemetryStep),
+  markRaw(DoneStep),
+];
 
-function acknowledge() {
-  setupComplete();
+// Resume: if an admin already exists, the wizard was interrupted after POST
+// /setup (the account is made, the box just isn't first-run-complete yet —
+// FIRST_RUN.md # Phase 3). Skip the admin step and pick up at time zone.
+const current = ref(hasUsers.value ? 1 : 0);
+const step = computed(() => steps[current.value]!);
+
+function next() {
+  if (current.value < steps.length - 1) current.value++;
 }
 </script>
 
 <template>
   <main class="auth">
     <h1>malmo</h1>
-    <form v-if="!recoveryCode" @submit.prevent="submit">
-      <h2>Set your password</h2>
-      <p class="hint">This is the only account on the box — the admin.</p>
-      <label>
-        Password
-        <input v-model="password" type="password" autocomplete="new-password" required autofocus />
-      </label>
-      <button type="submit" :disabled="submitting">
-        {{ submitting ? "Creating…" : "Continue" }}
-      </button>
-      <p v-if="error" class="error">{{ error }}</p>
-    </form>
-
-    <form v-else @submit.prevent="acknowledge">
-      <h2>Save your recovery code</h2>
-      <p class="hint">
-        Write this down. If you lose your password, this is the only way back in —
-        we don't store the code itself, just a hash.
-      </p>
-      <div class="recovery">{{ recoveryCode }}</div>
-      <button type="submit">I've saved it — continue</button>
-    </form>
+    <component :is="step" @done="next" />
   </main>
 </template>

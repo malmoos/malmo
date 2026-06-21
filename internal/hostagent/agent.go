@@ -202,6 +202,18 @@ type UserManager interface {
 	ReleaseAppService(uid int) error
 }
 
+// TimezoneSetter is a consumer-side interface for the system-timezone op behind
+// POST /v1/system/set-timezone (TIME.md # System TZ): the first-run wizard's
+// time-zone step and the later Settings → System → Time surface drive it
+// through the brain. Provider packages (timezone.Setter, real `timedatectl
+// set-timezone`) export concrete types only. zone is a pre-validated IANA tz
+// database name. Applies to both build profiles — a hosted VM and an appliance
+// both run in a timezone (ENVIRONMENT.md # Provisioning keeps the time-zone
+// step in the trimmed wizard).
+type TimezoneSetter interface {
+	SetTimezone(zone string) error
+}
+
 // Agent is the HTTP handler set for host-agent. It holds both the
 // PasswordVerifier (swapped per binary) and the in-memory fake maps used by
 // setPassword / setRole / deleteUser when UserMgr is nil (the fake binary).
@@ -299,6 +311,13 @@ type Agent struct {
 	// so /etc/passwd + /etc/shadow + /etc/group become the source of truth.
 	UserMgr UserManager
 
+	// Timezone, when non-nil, backs POST /v1/system/set-timezone (real
+	// `timedatectl set-timezone`). Wired by cmd/host-agent-real in both build
+	// profiles (timezone applies to a hosted VM and an appliance alike). When
+	// nil (cmd/host-agent fake, dev loop), set-timezone is an accepted no-op:
+	// the dev box's clock is the developer's, not the brain's to retune.
+	Timezone TimezoneSetter
+
 	// GPU, when non-nil, backs GET /v1/system/gpu. Swapped per binary: the real
 	// /dev/dri detector (cmd/host-agent-real, #125) vs FakeGPUReporter. When
 	// nil, the endpoint reports present: false — an agent with no detector
@@ -356,6 +375,7 @@ func (a *Agent) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/auth/set-password", a.setPassword)
 	mux.HandleFunc("POST /v1/auth/set-role", a.setRole)
 	mux.HandleFunc("POST /v1/auth/delete-user", a.deleteUser)
+	mux.HandleFunc("POST /v1/system/set-timezone", a.setTimezone)
 	mux.HandleFunc("GET /v1/health/system", a.systemHealth)
 	mux.HandleFunc("GET /v1/journal/follow", a.journalFollow)
 	mux.HandleFunc("GET /v1/users/{username}/home", a.resolveHome)
@@ -791,6 +811,39 @@ func (a *Agent) deleteUser(w http.ResponseWriter, r *http.Request) {
 	a.persistLocked()
 	a.mu.Unlock()
 	slog.Info("delete-user", "user", req.User)
+	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+// setTimezone applies the system timezone (TIME.md # System TZ).
+//
+// When Timezone is wired (cmd/host-agent-real, both build profiles), delegates
+// to the real `timedatectl set-timezone <zone>`. When nil (cmd/host-agent fake,
+// dev loop), it is an accepted no-op — the dev box's clock isn't the brain's to
+// retune, but the wizard's time-zone step must still get a clean 200 so the
+// inner dev loop walks the whole flow. zone format is validated by the brain
+// before the call and re-validated by the real setter at the privileged
+// boundary; here we only reject the empty string. Error detail stays out of the
+// body, same opaque-error posture as set-password.
+func (a *Agent) setTimezone(w http.ResponseWriter, r *http.Request) {
+	var req protocol.SetTimezoneRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.Zone == "" {
+		writeErr(w, http.StatusBadRequest, "bad-request", "zone is required")
+		return
+	}
+	if a.Timezone == nil {
+		slog.Info("set-timezone (fake)", "zone", req.Zone)
+		writeJSON(w, http.StatusOK, struct{}{})
+		return
+	}
+	if err := a.Timezone.SetTimezone(req.Zone); err != nil {
+		slog.Error("set-timezone: setter error", "err", err)
+		writeErr(w, http.StatusInternalServerError, "set-timezone-failed", "set-timezone failed")
+		return
+	}
+	slog.Info("set-timezone", "zone", req.Zone)
 	writeJSON(w, http.StatusOK, struct{}{})
 }
 
