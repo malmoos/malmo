@@ -11,7 +11,7 @@ Realizes **C3b (#207)** — the hosted box's always-on `<slug>.<box-id>.malmo.ne
 ### Typed enrollment, persisted and reloaded (`internal/profile`, `internal/store`, `cmd/brain`)
 
 - `internal/profile/seed.go`: `Seed.Enrollment` changed from `json.RawMessage` to a typed `EnrollmentCredentials{Subdomain, Username, Password}` whose JSON tags mirror the cloud producer's `internal/seed.EnrollmentCredentials` byte-for-byte. Optional at parse (`Complete()` reports all three present); a hosted box seeded without it still gates `/setup`, it just gets no cert.
-- `cmd/brain/main.go` `loadHostedEnvironment` now also returns the enrollment and persists it (`store.BoxMetaEnrollment`, JSON) in **hash → enrollment → box-id** order — box-id stays the crash-safe commit marker. Frozen-identity boots reload the persisted enrollment (the seed is ignored), so Caddy can be reconfigured without it. Persisting/reloading is best-effort and non-fatal: the `/setup` gate never depends on it.
+- `cmd/brain/main.go` `loadHostedEnvironment` now also returns the enrollment and persists it (`store.BoxMetaEnrollment`, JSON) in **hash → enrollment → box-id** order — box-id stays the crash-safe commit marker. A complete enrollment that fails to persist **aborts the ingest before the box-id commit marker** (mirroring the hash-persist abort), so the seed is re-ingested next boot rather than freezing an identity whose enrollment was never recorded — a frozen box with no enrollment row would skip the cert pass on every subsequent boot. A seed with *no* enrollment is a legitimate "no HTTPS" box and proceeds. Frozen-identity boots reload the persisted enrollment (the seed is ignored), so Caddy can be reconfigured without it.
 
 ### Caddy DNS-01 wildcard (`internal/caddy`, `cmd/brain`)
 
@@ -43,6 +43,7 @@ Realizes **C3b (#207)** — the hosted box's always-on `<slug>.<box-id>.malmo.ne
 - **Enrollment creds stored plaintext** in `box_meta`, matching the cloud producer's MVP posture — a leaked pair only lets an attacker renew certs for that one box. At-rest encryption is a deferred hardening item (`NEXT.md`).
 - **Appliance secure-URLs toggle not built.** This is hosted-only and always-on. The profile-aware seam is structured so the appliance toggle (`MALMO_NETWORK.md` # The toggle) can reuse it, but interactive enrollment + the Settings toggle are a separate later issue.
 - **Custom Caddy image wiring into the hosted image / offline bundle** is not landed here — the compose is parameterized and the recipe exists, but baking the built image into the hosted cloud image and setting `MALMO_CADDY_IMAGE` there is part of the hosted-image / CL6 work.
+- **Caddy has no persistent `/data` volume in the control-plane compose**, so the wildcard cert and the admin-API-set (ephemeral) `:443` TLS policy live only in the running Caddy. A Caddy-only restart drops both, and the brain re-asserts `EnsureWildcardTLS` only on *its* next restart — so a Caddy bounce without a brain bounce leaves the box serving no HTTPS until the brain restarts. Same class as the deferred Caddy-reconnect handling (#187); recorded here, not fixed in this PR. A `caddy_data` volume (persisting the issued cert + Caddy's autosave config across restarts) is the likely fix when #187 is taken.
 
 ## What's next
 

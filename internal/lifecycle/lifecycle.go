@@ -730,11 +730,18 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	}
 	inst.State = "running"
 	m.emitState(inst, "installing")
+	// Hosted serves apps over HTTPS at the wildcard host; appliance is HTTP on
+	// ".local" (ENVIRONMENT.md # Networking & discovery). host already carries the
+	// right host for the scheme, so only the scheme itself differs.
+	url := "http://" + host
+	if m.hosted() {
+		url = "https://" + host
+	}
 	m.bus.Publish(events.AppInstalled, map[string]any{
-		"instance_id": id, "name": man.Name, "slug": slug, "url": "http://" + host,
+		"instance_id": id, "name": man.Name, "slug": slug, "url": url,
 	})
 	slog.Info("app installed",
-		"instance_id", id, "name", man.Name, "url", "http://"+host, "upstream", upstream)
+		"instance_id", id, "name", man.Name, "url", url, "upstream", upstream)
 	return inst, nil
 }
 

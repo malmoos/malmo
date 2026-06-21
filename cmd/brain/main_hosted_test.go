@@ -190,6 +190,24 @@ func TestLoadHostedEnvironment_FirstBootIngestsEnrollment(t *testing.T) {
 	}
 }
 
+// A complete enrollment that fails to persist aborts the ingest before the
+// box-id commit marker — so the seed is re-ingested next boot rather than
+// freezing an identity whose enrollment was never recorded (which would leave
+// the box certless on every subsequent boot). Mirrors the hash-persist abort.
+func TestLoadHostedEnvironment_EnrollmentPersistFailureStaysClosed(t *testing.T) {
+	bm := newFakeBoxMeta()
+	bm.setErr[store.BoxMetaEnrollment] = errors.New("disk full")
+	seedPath := writeSeedFile(t, seedWithEnrollmentJSON)
+
+	boxID, hash, enr := loadHostedEnvironment(profile.Hosted, bm, seedPath)
+	if boxID != "" || hash != "" || enr.Complete() {
+		t.Fatalf("enrollment-persist failure = (%q,%q,%+v); want empty", boxID, hash, enr)
+	}
+	if _, ok := bm.m[store.BoxMetaBoxID]; ok {
+		t.Error("box-id committed despite enrollment-persist failure")
+	}
+}
+
 // A seed with no enrollment still provisions the gate; the cert pass is skipped
 // (incomplete enrollment) and no enrollment row is written.
 func TestLoadHostedEnvironment_FirstBootNoEnrollmentSkips(t *testing.T) {

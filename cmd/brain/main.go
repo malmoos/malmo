@@ -195,6 +195,7 @@ func main() {
 	// double-banner a crash-looping app (HEALTH.md # app-unresponsive anti-flap).
 	rld := newRestartLoopDetector(dock, healthMgr, auditor, notifier, bus)
 	probe := newAppProbeDetector(dock, st, life, cfg.caddyProbeURL, healthMgr, auditor, notifier, bus)
+	probe.SetEnvironment(prof, boxID)
 	go appRuntimeHealthLoop(pollCtx, cfg.healthPollPeriod, rld.check, probe.check)
 
 	// Bound the notifications table (NOTIFICATIONS.md # Locked decisions, the
@@ -377,11 +378,19 @@ func loadHostedEnvironment(prof profile.Profile, bm boxMetaStore, seedPath strin
 		slog.Error("hosted: persist bootstrap hash failed; staying pre-setup", "err", err)
 		return "", "", profile.EnrollmentCredentials{}
 	}
-	// Enrollment is persisted before the box-id commit marker but is non-fatal:
-	// a box that fails to record its acme-dns creds still provisions and gates
-	// /setup; it just won't get a cert this boot. The cert pass logs the skip.
+	// Enrollment is persisted *before* the box-id commit marker, and a complete
+	// enrollment must persist for the ingest to commit. Every later (frozen-
+	// identity) boot reads the stored enrollment to reconfigure Caddy's DNS-01
+	// issuer; if this write silently failed but the box-id still committed, this
+	// boot would get a cert and no subsequent boot ever would. So a write failure
+	// aborts before the commit marker — the seed is re-ingested next boot — exactly
+	// like the hash-persist abort above. A seed with no enrollment is a legitimate
+	// "no HTTPS" box: it provisions, gates /setup, and skips the cert pass.
 	if seed.Enrollment.Complete() {
-		persistEnrollment(bm, seed.Enrollment)
+		if err := persistEnrollment(bm, seed.Enrollment); err != nil {
+			slog.Error("hosted: persist enrollment failed; staying pre-setup", "err", err)
+			return "", "", profile.EnrollmentCredentials{}
+		}
 	} else {
 		slog.Warn("hosted: seed carries no acme-dns enrollment; wildcard cert pass will be skipped", "box_id", seed.BoxID)
 	}
@@ -402,17 +411,18 @@ func sha256Hex(s string) string {
 
 // persistEnrollment stores the acme-dns credentials as JSON under
 // BoxMetaEnrollment so later boots can reconfigure Caddy's DNS-01 issuer without
-// the seed. Best-effort: a write failure is logged, not fatal — the gate does
-// not depend on it, and the seed is re-read until the box-id commit marker lands.
-func persistEnrollment(bm boxMetaStore, enr profile.EnrollmentCredentials) {
+// the seed. Written before the box-id commit marker; the caller aborts the
+// ingest on error so a provisioned identity is never frozen with no recorded
+// enrollment (which would leave the box permanently certless).
+func persistEnrollment(bm boxMetaStore, enr profile.EnrollmentCredentials) error {
 	b, err := json.Marshal(enr)
 	if err != nil {
-		slog.Error("hosted: marshal enrollment failed; wildcard cert pass will be skipped", "err", err)
-		return
+		return fmt.Errorf("marshal enrollment: %w", err)
 	}
 	if err := bm.SetBoxMeta(store.BoxMetaEnrollment, string(b)); err != nil {
-		slog.Error("hosted: persist enrollment failed; wildcard cert pass will be skipped", "err", err)
+		return fmt.Errorf("persist enrollment: %w", err)
 	}
+	return nil
 }
 
 // loadEnrollment reads the persisted acme-dns credentials on a frozen-identity
@@ -1015,6 +1025,24 @@ type appProbeDetector struct {
 	baseURL   string // Caddy site-listener base, e.g. http://127.0.0.1:80
 	now       func() time.Time
 	bad       map[string]int // instance_id -> consecutive failed-probe count
+
+	// profile + boxID select the probe's Host header to match the Caddy route
+	// (the same scheme the lifecycle keys routes on and the API surfaces). On
+	// hosted there is no mDNS, so the route host is "<slug>.<box-id>.malmo.network"
+	// and probing "<slug>.local" hits Caddy's catch-all 404 — every probed app
+	// would flap to app-unresponsive. Set once at startup via SetEnvironment; the
+	// empty default keeps the appliance ".local" path.
+	profile profile.Profile
+	boxID   string
+}
+
+// SetEnvironment records the environment profile and (on hosted) the box-id, so
+// the probe addresses each app at its real Caddy route host. Mirrors the
+// lifecycle and API seams; cmd/brain wires it from the resolved profile + the
+// ingested seed. Appliance passes an empty box-id and the ".local" path stands.
+func (d *appProbeDetector) SetEnvironment(prof profile.Profile, boxID string) {
+	d.profile = prof
+	d.boxID = boxID
 }
 
 func newAppProbeDetector(docker managedContainerReader, instances instanceLister, manifests instanceManifestLoader, baseURL string, healthMgr *health.Manager, auditor *audit.Recorder, notifier *notify.Notifier, bus *events.Bus) *appProbeDetector {
@@ -1081,8 +1109,16 @@ func (d *appProbeDetector) check(ctx context.Context) {
 			continue // start-period grace: warming up, don't count failures yet
 		}
 		probed[inst.ID] = true
-		host := inst.MDNSName
-		if host == "" {
+		// Address the app at its real Caddy route host (mirrors api getAppURL):
+		// hosted's public "<slug>.<box-id>.malmo.network" takes precedence, then
+		// the announced mDNS name, then the reconstructed "<slug>.local".
+		var host string
+		switch {
+		case d.profile == profile.Hosted && d.boxID != "" && inst.Slug != "":
+			host = profile.HostedAppHost(d.boxID, inst.Slug)
+		case inst.MDNSName != "":
+			host = inst.MDNSName
+		default:
 			host = inst.Slug + protocol.AppHostSuffix
 		}
 		if d.probe(ctx, host, man.HealthProbe) {
