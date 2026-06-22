@@ -302,6 +302,47 @@ func TestReconcileClearingResourceLimitsRemovesStanza(t *testing.T) {
 	}
 }
 
+// A failed ComposeUp after the override is patched must not strand the instance
+// on its old limits: the override is rewound so the next reconcile re-detects
+// the change and retries, instead of seeing a patched-but-unapplied file as
+// already converged.
+func TestReconcileFailedRecreateRewindsAndRetries(t *testing.T) {
+	e, inst := installedWhoami(t)
+	if err := e.m.SetResourceLimits(inst.ID, store.ResourceLimits{MemoryBytes: 256 << 20}); err != nil {
+		t.Fatalf("set limits: %v", err)
+	}
+	e.docker.psManaged = map[string]bool{inst.ID: true}
+
+	// First pass: ComposeUp fails. The override must be rewound to its pre-patch
+	// (uncapped) state so the policy is not falsely marked applied.
+	e.docker.composeUpErr = errors.New("compose up exploded")
+	e.docker.calls = nil
+	if err := e.m.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile (failing up): %v", err)
+	}
+	if !methodsContainArg(e.docker.Calls(), "ComposeUp", "malmo-"+inst.ID) {
+		t.Fatalf("a changed policy must attempt a recreate: %v", e.docker.methods())
+	}
+	if dep := readDeploy(t, e, inst.ID, "whoami"); dep != nil {
+		t.Fatalf("override must be rewound after a failed up, got %+v", dep)
+	}
+
+	// Second pass: ComposeUp succeeds. The change is re-detected and applied,
+	// proving the failure left a retryable state rather than a stranded one.
+	e.docker.composeUpErr = nil
+	e.docker.calls = nil
+	if err := e.m.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile (retry): %v", err)
+	}
+	dep := readDeploy(t, e, inst.ID, "whoami")
+	if dep == nil || dep.Resources.Limits.Memory != 256<<20 {
+		t.Fatalf("retry must apply the cap, override deploy = %+v", dep)
+	}
+	if !methodsContainArg(e.docker.Calls(), "ComposeUp", "malmo-"+inst.ID) {
+		t.Fatalf("retry must recreate the app: %v", e.docker.methods())
+	}
+}
+
 func TestReapplyResourceLimitsErrors(t *testing.T) {
 	overridePath := func(e *testEnv, id string) string {
 		return filepath.Join(e.stateDir, "instances", id, "compose.override.yml")
@@ -312,7 +353,7 @@ func TestReapplyResourceLimitsErrors(t *testing.T) {
 		if err := os.Remove(overridePath(e, inst.ID)); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := e.m.reapplyResourceLimits(inst.ID); err == nil {
+		if _, _, err := e.m.reapplyResourceLimits(inst.ID); err == nil {
 			t.Fatal("want read-override error")
 		}
 	})
@@ -322,7 +363,7 @@ func TestReapplyResourceLimitsErrors(t *testing.T) {
 		if err := os.WriteFile(overridePath(e, inst.ID), []byte("\tnot: [valid"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := e.m.reapplyResourceLimits(inst.ID); err == nil {
+		if _, _, err := e.m.reapplyResourceLimits(inst.ID); err == nil {
 			t.Fatal("want parse-override error")
 		}
 	})
@@ -332,7 +373,7 @@ func TestReapplyResourceLimitsErrors(t *testing.T) {
 		if err := os.WriteFile(overridePath(e, inst.ID), []byte("services:\n  other: {}\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := e.m.reapplyResourceLimits(inst.ID); err == nil {
+		if _, _, err := e.m.reapplyResourceLimits(inst.ID); err == nil {
 			t.Fatal("want missing-main-service error")
 		}
 	})
@@ -343,7 +384,7 @@ func TestReapplyResourceLimitsErrors(t *testing.T) {
 		if err := os.WriteFile(manPath, []byte("id: whoami\nname: Whoami\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := e.m.reapplyResourceLimits(inst.ID); err == nil {
+		if _, _, err := e.m.reapplyResourceLimits(inst.ID); err == nil {
 			t.Fatal("want main-service resolution error")
 		}
 	})

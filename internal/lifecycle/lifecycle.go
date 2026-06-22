@@ -1165,8 +1165,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		case "running":
 			if !actual[inst.ID] {
 				// Patch in the current resource-limit policy before bringing a
-				// drifted instance up, so the recreated container is bounded.
-				if _, err := m.reapplyResourceLimits(inst.ID); err != nil {
+				// drifted instance up, so the recreated container is bounded. This
+				// path always runs ComposeUp below regardless of whether the file
+				// changed, so it self-retries and needs no restore-on-failure.
+				if _, _, err := m.reapplyResourceLimits(inst.ID); err != nil {
 					slog.Warn("reconcile: re-apply resource limits",
 						"instance_id", inst.ID, "err", err)
 				}
@@ -1182,7 +1184,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 				// recreate the app only if it changed, so a policy change takes
 				// effect here without a reinstall (ENVIRONMENT.md # Per-instance
 				// resource limits).
-				changed, err := m.reapplyResourceLimits(inst.ID)
+				changed, restore, err := m.reapplyResourceLimits(inst.ID)
 				if err != nil {
 					slog.Warn("reconcile: re-apply resource limits",
 						"instance_id", inst.ID, "err", err)
@@ -1192,6 +1194,14 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 					if out, err := m.docker.ComposeUp(ctx, m.instanceDir(inst.ID), "malmo-"+inst.ID); err != nil {
 						slog.Warn("reconcile: compose up",
 							"instance_id", inst.ID, "err", err, "output", out)
+						// ComposeUp failed after the override was patched. Rewind it
+						// so the next reconcile re-detects the change and retries,
+						// instead of treating the patched-but-unapplied file as
+						// converged and leaving the old limits in place.
+						if rerr := restore(); rerr != nil {
+							slog.Warn("reconcile: restore override after failed re-apply",
+								"instance_id", inst.ID, "err", rerr)
+						}
 						continue
 					}
 				}

@@ -71,28 +71,35 @@ func formatCPUs(nano int64) string {
 // reconcile pass `compose up -d`s to recreate the container only when it did, so
 // a policy change applies without a reinstall (ENVIRONMENT.md # Per-instance
 // resource limits).
-func (m *Manager) reapplyResourceLimits(id string) (bool, error) {
+//
+// On a change it also returns a restore func that rewinds the override to its
+// pre-patch bytes (nil when nothing changed). The live-instance reconcile path
+// calls it when the follow-up ComposeUp fails: the file is both the input
+// ComposeUp reads and the "already-applied" marker, so leaving it patched after
+// a failed up would make the next pass see no change and never retry, stranding
+// the container on its old limits.
+func (m *Manager) reapplyResourceLimits(id string) (bool, func() error, error) {
 	lim, err := m.store.GetResourceLimits(id)
 	if err != nil {
-		return false, fmt.Errorf("get resource limits: %w", err)
+		return false, nil, fmt.Errorf("get resource limits: %w", err)
 	}
 	main, err := m.mainService(id)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	ovPath := filepath.Join(m.instanceDir(id), "compose.override.yml")
 	raw, err := os.ReadFile(ovPath)
 	if err != nil {
-		return false, fmt.Errorf("read override: %w", err)
+		return false, nil, fmt.Errorf("read override: %w", err)
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		return false, fmt.Errorf("parse override: %w", err)
+		return false, nil, fmt.Errorf("parse override: %w", err)
 	}
 	services, _ := doc["services"].(map[string]any)
 	svc, _ := services[main].(map[string]any)
 	if svc == nil {
-		return false, fmt.Errorf("override for %s missing main service %q", id, main)
+		return false, nil, fmt.Errorf("override for %s missing main service %q", id, main)
 	}
 	// The brain owns the main service's whole `deploy` stanza (writeOverride sets
 	// nothing else under it), so "no policy" means the key is absent.
@@ -100,27 +107,37 @@ func (m *Manager) reapplyResourceLimits(id string) (bool, error) {
 	existing, hasDeploy := svc["deploy"]
 	if want == nil {
 		if !hasDeploy {
-			return false, nil // already uncapped
+			return false, nil, nil // already uncapped
 		}
 		delete(svc, "deploy")
 	} else {
 		// Compare via marshaled bytes so the freshly-built stanza (int64 memory)
 		// and the round-tripped one (int memory) compare equal when unchanged.
-		wantBytes, _ := yaml.Marshal(want)
-		gotBytes, _ := yaml.Marshal(existing)
+		wantBytes, wantErr := yaml.Marshal(want)
+		gotBytes, gotErr := yaml.Marshal(existing)
+		if wantErr != nil || gotErr != nil {
+			return false, nil, fmt.Errorf("marshal deploy stanza for comparison: want=%v got=%v", wantErr, gotErr)
+		}
 		if bytes.Equal(wantBytes, gotBytes) {
-			return false, nil
+			return false, nil, nil
 		}
 		svc["deploy"] = want
 	}
 	out, err := yaml.Marshal(doc)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if err := os.WriteFile(ovPath, out, 0o644); err != nil {
-		return false, fmt.Errorf("write override: %w", err)
+		return false, nil, fmt.Errorf("write override: %w", err)
 	}
-	return true, nil
+	prev := raw
+	restore := func() error {
+		if err := os.WriteFile(ovPath, prev, 0o644); err != nil {
+			return fmt.Errorf("restore override: %w", err)
+		}
+		return nil
+	}
+	return true, restore, nil
 }
 
 // mainService reads the persisted manifest for an instance and returns its
