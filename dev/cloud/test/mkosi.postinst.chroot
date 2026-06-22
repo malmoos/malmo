@@ -1,0 +1,107 @@
+#!/bin/bash
+# Boot-proof image postinst (C2, #205), run inside the image (.chroot mode,
+# mkosi v27+). Auto-detected only for THIS config dir (dev/cloud/test), so the
+# lean `make build-cloud-image` build (dev/cloud/) never runs it and stays lean.
+#
+# Wires the hosted control plane to come up on first boot:
+#   - enable docker + containerd, systemd-networkd, host-agent, the first-boot
+#     image loader, and the serial-driven assertions oneshot (.wants symlinks —
+#     `systemctl enable` can't run in the chroot);
+#   - provision the malmo / malmo-app / malmo-shared identities host-agent +
+#     the brain resolve by name (FIRST_RUN.md, APP_ISOLATION.md # Runtime identity);
+#   - bring the single virtio NIC up via systemd-networkd DHCP — the minimal
+#     cloud-native path, NO NetworkManager (ENVIRONMENT.md # Networking, # Boot);
+#   - pre-commit machine-id + mask systemd-firstboot so the interactive wizard
+#     never blocks boot.
+#
+# Deliberately NOT here (hosted cuts, ENVIRONMENT.md # How the profile is realized):
+# sshd (off in hosted v1 — the assertions are serial-driven, not SSH-driven),
+# NetworkManager, Avahi, the LUKS/TPM enrollment of the medium lane.
+set -euo pipefail
+
+# Enable a unit by dropping its multi-user.target.wants symlink (no systemctl in
+# the chroot). $1 = unit file path (/lib or /etc), $2 = unit name.
+enable_unit() {
+    mkdir -p /etc/systemd/system/multi-user.target.wants
+    ln -sf "$1" "/etc/systemd/system/multi-user.target.wants/$2"
+}
+
+# Docker (baked from Docker's apt repo) + its dependency. The brain's compose +
+# host-agent's proxy run on it; ordered After=malmo-storage-ready not needed in
+# hosted (no physical-disk assembly), so plain enable.
+enable_unit /lib/systemd/system/docker.service     docker.service
+enable_unit /lib/systemd/system/containerd.service containerd.service
+
+# systemd-networkd brings the single NIC up (no NM in hosted). Enable it and its
+# socket; the .network match below is what actually configures the NIC.
+systemctl --root=/ enable systemd-networkd.service >/dev/null 2>&1 || true
+# Nothing orders against network-online.target, so don't let wait-online stall boot.
+systemctl --root=/ disable systemd-networkd-wait-online.service >/dev/null 2>&1 || true
+
+# Keep systemd-networkd's hands off Docker's own interfaces. The DHCP match below
+# is `Type=ether`, which also matches Docker's per-container veth endpoints and the
+# docker0 / br-<id> bridges. Left managed, networkd resets them — the bridge ends
+# up NO-CARRIER and the veths un-enslaved, so inter-container ARP never resolves
+# (the brain can't reach the socket-proxy: "no route to host"). NetworkManager (the
+# appliance/medium lane) ignores these by default; networkd does not, so mark them
+# unmanaged explicitly. Lower filename prefix → evaluated before 20-dhcp.network,
+# so it claims the virtual links first and the real NIC still falls through to DHCP.
+mkdir -p /etc/systemd/network
+cat > /etc/systemd/network/05-docker-unmanaged.network <<'EOF'
+[Match]
+Name=docker* veth* br-*
+
+[Link]
+Unmanaged=yes
+EOF
+
+# Single virtio NIC via DHCP — addressing comes from the cloud's DHCP/metadata
+# (ENVIRONMENT.md # Networking, "One virtual NIC"). Match by link type, not a
+# slot-dependent predictable name: a cloud VM has exactly one ethernet NIC.
+cat > /etc/systemd/network/20-dhcp.network <<'EOF'
+[Match]
+Type=ether
+
+[Network]
+DHCP=yes
+EOF
+
+# host-agent (slim, -tags hosted) launches the brain; its drop-in (staged by
+# run-cloud-tests.sh) points the bootstrap at the baked images + control-plane
+# dir. Order-after the image loader lives in that drop-in.
+enable_unit /etc/systemd/system/host-agent.service host-agent.service
+
+# First-boot control-plane image loader (reused verbatim from the medium lane).
+enable_unit /etc/systemd/system/malmo-load-images.service malmo-load-images.service
+
+# First-boot provisioning-seed materializer (C3a cloud-lane, #220). Lands the
+# SMBIOS-delivered seed at /var/lib/malmo/seed.json before host-agent launches
+# the brain; no-ops on an un-seeded boot.
+enable_unit /etc/systemd/system/malmo-seed.service malmo-seed.service
+
+# The serial-driven boot self-check (C2). Runs once after the stack should be up,
+# polls it, and writes its verdict to /dev/console for the QEMU harness to grep.
+enable_unit /etc/systemd/system/malmo-cloud-assertions.service malmo-cloud-assertions.service
+
+# malmo primary group (GID 3000, FIRST_RUN.md # Identity) — new users are created
+# with `useradd --gid malmo`; the brain's /setup needs it present. malmo-app /
+# malmo-shared (2000/2001, APP_ISOLATION.md # Runtime identity) are the well-known
+# app-runtime identities host-agent resolves by name. Idempotent.
+getent group malmo        >/dev/null || groupadd -g 3000 malmo
+getent group malmo-app    >/dev/null || groupadd -g 2000 malmo-app
+getent group malmo-shared >/dev/null || groupadd -g 2001 malmo-shared
+getent passwd malmo-app   >/dev/null || useradd -r -u 2000 -g malmo-app \
+    -M -d /nonexistent -s /usr/sbin/nologin malmo-app
+
+# Make the staged binaries/scripts executable (ExtraTrees preserves mode, but be
+# defensive — a clobbered mode would otherwise fail silently at boot).
+chmod 0755 /usr/lib/malmo/host-agent-real 2>/dev/null || true
+chmod 0755 /usr/lib/malmo/load-control-plane-images.sh 2>/dev/null || true
+chmod 0755 /usr/local/bin/cloud-assertions.sh 2>/dev/null || true
+chmod 0755 /usr/local/bin/malmo-seed-materialize.sh 2>/dev/null || true
+
+# Pre-commit machine-id so systemd doesn't treat first boot as uninitialized and
+# launch the interactive firstboot wizard (it blocks sysinit waiting on input).
+systemd-machine-id-setup 2>/dev/null || \
+    { tr -d '-\n' < /proc/sys/kernel/random/uuid > /etc/machine-id && echo >> /etc/machine-id; }
+systemctl --root=/ mask systemd-firstboot.service >/dev/null 2>&1 || true

@@ -48,6 +48,8 @@ Branch-name shape: `feat/…`, `fix/…`, `test/…`, `docs/…` + the issue num
 
 **One PR per issue.** If a task feels too big, split the issue first (file child issues, link them with `Depends on #<N>`, add the `blocked` label to dependents) — then each issue gets its own focused PR. Don't split a single issue across multiple PRs.
 
+**Review feedback goes on the same branch, not a new PR.** When automated or human review flags issues on an open PR, push fixup commits to that branch — never open a second PR for the same issue while one is still open. Opening a second PR splits review history, leaves two competing versions in the queue, and forces the maintainer to decide which to close. To replace a PR entirely (rare), explicitly close the old one first and include "Supersedes #<N>" in the new PR body.
+
 ## Step 3 — Build it
 
 The inner dev loop is all native, no VM — see [`running-locally.md`](running-locally.md) (`make dev` runs agent + brain + UI together). Hold to the conventions already in the tree:
@@ -133,6 +135,7 @@ PR body must include **`Closes #<N>`** — do not delete this line. It is the on
 - [ ] Self-review run (`/code-review low` with progress doc as context per [`code-review.md`](code-review.md)); all Block findings addressed, disagreements noted in Known gaps.
 - [ ] Branched off a fresh `main` (`git checkout main && git pull` before branching); branch named `<area>/<N>-<short-slug>`.
 - [ ] One PR closes exactly one issue; if scope grew, the issue was split first.
+- [ ] Review feedback addressed with fixup commits on the existing branch, not a new PR; if the PR was replaced, the old one was closed first with "Supersedes #<N>".
 - [ ] PR into `main` with `Closes #<N>` (do not delete — GitHub won't auto-close the issue otherwise); any dependent issue un-`blocked`.
 
 ## When you're stuck or unsure

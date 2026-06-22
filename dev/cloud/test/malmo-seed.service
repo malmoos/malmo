@@ -1,0 +1,25 @@
+# Hosted first-boot seed materializer (C3a cloud-lane, #220). A first-boot
+# oneshot that lands the provisioning seed (delivered as a systemd credential
+# over SMBIOS by dev/cloud/run-cloud-tests.sh) at /var/lib/malmo/seed.json, where
+# the brain ingests it (profile.DefaultSeedPath; cmd/brain loadHostedEnvironment).
+#
+# Ordered Before=host-agent.service so the seed is on disk before host-agent
+# launches the brain container — the brain reads the seed once at startup, and
+# /var/lib/malmo is bind-mounted into it at the same path (brainlaunch.runSpec),
+# so the host-side file is what the containerized brain sees.
+#
+# The credential is optional (ImportCredential tolerates absence): an un-seeded
+# boot delivers none and the materializer no-ops, leaving /setup at 503.
+[Unit]
+Description=malmo hosted first-boot provisioning seed (materialize seed.json)
+After=local-fs.target
+Before=host-agent.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ImportCredential=malmo.seed
+ExecStart=/usr/local/bin/malmo-seed-materialize.sh
+
+[Install]
+WantedBy=multi-user.target

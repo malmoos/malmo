@@ -143,6 +143,7 @@ func (s *Server) registerAll(api huma.API) {
 	s.registerNotifications(api)
 	s.registerMail(api)
 	s.registerSystem(api)
+	s.registerFirstRun(api)
 	s.registerAppSecrets(api)
 }
 
@@ -259,13 +260,18 @@ type InstanceDTO struct {
 	MailProviderID string `json:"mail_provider_id,omitempty"`
 }
 
-func toDTO(i store.Instance, ownerUsername string, e *catalog.Entry) InstanceDTO {
-	// Prefer the name actually announced over Avahi (MDNSName), which may be the
-	// box-qualified collision fallback "<slug>-<box>.local". Fall back to the
-	// reconstructed primary "<slug>.local" for rows predating the published-name
-	// plumbing or where mDNS publish failed.
+func (s *Server) toDTO(i store.Instance, ownerUsername string, e *catalog.Entry) InstanceDTO {
+	// On hosted, the app's sole URL is public HTTPS at
+	// "<slug>.<box-id>.malmo.network" (ENVIRONMENT.md # Networking & discovery) —
+	// no mDNS, no ".local" fallback. On appliance, prefer the name actually
+	// announced over Avahi (MDNSName), which may be the box-qualified collision
+	// fallback "<slug>-<box>.local"; fall back to the reconstructed primary
+	// "<slug>.local" for rows predating the published-name plumbing or where mDNS
+	// publish failed.
 	url := ""
 	switch {
+	case s.profile == profile.Hosted && s.boxID != "" && i.Slug != "":
+		url = profile.HostedAppURL(s.boxID, i.Slug)
 	case i.MDNSName != "":
 		url = "http://" + i.MDNSName
 	case i.Slug != "":
@@ -386,7 +392,7 @@ func (s *Server) listApps(ctx context.Context, _ *struct{}) (*struct {
 		if e, err := s.catalog.Entry(i.ManifestID); err == nil {
 			ce = &e
 		}
-		out.Body.Apps = append(out.Body.Apps, toDTO(i, names[i.OwnerUserID], ce))
+		out.Body.Apps = append(out.Body.Apps, s.toDTO(i, names[i.OwnerUserID], ce))
 	}
 	return out, nil
 }
@@ -420,7 +426,7 @@ func (s *Server) getApp(ctx context.Context, in *struct {
 	if e, err := s.catalog.Entry(i.ManifestID); err == nil {
 		catEntry = &e
 	}
-	dto := toDTO(i, owner.Username, catEntry)
+	dto := s.toDTO(i, owner.Username, catEntry)
 	// Mail enrichment for the rebind picker. The manifest comes from the
 	// catalog, so a withdrawn app simply hides the picker (the binding itself
 	// keeps working — lifecycle reads the instance dir's own manifest copy).

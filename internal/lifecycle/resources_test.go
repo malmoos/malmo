@@ -182,7 +182,7 @@ func TestManagerSetResourceLimits(t *testing.T) {
 
 func TestWriteOverrideRendersResourceLimits(t *testing.T) {
 	e := newTestEnv(t)
-	e.m.SetProfile(profile.Hosted)
+	e.m.SetEnvironment(profile.Hosted, "")
 	id := "inst-wo"
 	if err := os.MkdirAll(e.m.instanceDir(id), 0o755); err != nil {
 		t.Fatal(err)

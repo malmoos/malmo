@@ -180,21 +180,38 @@ func (s *Server) registerAuth(api huma.API) {
 
 // --- handlers ------------------------------------------------------------
 
+// authState is the public bootstrap probe the dashboard reads before any
+// session exists. has_users drives the login-vs-setup split; first_run_complete
+// is the wizard's reappearance gate (FIRST_RUN.md # Phase 3 — more than "an
+// admin exists", so a half-finished wizard resumes rather than dropping the user
+// onto the dashboard); profile lets the wizard pick its step set and show the
+// admin-bootstrap-secret field on hosted (ENVIRONMENT.md # Provisioning). The
+// box-id and the secret itself are never surfaced here.
 func (s *Server) authState(ctx context.Context, _ *struct{}) (*struct {
 	Body struct {
-		HasUsers bool `json:"has_users"`
+		HasUsers         bool   `json:"has_users"`
+		FirstRunComplete bool   `json:"first_run_complete"`
+		Profile          string `json:"profile"`
 	}
 }, error) {
 	has, err := s.store.HasAnyUser()
 	if err != nil {
 		return nil, huma.Error500InternalServerError("store read failed", err)
 	}
+	complete, err := s.boxMetaBool(store.BoxMetaFirstRunComplete)
+	if err != nil {
+		return nil, huma.Error500InternalServerError("store read failed", err)
+	}
 	out := &struct {
 		Body struct {
-			HasUsers bool `json:"has_users"`
+			HasUsers         bool   `json:"has_users"`
+			FirstRunComplete bool   `json:"first_run_complete"`
+			Profile          string `json:"profile"`
 		}
 	}{}
 	out.Body.HasUsers = has
+	out.Body.FirstRunComplete = complete
+	out.Body.Profile = s.profileName()
 	return out, nil
 }
 
@@ -266,6 +283,13 @@ func (s *Server) setup(ctx context.Context, in *struct {
 		// required only in the hosted profile (gateBootstrap); appliance ignores
 		// it entirely, so an appliance request need not send it.
 		BootstrapSecret string `json:"bootstrap_secret,omitempty"`
+		// Recovery toggles the first-run recovery code (FIRST_RUN.md # Step 2a,
+		// on by default). nil ⇒ on (back-compat: the M1c headless /setup and any
+		// older caller that omits the field still get a code). Explicit false is
+		// the wizard's "off" path — the user acknowledged they won't be able to
+		// recover; the admin row is created with no recovery hash and the
+		// response carries an empty recovery_code.
+		Recovery *bool `json:"recovery,omitempty"`
 	}
 }) (*struct {
 	SetCookie string `header:"Set-Cookie"`
@@ -276,6 +300,7 @@ func (s *Server) setup(ctx context.Context, in *struct {
 }, error) {
 	username := strings.TrimSpace(in.Body.Username)
 	password := in.Body.Password
+	withRecovery := in.Body.Recovery == nil || *in.Body.Recovery
 
 	// Hosted profile: the seeded admin-bootstrap secret gates /setup before any
 	// other processing (ENVIRONMENT.md # Admin bootstrap). Runs ahead of the
@@ -296,9 +321,18 @@ func (s *Server) setup(ctx context.Context, in *struct {
 		return nil, err
 	}
 
-	recoveryCode, recoveryHash, err := newRecoveryCode()
-	if err != nil {
-		return nil, huma.Error500InternalServerError("recovery code", err)
+	// Recovery code is generated only when the user kept the toggle on
+	// (FIRST_RUN.md # Step 2a). With it off, the admin row carries no recovery
+	// hash — recover() then rejects any code for this account (an empty hash
+	// never matches), which is exactly the opted-out tradeoff the wizard made
+	// the user acknowledge.
+	var recoveryCode, recoveryHash string
+	if withRecovery {
+		var err error
+		recoveryCode, recoveryHash, err = newRecoveryCode()
+		if err != nil {
+			return nil, huma.Error500InternalServerError("recovery code", err)
+		}
 	}
 
 	u := store.User{

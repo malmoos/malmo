@@ -1,9 +1,15 @@
 // Tiny auth composable. Owns the singleton currentUser ref and the bootstrap
-// flow described in AUTH.md / BRAIN_UI_PROTOCOL.md:
+// flow described in AUTH.md / BRAIN_UI_PROTOCOL.md / FIRST_RUN.md:
 //
-//   GET /auth/state -> has_users?
-//     no  -> setup view (call POST /setup)
-//     yes -> GET /me; on 200 -> dashboard, on 401 -> login (POST /login)
+//   GET /auth/state -> { has_users, first_run_complete, profile }
+//     first_run_complete? no  -> the first-run wizard (FIRST_RUN.md Phase 2)
+//                          yes -> has_users? GET /me; 200 -> dashboard, 401 -> login
+//
+// The wizard (not just "an admin exists") is gated on first_run_complete so a
+// half-finished wizard resumes rather than dropping the user onto the dashboard
+// (FIRST_RUN.md # Phase 3). profile selects the wizard's step set and whether
+// the admin step shows the hosted bootstrap-secret field (ENVIRONMENT.md
+// # Provisioning).
 //
 // Any 401 from a later API call drops currentUser to null via the handler
 // registered with setUnauthenticatedHandler — that's the single route the
@@ -14,6 +20,8 @@ import { api, setUnauthenticatedHandler, type AuthState, type SetupResult, type 
 
 const currentUser = ref<User | null>(null);
 const hasUsers = ref<boolean | null>(null);
+const firstRunComplete = ref<boolean | null>(null);
+const profile = ref<string>("appliance");
 const booted = ref(false);
 
 setUnauthenticatedHandler(() => {
@@ -24,6 +32,8 @@ export async function bootstrap() {
   if (booted.value) return;
   const state = await api.get<AuthState>("/auth/state");
   hasUsers.value = state.has_users;
+  firstRunComplete.value = state.first_run_complete;
+  profile.value = state.profile;
   if (state.has_users) {
     try {
       currentUser.value = await api.get<User>("/me");
@@ -40,25 +50,54 @@ export async function login(username: string, password: string) {
   hasUsers.value = true;
 }
 
-// setup creates the admin and returns the recovery code. We deliberately do
-// NOT set currentUser here — the Setup view needs to stay mounted to display
-// the recovery code once. Call setupComplete() after the user acknowledges.
-let pendingSetupUser: User | null = null;
-export async function setup(username: string, password: string): Promise<SetupResult> {
-  const res = await api.post<SetupResult>("/setup", { username, password });
-  pendingSetupUser = res.user;
+// SetupOptions carries the first-run admin step's two profile-aware choices:
+// recovery (FIRST_RUN.md # Step 2a, on by default) and bootstrapSecret (the
+// hosted one-time admin-bootstrap secret the operator pastes, forwarded as
+// C3a's `bootstrap_secret` body field — ENVIRONMENT.md # Admin bootstrap).
+export interface SetupOptions {
+  recovery: boolean;
+  bootstrapSecret?: string;
+}
+
+// setup creates the first admin. Unlike login it is followed by the rest of the
+// wizard, so we set currentUser/hasUsers immediately — the App stays on the
+// wizard because first_run_complete is still false, and the admin-gated
+// time-zone/telemetry/complete calls need the session this just minted.
+export async function setup(
+  username: string,
+  password: string,
+  opts: SetupOptions,
+): Promise<SetupResult> {
+  const res = await api.post<SetupResult>("/setup", {
+    username,
+    password,
+    recovery: opts.recovery,
+    ...(opts.bootstrapSecret ? { bootstrap_secret: opts.bootstrapSecret } : {}),
+  });
+  currentUser.value = res.user;
+  hasUsers.value = true;
   return res;
 }
 
-// setupComplete is called after the user acknowledges the recovery code.
-// We delay flipping hasUsers/currentUser until now so the App.vue router
-// keeps showing the Setup view across the create-then-acknowledge transition.
-export function setupComplete() {
-  if (pendingSetupUser) {
-    currentUser.value = pendingSetupUser;
-    hasUsers.value = true;
-    pendingSetupUser = null;
-  }
+// setSystemTimezone applies the system time zone (FIRST_RUN.md # Step 3 /
+// TIME.md). Admin-only on the brain; the wizard's session is the admin just
+// created.
+export async function setSystemTimezone(timezone: string) {
+  await api.post("/system/timezone", { timezone });
+}
+
+// setTelemetryConsent records the box-wide telemetry choice (FIRST_RUN.md
+// # Step 4 / TELEMETRY.md). Off by default.
+export async function setTelemetryConsent(enabled: boolean) {
+  await api.post("/system/telemetry", { enabled });
+}
+
+// completeFirstRun writes the first-run-complete marker (FIRST_RUN.md # Phase 3)
+// and flips local state so the App leaves the wizard for the dashboard. The
+// wizard never reappears after this.
+export async function completeFirstRun() {
+  await api.post("/system/first-run-complete");
+  firstRunComplete.value = true;
 }
 
 export async function logout() {
@@ -123,6 +162,8 @@ export function useAuth() {
   return {
     currentUser: computed(() => currentUser.value),
     hasUsers: computed(() => hasUsers.value),
+    firstRunComplete: computed(() => firstRunComplete.value),
+    profile: computed(() => profile.value),
     booted: computed(() => booted.value),
     singleUserMode: computed(() => currentUser.value?.single_user_mode ?? false),
     refreshCurrentUser,

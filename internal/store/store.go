@@ -861,11 +861,30 @@ func (s *Store) HasAnyUser() (bool, error) {
 	return n > 0, err
 }
 
-// Box-level metadata keys for the box_meta KV table. Set on a hosted box from
-// the first-boot seed (ENVIRONMENT.md # Provisioning); absent on appliance.
+// Box-level metadata keys for the box_meta KV table. box_id and the bootstrap
+// secret hash are set on a hosted box from the first-boot seed (ENVIRONMENT.md
+// # Provisioning) and absent on appliance; telemetry consent and first-run
+// completion are box-wide facts the first-run wizard records on both profiles
+// (FIRST_RUN.md # Step 4, # Phase 3 / TELEMETRY.md).
 const (
 	BoxMetaBoxID               = "box_id"
 	BoxMetaBootstrapSecretHash = "admin_bootstrap_secret_hash"
+	// BoxMetaTelemetryConsent is "true"/"false"; unset ⇒ off (TELEMETRY.md
+	// # Locked: off by default).
+	BoxMetaTelemetryConsent = "telemetry_consent"
+	// BoxMetaFirstRunComplete is "true" once the wizard's Done step runs; unset
+	// ⇒ first-run incomplete. It gates the wizard's reappearance (FIRST_RUN.md
+	// # Phase 3) and is distinct from "an admin exists" — completion is more
+	// than the first POST /setup.
+	BoxMetaFirstRunComplete = "first_run_complete"
+	// BoxMetaEnrollment holds the per-box acme-dns credentials (JSON) ingested
+	// from the seed, so later (frozen-identity) boots can reconfigure Caddy's
+	// DNS-01 wildcard issuer without re-reading the seed the brain otherwise
+	// ignores (ENVIRONMENT.md # Networking & discovery; C3b). Stored plaintext at
+	// MVP, matching the cloud producer's posture — a leaked pair only lets an
+	// attacker renew certs for this one box; at-rest encryption is a deferred
+	// hardening item (NEXT.md).
+	BoxMetaEnrollment = "acmedns_enrollment"
 )
 
 // GetBoxMeta returns the value stored under key, or ErrNotFound when unset.

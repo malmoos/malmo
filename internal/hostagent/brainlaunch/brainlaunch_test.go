@@ -177,6 +177,33 @@ func TestLaunchRunSpec(t *testing.T) {
 	if hasMount(s.Mounts, "/var/run/docker.sock", "/var/run/docker.sock") {
 		t.Error("brain must NOT mount the raw Docker socket")
 	}
+	// An unmarked box (no ProfileMarkerPath) gets no marker mount — the brain
+	// resolves appliance, the no-op default.
+	if hasMount(s.Mounts, "/etc/malmo/profile", "/etc/malmo/profile") {
+		t.Errorf("unexpected profile-marker mount when ProfileMarkerPath is empty: %+v", s.Mounts)
+	}
+}
+
+// On a marked box host-agent mounts the environment-profile marker read-only at
+// the same path so the containerized brain resolves the profile (appliance vs
+// hosted) exactly as it would natively — otherwise it can't see /etc/malmo and
+// always reads appliance, leaving a hosted box's /setup gate disarmed.
+func TestLaunchRunSpecProfileMarkerMount(t *testing.T) {
+	f := newFake()
+	cfg := testConfig()
+	cfg.ProfileMarkerPath = "/etc/malmo/profile"
+	if err := Launch(context.Background(), f, cfg); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	s := f.lastRun
+	if !hasMount(s.Mounts, "/etc/malmo/profile", "/etc/malmo/profile") {
+		t.Errorf("missing same-path profile-marker mount: %+v", s.Mounts)
+	}
+	for _, m := range s.Mounts {
+		if m.Source == "/etc/malmo/profile" && !m.ReadOnly {
+			t.Errorf("profile-marker mount must be read-only: %+v", m)
+		}
+	}
 }
 
 // On a baked, air-gapped box the brain is launched in offline-install mode; an

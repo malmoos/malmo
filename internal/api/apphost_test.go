@@ -1,0 +1,57 @@
+package api
+
+import (
+	"testing"
+
+	"github.com/malmoos/malmo/internal/profile"
+	"github.com/malmoos/malmo/internal/store"
+)
+
+// toDTO surfaces the per-app URL by profile: hosted is public HTTPS at
+// "<slug>.<box-id>.malmo.network" (the sole scheme), appliance is plain-HTTP
+// ".local" (the published mDNS name when present).
+func TestToDTO_URLByProfile(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile profile.Profile
+		boxID   string
+		inst    store.Instance
+		wantURL string
+	}{
+		{
+			name:    "appliance primary .local",
+			profile: profile.Appliance,
+			inst:    store.Instance{ID: "1", Slug: "photos"},
+			wantURL: "http://photos.local",
+		},
+		{
+			name:    "appliance prefers published mDNS name",
+			profile: profile.Appliance,
+			inst:    store.Instance{ID: "1", Slug: "photos", MDNSName: "photos-box.local"},
+			wantURL: "http://photos-box.local",
+		},
+		{
+			name:    "hosted public HTTPS, sole scheme",
+			profile: profile.Hosted,
+			boxID:   "cindy-fox",
+			inst:    store.Instance{ID: "1", Slug: "photos", MDNSName: "ignored.local"},
+			wantURL: "https://photos.cindy-fox.malmo.network",
+		},
+		{
+			name:    "hosted without box-id falls back to appliance scheme",
+			profile: profile.Hosted,
+			boxID:   "",
+			inst:    store.Instance{ID: "1", Slug: "photos"},
+			wantURL: "http://photos.local",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Server{profile: tt.profile, boxID: tt.boxID}
+			got := s.toDTO(tt.inst, "", nil)
+			if got.URL != tt.wantURL {
+				t.Errorf("URL = %q, want %q", got.URL, tt.wantURL)
+			}
+		})
+	}
+}

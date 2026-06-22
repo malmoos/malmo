@@ -33,6 +33,8 @@ Wire: `browser → web-ui → brain`, and the brain fans out to `docker compose`
 
 ## Developing
 
+**When starting work on any issue, read `docs/dev/contributing.md` first** — it is the authoritative contribution loop (orient → pick → branch → build → test → document → self-review → PR) and includes rules that supplement those in this file. The commands below are a quick reference; contributing.md is the binding guide.
+
 The dev model is **two loops** (full detail in `docs/dev/running-locally.md`):
 
 - **Inner loop (seconds) — all native, no VM.** The brain and dashboard run directly on your machine against the local Docker socket; the host-agent is the fake that speaks the real protocol but stubs host ops. ~90% of development happens here, and it works on macOS, Windows (WSL2), or Linux with no platform-specific setup.
@@ -53,7 +55,9 @@ The inner/outer boundary is also the **cross-platform / Linux-only** boundary. T
 
 **Start every piece of work from a fresh branch off latest `main`:** `git checkout main && git pull && git checkout -b <branch>`. Never commit straight to `main`.
 
-**The contributing loop is `docs/dev/contributing.md`** — branch → build → test → document → PR, including the mandatory `Closes #<N>` rule. Start there before opening a PR. Actionable parallel work lives in [GitHub Issues](https://github.com/malmoos/malmo/issues) (`gh issue list --label P1`).
+Actionable parallel work lives in [GitHub Issues](https://github.com/malmoos/malmo/issues) (`gh issue list --label P1`).
+
+**After opening a PR, run a self-review** using a fresh sonnet agent with no conversation history — it has no attachment to the implementation choices you made. In Claude Code: `/code-review low Read docs/progress/<your-slug>.md first for context, then review the diff per docs/dev/code-review.md.` Address every Block finding before the PR merges; note any disagreements in the progress entry's Known gaps.
 
 ## Documentation discipline
 
@@ -76,7 +80,7 @@ Small set of rules. Codified now so we don't have to back them out later.
 - **Consumer-side interfaces.** Interfaces live in the package that *uses* them, not the package that implements them. `lifecycle.DockerDriver` lives in `internal/lifecycle/`, not in a hypothetical `internal/docker/`. Provider packages export concrete types only. Exception: a single interface shared by three or more consumers can move to the provider, but default to consumer-side until that's true.
 - **Layer boundaries.** `internal/lifecycle` is the transaction owner; only `cmd/brain` and `internal/api` may import it. `internal/store` is the persistence boundary; only `internal/lifecycle`, `internal/api`, `internal/auth`, `internal/audit`, and `cmd/brain` may import it. Anything else reaching in is breaking the model — push the call through the right seam instead.
 - **`log/slog` is the only logger.** No `"log"` imports, no `fmt.Println` for diagnostics. Structured fields, not interpolated strings: `slog.Info("app installed", "instance_id", id)`, not `slog.Info(fmt.Sprintf("installed %s", id))`. The default handler is set in `cmd/brain/main.go`; use `slog.Default()` (the package-level functions) — don't thread `*slog.Logger` through constructors.
-- **Standard structured fields.** Use these key names so journalctl/jq filters stay stable: `instance_id`, `manifest_id`, `slug`, `service`, `image`, `host`, `upstream`, `step`, `err`, `output`, `user_id`, `username`, `role`, `action`, `actor_user_id`, `target_kind`, `target_id`, `retry_after`, `iface`, `interfaces`, `src`, `dir`, `profile`, `box_id`. `host` is a machine or upstream hostname only — a single network interface name is `iface`, a list of them is `interfaces` (never overload `host` for either). `src` is a source filesystem path (bind-source, folder-source); `dir` is a relative bind dir path. `profile` is the resolved environment profile (`appliance`|`hosted`, `ENVIRONMENT.md`). `box_id` is the hosted box's provisioned identity (`ENVIRONMENT.md` # Provisioning). Adding a new recurring field? Add it here.
+- **Standard structured fields.** Use these key names so journalctl/jq filters stay stable: `instance_id`, `manifest_id`, `slug`, `service`, `image`, `host`, `upstream`, `step`, `err`, `output`, `user_id`, `username`, `role`, `action`, `actor_user_id`, `target_kind`, `target_id`, `retry_after`, `iface`, `interfaces`, `src`, `dir`, `profile`, `box_id`, `zone`. `host` is a machine or upstream hostname only — a single network interface name is `iface`, a list of them is `interfaces` (never overload `host` for either). `src` is a source filesystem path (bind-source, folder-source); `dir` is a relative bind dir path. `profile` is the resolved environment profile (`appliance`|`hosted`, `ENVIRONMENT.md`). `box_id` is the hosted box's provisioned identity (`ENVIRONMENT.md` # Provisioning). `zone` is an IANA time-zone name (`TIME.md`, host-agent set-timezone). Adding a new recurring field? Add it here.
 - **Typed errors at boundaries, not everywhere.** Define a sentinel/typed error only when a *consumer* needs to discriminate (HTTP status, retry decision, UI text). `store.ErrNotFound` exists because the API maps it to 404. Don't pre-declare error types speculatively.
 - **No premature abstraction.** Don't introduce an interface, factory, or DI container until at least two concrete consumers exist. It bites hardest in Go where every extra interface is import-graph weight.
 - **`internal/` for everything except `cmd/`.** No `pkg/`. Anything inside `internal/` is private to this module by Go's own rules — no public API surface to maintain.
@@ -107,6 +111,7 @@ Small set of rules. Codified now so we don't have to back them out later.
 ## Working style
 
 - **Always work in a git worktree for local implementations.** Use the `isolation: "worktree"` option when spawning agents, or manually create a worktree (`git worktree add`) before making changes. Never implement directly on the checked-out branch.
+- **When reviewing a PR** (your own or someone else's), read `docs/dev/code-review.md` end-to-end before looking at any diff — it defines the lenses, severity levels, and what "reviewed" means on this project. Use a sonnet agent for code review (`model: "sonnet"`).
 - This is a spec-led project; precision matters. When proposing a change, name the doc and section.
 - Read the relevant `docs/specs/` doc(s) end-to-end before proposing changes — they cross-reference each other heavily and decisions in one constrain the others. Use `docs/README.md` to find the right one.
 - Push back on tradeoffs; defer to product calls once made (per user preference).
