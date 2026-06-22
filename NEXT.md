@@ -21,3 +21,9 @@ C3b (#207, [hosted-wildcard-cert.md](docs/progress/hosted-wildcard-cert.md)) con
 ## Encrypt hosted enrollment credentials at rest (box-side)
 
 The per-box acme-dns credentials the brain ingests from the seed are persisted plaintext in `box_meta` (`store.BoxMetaEnrollment`), matching the cloud producer's MVP posture. The threat is loss of the brain's SQLite: a leaked subdomain/username/password lets an attacker renew certs for that one box, not escalate beyond it. Encrypt at rest when the box's DB lands on shared/backed-up infra. The cloud side tracks the symmetric item for its own `boxes` table (`malmoos/cloud` NEXT.md).
+
+## Per-app disk quota for hosted tenants
+
+`ENVIRONMENT.md` # Per-instance resource limits names a per-app **disk quota** as the third dimension the hosted control plane needs to bound a paying tenant. The memory + CPU cgroup limits landed with #211, but disk quota was deferred: the locked storage stack (`ext4` + Docker's `overlay2`, `STORAGE.md`) cannot enforce a per-container write-layer quota portably. Docker's `--storage-opt size=` works only on `xfs`-with-`pquota` or the `devicemapper`/`btrfs` drivers — none of which the appliance or the cloud image use.
+
+The realistic path is **XFS project quotas** on the data tree, driven through the host-agent (a privileged op — set/clear a project ID + hard limit on an app's `/var/lib/malmo/instances/<id>/` subtree and its bound use-case folders). It needs: a `BRAIN_HOST_PROTOCOL.md` verb, a `host-agent-real` implementation, and the same store-backed-policy + reconcile seam the cgroup limits already use (`internal/store` `instance_resource_limits` would gain a `disk_bytes` column). Hosted-only in practice; out of scope until the cloud image's storage layout is fixed. Deferred from #211; tracked in #221.

@@ -161,8 +161,10 @@ type Manager struct {
 	// box-id, routes are keyed on (and surfaced URLs use)
 	// "<slug>.<box-id>.malmo.network" and no mDNS is published — there is no LAN
 	// to multicast on (ENVIRONMENT.md # Networking & discovery). Appliance leaves
-	// both zero-valued and keeps the ".local"/Avahi path unchanged. Set once at
-	// startup via SetEnvironment; the empty default means appliance behavior.
+	// both zero-valued and keeps the ".local"/Avahi path unchanged. profile also
+	// gates resource-limit CPU capping (hosted only — APP_ISOLATION.md # Resource
+	// limits says CPU is never capped on the appliance). Set once at startup via
+	// SetEnvironment; the empty default means appliance behavior.
 	profile profile.Profile
 	boxID   string
 
@@ -183,6 +185,7 @@ func NewManager(st *store.Store, cat *catalog.Catalog, host HostDriver, cd Caddy
 		healthWait: healthWaitTimeout, healthPoll: 2 * time.Second,
 		serviceReadyWait: serviceReadyTimeout,
 		instLocks:        map[string]*sync.Mutex{},
+		profile:          profile.Appliance,
 	}
 }
 
@@ -638,9 +641,13 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 		}
 	}
 
-	// 7. Generate override (with pins + isolation) + .env.
+	// 7. Generate override (with pins + isolation + any resource policy) + .env.
 	step("generating_override")
-	if err := m.writeOverride(id, man, composeBytes, pins, iso); err != nil {
+	lim, limErr := m.store.GetResourceLimits(id)
+	if limErr != nil {
+		return rollback(fmt.Errorf("get resource limits: %w", limErr))
+	}
+	if err := m.writeOverride(id, man, composeBytes, pins, iso, lim); err != nil {
 		return rollback(fmt.Errorf("override: %w", err))
 	}
 	if err := m.writeEnv(id, slug, iso); err != nil {
@@ -1157,12 +1164,46 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		switch inst.State {
 		case "running":
 			if !actual[inst.ID] {
+				// Patch in the current resource-limit policy before bringing a
+				// drifted instance up, so the recreated container is bounded. This
+				// path always runs ComposeUp below regardless of whether the file
+				// changed, so it self-retries and needs no restore-on-failure.
+				if _, _, err := m.reapplyResourceLimits(inst.ID); err != nil {
+					slog.Warn("reconcile: re-apply resource limits",
+						"instance_id", inst.ID, "err", err)
+				}
 				slog.Info("reconcile: starting drifted instance",
 					"instance_id", inst.ID, "reason", "no containers")
 				if out, err := m.docker.ComposeUp(ctx, m.instanceDir(inst.ID), "malmo-"+inst.ID); err != nil {
 					slog.Warn("reconcile: compose up",
 						"instance_id", inst.ID, "err", err, "output", out)
 					continue
+				}
+			} else {
+				// Containers already up: re-apply the resource-limit policy and
+				// recreate the app only if it changed, so a policy change takes
+				// effect here without a reinstall (ENVIRONMENT.md # Per-instance
+				// resource limits).
+				changed, restore, err := m.reapplyResourceLimits(inst.ID)
+				if err != nil {
+					slog.Warn("reconcile: re-apply resource limits",
+						"instance_id", inst.ID, "err", err)
+				} else if changed {
+					slog.Info("reconcile: re-applying resource-limit policy",
+						"instance_id", inst.ID)
+					if out, err := m.docker.ComposeUp(ctx, m.instanceDir(inst.ID), "malmo-"+inst.ID); err != nil {
+						slog.Warn("reconcile: compose up",
+							"instance_id", inst.ID, "err", err, "output", out)
+						// ComposeUp failed after the override was patched. Rewind it
+						// so the next reconcile re-detects the change and retries,
+						// instead of treating the patched-but-unapplied file as
+						// converged and leaving the old limits in place.
+						if rerr := restore(); rerr != nil {
+							slog.Warn("reconcile: restore override after failed re-apply",
+								"instance_id", inst.ID, "err", rerr)
+						}
+						continue
+					}
 				}
 			}
 			// Re-assert Caddy + mDNS. Track Avahi replay outcome for the
@@ -1367,7 +1408,7 @@ func (m *Manager) writeInstanceDir(id string, man *manifest.Manifest, composeByt
 // attachment, plus the `image: name@sha256:…` pin per service (digest pinning
 // — APP_LIFECYCLE.md). main_service additionally joins the ingress network
 // with a per-instance alias so Caddy can reach exactly this instance.
-func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes []byte, pins []servicePin, iso isolation) error {
+func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes []byte, pins []servicePin, iso isolation, lim store.ResourceLimits) error {
 	svcs, err := parseComposeServices(composeBytes)
 	if err != nil {
 		return err
@@ -1430,6 +1471,14 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 		// fixed exec handle (services.go).
 		if svc == man.MainService {
 			entry["container_name"] = fmt.Sprintf("malmo-%s-%s", id, man.MainService)
+			// Per-instance cgroup limits (ENVIRONMENT.md # Per-instance resource
+			// limits) clamp the app's main container. Omitted when no policy is
+			// set, so the app bursts freely by default (APP_ISOLATION.md #
+			// Resource limits). reapplyResourceLimits patches this same stanza on
+			// reconcile when the policy later changes.
+			if stanza := resourceLimitsStanza(m.profile, lim); stanza != nil {
+				entry["deploy"] = stanza
+			}
 		}
 		// Forced restart, EXCEPT for author-declared terminating jobs and
 		// completion-gate targets (#92). main_service is always forced — a paranoid

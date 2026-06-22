@@ -51,9 +51,9 @@ func main() {
 
 	// Resolve the environment profile once at startup (ENVIRONMENT.md # How the
 	// profile is realized). An unmarked box resolves to appliance — the no-op
-	// default — so `make dev` and existing appliance boxes are unchanged. No
-	// behavioral seam consults prof yet; each hosted behavior branches on it when
-	// its own feature lands (C1b/C1c and beyond, #196).
+	// default — so `make dev` and existing appliance boxes are unchanged. The
+	// resolved profile is handed to the lifecycle manager below; each hosted
+	// behavior branches on it when its own feature lands (#196).
 	prof := profile.Read(cfg.profilePath)
 	slog.Info("environment profile resolved", "profile", string(prof))
 
@@ -87,8 +87,9 @@ func main() {
 	life.SetOfflineInstall(cfg.offlineInstall)
 	// On hosted, per-app routes and surfaced URLs use the public
 	// "<slug>.<box-id>.malmo.network" scheme instead of "<slug>.local"
-	// (ENVIRONMENT.md # Networking & discovery). Appliance leaves the box-id
-	// empty and the lifecycle keeps its .local/mDNS path.
+	// (ENVIRONMENT.md # Networking & discovery), and the resolved profile also
+	// gates the hosted-only resource-limit CPU cap (#211). Appliance leaves the
+	// box-id empty and the lifecycle keeps its .local/mDNS path.
 	life.SetEnvironment(prof, boxID)
 
 	// Production: the brain owns the control-plane stack (Caddy + malmo-ui) and
