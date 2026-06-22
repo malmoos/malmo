@@ -480,12 +480,62 @@ func TestReconcileBringsRunningInstanceBackUp(t *testing.T) {
 	if err := e.m.Reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
+	// Per-app network must be re-created before compose up (the override
+	// declares it external, so compose fails if the network was pruned).
+	if !methodsContainArg(e.docker.Calls(), "NetworkCreate", "malmo-app-"+inst.ID) {
+		t.Fatalf("NetworkCreate for per-app net not called during reconcile: %v", e.docker.methods())
+	}
 	if !methodsContainArg(e.docker.Calls(), "ComposeUp", "malmo-"+inst.ID) {
 		t.Fatalf("ComposeUp not called for drifted instance: %v", e.docker.methods())
 	}
 	// Route re-asserted.
 	if !e.caddy.called("AddRoute") {
 		t.Fatalf("AddRoute not called during reassert: %v", e.caddy.calls)
+	}
+}
+
+func TestReconcileDriftedInstanceNetworkCreateBeforeComposeUp(t *testing.T) {
+	// Regression: the override declares the per-app network as external, so
+	// compose up fails if the network no longer exists. The reconciler must
+	// ensure the network before calling compose up.
+	e := newTestEnv(t)
+	e.writeCatalogApp(t, "whoami", whoamiCompose, whoamiManifest(""))
+	e.docker.digests[testImage] = testDigest
+	_, err := e.m.Install(context.Background(), "whoami", Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	e.docker.psManaged = map[string]bool{}
+	e.docker.calls = nil
+
+	if err := e.m.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if !containsInOrder(e.docker.methods(), []string{"NetworkCreate", "ComposeUp"}) {
+		t.Fatalf("NetworkCreate must precede ComposeUp: %v", e.docker.methods())
+	}
+}
+
+func TestReconcileDriftedInstanceNetworkCreateFailureSkipsComposeUp(t *testing.T) {
+	// If the network cannot be re-created, compose up must not be attempted:
+	// it would fail with "network declared as external, but could not be found"
+	// and that error is less clear than the NetworkCreate failure itself.
+	e := newTestEnv(t)
+	e.writeCatalogApp(t, "whoami", whoamiCompose, whoamiManifest(""))
+	e.docker.digests[testImage] = testDigest
+	_, err := e.m.Install(context.Background(), "whoami", Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	e.docker.psManaged = map[string]bool{}
+	e.docker.calls = nil
+	e.docker.networkCreateErr = fmt.Errorf("docker: network driver error")
+
+	if err := e.m.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if e.docker.called("ComposeUp") {
+		t.Fatalf("ComposeUp must not be called when NetworkCreate fails: %v", e.docker.methods())
 	}
 }
 

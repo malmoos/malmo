@@ -56,6 +56,7 @@ type fakeDocker struct {
 	removeImageErr    error
 	serviceUpErr      error
 	controlPlaneUpErr error
+	networkCreateErr  error // forces NetworkCreate to return this error
 
 	// runOneOff drives RunOneOff: it returns scripted output/error per invocation
 	// (matched on args). Default (nil) returns ("", nil) — provisioning only cares
@@ -198,7 +199,7 @@ func (f *fakeDocker) Inspect(_ context.Context, id, main string) (bool, string, 
 
 func (f *fakeDocker) NetworkCreate(_ context.Context, name string, internal bool) error {
 	f.record("NetworkCreate", name, internal)
-	return nil
+	return f.networkCreateErr
 }
 
 func (f *fakeDocker) NetworkRemove(_ context.Context, name string) error {

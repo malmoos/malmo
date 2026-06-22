@@ -1172,6 +1172,21 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 					slog.Warn("reconcile: re-apply resource limits",
 						"instance_id", inst.ID, "err", err)
 				}
+				// Re-create the per-app network if it was removed while the brain
+				// was down. The override declares it external, so compose up fails
+				// without it. NetworkCreate treats "already exists" as success.
+				man, manErr := m.loadInstanceManifest(inst.ID)
+				if manErr != nil {
+					slog.Warn("reconcile: load manifest, skipping drifted instance",
+						"instance_id", inst.ID, "err", manErr)
+					continue
+				}
+				appNet := "malmo-app-" + inst.ID
+				if err := m.docker.NetworkCreate(ctx, appNet, !man.Permissions.Internet); err != nil {
+					slog.Warn("reconcile: ensure app network",
+						"instance_id", inst.ID, "err", err)
+					continue
+				}
 				slog.Info("reconcile: starting drifted instance",
 					"instance_id", inst.ID, "reason", "no containers")
 				if out, err := m.docker.ComposeUp(ctx, m.instanceDir(inst.ID), "malmo-"+inst.ID); err != nil {
