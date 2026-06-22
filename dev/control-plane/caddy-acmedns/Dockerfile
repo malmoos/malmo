@@ -16,7 +16,10 @@
 #   docker build -t malmo-caddy-acmedns:<tag> .
 # The real DNS-01 issuance path is exercised end-to-end in the cloud on-ramp
 # (cloud #6 / CL6), not the inner loop (no real ACME/DNS locally).
-ARG CADDY_VERSION=2.8.4
+# 2.10.0's builder ships Go 1.24.x; caddy-dns/acmedns >=0.7.0 requires Go >=1.24,
+# and the builder pins GOTOOLCHAIN=local (no toolchain auto-download), so an older
+# Caddy (2.8.4 → Go 1.23) fails `xcaddy build` with a "requires go >= 1.24" error.
+ARG CADDY_VERSION=2.10.0
 FROM caddy:${CADDY_VERSION}-builder AS builder
 RUN xcaddy build --with github.com/caddy-dns/acmedns
 

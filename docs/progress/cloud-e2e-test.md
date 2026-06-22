@@ -34,7 +34,7 @@ The wizard's time-zone step is a real `timedatectl set-timezone`, which **reject
 ### Harness wiring (`dev/cloud/run-cloud-tests.sh`, `dev/cloud/test/bootstrap.sh`)
 
 - `run-cloud-tests.sh` — header + per-boot narration updated to describe the wizard; **no driver logic change** (the seed delivery + 3-boot overlay + serial verdict grep are reused verbatim from C2/#220). The verdict mechanism (`MALMO_CLOUD_ASSERTIONS: PASS`) is unchanged.
-- `dev/cloud/test/bootstrap.sh` — `CANARY_VERSION` v12 → v13 to force a clean image rebuild (the baked `cloud-assertions.sh` + the `tzdata` package both changed).
+- `dev/cloud/test/bootstrap.sh` — `CANARY_VERSION` v14 → v15 to force a clean image rebuild (the baked `cloud-assertions.sh` + the `tzdata` package both changed; rebased over CL6/#236, which had bumped it to v14).
 - The `make test-cloud-qemu` target (added by C2) already runs the driver; no Makefile change needed.
 
 ## Known gaps & operational notes

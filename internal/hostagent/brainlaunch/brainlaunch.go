@@ -125,6 +125,14 @@ type Config struct {
 	// MALMO_DASHBOARD_UI_UPSTREAM; its presence is what makes the brain install
 	// the dashboard route. Empty leaves the brain without a dashboard route.
 	UIUpstream string
+	// CaddyImage selects the Caddy image the brain's control-plane `docker compose
+	// up` runs, passed through as MALMO_CADDY_IMAGE (the compose substitutes
+	// ${MALMO_CADDY_IMAGE:-caddy:2-alpine}; ControlPlaneUp inherits the brain's
+	// env). The hosted profile sets it to the caddy-dns/acmedns build, which the
+	// "*.<box-id>.malmo.network" wildcard cert needs (ACME DNS-01 — os #207/C3b).
+	// Empty leaves compose on stock caddy:2-alpine — the appliance, which does no
+	// ACME — so the var is only emitted when set.
+	CaddyImage string
 	// CatalogDir is the Door-1 catalog the brain installs apps from, passed as
 	// MALMO_CATALOG_DIR. It must live under DataDir (the default does) so it is
 	// already visible in the brain via the DataDir bind mount — the brain only
@@ -323,6 +331,12 @@ func runSpec(cfg Config) RunSpec {
 	// default rather than pointing it at an empty "".
 	if cfg.CatalogDir != "" {
 		env = append(env, EnvVar{Key: "MALMO_CATALOG_DIR", Value: cfg.CatalogDir})
+	}
+	// The hosted Caddy image (caddy-dns/acmedns build). Emit only when set so an
+	// unset CaddyImage leaves the control-plane compose on its stock-caddy default
+	// (the appliance does no ACME — Config.CaddyImage).
+	if cfg.CaddyImage != "" {
+		env = append(env, EnvVar{Key: "MALMO_CADDY_IMAGE", Value: cfg.CaddyImage})
 	}
 	// Air-gapped install mode (registry-less box). Emit only when set — the brain
 	// defaults it off (a box with a registry pulls + verifies as usual).
