@@ -215,6 +215,23 @@ func (m *Manager) provisionServices(ctx context.Context, instanceID, manifestID 
 	return grants, nil
 }
 
+// existingServicePW reads the superuser password from the service dir's .env if
+// it already exists on disk. Returns the password and true when found; empty
+// string and false otherwise (file absent, unreadable, or malformed).
+func (m *Manager) existingServicePW(kind, version string) (string, bool) {
+	envPath := filepath.Join(m.serviceDir(kind, version), ".env")
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		return "", false
+	}
+	line := strings.TrimSpace(string(data))
+	_, val, ok := strings.Cut(line, "=")
+	if !ok {
+		return "", false
+	}
+	return strings.TrimSpace(val), true
+}
+
 // ensureServiceInstance starts the shared service container of a kind+version if
 // it isn't already recorded (lazy spinup). Idempotent: an existing row means the
 // instance was spun up before and the reconcile pass keeps it running.
@@ -225,12 +242,18 @@ func (m *Manager) ensureServiceInstance(ctx context.Context, kind, version strin
 		return err
 	}
 
-	superuserPW, err := randSecret(24)
-	if err != nil {
-		return err
-	}
-	if err := m.writeServiceDir(kind, version, superuserPW); err != nil {
-		return err
+	// Reuse the existing superuser password if the service dir survived a store
+	// wipe — overwriting .env would mismatch the already-initialised container.
+	superuserPW, existed := m.existingServicePW(kind, version)
+	if !existed {
+		var err error
+		superuserPW, err = randSecret(24)
+		if err != nil {
+			return err
+		}
+		if err := m.writeServiceDir(kind, version, superuserPW); err != nil {
+			return err
+		}
 	}
 	netName := serviceNetworkName(kind, version)
 	if err := m.docker.NetworkCreate(ctx, netName, true); err != nil {
