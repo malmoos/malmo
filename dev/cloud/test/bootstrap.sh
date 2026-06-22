@@ -24,7 +24,7 @@ WORK="${REPO_ROOT}/.dev/cloud-boot"
 EXTRA="${TEST_DIR}/mkosi.extra"
 PKGMNGR="${TEST_DIR}/mkosi.pkgmngr"
 CANARY="${WORK}/.cloud-boot-ready"
-CANARY_VERSION="v13"  # bump when staging/mkosi.conf/repart changes require a clean rebuild
+CANARY_VERSION="v14"  # bump when staging/mkosi.conf/repart changes require a clean rebuild
 IMAGE_OUT="${WORK}/malmo-cloud.raw"
 
 if [ "${EUID:-$(id -u)}" -ne 0 ]; then

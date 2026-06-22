@@ -30,9 +30,12 @@ set -uo pipefail
 
 SENTINEL=/dev/console
 SEED=/var/lib/malmo/seed.json
-# Brain default dashboard host (MALMO_DASHBOARD_HOST); host-agent does not
-# override it, so the brain installs the dashboard route under this Host. The
-# assertion is a Host-header route match over localhost — no DNS/mDNS involved.
+# Host the dashboard + /api + /setup are served under, resolved per scenario below
+# (just before step 7, once json_str is defined). An UNPROVISIONED hosted box has no
+# box-id yet, so the brain installs the route under the appliance-style "malmo.local"
+# apex; a SEEDED/FROZEN box installs it under "<box-id>.malmo.network" — the apex of
+# the box's wildcard cert (C3b, #207). The assertion is a Host-header route match over
+# localhost — no DNS/mDNS involved. Default is the unprovisioned host.
 DASH_HOST=malmo.local
 # First-admin credentials the seeded scenario creates and the frozen scenario logs
 # back in with (a fresh process each boot; these constants are the only shared
@@ -95,6 +98,10 @@ diag() {
         docker logs malmo-docker-proxy 2>&1 | tail -15
         echo "-- malmo-brain logs (tail 40) --"
         docker logs malmo-brain 2>&1 | tail -40
+        echo "-- malmo-brain resolved profile (grep, not tail) --"
+        docker logs malmo-brain 2>&1 | grep -iE 'environment profile resolved|provisioning seed|setup stays closed' || echo "(no profile line in brain log)"
+        echo "-- malmo-brain mounts (is /etc/malmo/profile bind-mounted?) --"
+        docker inspect malmo-brain --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}' 2>&1
         echo "-- host-agent journal (tail 15) --"
         journalctl -u host-agent.service -b --no-pager 2>&1 | tail -15
         echo "=== END MALMO_CLOUD_DIAG ==="
@@ -220,6 +227,18 @@ http_post() { # PATH HOST JSON -> full response
 json_str() { # FILE KEY -> value
     sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" | head -1
 }
+
+# Resolve the Host the brain actually serves the dashboard under for this scenario
+# (see DASH_HOST above). A provisioned box (seeded/frozen) serves at its wildcard apex
+# "<box-id>.malmo.network", not "malmo.local" — so steps 7–9 must probe that host or
+# Caddy's catch-all answers 404. Seeded reads the box-id from the just-materialized
+# seed; frozen uses the persisted identity carried in MODE (the brain ignores this
+# boot's re-delivered seed, so the route stays under the original box-id).
+case "$MODE" in
+seeded)   DASH_HOST="$(json_str "$SEED" box_id).malmo.network" ;;
+frozen:*) DASH_HOST="${MODE#frozen:}.malmo.network" ;;
+esac
+echo "cloud-assertions: probing control plane at Host=$DASH_HOST (mode=$MODE)"
 
 # --- 7. the dashboard SPA answers through Caddy (the control-plane-up proof).
 # The brain flips/installs the dashboard route a beat after Caddy comes up, so poll.
