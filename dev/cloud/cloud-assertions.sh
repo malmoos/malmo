@@ -227,9 +227,11 @@ json_str() { # FILE KEY -> value
 # Extract the session cookie ("malmo_session=<tok>") from a /login (or /setup)
 # response's Set-Cookie header, dropping the attributes after the first ';'. The
 # wizard's box-configuration endpoints are admin-gated, so they need this cookie.
+# Match the malmo_session header specifically (not just the first Set-Cookie) so
+# an unrelated cookie can't be returned and silently fail every later auth call.
 session_cookie() { # RESPONSE -> "malmo_session=<tok>"
-    grep -i '^Set-Cookie:' <<<"$1" \
-        | sed -E 's/^[Ss]et-[Cc]ookie:[[:space:]]*([^;]*).*/\1/' | tr -d '\r' | head -1
+    grep -i '^Set-Cookie:.*malmo_session=' <<<"$1" \
+        | sed -E 's/^[Ss]et-[Cc]ookie:[[:space:]]*(malmo_session=[^;]*).*/\1/' | tr -d '\r' | head -1
 }
 # Authenticated POST carrying the session cookie -> full response. An empty body
 # arg is sent as a bodyless POST (Content-Length: 0, no Content-Type) for the
@@ -391,6 +393,7 @@ frozen:*)
     # The first-run-complete marker written during the seeded boot survives the
     # power-cycle: the wizard does not reappear after a reboot (FIRST_RUN.md # Phase 3).
     fr_cookie="$(session_cookie "$login")"
+    [ -n "$fr_cookie" ] || fail "frozen mode: no session cookie from /login (status: $(status_of "$login"))"
     fr_state="$(auth_get "$fr_cookie" /api/v1/auth/state "$DASH_HOST" 2>/dev/null || true)"
     grep -q '"first_run_complete":true' <<<"$fr_state" || \
         fail "frozen mode: first_run_complete not persisted across the reboot — the wizard would reappear (body: $(printf '%s' "$fr_state" | tail -1))"
