@@ -143,6 +143,10 @@ func brainLaunchConfig(sockPath string) brainlaunch.Config {
 		ProxyContainerName: "malmo-docker-proxy",
 		ControlPlaneDir:    controlPlaneDir,
 		UIUpstream:         env("MALMO_DASHBOARD_UI_UPSTREAM", "malmo-ui:80"),
+		// Empty by default: the control-plane compose then runs stock caddy:2-alpine
+		// (the appliance, no ACME). The hosted image sets MALMO_CADDY_IMAGE to the
+		// caddy-dns/acmedns build for the wildcard cert (os #207/C3b).
+		CaddyImage: env("MALMO_CADDY_IMAGE", ""),
 		// The Door-1 catalog the brain installs from, staged under dataDir so it
 		// rides the brain's DataDir mount (brainlaunch.Config.CatalogDir).
 		CatalogDir:        env("MALMO_CATALOG_DIR", filepath.Join(dataDir, "catalog")),

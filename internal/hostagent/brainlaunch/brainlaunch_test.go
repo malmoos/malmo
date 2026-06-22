@@ -174,6 +174,11 @@ func TestLaunchRunSpec(t *testing.T) {
 	if v := envVal(s.Env, "MALMO_OFFLINE_INSTALL"); v != "" {
 		t.Errorf("MALMO_OFFLINE_INSTALL = %q, want unset when OfflineInstall is false", v)
 	}
+	// CaddyImage empty (the appliance/dev default) → the brain gets no
+	// MALMO_CADDY_IMAGE, so the control-plane compose stays on stock caddy:2-alpine.
+	if v := envVal(s.Env, "MALMO_CADDY_IMAGE"); v != "" {
+		t.Errorf("MALMO_CADDY_IMAGE = %q, want unset when CaddyImage is empty", v)
+	}
 	if hasMount(s.Mounts, "/var/run/docker.sock", "/var/run/docker.sock") {
 		t.Error("brain must NOT mount the raw Docker socket")
 	}
@@ -222,6 +227,21 @@ func TestLaunchRunSpecOfflineAndNoCatalog(t *testing.T) {
 	}
 	if v := envVal(s.Env, "MALMO_CATALOG_DIR"); v != "" {
 		t.Errorf("MALMO_CATALOG_DIR = %q, want unset when CatalogDir is empty", v)
+	}
+}
+
+// The hosted profile sets CaddyImage; it must reach the brain as MALMO_CADDY_IMAGE
+// so the control-plane compose substitutes the caddy-dns/acmedns build for the
+// wildcard cert (os #207/C3b).
+func TestLaunchRunSpecCaddyImage(t *testing.T) {
+	f := newFake()
+	cfg := testConfig()
+	cfg.CaddyImage = "malmo-caddy-acmedns:dev"
+	if err := Launch(context.Background(), f, cfg); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if v := envVal(f.lastRun.Env, "MALMO_CADDY_IMAGE"); v != "malmo-caddy-acmedns:dev" {
+		t.Errorf("MALMO_CADDY_IMAGE = %q, want malmo-caddy-acmedns:dev", v)
 	}
 }
 
