@@ -22,7 +22,14 @@
 # socket-proxy-compose-validation.md.
 services:
   caddy:
-    image: caddy:2-alpine
+    # Appliance rides stock caddy:2-alpine (it does no ACME — plain-HTTP .local).
+    # The hosted profile sets MALMO_CADDY_IMAGE (in the brain's environment, which
+    # `docker compose` inherits) to a custom build with the caddy-dns/acmedns
+    # module compiled in, needed for the "*.<box-id>.malmo.network" wildcard cert
+    # via ACME DNS-01 (ENVIRONMENT.md # Networking & discovery; os #207 / C3b).
+    # The recipe is ./caddy-acmedns/Dockerfile; one env var selects the image so
+    # the future appliance secure-URLs toggle can reuse the same build.
+    image: ${MALMO_CADDY_IMAGE:-caddy:2-alpine}
     container_name: malmo-caddy
     restart: unless-stopped
     command: ["caddy", "run", "--config", "/etc/caddy/caddy.json"]

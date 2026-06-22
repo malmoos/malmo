@@ -12,13 +12,13 @@ import (
 
 func TestSetTimezone_RejectsInvalidBeforeExec(t *testing.T) {
 	invalid := []string{
-		"",                // empty
-		"Not A Zone!",     // spaces + punctuation
-		"../etc/passwd",   // path traversal
-		"/UTC",            // leading slash
-		"Europe/",         // trailing slash, empty component
-		"Europe//Berlin",  // empty middle component
-		"$(reboot)",       // shell-ish
+		"",               // empty
+		"Not A Zone!",    // spaces + punctuation
+		"../etc/passwd",  // path traversal
+		"/UTC",           // leading slash
+		"Europe/",        // trailing slash, empty component
+		"Europe//Berlin", // empty middle component
+		"$(reboot)",      // shell-ish
 		"Europe/Stockholm; rm -rf /",
 	}
 	for _, zone := range invalid {

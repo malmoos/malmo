@@ -21,6 +21,32 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-21 — Hosted box runs a custom Caddy build (acme-dns module); appliance keeps stock Caddy (#207)
+
+**Previously:** the control-plane stack ran stock `caddy:2-alpine` for both profiles. C3b's plan assumed acme-dns being "native to Caddy" meant no custom build was needed.
+
+**Now:** **the hosted profile runs a custom Caddy built with `caddy-dns/acmedns` compiled in (xcaddy); appliance keeps stock `caddy:2-alpine`.** The acme-dns DNS provider is a community module that still must be *built into* the binary — stock Caddy ships no DNS-provider modules, so DNS-01 (the only way to issue a wildcard) cannot work on it. `dev/control-plane/caddy-acmedns/Dockerfile` is the recipe; `compose.yml` selects the image via `${MALMO_CADDY_IMAGE:-caddy:2-alpine}`, and only the hosted image sets the var.
+
+**Why:**
+- A wildcard `*.<box-id>.malmo.network` can only be issued via ACME DNS-01, which needs a DNS-provider plugin in the Caddy binary. Stock Caddy has none. There is no config-only path.
+- Putting the custom image on **both** profiles was rejected: appliance does no ACME today (plain-HTTP `.local`; its secure-URLs toggle is deferred), so it would carry an unused module, drop off upstream's official image (security updates), and grow the offline bundle for nothing.
+- A single env var (`MALMO_CADDY_IMAGE`) selecting the image keeps one build recipe and one compose, so when the appliance toggle ships, flipping appliance onto the same image is a one-line change — the "build hosted-only, structure for reuse" shape.
+
+**Affected docs:** `ENVIRONMENT.md` (# Networking & discovery — as built). Realized by `docs/progress/hosted-wildcard-cert.md` (#207/C3b). The cloud side runs joohoi/acme-dns and ships the per-box account in the seed (`malmoos/cloud` CL4).
+
+## 2026-06-21 — The box→acme-dns API endpoint is a box-side constant, not seeded (#207)
+
+**Previously:** undefined. The seed carries the per-box acme-dns *credentials* (`{subdomain, username, password}`); how the box reaches acme-dns to push TXT updates was unspecified on the OS side.
+
+**Now:** **the acme-dns API endpoint is a box-side constant — `MALMO_ACMEDNS_ENDPOINT`, default `https://auth.malmo.network` — not part of the seed.** It is the same for every box, so seeding it per-box would be redundant; only the credentials, which differ per box, are seeded. The brain hands the constant + the seeded creds to Caddy's `acmedns` provider.
+
+**Why:**
+- The credential is per-box (each box's acme-dns account can set only its own `_acme-challenge` TXT); the endpoint is shared infrastructure. Seeding only what varies keeps the seed minimal and the wire contract small (cloud `specs/ARCHITECTURE.md` Contract 2 names the endpoint a box-side constant explicitly).
+- Overridable via env so a box can be pointed at a staging or self-hosted acme-dns without re-seeding.
+- **Open cross-repo gap:** the cloud deploy currently binds acme-dns's HTTP API to `127.0.0.1:4443` (internal `/register` only) — no public face is deployed yet, so `https://auth.malmo.network` is a chosen default, not a confirmed endpoint. Filed as `malmoos/cloud` #14; pinned at CL6.
+
+**Affected docs:** `ENVIRONMENT.md` (# Networking & discovery — as built), `NEXT.md`. Realized by `docs/progress/hosted-wildcard-cert.md` (#207/C3b).
+
 ## 2026-06-20 — Admin-bootstrap secret is handed off out-of-band, not served by the brain (#206)
 
 **Previously:** C3a (#206) left the hand-off open ("coordinate with C4"). The design review raised the obvious candidate — the brain serves the one-time bootstrap secret to the browser at first boot (à la a provider's one-time root-password page), which would necessarily be an unauthenticated, pre-admin endpoint with an expiry.

@@ -39,11 +39,38 @@ type Seed struct {
 	// AdminBootstrapSecret is the one-time secret that gates first-admin
 	// creation on /setup. The brain stores only its hash, never the plaintext.
 	AdminBootstrapSecret string `json:"admin_bootstrap_secret"`
-	// Enrollment carries the `*.<box-id>.malmo.network` DNS-01 credentials.
-	// Reserved for C3b (seeded enrollment + wildcard cert), which depends on the
-	// unbuilt cloud enrollment API — captured here so the seed contract is whole,
-	// but deliberately unconsumed by C3a.
-	Enrollment json.RawMessage `json:"enrollment,omitempty"`
+	// Enrollment carries the per-box acme-dns account the box's Caddy uses to
+	// obtain and renew its `*.<box-id>.malmo.network` wildcard cert via ACME
+	// DNS-01 (C3b; ENVIRONMENT.md # Networking & discovery). The JSON shape
+	// mirrors the cloud producer's wire contract byte-for-byte (cloud
+	// internal/seed.EnrollmentCredentials) — the two repos meet at this format,
+	// not a shared Go type. It is optional at the seed-parse layer: a hosted box
+	// seeded without it simply can't get a cert (the cert pass logs and skips);
+	// the box-id + bootstrap gate still work. omitempty so an appliance/un-enrolled
+	// seed round-trips without an empty block.
+	Enrollment EnrollmentCredentials `json:"enrollment,omitempty"`
+}
+
+// EnrollmentCredentials is a per-box joohoi/acme-dns account (cloud
+// specs/ARCHITECTURE.md Contract 2). The credential can set only this box's own
+// `_acme-challenge` TXT, so Caddy renews the wildcard cert directly against
+// acme-dns with no per-renewal cloud call. The acme-dns server's API endpoint is
+// a box-side constant (the same for every box), not part of this seeded payload.
+type EnrollmentCredentials struct {
+	// Subdomain is the acme-dns account subdomain the box's
+	// `_acme-challenge.<box-id>` CNAME points at (the CNAME is set cloud-side in
+	// Route53 at provision).
+	Subdomain string `json:"subdomain"`
+	// Username and Password authenticate the box to acme-dns for TXT updates.
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// Complete reports whether all three acme-dns fields are present. An incomplete
+// (or absent) block means the box cannot configure DNS-01, so the hosted cert
+// pass logs and skips rather than handing Caddy a half-configured issuer.
+func (e EnrollmentCredentials) Complete() bool {
+	return e.Subdomain != "" && e.Username != "" && e.Password != ""
 }
 
 // ReadSeed reads and validates the provisioning seed at path. A missing file

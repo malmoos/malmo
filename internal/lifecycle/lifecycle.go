@@ -25,6 +25,7 @@ import (
 	"github.com/malmoos/malmo/internal/events"
 	"github.com/malmoos/malmo/internal/hostclient"
 	"github.com/malmoos/malmo/internal/manifest"
+	"github.com/malmoos/malmo/internal/profile"
 	"github.com/malmoos/malmo/internal/protocol"
 	"github.com/malmoos/malmo/internal/store"
 
@@ -156,6 +157,15 @@ type Manager struct {
 	// serviceReadyTimeout. Overridable in tests (mirrors healthWait).
 	serviceReadyWait time.Duration
 
+	// profile + boxID select the per-app URL scheme. On hosted with a non-empty
+	// box-id, routes are keyed on (and surfaced URLs use)
+	// "<slug>.<box-id>.malmo.network" and no mDNS is published — there is no LAN
+	// to multicast on (ENVIRONMENT.md # Networking & discovery). Appliance leaves
+	// both zero-valued and keeps the ".local"/Avahi path unchanged. Set once at
+	// startup via SetEnvironment; the empty default means appliance behavior.
+	profile profile.Profile
+	boxID   string
+
 	// instLocks serializes lifecycle ops on a single existing instance
 	// (APP_LIFECYCLE.md # concurrency — one op at a time per instance). Stop,
 	// Start, and Uninstall all take the per-id lock so a stop can't race an
@@ -181,6 +191,23 @@ func NewManager(st *store.Store, cat *catalog.Catalog, host HostDriver, cd Caddy
 // fails. cmd/brain wires this from MALMO_OFFLINE_INSTALL; it is a box-level mode
 // (a baked, registry-less box), not a per-install option. See offlineInstall.
 func (m *Manager) SetOfflineInstall(v bool) { m.offlineInstall = v }
+
+// SetEnvironment records the environment profile and (on hosted) the box-id, so
+// per-app route hosts and surfaced URLs use the hosted "<slug>.<box-id>.malmo.network"
+// scheme. cmd/brain wires this from the resolved profile + the ingested seed.
+// Appliance passes an empty box-id and the lifecycle keeps its ".local"/mDNS path.
+func (m *Manager) SetEnvironment(prof profile.Profile, boxID string) {
+	m.profile = prof
+	m.boxID = boxID
+}
+
+// hosted reports whether per-app routing should use the public
+// "<slug>.<box-id>.malmo.network" scheme: the hosted profile with a resolved
+// box-id. A hosted box that hasn't ingested its seed yet (no box-id) has no apps
+// installed anyway, so falling back to the appliance path is harmless.
+func (m *Manager) hosted() bool {
+	return m.profile == profile.Hosted && m.boxID != ""
+}
 
 // lockInstance acquires the per-instance lock (creating it on first use) and
 // returns the unlock func. Callers `defer unlock()`. See instLocks.
@@ -631,25 +658,31 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	// the hostname is reachable immediately (APP_LIFECYCLE.md # register early,
 	// with a splash) instead of returning connection-refused for ~120s.
 	//
-	// The published name is authoritative: Publish may return a box-qualified
-	// collision-fallback ("<slug>-<box>.local") that differs from the primary
-	// "<slug>.local", so the Caddy route and the displayed URL must follow
-	// pub.Name. We reconstruct the primary name only if publish failed, so the
-	// route still exists (host-header routing keeps working even when mDNS
-	// resolution doesn't).
+	// On hosted there is no LAN and no Avahi: the route host is the public
+	// "<slug>.<box-id>.malmo.network" and nothing is multicast (ENVIRONMENT.md #
+	// Networking & discovery). On appliance the published name is authoritative:
+	// Publish may return a box-qualified collision-fallback ("<slug>-<box>.local")
+	// that differs from the primary "<slug>.local", so the Caddy route and the
+	// displayed URL must follow pub.Name. We reconstruct the primary name only if
+	// publish failed, so the route still exists (host-header routing keeps working
+	// even when mDNS resolution doesn't).
 	host := slug + protocol.AppHostSuffix
-	step("publishing_mdns")
-	pub, err := m.host.Publish(ctx, slug)
-	if err != nil {
-		slog.Warn("mDNS publish failed (continuing)",
-			"instance_id", id, "slug", slug, "err", err)
+	if m.hosted() {
+		host = profile.HostedAppHost(m.boxID, slug)
 	} else {
-		host = pub.Name
-		if err := m.store.SetMDNSName(id, pub.Name); err != nil {
-			slog.Warn("mDNS name persist failed (continuing)",
-				"instance_id", id, "name", pub.Name, "err", err)
+		step("publishing_mdns")
+		pub, err := m.host.Publish(ctx, slug)
+		if err != nil {
+			slog.Warn("mDNS publish failed (continuing)",
+				"instance_id", id, "slug", slug, "err", err)
+		} else {
+			host = pub.Name
+			if err := m.store.SetMDNSName(id, pub.Name); err != nil {
+				slog.Warn("mDNS name persist failed (continuing)",
+					"instance_id", id, "name", pub.Name, "err", err)
+			}
+			inst.MDNSName = pub.Name
 		}
-		inst.MDNSName = pub.Name
 	}
 	step("registering_route")
 	if err := m.caddy.AddSplashRoute(ctx, id, host, man.Name, "starting"); err != nil {
@@ -697,11 +730,18 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	}
 	inst.State = "running"
 	m.emitState(inst, "installing")
+	// Hosted serves apps over HTTPS at the wildcard host; appliance is HTTP on
+	// ".local" (ENVIRONMENT.md # Networking & discovery). host already carries the
+	// right host for the scheme, so only the scheme itself differs.
+	url := "http://" + host
+	if m.hosted() {
+		url = "https://" + host
+	}
 	m.bus.Publish(events.AppInstalled, map[string]any{
-		"instance_id": id, "name": man.Name, "slug": slug, "url": "http://" + host,
+		"instance_id": id, "name": man.Name, "slug": slug, "url": url,
 	})
 	slog.Info("app installed",
-		"instance_id", id, "name", man.Name, "url", "http://"+host, "upstream", upstream)
+		"instance_id", id, "name", man.Name, "url", url, "upstream", upstream)
 	return inst, nil
 }
 
@@ -825,7 +865,7 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 	// Best-effort splash flip — the route already exists; a failure here leaves
 	// the real upstream pointing at now-stopped containers (which Caddy will fail
 	// to reach), so it's degraded UX, not a reason to fail the stop.
-	host := routeHost(inst)
+	host := m.routeHost(inst)
 	man, err := m.loadInstanceManifest(id)
 	appName := inst.Name
 	if err == nil {
@@ -941,13 +981,18 @@ func (m *Manager) startFailed(ctx context.Context, inst store.Instance, host, ap
 	return cause
 }
 
-// routeHost is the hostname an instance's Caddy route is keyed on: the published
-// mDNS name when we have one (it may be the box-qualified collision fallback),
-// else the reconstructed primary `<slug>.local`. Mirrors the fallback chain in
-// install + reassertRouting so the three never disagree. Used by the passive
-// callers (Stop) that flip the splash without re-announcing the name;
-// re-assertion paths (Start, reconcile) use publishHost instead.
-func routeHost(inst store.Instance) string {
+// routeHost is the hostname an instance's Caddy route is keyed on. On hosted it
+// is the public "<slug>.<box-id>.malmo.network" (no mDNS, no collision fallback).
+// On appliance it is the published mDNS name when we have one (it may be the
+// box-qualified collision fallback), else the reconstructed primary
+// `<slug>.local`. Mirrors the fallback chain in install + reassertRouting so the
+// three never disagree. Used by the passive callers (Stop) that flip the splash
+// without re-announcing the name; re-assertion paths (Start, reconcile) use
+// publishHost instead.
+func (m *Manager) routeHost(inst store.Instance) string {
+	if m.hosted() {
+		return profile.HostedAppHost(m.boxID, inst.Slug)
+	}
 	if inst.MDNSName != "" {
 		return inst.MDNSName
 	}
@@ -965,6 +1010,12 @@ func routeHost(inst store.Instance) string {
 // reconcile pass both call it freely. Shared by reassertRouting (reconcile) and
 // Start so Caddy, Avahi, and the stored MDNSName never disagree.
 func (m *Manager) publishHost(ctx context.Context, inst store.Instance) (string, bool) {
+	// Hosted has no LAN and no Avahi (host-agent is the slim build): the route
+	// host is the public "<slug>.<box-id>.malmo.network" and nothing is
+	// multicast. Report avahiOK=true — there is no mDNS leg that could fail.
+	if m.hosted() {
+		return profile.HostedAppHost(m.boxID, inst.Slug), true
+	}
 	host := inst.MDNSName
 	avahiOK := true
 	if pub, err := m.host.Publish(ctx, inst.Slug); err != nil {
@@ -1461,9 +1512,16 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 
 func (m *Manager) writeEnv(id, slug string, iso isolation) error {
 	dataDir, _ := filepath.Abs(filepath.Join(m.instanceDir(id), "data"))
+	// MALMO_APP_URL is the app's own public URL (apps that build absolute links
+	// read it). Hosted is HTTPS at "<slug>.<box-id>.malmo.network"; appliance is
+	// plain-HTTP "<slug>.local".
+	appURL := "http://" + slug + protocol.AppHostSuffix
+	if m.hosted() {
+		appURL = profile.HostedAppURL(m.boxID, slug)
+	}
 	lines := []string{
 		"MALMO_INSTANCE_ID=" + id,
-		"MALMO_APP_URL=http://" + slug + protocol.AppHostSuffix,
+		"MALMO_APP_URL=" + appURL,
 		"MALMO_DATA_DIR=" + dataDir,
 	}
 	// Inject the in-container path for each bound folder (APP_MANIFEST.md #

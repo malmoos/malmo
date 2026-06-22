@@ -16,6 +16,7 @@ import (
 	"github.com/malmoos/malmo/internal/lifecycle"
 	"github.com/malmoos/malmo/internal/manifest"
 	"github.com/malmoos/malmo/internal/notify"
+	"github.com/malmoos/malmo/internal/profile"
 	"github.com/malmoos/malmo/internal/protocol"
 	"github.com/malmoos/malmo/internal/store"
 )
@@ -1159,6 +1160,34 @@ func TestAppProbe_MDNSFallback(t *testing.T) {
 	}
 	if rt.last.Host != "myapp.local" {
 		t.Errorf("probe Host = %q, want myapp.local (slug fallback)", rt.last.Host)
+	}
+}
+
+// On hosted the probe must address the public wildcard route host
+// "<slug>.<box-id>.malmo.network" — not "<slug>.local", which has no Caddy route
+// and would 404 into a perpetual app-unresponsive flap. MDNSName is empty on
+// hosted (no LAN to multicast on), so the appliance fallback would otherwise win.
+func TestAppProbe_HostedWildcardHost(t *testing.T) {
+	clk := &stepClock{t: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)}
+	lister := &fakeInstanceLister{instances: []store.Instance{
+		{ID: "app", Slug: "myapp", MDNSName: "", State: "running"},
+	}}
+	loader := &fakeManifestLoader{m: map[string]*manifest.Manifest{
+		"app": probeManifest("web", "/healthz", nil, manifest.DefaultStartPeriod),
+	}}
+	reader := &fakeContainerReader{containers: []lifecycle.ManagedContainer{
+		{InstanceID: "app", Service: "web", Running: true, StartedAt: clk.now().Add(-5 * time.Minute)},
+	}}
+	rt := &stubRoundTripper{status: map[string]int{"myapp.cindy-fox.malmo.network": 200}}
+	d, _, _, _ := newTestProbeDetector(lister, loader, reader, rt, clk)
+	d.SetEnvironment(profile.Hosted, "cindy-fox")
+
+	d.check(context.Background())
+	if rt.last == nil {
+		t.Fatal("expected a probe request")
+	}
+	if want := "myapp.cindy-fox.malmo.network"; rt.last.Host != want {
+		t.Errorf("probe Host = %q, want %q (hosted wildcard route host)", rt.last.Host, want)
 	}
 }
 
