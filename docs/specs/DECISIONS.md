@@ -43,7 +43,7 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 **Why:**
 - The credential is per-box (each box's acme-dns account can set only its own `_acme-challenge` TXT); the endpoint is shared infrastructure. Seeding only what varies keeps the seed minimal and the wire contract small (cloud `specs/ARCHITECTURE.md` Contract 2 names the endpoint a box-side constant explicitly).
 - Overridable via env so a box can be pointed at a staging or self-hosted acme-dns without re-seeding.
-- **Open cross-repo gap:** the cloud deploy currently binds acme-dns's HTTP API to `127.0.0.1:4443` (internal `/register` only) — no public face is deployed yet, so `https://auth.malmo.network` is a chosen default, not a confirmed endpoint. Filed as `malmoos/cloud` #14; pinned at CL6.
+- **Cross-repo gap closed (2026-06-23, `malmoos/cloud` #14):** the cloud control-plane VM now fronts acme-dns with Caddy, exposing `/update` + `/health` over real Let's Encrypt TLS for `auth.malmo.network` (`/register` stays loopback-only, 404 on the public face) and answering the authoritative `:53` face publicly. `https://auth.malmo.network` is a **confirmed live endpoint** — the box-side default holds unchanged. Real end-to-end issuance against it is verified jointly at cloud #6 / CL6.
 
 **Affected docs:** `ENVIRONMENT.md` (# Networking & discovery — as built), `NEXT.md`. Realized by `docs/progress/hosted-wildcard-cert.md` (#207/C3b).
 
