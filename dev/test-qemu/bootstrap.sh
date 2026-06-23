@@ -464,6 +464,24 @@ EOF
 fi
 echo "mkosi interpreter: $MKOSI_INTERPRETER"
 
+# Ubuntu 24.04+ heads-up: mkosi builds rootless (as $CALLER, below) by unsharing
+# a user namespace and dropping capabilities inside it. With
+# kernel.apparmor_restrict_unprivileged_userns=1 (the 24.04 default) that userns
+# has no CAP_SETPCAP, so mkosi's PR_CAPBSET_DROP EPERMs and the build dies at
+# sandbox bring-up (#189). We don't relax a system sysctl unbidden, so warn with
+# the remedy here — it lands right above mkosi's own (opaque) traceback if the
+# build does fail. The cloud lane (dev/cloud/bootstrap.sh), which runs mkosi as
+# the invoking user, hard-probes instead; here mkosi runs as $CALLER under sudo.
+userns_knob=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+if [ -r "$userns_knob" ] && [ "$(cat "$userns_knob")" = "1" ]; then
+    cat >&2 <<EOF
+note: kernel.apparmor_restrict_unprivileged_userns=1 (Ubuntu 24.04 default).
+If the mkosi build below fails with PR_CAPBSET_DROP / "Operation not permitted",
+relax it with: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+See docs/dev/running-locally.md # Ubuntu 24.04: unprivileged user namespaces.
+EOF
+fi
+
 if [ -n "$CALLER" ]; then
     sudo -u "$CALLER" env "MKOSI_INTERPRETER=$MKOSI_INTERPRETER" \
         "$MKOSI_BIN" --force build

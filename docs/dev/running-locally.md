@@ -108,6 +108,24 @@ behavior is required.
   above. On macOS/Windows, skip it and use `make test-nopam` or run the fake
   host-agent.
 
+### Ubuntu 24.04: unprivileged user namespaces
+
+Only relevant to the **mkosi image-build lanes** — `make build-cloud-image`, `make test-cloud-qemu`, `make test-medium-qemu`. The inner loop is unaffected.
+
+mkosi (the locked image builder) builds rootless: it unshares a user namespace and drops capabilities inside it. Ubuntu 24.04 ships `kernel.apparmor_restrict_unprivileged_userns=1`, which hands an unconfined process a user namespace with no `CAP_SETPCAP`. mkosi's `PR_CAPBSET_DROP` then returns `EPERM` and the build dies at sandbox bring-up — `acquire_privileges → drop_capabilities` — before doing any work (issue #189). It is not version- or `sudo`-specific: any unprivileged mkosi invocation on a restriction-enabled kernel hits it.
+
+Relax the restriction (it is the system-wide default that gates *all* unprivileged userns, not mkosi-specific):
+
+```bash
+# this shell (reverts on reboot):
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+# persist across reboots:
+echo 'kernel.apparmor_restrict_unprivileged_userns=0' | sudo tee /etc/sysctl.d/99-mkosi-userns.conf
+sudo sysctl --system
+```
+
+If you would rather keep the restriction on, the scoped alternative is an AppArmor profile that grants `userns,` to mkosi's interpreter — more setup, but it doesn't open unprivileged userns host-wide. The `dev/cloud/bootstrap.sh` preflight hard-fails with this pointer when the probe trips; `dev/test-qemu/bootstrap.sh` prints it as a warning above mkosi's own output. CI's cloud-image lane (`.github/workflows/ci-cloud-image.yml`) sets the knob automatically — its runner is ephemeral, so relaxing it host-wide is harmless there.
+
 ## Start the stack
 
 **One terminal (recommended):**
