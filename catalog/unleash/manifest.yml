@@ -1,0 +1,58 @@
+id: unleash
+manifest_version: 1
+name: Unleash
+version: "8.0.1"
+description:
+  short: "Self-hosted feature flags and progressive rollouts for your own apps."
+  long: |
+    Unleash is an open-source feature management platform that runs entirely on your own hardware. Wrap a risky change in a flag and turn it on or off at runtime without redeploying, target a feature at specific users or segments, roll it out gradually by percentage, and A/B test variants — all from one dashboard. Your own services connect to Unleash with an SDK and ask it which features are on, so flag state lives on your home server instead of a vendor cloud. malmo provisions and manages the PostgreSQL database Unleash needs automatically, so there is nothing to wire up.
+
+    Logging in the first time: Unleash starts with a single administrator account, username `admin`. Its initial password is generated uniquely for your install and shown on this app's page in malmo — copy it to sign in, then change it under your account settings. From there you can invite the rest of your household and create projects, environments, and flags.
+
+    Email is optional. Password resets, user invites, and the productivity report are delivered by email; until an administrator adds an outgoing email account in malmo and binds it to this app, those features quietly do nothing while everything else works. Note on links: Unleash builds invite and reset links from this app's local network address, so they only open from a device on your home network until remote access is available. The dashboard and your SDK clients work fully on your LAN today.
+icon: ./icon.svg
+categories: [developer-tools]
+author:
+  name: Unleash
+  url: https://www.getunleash.io
+license: AGPL-3.0
+links:
+  homepage: https://www.getunleash.io
+  source: https://github.com/Unleash/unleash
+  support: https://docs.getunleash.io
+changelog_url: https://github.com/Unleash/unleash/releases
+
+compose_file: compose.yml
+main_service: unleash
+main_port: 4242
+preferred_slugs: [unleash, flags, feature-flags]
+
+health_probe:
+  path: /health
+  start_period: 90s
+
+resources:
+  recommended: { memory: 1G, cpu: 1.0 }
+
+services:
+  database:
+    type: postgres
+    version: "16"
+
+secrets:
+  - name: unleash_secret
+  - name: admin_password
+    show: true
+
+mail:
+  optional: true
+
+permissions:
+  internet: true
+  lan: false
+
+images:
+  unleashorg/unleash-server:8.0.1:
+    digest: sha256:07139700dd09a68b35bac8b4b49456fbb1ec1bfb4cc80c360a1c2877dcbf9510
+    download_bytes: 90111658
+    disk_bytes: 328390144
