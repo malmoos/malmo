@@ -21,6 +21,19 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-23 — `nftables` stays in the hosted image: docker-ce hard-Depends on it (#241)
+
+**Previously:** the 2026-06-19 entry (below) and `ENVIRONMENT.md` stated hosted **ships no `nftables`** — the package was on the lean-image cut list, on the reasoning that its only job is LAN-scoping SSH/SMB (both dropped in hosted). The lean check (`dev/cloud/bootstrap.sh`) asserted its absence. #237 separately fixed `nftables` arriving as `iptables`' *recommend* (`WithRecommends=no`), which kept that premise true.
+
+**Now:** **`nftables` is accepted permanently in the hosted image — it is a hard dependency of `docker-ce`, not droppable.** `docker-ce` `5:29.6.0` reads `Depends: ... iptables, nftables` (two separate hard deps); Docker 28 moved its default firewall backend to nftables and 29.x made the package mandatory. Recommends-off can't exclude a hard dep, and the hosted image *must* run docker (the four control-plane containers). `nftables` is dropped from the lean-check cut list for good; the temporary unblock from #243 is replaced with a permanent rationale.
+
+**Why:**
+- The 2026-06-19 decision's *substance* is unchanged: malmo still manages **no firewall ruleset of its own** in hosted, and L3/L4 filtering is still the provider's security group. Only the factual premise "no `nftables` package present" flipped — the package now rides in as docker's backend, not as appliance LAN machinery.
+- Pinning `docker-ce < 28` to keep `nftables` a recommend would ship an EOL'd, security-frozen Docker in every tenant image. Rejected.
+- The image is unchanged and boots; `nftables` present is correct (docker's firewall backend). The deferred in-guest default-deny backstop (`NEXT.md`) is now a ruleset + host-agent seam only — the package is already there.
+
+**Affected docs:** `ENVIRONMENT.md` (# How the profile is realized, # Public-by-default — `nftables` reframed from "cut" to "present as docker's backend, no malmo ruleset"), `NEXT.md` (backstop item: package already present). Realized by `docs/progress/cloud-image-nftables-hard-dep.md` (#241); the lean check's cut list in `dev/cloud/bootstrap.sh` no longer lists `nftables`. See #237 / `docs/progress/cloud-image-recommends-pin.md` for the recommends-path history this supersedes for `nftables`.
+
 ## 2026-06-21 — Hosted box runs a custom Caddy build (acme-dns module); appliance keeps stock Caddy (#207)
 
 **Previously:** the control-plane stack ran stock `caddy:2-alpine` for both profiles. C3b's plan assumed acme-dns being "native to Caddy" meant no custom build was needed.
