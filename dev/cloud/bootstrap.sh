@@ -19,10 +19,11 @@
 #   3. Stage Docker's apt repo (trixie pocket) into mkosi.pkgmngr/ so docker-ce
 #      resolves at build time (build-host network only; the VM never apt-installs).
 #   4. `mkosi build` → a raw GPT disk image under .dev/cloud/.
-#   5. Assert the appliance cut list is absent from the package manifest
-#      (nftables is intentionally NOT cut — docker-ce hard-Depends on it as
-#      its firewall backend; ENVIRONMENT.md # How the profile is realized)
-#      and that the committed ExtraTrees marker reads `hosted`.
+#   5. Assert the built package manifest matches the checked-in expected set
+#      (expected-packages.txt) exactly — any off-list package (bloat, e.g.
+#      recommends drift) or unexpectedly-dropped package fails the build, not
+#      just a hardcoded appliance cut list (#238). Then source-sanity-check the
+#      committed ExtraTrees marker reads `hosted`.
 #
 # Needs root: it builds the control-plane image bundle (docker) and chowns build
 # artifacts back to the caller; mkosi itself runs as the caller (it auto-escalates
@@ -199,31 +200,63 @@ if [ -z "$MANIFEST" ]; then
     exit 1
 fi
 
-python3 - "$MANIFEST" <<'PY'
-import json, sys
+# Lean guard (#238): assert the built manifest's package set matches the
+# checked-in expected set (expected-packages.txt) exactly. This supersedes the
+# old hardcoded appliance cut list — any off-list package (recommends drift like
+# #237, or any other bloat) fails, not only a named handful, and an
+# unexpectedly-dropped package fails too. The expected set is a lockfile-style
+# snapshot of the lean image (ENVIRONMENT.md # How the profile is realized);
+# names only, so version bumps don't churn it. Regenerate it by pasting the
+# reported sets when a package change is intended (see expected-packages.txt).
+EXPECTED="${CLOUD_DIR}/expected-packages.txt"
+python3 - "$MANIFEST" "$EXPECTED" <<'PY'
+import json, re, sys
 
-# The appliance LAN/storage machinery that the hosted image must NOT carry
-# (ENVIRONMENT.md # How the profile is realized — "absent, not disabled").
-cuts = {
-    "network-manager", "avahi-daemon", "avahi-utils", "samba",
-    "mergerfs", "cryptsetup", "tpm2-tools", "openssh-server",
-    # nftables is deliberately NOT cut. docker-ce hard-Depends on it
-    # (Depends: ... iptables, nftables) as its firewall backend since
-    # Docker 28, so the hosted image — which must run docker — carries it
-    # unavoidably. The appliance ships nftables only to LAN-scope SSH/SMB
-    # (both dropped here); malmo manages no firewall ruleset of its own in
-    # hosted, so the package's presence is docker's, not appliance machinery
-    # (#241, ENVIRONMENT.md # How the profile is realized / # Public-by-default).
-}
-with open(sys.argv[1]) as f:
+manifest_path, expected_path = sys.argv[1], sys.argv[2]
+
+# The concrete kernel-image package carries the full ABI version IN its name
+# (e.g. linux-image-6.12.94+deb13-amd64), so its name changes on every kernel
+# bump — that is not bloat. It is pulled by the stable meta-package
+# linux-image-amd64, which stays in the expected set and still flags a real
+# kernel removal. Drop the versioned one from both sides so an ABI bump is not a
+# false "unexpected package". This is the one package whose name is not version-
+# stable; everything else is compared by name only.
+versioned_kernel = re.compile(r"^linux-image-\d")
+
+with open(manifest_path) as f:
     data = json.load(f)
-names = {p.get("name") for p in data.get("packages", [])}
-present = sorted(cuts & names)
-if present:
-    print(f"LEAN CHECK FAILED — appliance packages present in cloud image: {present}",
-          file=sys.stderr)
+installed = {p["name"] for p in data.get("packages", [])
+             if p.get("name") and not versioned_kernel.match(p["name"])}
+
+expected = set()
+with open(expected_path) as f:
+    for line in f:
+        name = line.split("#", 1)[0].strip()
+        if name and not versioned_kernel.match(name):
+            expected.add(name)
+
+unexpected = sorted(installed - expected)
+missing = sorted(expected - installed)
+
+print(f"lean check: {len(installed)} packages compared, {len(expected)} expected")
+
+if unexpected or missing:
+    print("LEAN CHECK FAILED — built image does not match the expected package "
+          "set (dev/cloud/expected-packages.txt).", file=sys.stderr)
+    if unexpected:
+        print(f"\nUNEXPECTED — in the image but not expected ({len(unexpected)}); "
+              "if intended, add these to expected-packages.txt:", file=sys.stderr)
+        for name in unexpected:
+            print(name, file=sys.stderr)
+    if missing:
+        print(f"\nMISSING — expected but not in the image ({len(missing)}); "
+              "if intended, drop these from expected-packages.txt:", file=sys.stderr)
+        for name in missing:
+            print(name, file=sys.stderr)
     sys.exit(1)
-print(f"lean check passed — none of {sorted(cuts)} are installed")
+
+print(f"lean check passed — manifest matches expected-packages.txt exactly "
+      f"({len(installed)} packages)")
 PY
 
 # Source-sanity check: verify the committed ExtraTrees source file reads `hosted`
