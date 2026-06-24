@@ -65,12 +65,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             pipx uidmap mmdebstrap debian-archive-keyring \
-            dosfstools mtools squashfs-tools e2fsprogs systemd-container
+            dosfstools mtools squashfs-tools e2fsprogs systemd-container \
+            libpam0g-dev
           # Pin to the v26 git tag — the same source the dev box uses. mkosi no
           # longer ships this release to PyPI (`pipx install mkosi==26` 404s), so
           # install straight from the upstream tag for a reproducible lane.
           pipx install git+https://github.com/systemd/mkosi.git@v26
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          # bootstrap.sh runs under sudo (make build-cloud-image → sudo -E
+          # ./dev/cloud/bootstrap.sh), where the runner's ~/.local/bin is not on
+          # root's PATH even with -E. Symlink mkosi into /usr/local/bin so the
+          # preflight command -v check finds it regardless.
+          sudo ln -sf "$HOME/.local/bin/mkosi" /usr/local/bin/mkosi
 
       - name: Versions
         run: |
