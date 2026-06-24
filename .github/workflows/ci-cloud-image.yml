@@ -1,0 +1,90 @@
+# CI gate for the hosted cloud-VM image: build it with mkosi and assert it stays
+# lean. The CI realization of `make build-cloud-image` (docs/specs/TESTING.md).
+#
+# Closes the gap #189/#238 carried: until now the cloud image had NO automated
+# build — `make build-cloud-image` ran only by hand, and on an Ubuntu 24.04 box
+# mkosi 26's rootless sandbox dies before it starts (PR_CAPBSET_DROP EPERM)
+# under the AppArmor unprivileged-userns restriction. The whole cloud track
+# deferred its green build to "the maintainer's joint cloud live run". This lane
+# makes the build (and its lean check) run on every dev/cloud/** change instead.
+#
+# Triggers on PRs into main, only when cloud-image-relevant files change (path
+# filter) — same narrow-trigger pattern as ci-go.yml. workflow_dispatch is kept
+# for manual re-runs while iterating on the lane.
+name: CI / Cloud image
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "dev/cloud/**"
+      - "Makefile"
+      - ".github/workflows/ci-cloud-image.yml"
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref (e.g. force-pushes to a PR branch).
+concurrency:
+  group: ci-cloud-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cloud-image:
+    name: Build hosted cloud image + lean check
+    # Pin 24.04 explicitly: this is the exact environment that reproduces the
+    # mkosi-sandbox EPERM (#189), so the fix has to be proven here, not on a
+    # floating ubuntu-latest.
+    runs-on: ubuntu-24.04
+    # mmdebstrap + apt fetch over the network; cap the run so a stalled mirror or
+    # a build loop can't hold the runner for the 6-hour Actions default.
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+
+      # mkosi 26 builds rootless: it unshares a user namespace and drops
+      # capabilities inside it. Ubuntu 24.04 ships
+      # kernel.apparmor_restrict_unprivileged_userns=1, which hands an
+      # unconfined process a userns with no CAP_SETPCAP, so mkosi's
+      # PR_CAPBSET_DROP returns EPERM and the build dies at sandbox bring-up
+      # (#189). Relaxing the knob is safe on an ephemeral runner; on a dev box
+      # the bootstrap scripts detect the restriction and point at this remedy.
+      - name: Relax AppArmor unprivileged-userns restriction
+        run: |
+          knob=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          echo "before: $(cat "$knob" 2>/dev/null || echo 'n/a (no AppArmor userns restriction)')"
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          echo "after:  $(cat "$knob")"
+
+      # Host tooling mkosi needs to bootstrap a Debian tools tree (the Ubuntu
+      # host resolves ToolsTree=default to Debian) and to build rootless:
+      #   - uidmap: newuidmap/newgidmap for mkosi's --map-auto userns mapping
+      #   - mmdebstrap + debian-archive-keyring: bootstrap + verify the tools tree
+      #   - dosfstools/mtools: lay down the FAT ESP; squashfs-tools, e2fsprogs:
+      #     the ext4 root; systemd-container: nspawn for the build sandbox.
+      - name: Install mkosi and image-build tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pipx uidmap mmdebstrap debian-archive-keyring \
+            dosfstools mtools squashfs-tools e2fsprogs systemd-container
+          # Pin to the v26 git tag — the same source the dev box uses. mkosi no
+          # longer ships this release to PyPI (`pipx install mkosi==26` 404s), so
+          # install straight from the upstream tag for a reproducible lane.
+          pipx install git+https://github.com/systemd/mkosi.git@v26
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Versions
+        run: |
+          mkosi --version
+          echo "subuid: $(grep "^$(id -un):" /etc/subuid || echo MISSING)"
+          echo "subgid: $(grep "^$(id -un):" /etc/subgid || echo MISSING)"
+
+      # Fast isolation of the #189 fix: exercise exactly the sandbox code path
+      # that EPERM'd (acquire_privileges -> drop_capabilities) before spending
+      # minutes on the full build. If this fails, the userns knob did not take
+      # and the build diagnosis is unambiguous; if it passes but the build
+      # fails, the cause is a build dependency, not the sandbox.
+      - name: mkosi sandbox smoke (validates the userns fix in isolation)
+        run: mkosi sandbox -- true
+
+      - name: Build the hosted cloud image (+ lean check)
+        run: make build-cloud-image

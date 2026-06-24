@@ -105,6 +105,41 @@ EOF
     exit 1
 fi
 
+# --- 1b. unprivileged user-namespace preflight (Ubuntu 24.04+)
+# mkosi builds rootless: it unshares a user namespace and drops capabilities
+# inside it. Ubuntu 24.04 ships kernel.apparmor_restrict_unprivileged_userns=1,
+# which hands an unconfined process a userns with no CAP_SETPCAP, so mkosi's
+# PR_CAPBSET_DROP EPERMs and the build dies at sandbox bring-up before doing any
+# work (#189). Probe mkosi's real sandbox from a config-less dir (so a healthy
+# host doesn't provision a tools tree here) and, on failure, point at the fix
+# rather than leaving the caller with mkosi's opaque ctypes traceback.
+probe_dir="$(mktemp -d)"
+userns_ok=1
+( cd "$probe_dir" && mkosi sandbox -- true ) >/dev/null 2>&1 || userns_ok=0
+rm -rf "$probe_dir"
+if [ "$userns_ok" -ne 1 ]; then
+    knob=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+    knob_val=$(cat "$knob" 2>/dev/null || echo "absent")
+    if [ "$knob_val" = "1" ]; then
+        cat >&2 <<EOF
+mkosi's build sandbox can't start: creating an unprivileged user namespace
+failed (PR_CAPBSET_DROP EPERM). kernel.apparmor_restrict_unprivileged_userns=1
+(Ubuntu 24.04 default) — relax it:
+  - this shell / CI:  sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+  - persist it:       echo 'kernel.apparmor_restrict_unprivileged_userns=0' | \\
+                      sudo tee /etc/sysctl.d/99-mkosi-userns.conf && sudo sysctl --system
+See docs/dev/running-locally.md # Ubuntu 24.04: unprivileged user namespaces.
+EOF
+    else
+        cat >&2 <<EOF
+mkosi's build sandbox can't start (sandbox probe failed; knob=${knob_val} — not the AppArmor restriction).
+Check that uidmap is installed and ${CALLER:-root} appears in /etc/subuid and /etc/subgid:
+  grep "^${CALLER:-root}:" /etc/subuid /etc/subgid
+EOF
+    fi
+    exit 1
+fi
+
 mkdir -p "$WORK"
 [ -n "$CALLER" ] && chown "$CALLER":"$(id -gn "$CALLER")" "$WORK"
 
@@ -113,8 +148,7 @@ mkdir -p "$WORK"
 . "${CLOUD_DIR}/stage-control-plane.sh"
 stage_control_plane
 
-# --- 3. Docker apt repo for the build's package manager.
-# The build host has network; the VM never apt-installs Docker (baked). trixie
+# --- 3. Docker apt repo for the build's package manager.# The build host has network; the VM never apt-installs Docker (baked). trixie
 # pocket — the cloud image is Release=trixie (the test lane uses bookworm).
 rm -rf "$PKGMNGR"
 mkdir -p "$PKGMNGR/etc/apt/keyrings" "$PKGMNGR/etc/apt/sources.list.d"
