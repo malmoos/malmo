@@ -114,9 +114,27 @@ fi
 # work (#189). Probe mkosi's real sandbox from a config-less dir (so a healthy
 # host doesn't provision a tools tree here) and, on failure, point at the fix
 # rather than leaving the caller with mkosi's opaque ctypes traceback.
+# Probe AS THE USER THAT ACTUALLY RUNS MKOSI ($CALLER, see the build step below) —
+# not as root. Two reasons the root probe false-negatives even though the real
+# `sudo -u "$CALLER" mkosi build` succeeds: (1) mkosi's sandbox is rootless and
+# behaves differently under root; (2) `sudo -u` resets PATH to the system python
+# 3.8, but mkosi needs >=3.10 — so the probe must pass MKOSI_INTERPRETER just like
+# the build step does.
+probe_py=""
+for cand in python3.13 python3.12 python3.11 python3.10 \
+            "$CALLER_HOME/anaconda3/bin/python3" "$CALLER_HOME/miniconda3/bin/python3"; do
+    p="$(command -v "$cand" 2>/dev/null || true)"
+    [ -n "$p" ] && [ -x "$p" ] && "$p" -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null \
+        && { probe_py="$p"; break; }
+done
 probe_dir="$(mktemp -d)"
+[ -n "$CALLER" ] && chown "$CALLER" "$probe_dir" 2>/dev/null || true
 userns_ok=1
-( cd "$probe_dir" && mkosi sandbox -- true ) >/dev/null 2>&1 || userns_ok=0
+if [ -n "$CALLER" ]; then
+    ( cd "$probe_dir" && sudo -u "$CALLER" env "MKOSI_INTERPRETER=$probe_py" "$(command -v mkosi)" sandbox -- true ) >/dev/null 2>&1 || userns_ok=0
+else
+    ( cd "$probe_dir" && MKOSI_INTERPRETER="$probe_py" mkosi sandbox -- true ) >/dev/null 2>&1 || userns_ok=0
+fi
 rm -rf "$probe_dir"
 if [ "$userns_ok" -ne 1 ]; then
     knob=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
