@@ -81,6 +81,7 @@ jobs:
       - name: Versions
         run: |
           mkosi --version
+          git -C /tmp/mkosi-src log --oneline -1
           echo "subuid: $(grep "^$(id -un):" /etc/subuid || echo MISSING)"
           echo "subgid: $(grep "^$(id -un):" /etc/subgid || echo MISSING)"
 
