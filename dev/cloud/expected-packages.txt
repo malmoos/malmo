@@ -1,0 +1,163 @@
+# Expected package set for the lean hosted cloud image (dev/cloud/mkosi.conf).
+#
+# dev/cloud/bootstrap.sh's lean check asserts the built image's package manifest
+# matches this set EXACTLY: any package present in the image but not listed here
+# (bloat — e.g. the recommends drift of #237), or listed here but absent from the
+# image, fails `make build-cloud-image` and the CI cloud-image lane (#238). This
+# is the leanness guard the old hardcoded cut list could not give — it catches
+# ANY off-list package, not just a named handful.
+#
+# This is a lockfile: one package name per line, `#` starts a comment. Names
+# only — versions are not compared, so a patch/minor bump does not churn this
+# file; only a genuine change to the dependency graph does, and that change must
+# be reviewed. ENVIRONMENT.md # How the profile is realized governs what the lean
+# image carries; the appliance cuts (network-manager, avahi, samba, mergerfs,
+# cryptsetup, tpm2-tools, openssh-server) must never appear below.
+#
+# nftables is in the set because docker-ce hard-Depends it (#241) — its proper
+# fix/decision is tracked there; until then it is part of the lean set, not a
+# leak.
+#
+# The concrete kernel-image package (linux-image-<abi>-amd64) is deliberately
+# NOT listed: its name carries the ABI version, which changes on every kernel
+# bump. The lean check normalizes it out of the diff on both sides; the stable
+# meta-package linux-image-amd64 (below) is what guarantees a kernel is present.
+#
+# Regenerate when a package change is intended: run the lean check (the CI lane,
+# or `make build-cloud-image` on a host where mkosi builds) and add the reported
+# "UNEXPECTED" names / drop the reported "MISSING" names below.
+#
+# --- package set (filled from the first green CI build) ---
+base-files
+base-passwd
+bash
+bsdutils
+ca-certificates
+containerd.io
+coreutils
+cpio
+dash
+dbus
+dbus-bin
+dbus-daemon
+dbus-session-bus-common
+dbus-system-bus-common
+debconf
+debianutils
+diffutils
+docker-ce
+docker-ce-cli
+docker-compose-plugin
+dpkg
+dracut-install
+findutils
+gawk
+gcc-14-base
+grep
+gzip
+hostname
+initramfs-tools
+initramfs-tools-bin
+initramfs-tools-core
+init-system-helpers
+iproute2
+iptables
+klibc-utils
+kmod
+less
+libacl1
+libapparmor1
+libattr1
+libaudit1
+libaudit-common
+libblkid1
+libbpf1
+libbsd0
+libbz2-1.0
+libc6
+libcap2
+libcap2-bin
+libcap-ng0
+libc-bin
+libcom-err2
+libcrypt1
+libdb5.3t64
+libdbus-1-3
+libdebconfclient0
+libedit2
+libelf1t64
+libexpat1
+libgcc-s1
+libgmp10
+libgssapi-krb5-2
+libip4tc2
+libip6tc2
+libjansson4
+libk5crypto3
+libkeyutils1
+libklibc
+libkmod2
+libkrb5-3
+libkrb5support0
+liblastlog2-2
+liblzma5
+libmd0
+libmnl0
+libmount1
+libmpfr6
+libnetfilter-conntrack3
+libnfnetlink0
+libnftables1
+libnftnl11
+libpam0g
+libpam-modules
+libpam-modules-bin
+libpam-runtime
+libpcre2-8-0
+libreadline8t64
+libseccomp2
+libselinux1
+libsemanage2
+libsemanage-common
+libsepol2
+libsigsegv2
+libsmartcols1
+libsqlite3-0
+libssl3t64
+libsystemd0
+libsystemd-shared
+libtinfo6
+libtirpc3t64
+libtirpc-common
+libudev1
+libuuid1
+libxtables12
+libzstd1
+linux-base
+linux-image-amd64
+login.defs
+logsave
+mawk
+mount
+ncurses-base
+ncurses-bin
+netbase
+nftables
+openssl
+openssl-provider-legacy
+passwd
+perl-base
+readline-common
+sed
+sudo
+systemd
+systemd-boot
+systemd-boot-efi
+systemd-boot-tools
+systemd-sysv
+sysvinit-utils
+tar
+tzdata
+udev
+util-linux
+zlib1g
