@@ -121,8 +121,9 @@ EOF
     # First-boot provisioning-seed materializer + its oneshot (C3a cloud-lane, #220).
     # Lands the delivered seed at /var/lib/malmo/seed.json before host-agent launches
     # the brain; the postinst enables the unit. The materializer reads the SMBIOS
-    # systemd-credential channel (the test lane + clouds that deliver via fw_cfg);
-    # the real-cloud metadata channel is the #242 follow-up.
+    # systemd-credential channel (the test lane + clouds that deliver via fw_cfg)
+    # first, falling back to the real-cloud metadata/user-data endpoint when absent
+    # (Hetzner — #246).
     cp "${REPO_ROOT}/dev/cloud/malmo-seed-materialize.sh" "$WIRING/usr/local/bin/malmo-seed-materialize.sh"
     chmod 0755 "$WIRING/usr/local/bin/malmo-seed-materialize.sh"
     cp "${REPO_ROOT}/dev/cloud/malmo-seed.service" "$WIRING/etc/systemd/system/"
