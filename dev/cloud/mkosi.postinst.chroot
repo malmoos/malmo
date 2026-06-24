@@ -67,6 +67,27 @@ Type=ether
 DHCP=yes
 EOF
 
+# Static DNS resolver. The lean image ships NO systemd-resolved (not in the
+# package set) and systemd-networkd does not itself write /etc/resolv.conf, so
+# without this the box gets an IP via DHCP but has NO name resolution — only
+# /etc/hosts. That is invisible until something must resolve a public name: the
+# box reaches the metadata service and its own :80 by IP, so it boots and serves,
+# but the brain's Caddy cannot resolve acme-v02.api.letsencrypt.org or
+# auth.malmo.network, so the wildcard-cert ACME flow never starts (#207 / C3b)
+# and :443 stays certless. Docker also derives a bridge container's resolver from
+# the host's /etc/resolv.conf; with the file absent, malmo-caddy (a malmo-ingress
+# container) inherits no usable resolver — the same Docker-DNS gap the cloud
+# control-plane deploy had to patch. A static file with public resolvers is the
+# no-extra-package fix (resolved would change the lean manifest); the box only
+# ever resolves public names (control-plane images are baked, no registry pulls).
+cat > /etc/resolv.conf <<'EOF'
+# malmo hosted cloud image — static resolver (no systemd-resolved in the lean set).
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+nameserver 9.9.9.9
+EOF
+chmod 0644 /etc/resolv.conf
+
 # host-agent (slim, -tags hosted) launches the brain; its drop-in (staged in
 # mkosi.extra.wiring) points the bootstrap at the baked images + control-plane
 # dir. Order-after the image loader lives in that drop-in.
