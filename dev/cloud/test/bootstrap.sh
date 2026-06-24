@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
-# Build the hosted cloud BOOT-PROOF image (C2, #205): the lean image plus the
-# baked control plane, the slim host-agent, the single-NIC networkd config, and
-# the serial-driven self-check. The cloud analogue of dev/test-qemu/bootstrap.sh,
-# minus swtpm/LUKS/SSH (hosted cuts). dev/cloud/run-cloud-tests.sh calls this,
-# then converts the raw to qcow2 and boots it once in QEMU.
+# Build the hosted cloud BOOT-PROOF image (C2 #205; restructured #242): the
+# production hosted image PLUS the serial-driven self-check. Since #242 promoted the
+# first-boot runtime wiring (slim host-agent, networkd config, control-plane bundle,
+# seed materializer) into the production image (dev/cloud/), this lane now adds ONLY
+# the test harness on top — it boots the real production image, not a test-only
+# superset. The cloud analogue of dev/test-qemu/bootstrap.sh, minus swtpm/LUKS/SSH
+# (hosted cuts). dev/cloud/run-cloud-tests.sh calls this, then converts the raw to
+# qcow2 and boots it in QEMU.
+#
+# The boot-proof image = the lean production image (Include=.. of dev/cloud/, which
+# auto-detects dev/cloud/mkosi.postinst.chroot + dev/cloud/mkosi.extra.wiring/ for
+# this lane too) + this lane's assertions extra + assertions-only postinst.
 #
 # Sequence:
 #   1. Host preflight (mkosi v22+, qemu, qemu-img, OVMF, docker, go, libpam).
-#   2. Build the slim host-agent (`-tags hosted`, #204) + the control-plane image
-#      bundle (`make control-plane-images`).
-#   3. Stage dev/cloud/test/mkosi.extra/ with the agent + units + drop-in, the
-#      image bundle + loader (reused from the medium lane), the control-plane
-#      compose, the PAM stack, and the assertions oneshot + script.
+#   2. Stage the production first-boot wiring via the shared
+#      dev/cloud/stage-control-plane.sh (the SAME staging the lean build runs).
+#   3. Stage this lane's assertions (cloud-assertions.sh + its unit) into
+#      dev/cloud/test/mkosi.extra/; the test postinst enables the unit.
 #   4. Stage Docker's apt repo (trixie) so docker-ce resolves at build time.
 #   5. `mkosi build` from dev/cloud/test/ → .dev/cloud-boot/malmo-cloud.raw.
 #
@@ -19,12 +25,15 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-TEST_DIR="${REPO_ROOT}/dev/cloud/test"
+CLOUD_DIR="${REPO_ROOT}/dev/cloud"
+TEST_DIR="${CLOUD_DIR}/test"
 WORK="${REPO_ROOT}/.dev/cloud-boot"
-EXTRA="${TEST_DIR}/mkosi.extra"
+EXTRA="${TEST_DIR}/mkosi.extra"          # this lane's assertions only
+WIRING="${CLOUD_DIR}/mkosi.extra.wiring" # shared production wiring (ExtraTree of dev/cloud/)
 PKGMNGR="${TEST_DIR}/mkosi.pkgmngr"
+CP_BUNDLE="${REPO_ROOT}/.dev/control-plane"
 CANARY="${WORK}/.cloud-boot-ready"
-CANARY_VERSION="v15"  # bump when staging/mkosi.conf/repart changes require a clean rebuild
+CANARY_VERSION="v16"  # bump when staging/mkosi.conf/repart changes require a clean rebuild
 IMAGE_OUT="${WORK}/malmo-cloud.raw"
 
 if [ "${EUID:-$(id -u)}" -ne 0 ]; then
@@ -100,107 +109,20 @@ if [ -f "$CANARY" ] && [ "$(cat "$CANARY")" = "$CANARY_VERSION" ] && [ -f "$IMAG
     exit 0
 fi
 
-# --- 2. build the slim host-agent (-tags hosted, #204) + control-plane bundle.
-# CGO on (PAM) + CGO_CFLAGS as the Makefile sets — dynamic against the build
-# host's libpam, run on the Debian VM (libpam0g is in the lean base).
-HOSTAGENT_BIN="${WORK}/host-agent-real-hosted"
-build_go() { # OUT PKG [extra go-build args...]
-    local out="$1" pkg="$2"; shift 2
-    if [ -n "$CALLER" ]; then
-        sudo -u "$CALLER" env CGO_ENABLED=1 CGO_CFLAGS=-D_GNU_SOURCE "$GO" build "$@" -o "$out" "$pkg"
-    else
-        CGO_ENABLED=1 CGO_CFLAGS=-D_GNU_SOURCE "$GO" build "$@" -o "$out" "$pkg"
-    fi
-}
-build_go "$HOSTAGENT_BIN" "${REPO_ROOT}/cmd/host-agent-real/" -tags hosted
+# --- 2. stage the production first-boot wiring (shared with the lean build) into
+# dev/cloud/mkosi.extra.wiring/ — the ExtraTree of dev/cloud/ this lane inherits.
+# shellcheck source=dev/cloud/stage-control-plane.sh
+. "${CLOUD_DIR}/stage-control-plane.sh"
+stage_control_plane
 
-CP_BUNDLE="${REPO_ROOT}/.dev/control-plane"
-# Rebuild the control-plane image bundle only when absent (or forced via
-# MALMO_REBUILD_CP=1). `make control-plane-images` re-runs the brain (Go) + UI
-# (Vue) docker builds, regenerating ~13 GB of BuildKit cache each time — on a
-# tight disk that fills it across iterations. The images don't change while
-# iterating on the boot harness, so reuse the existing tarballs.
-if [ "${MALMO_REBUILD_CP:-0}" = "1" ] || ! ls "$CP_BUNDLE"/malmo-brain.tar "$CP_BUNDLE"/malmo-ui.tar \
-        "$CP_BUNDLE"/caddy.tar "$CP_BUNDLE"/docker-socket-proxy.tar >/dev/null 2>&1; then
-    echo "building + saving control-plane image bundle (docker)..."
-    make -C "$REPO_ROOT" control-plane-images
-else
-    echo "reusing existing control-plane image bundle (set MALMO_REBUILD_CP=1 to force)"
-fi
-
-# --- 3. stage mkosi.extra/
+# --- 3. stage this lane's assertions on top of the production wiring. The
+# serial-driven boot self-check + its oneshot are the ONLY test-only additions; the
+# test postinst (dev/cloud/test/mkosi.postinst.chroot) enables the unit.
 rm -rf "$EXTRA"
-mkdir -p "$EXTRA/etc/systemd/system/host-agent.service.d" \
-         "$EXTRA/usr/lib/malmo" \
-         "$EXTRA/usr/local/bin" \
-         "$EXTRA/etc/pam.d" \
-         "$EXTRA/var/lib/malmo/control-plane-images" \
-         "$EXTRA/var/lib/malmo/control-plane"
-
-# Slim host-agent at the production path host-agent.service ExecStarts.
-cp "$HOSTAGENT_BIN" "$EXTRA/usr/lib/malmo/host-agent-real"
-chmod 0755 "$EXTRA/usr/lib/malmo/host-agent-real"
-cp "${REPO_ROOT}/dist/systemd/host-agent.service" "$EXTRA/etc/systemd/system/"
-
-# host-agent bootstrap drop-in: point the brain bootstrap at the baked dev-tagged
-# images + tarballs + the staged control-plane dir, and order after the first-boot
-# image load so every image is present when the bootstrap runs. The brain reads
-# /etc/malmo/profile (mounted from the host by host-agent — brainlaunch
-# ProfileMarkerPath) to resolve profile=hosted; no MALMO_PROFILE_* env needed.
-cat > "$EXTRA/etc/systemd/system/host-agent.service.d/10-cloud-brain.conf" <<'EOF'
-[Unit]
-After=malmo-load-images.service
-
-[Service]
-Environment=MALMO_BRAIN_IMAGE=malmo-brain:dev
-Environment=MALMO_BRAIN_IMAGE_TAR=/var/lib/malmo/control-plane-images/malmo-brain.tar
-Environment=MALMO_PROXY_IMAGE=tecnativa/docker-socket-proxy:v0.4.2
-Environment=MALMO_PROXY_IMAGE_TAR=/var/lib/malmo/control-plane-images/docker-socket-proxy.tar
-Environment=MALMO_CONTROL_PLANE_DIR=/var/lib/malmo/control-plane
-Environment=MALMO_DASHBOARD_UI_UPSTREAM=malmo-ui:80
-Environment=MALMO_CADDY_IMAGE=malmo-caddy-acmedns:dev
-EOF
-
-# PAM stack for host-agent-real's verify-password (kept in hosted). Without it
-# pam_start("malmo") falls back to /etc/pam.d/other (deny). The malmo group is
-# provisioned by the postinst.
-cp "${REPO_ROOT}/dev/pam/malmo" "$EXTRA/etc/pam.d/malmo"
-
-# Control-plane image bundle + first-boot loader (reused verbatim from the
-# medium lane — same offline-first mechanism, TESTING.md # Full-stack control-
-# plane integration). The VM is air-gapped, so every image is a local tarball.
-cp "$CP_BUNDLE"/*.tar "$EXTRA/var/lib/malmo/control-plane-images/"
-# Hosted-only Caddy swap: the wildcard cert needs the caddy-dns/acmedns module
-# (ACME DNS-01 — os #207/C3b), which stock caddy:2-alpine lacks. Build the xcaddy
-# recipe and docker-save it OVER the *staged* caddy.tar — not the shared
-# $CP_BUNDLE copy, which the appliance/medium lane keeps on stock caddy (it does
-# no ACME). The drop-in above sets MALMO_CADDY_IMAGE so the brain's control-plane
-# compose runs this image; load-control-plane-images.sh loads it from the tar
-# regardless of filename (build-host network only; the VM never pulls).
-CADDY_ACMEDNS_IMAGE="malmo-caddy-acmedns:dev"
-echo "building hosted Caddy with the caddy-dns/acmedns module (xcaddy)..."
-docker build -t "$CADDY_ACMEDNS_IMAGE" "${REPO_ROOT}/dev/control-plane/caddy-acmedns/"
-docker save "$CADDY_ACMEDNS_IMAGE" -o "$EXTRA/var/lib/malmo/control-plane-images/caddy.tar"
-cp "${REPO_ROOT}/dev/test-qemu/load-control-plane-images.sh" "$EXTRA/usr/lib/malmo/"
-chmod 0755 "$EXTRA/usr/lib/malmo/load-control-plane-images.sh"
-cp "${REPO_ROOT}/dev/test-qemu/malmo-load-images.service" "$EXTRA/etc/systemd/system/"
-
-# Control-plane compose + caddy.json staged at the SAME host path the brain
-# container sees (same-path bind constraint — socket-proxy-compose-validation.md).
-cp "${REPO_ROOT}/dev/control-plane/compose.yml" "$EXTRA/var/lib/malmo/control-plane/"
-cp "${REPO_ROOT}/dev/control-plane/caddy.json"   "$EXTRA/var/lib/malmo/control-plane/"
-
-# Serial-driven boot self-check + its oneshot.
-cp "${REPO_ROOT}/dev/cloud/cloud-assertions.sh" "$EXTRA/usr/local/bin/cloud-assertions.sh"
+mkdir -p "$EXTRA/usr/local/bin" "$EXTRA/etc/systemd/system"
+cp "${CLOUD_DIR}/cloud-assertions.sh" "$EXTRA/usr/local/bin/cloud-assertions.sh"
 chmod 0755 "$EXTRA/usr/local/bin/cloud-assertions.sh"
 cp "${TEST_DIR}/malmo-cloud-assertions.service" "$EXTRA/etc/systemd/system/"
-
-# First-boot provisioning-seed materializer + its oneshot (C3a cloud-lane, #220).
-# Lands the SMBIOS-delivered seed at /var/lib/malmo/seed.json before host-agent
-# launches the brain; the postinst enables it.
-cp "${TEST_DIR}/malmo-seed-materialize.sh" "$EXTRA/usr/local/bin/malmo-seed-materialize.sh"
-chmod 0755 "$EXTRA/usr/local/bin/malmo-seed-materialize.sh"
-cp "${TEST_DIR}/malmo-seed.service" "$EXTRA/etc/systemd/system/"
 
 # --- 4. Docker apt repo for the build's package manager (trixie pocket — the
 # cloud image is Release=trixie). Build-host network only; the VM never apt-installs.
@@ -212,15 +134,13 @@ cat > "$PKGMNGR/etc/apt/sources.list.d/docker.list" <<'EOF'
 deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian trixie stable
 EOF
 
-# --- 5. mkosi build (from dev/cloud/test; Include=.. pulls in the lean base).
+# --- 5. mkosi build (from dev/cloud/test; Include=.. pulls in the production base
+# + its wiring). Re-own the staged trees + work dir to the caller; mkosi runs as
+# $CALLER and auto-sudos for privileged ops. NOT $CP_BUNDLE (mkosi reads the tarball
+# copies under $WIRING, and it is shared with the medium lane — leave it alone).
 echo "building cloud boot-proof image via mkosi (first run takes a few minutes)..."
-# Re-own the staged tree + work dir to the caller; mkosi runs as $CALLER and
-# auto-sudos for privileged ops. mkosi preserves mode inside the image regardless.
-# NOT $CP_BUNDLE: mkosi reads the tarball *copies* staged under $EXTRA, never the
-# bundle itself, and it is shared with the medium lane (test-medium-qemu) — leave
-# its ownership alone, as that lane does.
 if [ -n "$CALLER" ]; then
-    chown -R "$CALLER":"$(id -gn "$CALLER")" "$EXTRA" "$WORK" "$PKGMNGR"
+    chown -R "$CALLER":"$(id -gn "$CALLER")" "$EXTRA" "$WIRING" "$WORK" "$PKGMNGR"
 fi
 MKOSI_BIN="$(command -v mkosi || true)"
 [ -n "$MKOSI_BIN" ] || { echo "mkosi disappeared from PATH" >&2; exit 1; }

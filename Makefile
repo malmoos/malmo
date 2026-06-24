@@ -30,7 +30,7 @@ help:
 	@echo "make build       - compile brain + host-agent"
 	@echo "make host-agent-real-hosted - build the slim hosted-cloud host-agent (-tags hosted; #204/C1c)"
 	@echo "make control-plane-images - build malmo-brain + malmo-ui images and docker-save the control-plane bundle to .dev/"
-	@echo "make build-cloud-image - build the lean hosted cloud VM image via mkosi (no boot; #203)"
+	@echo "make build-cloud-image - build the self-bootstrapping hosted cloud VM image via mkosi (needs sudo; #203/#242)"
 	@echo "make net         - create the malmo-ingress docker network"
 	@echo "make caddy       - start the dev Caddy reverse proxy (container)"
 	@echo "make run-agent   - run the fake host-agent (foreground)"
@@ -193,20 +193,26 @@ test-medium-qemu:
 # returns 503 (no seed). Air-gapped (restrict=on) so a stray pull hard-fails.
 # Requires mkosi v22+, qemu-system-x86, ovmf, docker, go, libpam0g-dev —
 # bootstrap.sh prints an install pointer if anything is missing.
+# NOTE: do not run test-cloud-qemu and build-cloud-image in parallel — both stage
+# into dev/cloud/mkosi.extra.wiring/ and will race on the rm -rf at the start.
 # See docs/progress/cloud-vm-boot-proof.md.
 test-cloud-qemu:
 	sudo -E ./dev/cloud/run-cloud-tests.sh
 
-# Build the lean hosted cloud-VM image (C1b, #203) via mkosi and assert it is
-# genuinely lean (no NetworkManager/Avahi/Samba/mergerfs/cryptsetup/tpm2-tools)
-# with the /etc/malmo/profile=hosted marker baked in. Output: a raw GPT disk
-# image under .dev/cloud/. This is the image *definition* slice only — the
-# qcow2 packaging + QEMU boot proof (control plane up) are #205/C2, and the
-# slim cloud host-agent it boots is #204/C1c. Needs mkosi v22+; bootstrap.sh
-# prints an install pointer if anything is missing.
-# See docs/progress/hosted-cloud-image.md.
+# Build the hosted cloud-VM image (C1b #203; first-boot wiring #242) via mkosi:
+# the lean Debian + docker base PLUS the baked first-boot runtime wiring (slim
+# host-agent, networkd DHCP config, control-plane image bundle, seed materializer)
+# so a provisioned box self-bootstraps instead of booting network-less (#242). Then
+# assert it is still lean (no NetworkManager/Avahi/Samba/mergerfs/cryptsetup/tpm2-
+# tools — the wiring adds no apt packages) with /etc/malmo/profile=hosted. Output: a
+# raw GPT disk image under .dev/cloud/; the cloud repo snapshots it as the tenant
+# image. Needs root (control-plane image build + mkosi disk ops) + mkosi v22+, go,
+# docker, libpam0g-dev; bootstrap.sh prints an install pointer if anything is missing.
+# NOTE: do not run build-cloud-image and test-cloud-qemu in parallel — both stage
+# into dev/cloud/mkosi.extra.wiring/ and will race on the rm -rf at the start.
+# See docs/progress/hosted-cloud-image.md, docs/progress/cloud-image-first-boot-wiring.md.
 build-cloud-image:
-	./dev/cloud/bootstrap.sh
+	sudo -E ./dev/cloud/bootstrap.sh
 
 # End-to-end Caddy routing verification. Assumes `make dev` is running.
 # Tests Host-header routing, confirms path-based routing does NOT work,
