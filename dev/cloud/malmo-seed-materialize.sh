@@ -91,7 +91,14 @@ http_get() { # host port path
         printf "GET %s HTTP/1.0\r\nHost: %s\r\nConnection: close\r\n\r\n" "$path" "$host" >&3
         cat <&3
         exec 3>&- 3<&-
-    ' _ "$host" "$port" "$path" 2>/dev/null)" || return 2
+    ' _ "$host" "$port" "$path" 2>/dev/null)"
+    # Decide on the captured bytes, NOT the subshell exit code. Hetzner's metadata
+    # server ignores our "Connection: close" and holds the socket open, so `cat`
+    # never sees EOF and `timeout` kills it (exit 124) AFTER the full response was
+    # already read — keying off the exit code there would discard a perfectly good
+    # 200. An empty resp means nothing was read at all (connect refused during the
+    # DHCP race, or a genuine hang); that is the only transient-retry case.
+    [ -n "$resp" ] || return 2
     # Status line: "HTTP/1.0 200 OK". Pull the numeric code with no awk dependency.
     status="${resp%%$'\r'*}"   # first line, CR-stripped
     status="${status#* }"       # drop "HTTP/1.x "

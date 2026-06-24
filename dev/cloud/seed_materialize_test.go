@@ -9,10 +9,14 @@
 package cloud
 
 import (
+	"bufio"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -83,6 +87,58 @@ func TestFetchSeed200WritesBodyVerbatim(t *testing.T) {
 	out, code := runFn(t, `fetch_seed "$1"`, srv.URL+"/hetzner/v1/userdata")
 	if code != 0 {
 		t.Fatalf("fetch_seed exit %d, want 0", code)
+	}
+	if out != seed {
+		t.Errorf("fetch_seed body = %q, want %q", out, seed)
+	}
+}
+
+func TestFetchSeed200KeepAliveSocketStillLandsSeed(t *testing.T) {
+	// Regression for the cloud#6 live-run bug: Hetzner's metadata server ignores
+	// our "Connection: close" and holds the socket open, so the inner `cat <&3`
+	// never sees EOF and `timeout` kills it (exit 124) *after* the full 200 was
+	// already captured. http_get must decide on the captured bytes, not that exit
+	// code, and still hand back the body. TestFetchSeed200WritesBodyVerbatim uses a
+	// polite httptest server that closes the socket, so it never exercised this —
+	// this test drives a raw listener that deliberately keeps the connection open.
+	if runtime.GOOS != "linux" {
+		t.Skip("materializer uses bash /dev/tcp + timeout; Linux-only")
+	}
+	const seed = `{"box_id":"keepalive-otter","admin_bootstrap_secret":"c0ffee"}`
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return // listener closed at test end
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				// Drain the request line + headers (read up to the blank line).
+				br := bufio.NewReader(c)
+				for {
+					line, err := br.ReadString('\n')
+					if err != nil || line == "\r\n" || line == "\n" {
+						break
+					}
+				}
+				_, _ = io.WriteString(c, "HTTP/1.0 200 OK\r\nContent-Length: "+
+					strconv.Itoa(len(seed))+"\r\nContent-Type: text/plain\r\n\r\n"+seed)
+				// Do NOT close after writing — mirror the Hetzner metadata server
+				// holding the socket open. Block until the client (killed by
+				// `timeout`) drops its end, then the deferred Close runs.
+				_, _ = io.Copy(io.Discard, c)
+			}(conn)
+		}
+	}()
+
+	out, code := runFn(t, `fetch_seed "$1"`, "http://"+ln.Addr().String()+"/hetzner/v1/userdata")
+	if code != 0 {
+		t.Fatalf("fetch_seed against a keep-alive metadata socket exit %d, want 0", code)
 	}
 	if out != seed {
 		t.Errorf("fetch_seed body = %q, want %q", out, seed)
