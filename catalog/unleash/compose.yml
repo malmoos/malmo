@@ -20,7 +20,7 @@ services:
       CHECK_VERSION: "false"
       # Optional outgoing email (no-op until an admin binds a mail provider in malmo)
       EMAIL_HOST: "${MALMO_MAIL_HOST:-}"
-      EMAIL_PORT: "${MALMO_MAIL_PORT:-}"
+      EMAIL_PORT: "${MALMO_MAIL_PORT:-587}"
       EMAIL_USER: "${MALMO_MAIL_USER:-}"
       EMAIL_PASSWORD: "${MALMO_MAIL_PASSWORD:-}"
       EMAIL_SENDER: "${MALMO_MAIL_FROM:-}"
