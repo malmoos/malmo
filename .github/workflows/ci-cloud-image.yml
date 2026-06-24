@@ -34,6 +34,9 @@ jobs:
     # mkosi-sandbox EPERM (#189), so the fix has to be proven here, not on a
     # floating ubuntu-latest.
     runs-on: ubuntu-24.04
+    # mmdebstrap + apt fetch over the network; cap the run so a stalled mirror or
+    # a build loop can't hold the runner for the 6-hour Actions default.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
 
