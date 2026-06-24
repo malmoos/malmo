@@ -96,8 +96,14 @@ chmod 0755 /usr/lib/malmo/host-agent-real 2>/dev/null || true
 chmod 0755 /usr/lib/malmo/load-control-plane-images.sh 2>/dev/null || true
 chmod 0755 /usr/local/bin/malmo-seed-materialize.sh 2>/dev/null || true
 
-# Pre-commit machine-id so systemd doesn't treat first boot as uninitialized and
-# launch the interactive firstboot wizard (it blocks sysinit waiting on input).
-systemd-machine-id-setup 2>/dev/null || \
-    { tr -d '-\n' < /proc/sys/kernel/random/uuid > /etc/machine-id && echo >> /etc/machine-id; }
+# Leave machine-id empty (zero bytes, file present) so systemd generates a unique
+# one on each VM's first real boot. Pre-committing it here would bake the build
+# host's entropy into every snapshot — all provisioned VMs would share the same
+# machine-id, causing DHCPv6 DUID collisions and indistinguishable journal entries
+# when logs are forwarded to a central collector. An empty-but-present file is the
+# standard golden-image approach; systemd's machine-id-commit service initializes it
+# at runtime without blocking boot.
+: > /etc/machine-id
+# Mask systemd-firstboot.service so the interactive locale/timezone wizard never
+# blocks sysinit (the empty machine-id is not enough to suppress it alone).
 systemctl --root=/ mask systemd-firstboot.service >/dev/null 2>&1 || true
