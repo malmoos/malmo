@@ -136,9 +136,11 @@ main() {
         return 0
     fi
     tmp="$(mktemp)"
+    trap 'rm -f "$tmp"' EXIT
     printf '%s' "$body" > "$tmp"
     materialize_from_file "$tmp"
     rm -f "$tmp"
+    trap - EXIT
 }
 
 # Run main only when executed; sourcing (the unit test) gets the functions alone.
