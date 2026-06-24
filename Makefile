@@ -193,6 +193,8 @@ test-medium-qemu:
 # returns 503 (no seed). Air-gapped (restrict=on) so a stray pull hard-fails.
 # Requires mkosi v22+, qemu-system-x86, ovmf, docker, go, libpam0g-dev —
 # bootstrap.sh prints an install pointer if anything is missing.
+# NOTE: do not run test-cloud-qemu and build-cloud-image in parallel — both stage
+# into dev/cloud/mkosi.extra.wiring/ and will race on the rm -rf at the start.
 # See docs/progress/cloud-vm-boot-proof.md.
 test-cloud-qemu:
 	sudo -E ./dev/cloud/run-cloud-tests.sh
@@ -206,6 +208,8 @@ test-cloud-qemu:
 # raw GPT disk image under .dev/cloud/; the cloud repo snapshots it as the tenant
 # image. Needs root (control-plane image build + mkosi disk ops) + mkosi v22+, go,
 # docker, libpam0g-dev; bootstrap.sh prints an install pointer if anything is missing.
+# NOTE: do not run build-cloud-image and test-cloud-qemu in parallel — both stage
+# into dev/cloud/mkosi.extra.wiring/ and will race on the rm -rf at the start.
 # See docs/progress/hosted-cloud-image.md, docs/progress/cloud-image-first-boot-wiring.md.
 build-cloud-image:
 	sudo -E ./dev/cloud/bootstrap.sh

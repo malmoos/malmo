@@ -91,7 +91,17 @@ if [ -z "${GO:-}" ] && [ -n "$CALLER_HOME" ]; then
         [ -x "$cand" ] && { GO="$cand"; break; }
     done
 fi
-[ -n "${GO:-}" ] && [ -x "$GO" ] || { echo "go binary not found (\$GO=${GO:-})" >&2; exit 1; }
+if ! { [ -n "${GO:-}" ] && [ -x "$GO" ]; }; then
+    cat >&2 <<EOF
+cloud-image build preflight: go binary not found (GO=${GO:-}).
+  Install (Ubuntu/Debian): sudo apt-get install -y golang-go
+  Or download from https://go.dev/dl/ and ensure the binary is on PATH.
+  Set GO=/path/to/go to override discovery.
+
+After installing, re-run \`sudo make build-cloud-image\`.
+EOF
+    exit 1
+fi
 
 mkdir -p "$WORK"
 [ -n "$CALLER" ] && chown "$CALLER":"$(id -gn "$CALLER")" "$WORK"

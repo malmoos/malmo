@@ -21,6 +21,9 @@
 # Expects these set by the sourcing script: REPO_ROOT, CALLER (may be empty), GO,
 # CP_BUNDLE, WIRING (the dev/cloud/mkosi.extra.wiring/ target dir), WORK (a build
 # scratch dir for the intermediate host-agent binary).
+# Sourced, not executed — inherits the caller's shell options. Both callers have
+# set -euo pipefail; mirror it here so sourcing from a non-strict script still fails fast.
+set -euo pipefail
 
 # Build a Go binary, as the invoking user when running under sudo so the caller
 # owns the build cache. CGO on (PAM verify is kept in hosted) + CGO_CFLAGS as the
