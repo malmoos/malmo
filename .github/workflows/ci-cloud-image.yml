@@ -60,21 +60,23 @@ jobs:
       #   - mmdebstrap + debian-archive-keyring: bootstrap + verify the tools tree
       #   - dosfstools/mtools: lay down the FAT ESP; squashfs-tools, e2fsprogs:
       #     the ext4 root; systemd-container: nspawn for the build sandbox.
+      #   - libpam0g-dev: PAM headers for the slim host-agent-real CGO build
+      #     that bootstrap.sh stages (preflight checks for /usr/include/security/pam_appl.h).
       - name: Install mkosi and image-build tooling
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            pipx uidmap mmdebstrap debian-archive-keyring \
+            uidmap mmdebstrap debian-archive-keyring \
             dosfstools mtools squashfs-tools e2fsprogs systemd-container \
             libpam0g-dev
-          # Pin to the v26 git tag — the same source the dev box uses. mkosi no
-          # longer ships this release to PyPI (`pipx install mkosi==26` 404s), so
-          # install straight from the upstream tag for a reproducible lane.
-          # Install into /usr/local/bin (PIPX_BIN_DIR) so root finds mkosi when
-          # bootstrap.sh runs under sudo — user-level pipx installs land in
-          # ~/.local/bin which sudo's secure_path drops.
-          sudo PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin \
-            pipx install git+https://github.com/systemd/mkosi.git@v26
+          # Clone mkosi at the pinned tag and symlink its launcher into /usr/local/bin
+          # so root finds it when bootstrap.sh runs under sudo (sudo's secure_path
+          # drops ~/.local/bin and /opt/pipx_bin). bin/mkosi uses readlink -f to
+          # resolve PYTHONPATH back to the checkout regardless of where the symlink
+          # lives — the same approach mkosi's own setup-mkosi action.yaml uses.
+          git clone --depth=1 --branch v26 \
+            https://github.com/systemd/mkosi.git /tmp/mkosi-src
+          sudo ln -sf /tmp/mkosi-src/bin/mkosi /usr/local/bin/mkosi
 
       - name: Versions
         run: |
