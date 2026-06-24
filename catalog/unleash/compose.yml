@@ -1,0 +1,33 @@
+services:
+  unleash:
+    image: unleashorg/unleash-server:8.0.1
+    environment:
+      # Managed PostgreSQL (provisioned by malmo)
+      DATABASE_HOST: ${MALMO_SERVICE_DATABASE_HOST}
+      DATABASE_PORT: ${MALMO_SERVICE_DATABASE_PORT}
+      DATABASE_NAME: ${MALMO_SERVICE_DATABASE_NAME}
+      DATABASE_USERNAME: ${MALMO_SERVICE_DATABASE_USER}
+      DATABASE_PASSWORD: ${MALMO_SERVICE_DATABASE_PASSWORD}
+      DATABASE_SSL: "false"
+      # Public URL: baked into invite/reset email links and the SDK connection URL
+      UNLEASH_URL: ${MALMO_APP_URL}
+      # Server secret (defaults to the insecure literal "super-secret" upstream)
+      UNLEASH_SECRET: ${MALMO_SECRET_UNLEASH_SECRET}
+      # Seed the single admin account on first boot with a generated, owner-visible password
+      UNLEASH_DEFAULT_ADMIN_USERNAME: admin
+      UNLEASH_DEFAULT_ADMIN_PASSWORD: ${MALMO_SECRET_ADMIN_PASSWORD}
+      # No outbound version-check telemetry
+      CHECK_VERSION: "false"
+      # Optional outgoing email (no-op until an admin binds a mail provider in malmo)
+      EMAIL_HOST: "${MALMO_MAIL_HOST:-}"
+      EMAIL_PORT: "${MALMO_MAIL_PORT:-587}"
+      EMAIL_USER: "${MALMO_MAIL_USER:-}"
+      EMAIL_PASSWORD: "${MALMO_MAIL_PASSWORD:-}"
+      EMAIL_SENDER: "${MALMO_MAIL_FROM:-}"
+      EMAIL_SECURE: "${MALMO_MAIL_USE_SSL:-false}"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4242/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
