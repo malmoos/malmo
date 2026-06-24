@@ -101,6 +101,12 @@ func TestFetchSeed200KeepAliveSocketStillLandsSeed(t *testing.T) {
 	// code, and still hand back the body. TestFetchSeed200WritesBodyVerbatim uses a
 	// polite httptest server that closes the socket, so it never exercised this —
 	// this test drives a raw listener that deliberately keeps the connection open.
+	//
+	// Timing invariant (not a hazard): runFn caps the inner read at
+	// MALMO_SEED_FETCH_TIMEOUT=1s. The full seed is written synchronously over
+	// loopback (microseconds) before that deadline, so `cat` always captures the
+	// whole response and `timeout` only fires on the trailing keep-alive wait —
+	// which is exactly the case under test.
 	if runtime.GOOS != "linux" {
 		t.Skip("materializer uses bash /dev/tcp + timeout; Linux-only")
 	}

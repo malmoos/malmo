@@ -21,6 +21,21 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-24 — Hosted box DNS: a static `/etc/resolv.conf`, not systemd-resolved (cloud#6)
+
+**Previously:** unstated. The hosted image enables `systemd-networkd` + DHCP for the single NIC (#242) but nothing wired host name resolution — there was no `/etc/resolv.conf`, and `systemd-resolved` is not in the lean package set, so a provisioned box could route by IP but resolve no name. The gap was invisible until the first real-cloud cert issuance.
+
+**Now:** **the first-boot wiring writes a static `/etc/resolv.conf` with public resolvers.** It is the box's resolver for the host and — via Docker copying the host file into bridge containers — for `malmo-caddy`, which must resolve `acme-v02.api.letsencrypt.org` + `auth.malmo.network` to obtain the `*.<box-id>` wildcard cert (#207/C3b).
+
+**Why:**
+- The cloud#6 live on-ramp boots, networks, fetches its seed (all by IP), and serves `:80`, but the wildcard cert never issued because Caddy could not resolve the ACME endpoints. Name resolution was the missing piece — surfaced only on real cloud because nothing before it needed outbound DNS.
+- **Rejected: `systemd-resolved`** (the obvious way to consume the DHCP-offered DNS). It is a separate package not in the lean set, so adding it grows the 133-package manifest and trips the lean check — more machinery than a box that only ever resolves public names needs (control-plane images are baked; no registry pulls).
+- A static file is acceptable precisely because the need is narrow and public. Revisit only if a hosted box ever needs split-horizon / private resolution, at which point `resolved` + DHCP DNS earns its weight.
+
+**Affected docs:** `ENVIRONMENT.md` (# Networking & discovery — the static-resolver fact). Realized by `docs/progress/cloud-image-live-onramp-fixes.md`; the file is written in `dev/cloud/mkosi.postinst.chroot`.
+
+---
+
 ## 2026-06-23 — `nftables` stays in the hosted image: docker-ce hard-Depends on it (#241)
 
 **Previously:** the 2026-06-19 entry (below) and `ENVIRONMENT.md` stated hosted **ships no `nftables`** — the package was on the lean-image cut list, on the reasoning that its only job is LAN-scoping SSH/SMB (both dropped in hosted). The lean check (`dev/cloud/bootstrap.sh`) asserted its absence. #237 separately fixed `nftables` arriving as `iptables`' *recommend* (`WithRecommends=no`), which kept that premise true.

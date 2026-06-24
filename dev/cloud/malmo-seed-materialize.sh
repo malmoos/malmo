@@ -97,7 +97,9 @@ http_get() { # host port path
     # never sees EOF and `timeout` kills it (exit 124) AFTER the full response was
     # already read — keying off the exit code there would discard a perfectly good
     # 200. An empty resp means nothing was read at all (connect refused during the
-    # DHCP race, or a genuine hang); that is the only transient-retry case.
+    # DHCP race, or a genuine hang) — retry. A partial read (non-empty but cut off
+    # before the body) is also safe: it has no recognizable status line, so it
+    # falls to the unrecognized-status `return 2` below and retries too.
     [ -n "$resp" ] || return 2
     # Status line: "HTTP/1.0 200 OK". Pull the numeric code with no awk dependency.
     status="${resp%%$'\r'*}"   # first line, CR-stripped
