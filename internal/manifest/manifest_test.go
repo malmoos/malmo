@@ -300,6 +300,9 @@ services:
 
 func TestParseRejectsBadServices(t *testing.T) {
 	cases := map[string]string{
+		// mongodb is deliberately not a recognised managed type — malmo declined a
+		// managed MongoDB service; Mongo apps bundle their own engine
+		// (DECISIONS.md 2026-06-25, docs/progress/mongodb-compat-spike.md). Keep it rejected.
 		"unknown type":    "database:\n    type: mongodb\n    version: \"7\"",
 		"bad pg version":  "database:\n    type: postgres\n    version: \"13\"",
 		"bad redis ver":   "cache:\n    type: redis\n    version: \"6\"",

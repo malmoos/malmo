@@ -21,6 +21,22 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-25 — No managed MongoDB type; Mongo apps bundle their own engine (#253)
+
+**Previously:** MongoDB was listed as a plausible post-v1 managed Tier-1 service (`SERVICE_PROVISIONING.md`), to be built like Postgres/MySQL/Valkey on a license-clean engine — [FerretDB](https://www.ferretdb.com/) v2, the redis→valkey substitution applied to SSPL MongoDB. #253 gated that on a Phase 0 compatibility spike.
+
+**Now:** **malmo will not offer a managed `type: mongodb` service — decided, not deferred.** No FerretDB-backed provider, no alias, and no revisit clock. Apps that need MongoDB **bundle their own engine** in their compose (the Umbrel/CasaOS pattern); curation accepts them as long as the app uses Mongo internally and does not itself serve a database to third parties (`NEXT.md` # Store catalog curation policy).
+
+**Why:**
+- **The FerretDB engine fails on two independent measured findings** (`docs/progress/mongodb-compat-spike.md`, 2026-06-25). (1) *Compatibility ceiling:* no change streams, no oplog, no replica set, no multi-doc transactions — Rocket.Chat hard-blocked, Habitica/Appsmith blocked, Wekan degraded, leaving ~1 solid + 1 degraded app, short of the 3+ promotion bar. (2) *Isolation, decisive:* FerretDB v2 enforces authentication but **no** per-database authorization (the proxy has only `--auth`, no RBAC), so a per-app credential has full read/write to every other app's database on a shared instance — it cannot meet the # Per-app isolation contract every other Tier-1 service upholds. The only workaround (one ~2.3 GB instance per app) defeats the shared-instance model that defines Tier 1.
+- **Real MongoDB can't be the managed engine either.** SSPL's §13 trigger is *offering the database's functionality as a service to third parties* — exactly what a malmo-operated managed type does. That keeps the engine on the avoid-list *in the managed role* (same reasoning as redis→valkey, 2026-06-13). It does **not** restrict an app bundling Mongo for its own internal data, or a household running such an app — neither offers the database as a service.
+- **No `mongodb`→FerretDB alias**, unlike `redis`→`valkey`. That substitution worked because Valkey is a true drop-in (RESP wire, ACL model); FerretDB is not — it fails on both compat and isolation. So `mongodb` is simply not a recognised type (`internal/manifest`'s unknown-type rejection of it is correct-and-intentional and now load-bearing).
+- **Bundling is strictly better for Mongo apps here:** it ships *real* MongoDB, so it sidesteps both findings (Rocket.Chat & co. work), at the cost of the bundled-DB tradeoffs (no malmo-managed backups/shared instance, app-state not files-first-class). The managed model bought nothing for Mongo that bundling doesn't already deliver license-clean.
+
+**Affected docs:** `SERVICE_PROVISIONING.md` (# Post-v1 candidates — MongoDB struck off as declined; # Catalog plausible-additions line). `NEXT.md` (# Store catalog curation policy — bundled-database rule added; the prior "Managed MongoDB — deferred" entry removed, since this is decided not open). `docs/progress/mongodb-compat-spike.md` (the evidence; #253).
+
+---
+
 ## 2026-06-25 — Hosted: one in-guest nftables rule blocks app-container egress to the cloud metadata endpoint (#251)
 
 **Previously:** the 2026-06-19 / 2026-06-23 entries fixed malmo's hosted posture as "no malmo-owned firewall ruleset; L3/L4 filtering is the provider's security group," with a general in-guest default-deny backstop deferred (`NEXT.md`). That left the cloud metadata endpoint (`169.254.169.254`) reachable by any local process — including an untrusted app container, since Docker NATs container egress out the host NIC. The first-boot seed (admin-bootstrap secret + acme-dns password) stays retrievable there for the server's life: a classic cloud-metadata SSRF (cf. Capital One 2019), surfaced while implementing the real-cloud seed channel (#246).

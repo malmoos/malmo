@@ -1,15 +1,25 @@
 # MongoDB-compatible managed service — FerretDB v2 compatibility spike (Phase 0 gate)
 
-- **Status:** done — **verdict: NO-GO for v1.** Phase 1 (the provider implementation) is **not** entered.
+- **Status:** done — **decision: malmo will not offer a managed MongoDB type.** Phase 1 (the provider implementation) is **not** entered, and this is **not** a deferral with a revisit clock — it is a settled product call (`DECISIONS.md` 2026-06-25). Mongo-needing apps bundle their own engine instead (see "The decision" below).
 - **Date:** 2026-06-25
-- **Issue:** #253 (Tier-1 managed service: MongoDB-compatible provider, FerretDB engine). This is the Phase 0 compatibility-spike *gate* the issue mandates before any provider code.
-- **Specs touched:** `SERVICE_PROVISIONING.md` (post-v1 candidate back-reference), `NEXT.md` (the open-item home for the deferral).
+- **Issue:** #253 (Tier-1 managed service: MongoDB-compatible provider, FerretDB engine). This is the Phase 0 compatibility-spike *gate* the issue mandates before any provider code; the gate did not clear, and rather than park it for a future spike the team closed the question.
+- **Specs touched:** `DECISIONS.md` (the locked decision), `SERVICE_PROVISIONING.md` (# Post-v1 candidates — MongoDB struck off, with the bundled-engine path noted), `NEXT.md` (# Store catalog curation policy — the rule that Mongo-bundling apps are accepted).
 
 ## Why this exists
 
 #253 proposes a managed `type: mongodb` service provisioned exactly like managed Postgres/MySQL/Valkey, with [FerretDB](https://www.ferretdb.com/) (Apache-2.0) as the engine underneath — mirroring the redis→valkey license substitution, because MongoDB Community Server is SSPL (on malmo's avoid-list). The issue gates the build behind a Phase 0 spike: *prove the engine actually runs the apps we want before building the provider.* The promotion bar (`SERVICE_PROVISIONING.md` # Catalog) is **3+ store apps that genuinely want it and actually work**, on a **shared instance with per-app isolation** (the contract every other Tier-1 service upholds). The issue is explicit: "If <3 apps work, this issue stops here … and we note it in `NEXT.md` rather than shipping a half-working type."
 
-Two independent findings below each fail that bar. The verdict is **NO-GO**.
+Two independent findings below each fail that bar.
+
+## The decision
+
+malmo **will not offer a managed `type: mongodb` service** — not on the FerretDB engine (the two findings below), and not on real MongoDB (SSPL bites the moment *malmo* serves the database as a service; see the licensing note). This is **decided, not deferred**: there is no revisit clock and no follow-up spike on the backlog. The earlier draft of this entry framed it as "NO-GO for v1, revisit when two upstream gates clear" and added a `NEXT.md` deferral; that framing was dropped — the managed path is closed.
+
+There is also deliberately **no `mongodb`→FerretDB alias** by analogy to redis→valkey. That substitution worked because Valkey is a true drop-in (same RESP wire, same ACL model); FerretDB is not — it fails on both the compatibility ceiling *and* the isolation contract. So unlike `redis`, `mongodb` is not a recognised type at all.
+
+**What apps do instead:** an app that needs MongoDB **bundles its own engine** in its compose (the Umbrel/CasaOS pattern). That ships *real* MongoDB, so it sidesteps both findings — Rocket.Chat & co. actually work — and it raises no SSPL obligation on malmo, because the app uses the database internally for its own data rather than offering the database's functionality as a service. Curation **accepts** such apps; it rejects only an app whose own purpose is to serve generic MongoDB to third parties (a DBaaS/admin panel). The rule lives in `NEXT.md` # Store catalog curation policy.
+
+**Licensing note (why real MongoDB can't be the managed engine either).** SSPL's trigger is *offering the database's functionality as a service to third parties*, not shipping the binary. A household running a Mongo-bundling app for itself, and the app vendor bundling Mongo for its own use, are both clear. But a malmo-operated managed `type: mongodb` is malmo standing up the database and exposing it as a service through malmo's own control plane — squarely the activity SSPL §13 targets, which is why the engine is on the avoid-list *in that role* (the same reasoning as redis→valkey, `DECISIONS.md` 2026-06-13). One operational corollary: when a Mongo-bundling app's image is baked into an offline/air-gapped bundle (`APP_LIFECYCLE.md` # Locked: image digest pinning — the `MALMO_OFFLINE_INSTALL` `docker save`/`load` path), malmo *redistributes* the SSPL bytes and inherits the standard source-offer duty — satisfiable by pointing at upstream source, but a real checklist item before offline bundles ship.
 
 ## What was done
 
@@ -79,8 +89,8 @@ These were resolved during the spike and hold regardless of the go/no-go, for wh
 
 ## What's next
 
-- **Revisit when *both* upstream gates clear**, tracked in `NEXT.md` # Managed MongoDB (FerretDB engine) — evaluated, deferred:
-  1. DocumentDB ships **change streams** ([documentdb#50](https://github.com/microsoft/documentdb/issues/50), targeted Q3 2026) — unblocks the reactive/marquee apps (Rocket.Chat, full-fidelity Wekan) and is the demand driver.
-  2. FerretDB/DocumentDB gains an enforced **per-database authorization** model — without it the shared-instance isolation contract can't be met and the type can't ship as Tier 1 regardless of app compat.
-- **Until then, no managed `mongodb` type.** Apps that need Mongo stay curation-rejects (none are in the catalog today); the prospective demand is recorded above so the next import that bails on Mongo can grep this entry.
-- **If a single high-demand Mongo-only app (LibreChat) ever forces the issue before the gates clear**, the only viable shape is the `isolated: true` dedicated-instance escape hatch (`SERVICE_PROVISIONING.md` # Per-app isolation, "Not in v1") — a separate design, and still subject to the change-streams ceiling. Not recommended for v1.
+The managed-service question is **closed**, so there is no revisit clock and no follow-up issue. What remains is the standing posture this decision sets:
+
+- **No managed `mongodb` type, and no spike to re-open it.** The two FerretDB findings (Q3-2026-targeted change streams at [documentdb#50](https://github.com/microsoft/documentdb/issues/50); the absent per-database authorization model) are recorded here as the *evidence* for the call, not as gates to watch. If FerretDB later closes both, that is a fresh proposal someone can raise against `DECISIONS.md` 2026-06-25 — not a pre-committed reopen.
+- **Mongo-needing apps are first-class via bundling.** They ship their own engine and pass curation as long as they use Mongo internally (`NEXT.md` # Store catalog curation policy). The first such import (e.g. Rocket.Chat) will be the first real exercise of the bundled-DB path end-to-end; nothing in the platform blocks it today.
+- **The `isolated: true` dedicated-instance escape hatch stays parked** (`SERVICE_PROVISIONING.md` # Per-app isolation, "Not in v1"). It was the only shape that could ever have salvaged a malmo-served Mongo, and it is still subject to the same compatibility ceiling — so it is not a backdoor to the managed type. Bundling, not a per-app managed instance, is the answer for Mongo apps.
