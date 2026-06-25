@@ -227,7 +227,9 @@ if ip route get 169.254.169.254 >/dev/null 2>&1; then
     md_before="$(md_packets)"
     # A DROP gives no RST, so the connect would hang — bound it; the SYN is emitted
     # (and counted) immediately, so 3s is ample. The probe is EXPECTED not to connect.
-    timeout 3 nsenter -t "$md_pid" -n bash -c 'exec 3<>/dev/tcp/169.254.169.254/80' 2>/dev/null || true
+    # stderr is NOT suppressed so nsenter infrastructure failures (stale PID, permission
+    # denied) appear in the serial log and are distinguishable from "DROP working".
+    timeout 3 nsenter -t "$md_pid" -n bash -c 'exec 3<>/dev/tcp/169.254.169.254/80' 2>&1 || true
     md_after="$(md_packets)"
     [ -n "$md_before" ] && [ -n "$md_after" ] || fail "metadata firewall: could not read the drop counter (#251)"
     [ "$md_after" -gt "$md_before" ] || \
