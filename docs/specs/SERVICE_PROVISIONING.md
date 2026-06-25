@@ -61,7 +61,7 @@ MySQL and MariaDB share one wire protocol and SQL dialect, so they are two `type
 
 We add new types when **3+ store apps actually want them**, not before. Each new type is real ongoing operational complexity (backup integration, version management, schema isolation).
 
-Plausible v2+ additions: MongoDB (common in modern self-hosted apps).
+Plausible v2+ additions: see # Post-v1 candidates. (MongoDB was evaluated and **declined** as a managed type — `DECISIONS.md` 2026-06-25; Mongo apps bundle their own engine.)
 
 ### Provisioning protocol — end to end
 
@@ -270,7 +270,7 @@ Caveat: apps with framework-embedded schedulers (Sidekiq-cron, APScheduler, etc.
 Extend the catalog as concrete app demand justifies. We **host the substrates apps already use** rather than inventing new APIs — same shape as Postgres/Valkey today.
 
 Plausible additions:
-- **MongoDB** — common in modern self-hosted apps.
+- **MongoDB** — common in modern self-hosted apps, but **declined as a managed type, not deferred** (#253, `docs/progress/mongodb-compat-spike.md`, `DECISIONS.md` 2026-06-25). The license-clean engine (FerretDB v2, the redis→valkey substitution for SSPL Mongo) lacks change streams / oplog / replica sets / transactions (blocks Rocket.Chat et al.) and, decisively, enforces no per-database authorization, so the # Per-app isolation contract can't be met on a shared instance; real MongoDB can't be the managed engine either, because malmo *serving* the database is the SSPL trigger. There is deliberately no `mongodb`→FerretDB alias (FerretDB is not a drop-in, unlike Valkey for Redis). **Mongo-needing apps bundle their own engine** (the Umbrel/CasaOS pattern, which ships real MongoDB and raises no SSPL obligation when the app uses it internally); curation accepts them per `NEXT.md` # Store catalog curation policy.
 - **Kafka, RabbitMQ** — queue/streaming *substrates*, if app demand emerges.
 
 (MariaDB graduated from this list to the v1 catalog alongside MySQL — `DECISIONS.md` 2026-06-09.)
