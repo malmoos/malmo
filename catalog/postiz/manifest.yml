@@ -1,0 +1,92 @@
+id: postiz
+manifest_version: 1
+name: Postiz
+version: "2.21.10"
+description:
+  short: "Schedule and publish social posts across every network from one self-hosted dashboard."
+  long: |
+    Postiz is an open-source social media scheduler — a self-hosted alternative to Buffer or Hootsuite. Draft a post once, preview how it looks on each network, and schedule it out across many platforms from a single calendar, with an AI assist for copy and images, a team-style approvals flow, and analytics on what landed. Everything runs on your own home server: your drafts, your media, and your connected accounts stay in your database rather than a marketing-SaaS cloud. malmo provisions and manages the PostgreSQL database and Redis cache Postiz needs automatically, and runs its Temporal workflow engine alongside — there is nothing to wire up. On first visit you create your admin account, then connect networks and start scheduling.
+
+    Note on connecting networks: most large platforms (X, LinkedIn, Facebook/Instagram, YouTube, TikTok, and others) require you to register your own developer app with them and supply its API keys, which Postiz reads as server configuration that this packaging does not yet expose — so those networks can't be connected out of the box. Networks that authenticate with credentials entered directly in Postiz's own interface (such as Bluesky and Mastodon) work today. Postiz also bakes this app's address into post links, and a few browser conveniences only activate over HTTPS; since that address is your home network's `.local` name, those stay limited to your LAN until remote access ships. The scheduler itself works fully on your network.
+icon: ./icon.svg
+screenshots: [./screenshots/01.png, ./screenshots/02.png, ./screenshots/03.png]
+categories: [productivity]
+author:
+  name: Postiz (Gitroom)
+  url: https://postiz.com
+license: AGPL-3.0
+links:
+  homepage: https://postiz.com
+  source: https://github.com/gitroomhq/postiz-app
+  support: https://docs.postiz.com
+changelog_url: https://github.com/gitroomhq/postiz-app/releases
+
+compose_file: compose.yml
+main_service: postiz
+main_port: 5000
+preferred_slugs: [postiz, social, scheduler]
+
+# Postiz's nginx serves the dashboard on / (a redirect to the login/onboarding
+# page; any status < 500 counts as healthy). First boot runs Prisma schema push
+# against the managed Postgres and registers Temporal search attributes before
+# the node apps listen, and the image is large (~5.7 GB) so the cold start is
+# slow — allow a generous start period.
+health_probe:
+  path: /
+  start_period: 240s
+
+# Upstream's tested floor is a dedicated 2 GB-RAM VM. The single Postiz container
+# runs nginx + the NestJS backend + the Next.js frontend + workers + cron under
+# pm2, and the Temporal dev-server sits alongside; 2.5 GB gives the node stack and
+# Temporal headroom on the low-end hardware malmo targets.
+resources:
+  recommended: { memory: 2560M, cpu: 1.5 }
+
+# ./data/config is Postiz's config plus the pm2 daemon home (HOME=/config);
+# ./data/uploads is the local media store for post attachments
+# (STORAGE_PROVIDER=local); ./data/temporal is the Temporal dev-server's embedded
+# SQLite (workflow state — kept so in-flight schedules survive a restart). Posts,
+# connected accounts, and settings live in the managed Postgres, backed up by the
+# managed-service path, not these binds. Uploads have no use-case-folder home and
+# Postiz offers no external-library path, so it is app-managed content (forfeits
+# the files-first-class badge). estimated_size measured at first-healthy on a
+# clean boot; growth is user-uploaded media — runtime usage, not projected here.
+storage:
+  data_volumes: [./data/config, ./data/uploads, ./data/temporal]
+  estimated_size: 220M
+  app_managed_user_content: true
+
+# Postiz signs its session JWTs with JWT_SECRET; the brain generates it once at
+# install and injects it as MALMO_SECRET_JWT, stable across restarts so existing
+# sessions stay valid.
+secrets:
+  - name: jwt
+
+# Postgres holds all Postiz data (posts, connected accounts, settings); Redis
+# backs the BullMQ queues that drive scheduled publishing. The brain provisions
+# both per-app in its shared managed instances and injects MALMO_SERVICE_DATABASE_*
+# / MALMO_SERVICE_CACHE_*, which the compose maps onto DATABASE_URL / REDIS_URL.
+# `redis: "7"` normalizes to the BSD-3 Valkey 8 engine (RESP/ACL-compatible).
+services:
+  database:
+    type: postgres
+    version: "16"
+  cache:
+    type: redis
+    version: "7"
+
+# internet: Postiz reaches the social networks' APIs to publish posts and fetch
+# link previews and media. lan: not needed — the brain routes inbound traffic.
+permissions:
+  internet: true
+  lan: false
+
+images:
+  ghcr.io/gitroomhq/postiz-app:v2.21.10:
+    digest: sha256:1d5a5dc6b896747d1483c01dc2562165bd313ad601b32f6cabb7f7dd08a911a9
+    download_bytes: 1068994948
+    disk_bytes: 4312509952
+  temporalio/temporal:1.7.2:
+    digest: sha256:a715f1978c4d7d9b36fe6ef6e8aa414428f018a35f8e0f2b0c40c3cff9a9e634
+    download_bytes: 118058218
+    disk_bytes: 586558464

@@ -1,0 +1,100 @@
+# Postiz adapted for malmo's Tier-3 sandbox (cap_drop: ALL, no-new-privileges,
+# brain-pinned non-root user:). Upstream's compose is the full self-hosted stack
+# (postiz + its own postgres + redis + a heavy Temporal bundle: auto-setup +
+# postgresql + elasticsearch + admin-tools + ui + spotlight) and publishes host
+# port 4007. malmo drops the host port (the brain routes to main_port 5000),
+# moves Postgres and Redis to malmo's managed services (declared in the manifest),
+# and replaces the entire Temporal bundle with one lightweight
+# `temporal server start-dev` container.
+#
+# Two adaptations let the upstream images run under the sandbox. Both are the
+# same class as catalog/paperless-ngx's `tmpfs: - /run` precedent — no capability
+# is restored and nothing the app genuinely needs is stripped:
+#
+# 1. postiz tmpfs. The image runs an in-container nginx as a root-master that
+#    drops to `www`; under the brain-pinned non-root uid (neither root nor `www`)
+#    nginx's compiled-in writable paths are unwritable and it exits 1 with
+#    `mkdir() "/var/lib/nginx/body" failed (13: Permission denied)`. A tmpfs over
+#    the three baked nginx runtime dirs (/var/lib/nginx, /run, /var/log/nginx)
+#    gives it writable scratch owned by the runtime uid. PM2 (the node process
+#    manager) writes its daemon state under $HOME, so HOME points at the
+#    uid-owned ./data/config bind. Re-verify the tmpfs set on version bumps —
+#    nginx's compiled paths could shift.
+#
+# 2. temporal USER env. `temporal server start-dev` is a static Go binary whose
+#    OpenTelemetry resource detector calls Go's user.Current(); under a
+#    brain-elected uid with no /etc/passwd entry that errors with
+#    `user: Current requires cgo or $USER set in environment` and the server
+#    crash-loops. Any non-empty USER short-circuits it. Without this line the app
+#    green-installs and then crash-loops on every real host.
+#
+# Temporal is a hard, non-severable dependency (Postiz's backend and orchestrator
+# import it unconditionally and connect at boot); the only knob is
+# TEMPORAL_ADDRESS, which is exactly what lets us point Postiz at the dev-server
+# instead of the upstream bundle. The dev-server persists to SQLite under
+# ./data/temporal, so in-flight scheduled-post workflows survive a restart.
+#
+# Env rewiring (the brain injects the values; the compose maps them to Postiz's
+# own names):
+#   DATABASE_URL -> ${MALMO_SERVICE_DATABASE_DSN}  (managed Postgres 16)
+#   REDIS_URL    -> ${MALMO_SERVICE_CACHE_DSN}      (managed Valkey 8; redis:// scheme)
+#   JWT_SECRET   -> ${MALMO_SECRET_JWT}             (CSPRNG, generated once at install)
+#   MAIN_URL / FRONTEND_URL / NEXT_PUBLIC_BACKEND_URL -> ${MALMO_APP_URL}(/api)
+#
+# Social-provider OAuth keys (X, LinkedIn, Facebook, ...) are operator-supplied
+# developer-app credentials with no malmo env surface, so they are omitted; the
+# in-UI-credential networks (Bluesky, Mastodon, ...) and the full scheduler work
+# without them. See the manifest long description + the PR's Platform gaps.
+services:
+  postiz:
+    image: ghcr.io/gitroomhq/postiz-app:v2.21.10
+    depends_on:
+      temporal:
+        condition: service_healthy
+    tmpfs:
+      - /var/lib/nginx:exec,mode=1777
+      - /run:exec,mode=1777
+      - /var/log/nginx:mode=1777
+    environment:
+      MAIN_URL: ${MALMO_APP_URL}
+      FRONTEND_URL: ${MALMO_APP_URL}
+      NEXT_PUBLIC_BACKEND_URL: ${MALMO_APP_URL}/api
+      BACKEND_INTERNAL_URL: http://localhost:3000
+      DATABASE_URL: ${MALMO_SERVICE_DATABASE_DSN}
+      REDIS_URL: ${MALMO_SERVICE_CACHE_DSN}
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      JWT_SECRET: ${MALMO_SECRET_JWT}
+      IS_GENERAL: "true"
+      STORAGE_PROVIDER: local
+      UPLOAD_DIRECTORY: /uploads
+      NEXT_PUBLIC_UPLOAD_DIRECTORY: /uploads
+      HOME: /config
+    volumes:
+      - ./data/config:/config
+      - ./data/uploads:/uploads
+    # nginx comes up immediately but proxies 502 until the pm2-managed backend is
+    # live (first boot also runs Prisma schema push), so gate readiness on GET /
+    # actually returning < 500 — not just the process being up. The image ships
+    # neither curl nor wget, so probe with the bundled node runtime. start_period
+    # suppresses early failures; the first success flips the container healthy.
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 240s
+
+  temporal:
+    image: temporalio/temporal:1.7.2
+    command: ["server", "start-dev", "--ip", "0.0.0.0", "--db-filename", "/data/temporal.db", "--namespace", "default"]
+    environment:
+      USER: temporal
+    volumes:
+      - ./data/temporal:/data
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "127.0.0.1:7233"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
