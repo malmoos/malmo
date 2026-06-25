@@ -49,6 +49,12 @@ services:
     environment:
       DATABASE_URL: ${MALMO_SERVICE_DATABASE_DSN}
       MODE: server
+      # Windmill bakes its public base into webhook URLs, sharing links, and SDK
+      # connection strings. Without this it auto-detects from the Host header,
+      # which the brain's proxy may rewrite. Wire malmo's injected public URL,
+      # matching every other catalog app that emits its own address (Unleash
+      # UNLEASH_URL, Twenty SERVER_URL, Gitea ROOT_URL, Open-WebUI WEBUI_URL, …).
+      BASE_URL: ${MALMO_APP_URL}
     restart: unless-stopped
 
   windmill_worker:
