@@ -31,8 +31,12 @@ import (
 // Avahi/mDNS publish (avahipublisher), no network watcher — because a hosted VM
 // has a single provider-managed NIC and no `.local` discovery (ENVIRONMENT.md
 // # Networking & discovery). LUKS/TPM unlock, the Samba allowlist, and nftables
-// LAN-scoping are likewise absent: those packages aren't even installed in the
-// hosted image (#203/C1b + #205/C2), so there is nothing here to wire.
+// LAN-scoping are likewise absent. Note: the nftables package IS installed as a
+// docker-ce hard dep (#241, DECISIONS.md 2026-06-23); the appliance's
+// SSH/SMB LAN-scoping ruleset is absent, but a standing forward-hook DROP of
+// app-container egress to 169.254.169.254 ships as a static image-baked oneshot
+// (malmo-metadata-firewall.service, #251) outside host-agent. A future general
+// default-deny backstop would be wired here (NEXT.md # In-guest nftables).
 //
 // Net is left nil: with no NetworkManager there is no LAN set to report.
 // GET /v1/discovery/state then reports an empty interfaces list ("not
