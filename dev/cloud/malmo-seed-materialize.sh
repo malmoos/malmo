@@ -27,12 +27,14 @@
 # air-gapped box that will never have metadata), it logs "no seed" and exits 0,
 # identical to the un-seeded behavior the brain expects (/setup stays 503).
 #
-# Security note (#246): on Hetzner the metadata endpoint keeps the user-data
-# (which carries the admin-bootstrap secret + acme-dns password) retrievable for
-# the server's life, reachable by any local process / app container. Blocking
-# egress to 169.254.169.254 belongs to host-agent's hosted firewall posture
-# (deferred — cmd/host-agent-real/wiring_hosted.go), not this first-boot script;
-# tracked as a follow-up. See docs/progress/cloud-image-real-cloud-seed-channel.md.
+# Security note (#246, closed by #251): on Hetzner the metadata endpoint keeps
+# the user-data (admin-bootstrap secret + acme-dns password) retrievable for the
+# server's life, reachable by any local process / app container. Blocking that
+# egress is handled by malmo-metadata-firewall.service (a standing nftables
+# forward-hook DROP for 169.254.169.254, loaded before docker starts any
+# container), not this first-boot script. See
+# docs/progress/hosted-metadata-egress-block.md and ENVIRONMENT.md
+# # Provisioning & first-boot.
 #
 # The credential/user-data is optional: an un-seeded box delivers neither, so the
 # brain finds no seed and keeps /setup closed (503) rather than falling back to the
