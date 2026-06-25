@@ -1,0 +1,90 @@
+id: windmill
+manifest_version: 1
+name: Windmill
+version: "1.739.0"
+description:
+  short: "Turn scripts into scheduled jobs, workflows, APIs, and internal tools — a self-hosted developer platform."
+  long: |
+    Windmill turns plain scripts — Python, TypeScript, Go, Bash, or SQL — into shareable jobs, multi-step flows, cron schedules, webhooks, and auto-generated UIs, all running on a worker pool on your own hardware. Write a script in the browser editor, and Windmill builds an input form, an API endpoint, and a permissions model around it; chain scripts into flows with branches, retries, and approvals; or assemble low-code apps on top with the drag-and-drop builder. Every script, flow, secret, schedule, and run lives in the PostgreSQL database malmo provisions and manages for you, so there is nothing to wire up — on the first visit you create the admin account and start building. It is an open-source alternative to tools like Retool, Airflow, and Temporal, kept entirely in your home.
+
+    Note on job sandboxing: malmo runs every app under a hardened container profile (no elevated privileges), which disables Windmill's optional inner sandbox around the code it executes. The `# sandbox <image>` and legacy `# docker` step types are therefore off; ordinary scripts, flows, schedules, webhooks, and apps all work normally. Because your home server is the trust boundary and this is a single-tenant install, this matches how malmo runs comparable tools.
+
+    Note on links: Windmill bakes this app's address into the webhook and sharing URLs it generates. Because that address is your home network's `.local` name, those URLs resolve only on your LAN until remote access is available — the platform itself works fully on your network.
+icon: ./icon.svg
+screenshots: [./screenshots/01.png, ./screenshots/02.png, ./screenshots/03.png, ./screenshots/04.png]
+categories: [development, automation]
+author:
+  name: Windmill Labs
+  url: https://www.windmill.dev
+license: AGPL-3.0
+links:
+  homepage: https://www.windmill.dev
+  source: https://github.com/windmill-labs/windmill
+  support: https://www.windmill.dev/docs/intro
+changelog_url: https://github.com/windmill-labs/windmill/releases
+
+# Withdrawn from the store (kept in the catalog, hidden + uninstallable) until a
+# platform gap closes: Windmill's schema migrations hard-require the Postgres roles
+# `windmill_admin`/`windmill_user` to exist, which only happens when the connecting
+# role has CREATEROLE/superuser — but malmo provisions each app a plain LOGIN role
+# that owns its database, and there is no hook to pre-create app-required roles. The
+# server crash-loops at migration 20221211192539 ("role windmill_admin does not
+# exist"). The adaptation below is correct and re-ships by flipping this to true once
+# the gap closes. See the `managed-pg-role-creation` entry in
+# docs/dev/catalog-import-gaps.md.
+listed: false
+
+compose_file: compose.yml
+main_service: windmill_server
+main_port: 8000
+preferred_slugs: [windmill, workflows, automation]
+
+# /api/version is Windmill's unauthenticated liveness route (upstream documents it
+# for k8s readiness probes) — a cheap 200 once the server is up. First boot runs
+# the full schema migration against the freshly provisioned managed Postgres before
+# the server listens, so allow a generous start period.
+health_probe:
+  path: /api/version
+  start_period: 120s
+
+# Windmill's own docs set a ~2 GB-RAM floor for the server + worker pool.
+resources:
+  recommended: { memory: 2G, cpu: 1.0 }
+
+# Windmill keeps ALL durable state — scripts, flows, resources, secrets, schedules,
+# job results — in the managed Postgres database (backed up by the managed-service
+# path, not attributed here). The only app bind is ./data/worker-cache: the worker's
+# downloaded dependency cache (pip/npm/etc.), which is regenerable, so it is a cache
+# volume with no data volume. There is no local user-content store, so no folder
+# grant and no app_managed_user_content flag apply.
+# estimated_size: measured on a clean boot at first-healthy — the dependency cache is
+# empty until a script actually runs (deps download lazily), so the app-state baseline
+# is near-zero; growth is runtime job activity and deliberately not projected here.
+storage:
+  cache_volumes: [./data/worker-cache]
+  estimated_size: 1MB
+
+# Windmill is Postgres-only. The brain provisions a per-app database in the shared
+# managed instance and injects MALMO_SERVICE_DATABASE_*, which the compose maps onto
+# Windmill's single DATABASE_URL DSN. The per-app role owns its database but is not a
+# superuser and lacks CREATEROLE — which is exactly why this app is withdrawn (see the
+# `listed: false` banner above and the managed-pg-role-creation ledger entry):
+# Windmill's migrations need the windmill_admin/windmill_user roles created, and a
+# later unguarded GRANT to them hard-fails when they don't exist.
+services:
+  database:
+    type: postgres
+    version: "16"
+
+# internet: workers fetch script dependencies (pip/npm/cargo/etc.) and Windmill Hub
+# resources, and the server checks for updates. lan: not needed — the brain routes
+# inbound traffic.
+permissions:
+  internet: true
+  lan: false
+
+images:
+  ghcr.io/windmill-labs/windmill:1.739.0:
+    digest: sha256:133c2b3fd51adff6edee46cd1bb74bb2ce77c47a81e8082d59d2517de8784db1
+    download_bytes: 1408414936
+    disk_bytes: 3979066880
