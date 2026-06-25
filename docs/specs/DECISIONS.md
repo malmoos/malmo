@@ -21,6 +21,22 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-06-25 — Hosted: one in-guest nftables rule blocks app-container egress to the cloud metadata endpoint (#251)
+
+**Previously:** the 2026-06-19 / 2026-06-23 entries fixed malmo's hosted posture as "no malmo-owned firewall ruleset; L3/L4 filtering is the provider's security group," with a general in-guest default-deny backstop deferred (`NEXT.md`). That left the cloud metadata endpoint (`169.254.169.254`) reachable by any local process — including an untrusted app container, since Docker NATs container egress out the host NIC. The first-boot seed (admin-bootstrap secret + acme-dns password) stays retrievable there for the server's life: a classic cloud-metadata SSRF (cf. Capital One 2019), surfaced while implementing the real-cloud seed channel (#246).
+
+**Now:** **hosted ships exactly one malmo-owned in-guest `nftables` rule — a standing forward-hook DROP of egress to `169.254.169.254`, applied every boot by a dedicated oneshot** (`malmo-metadata-firewall.service` → `/etc/malmo/metadata-firewall.nft`). This is **not** the deferred general backstop, which stays deferred: it is a single, static, never-reconciled SSRF control for a malmo-specific secret exposure. The 2026-06-19 substance holds — public-surface L3/L4 filtering is still the provider's security group; this blocks one link-local address from the container forward path only.
+
+**Why:**
+- The worst secret at risk is the **acme-dns password** — the credential to rewrite `_acme-challenge.<box-id>` and mint/MITM the box's wildcard cert. Provider security groups do not help: the SSRF source is a local container and the metadata IP is **link-local**, so the packet never traverses the provider's L3/L4 edge. The block has to be in-guest.
+- **Forward hook, not output or a blackhole route.** The seed materializer fetches the endpoint as host root in the host netns (OUTPUT path) once at first boot; containers reach it over a Docker bridge (FORWARD path). Dropping only in `forward` blocks every container (apps *and* the brain, which reads the seed from disk) while leaving the host fetch untouched — a standing policy with no "unblock until seeded" timing or state.
+- **A static image-baked oneshot, not a host-agent reconciler.** The rule is one fixed IP that never changes, so it does not need the deferred dynamic firewall reconciler; a future host-agent firewall posture can subsume it. Putting it in the seed materializer script was rejected — firewall logic is the wrong owner there and would be clobbered by that future reconciler — so it is its own unit, in its own `inet malmo_metadata` table (loaded without flushing Docker's rules).
+- Blocking the metadata endpoint **wholesale after first boot** was considered and rejected as more complex for no gain: the forward-hook block is already always-on and the host (the only legitimate reader) uses the untouched OUTPUT path, so there is no window to gate.
+
+**Affected docs:** `ENVIRONMENT.md` (# How the profile is realized — the "no malmo ruleset" claim now carries this one exception; # Provisioning & first-boot — the #251 residual risk closed + the new "Metadata-endpoint egress block" as-built bullet; # Public-by-default — the metadata block named as the first in-guest rule, general backstop still deferred). `NEXT.md` unchanged (general backstop still deferred). Realized by `docs/progress/hosted-metadata-egress-block.md` (#251).
+
+---
+
 ## 2026-06-24 — Hosted box DNS: a static `/etc/resolv.conf`, not systemd-resolved (cloud#6)
 
 **Previously:** unstated. The hosted image enables `systemd-networkd` + DHCP for the single NIC (#242) but nothing wired host name resolution — there was no `/etc/resolv.conf`, and `systemd-resolved` is not in the lean package set, so a provisioned box could route by IP but resolve no name. The gap was invisible until the first real-cloud cert issuance.
