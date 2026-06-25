@@ -270,7 +270,7 @@ Caveat: apps with framework-embedded schedulers (Sidekiq-cron, APScheduler, etc.
 Extend the catalog as concrete app demand justifies. We **host the substrates apps already use** rather than inventing new APIs — same shape as Postgres/Valkey today.
 
 Plausible additions:
-- **MongoDB** — common in modern self-hosted apps.
+- **MongoDB** — common in modern self-hosted apps. **Evaluated 2026-06-25 (#253, `docs/progress/mongodb-compat-spike.md`) and deferred — NO-GO for v1:** the license-clean engine (FerretDB v2, the redis→valkey substitution for SSPL Mongo) lacks change streams / oplog / replica sets / transactions (blocks Rocket.Chat et al.) and, decisively, enforces no per-database authorization, so the # Per-app isolation contract can't be met on a shared instance. Revisit gates are tracked in `NEXT.md` # Managed MongoDB (FerretDB engine).
 - **Kafka, RabbitMQ** — queue/streaming *substrates*, if app demand emerges.
 
 (MariaDB graduated from this list to the v1 catalog alongside MySQL — `DECISIONS.md` 2026-06-09.)
