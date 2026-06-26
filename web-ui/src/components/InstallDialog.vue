@@ -192,17 +192,17 @@ function handleSubmit() {
     @click.self="emit('cancel')"
     @keydown.escape.window="emit('cancel')"
   >
-    <div class="w-full max-w-md rounded-2xl border border-border bg-card shadow-xl">
+    <div class="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-xl">
 
       <!-- Header -->
-      <div class="border-b border-border px-5 py-4">
+      <div class="shrink-0 border-b border-border px-5 py-4">
         <div class="flex items-baseline gap-2">
           <h2 class="text-base font-semibold">{{ plan.name }}</h2>
           <span class="text-xs text-muted-foreground">v{{ plan.version }}</span>
         </div>
       </div>
 
-      <div class="space-y-5 px-5 py-4">
+      <div class="flex-1 space-y-5 overflow-y-auto px-5 py-4">
 
         <!-- Permissions section -->
         <div class="space-y-1.5">
@@ -425,7 +425,7 @@ function handleSubmit() {
       </div>
 
       <!-- Footer -->
-      <div class="flex justify-end gap-2 border-t border-border px-5 py-3">
+      <div class="flex shrink-0 justify-end gap-2 border-t border-border px-5 py-3">
         <button
           class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
           @click="emit('cancel')"
