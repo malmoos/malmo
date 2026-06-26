@@ -52,6 +52,42 @@ func TestInstanceSecretsRoundtripAndCascade(t *testing.T) {
 	}
 }
 
+func TestInstanceConfigRoundtripAndCascade(t *testing.T) {
+	s := open(t)
+	if err := s.Create(sample("a", "alpha")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	want := []InstanceConfig{
+		{AppEnv: "OPENAI_API_KEY", Value: "sk-123", Secret: true},
+		{AppEnv: "OPENAI_MODEL", Value: "gpt-4o", Secret: false},
+	}
+	if err := s.SetInstanceConfig("a", want); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	got, err := s.GetInstanceConfig("a")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("roundtrip: got %v, want %v", got, want)
+	}
+	// SetInstanceConfig fully replaces the prior set.
+	if err := s.SetInstanceConfig("a", []InstanceConfig{{AppEnv: "ENDPOINT", Value: "https://x"}}); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	got, _ = s.GetInstanceConfig("a")
+	if len(got) != 1 || got[0].AppEnv != "ENDPOINT" {
+		t.Fatalf("replace did not clear prior values: %v", got)
+	}
+	// Deleting the instance cascades the config away.
+	if err := s.Delete("a"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if got, _ := s.GetInstanceConfig("a"); len(got) != 0 {
+		t.Fatalf("config survived instance delete: %v", got)
+	}
+}
+
 func TestServiceInstanceCRUD(t *testing.T) {
 	s := open(t)
 	if _, err := s.GetServiceInstance("postgres", "15"); err != ErrNotFound {

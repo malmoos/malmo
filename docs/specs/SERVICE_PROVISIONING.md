@@ -61,7 +61,7 @@ MySQL and MariaDB share one wire protocol and SQL dialect, so they are two `type
 
 We add new types when **3+ store apps actually want them**, not before. Each new type is real ongoing operational complexity (backup integration, version management, schema isolation).
 
-Plausible v2+ additions: MongoDB (common in modern self-hosted apps).
+Plausible v2+ additions: see # Post-v1 candidates. (MongoDB was evaluated and **declined** as a managed type — `DECISIONS.md` 2026-06-25; Mongo apps bundle their own engine.)
 
 ### Provisioning protocol — end to end
 
@@ -99,6 +99,8 @@ Managed-service credentials are one of four `MALMO_*` injection mechanisms the b
 | `MALMO_DATA_DIR`, `MALMO_APP_URL`, `MALMO_INSTANCE_ID` | Per-instance facts the brain knows (data root, routed URL, id) | Fixed for the instance |
 | `MALMO_SECRET_<NAME>` | A per-app random secret the brain **generates** from a manifest `secrets:` declaration | **Generated once at install, persisted, re-emitted verbatim** — never re-rolled |
 | `MALMO_MAIL_*` | The outgoing-mail provider the instance is bound to (this doc # BYO outgoing mail) | Stamped at install / rebind; absent when unbound |
+
+**User-supplied config (`config:`, `APP_MANIFEST.md` # D4) is the one injected family that breaks this contract on purpose.** Its values aren't malmo's to own — they're the app's own native variables the user supplies (`OPENAI_API_KEY`, a provider token) — so there is no `MALMO_*` name and no app-side mapping: the brain injects the value **directly under the `app_env` name** the manifest declares, into the target service's `environment:` in the compose override (default `main_service`, overridable per field), rather than into the interpolation `.env`. The form shows that same `app_env` as the technical hint, so the variable the user reads in the app's upstream docs is the variable shown, supplied, and set. A `config` field marked `secret: true` is stored and protected exactly like a `MALMO_SECRET_*` value (never logged, never echoed into compose output) — the same at-rest hardening surface (`NEXT.md` # App-secret injection hardening). See `DECISIONS.md` 2026-06-26.
 
 The secret case is the only one the brain *creates* rather than *reflects*: for each `secrets: [{name, bytes?, show?}]` entry (`APP_MANIFEST.md` # D2) it draws `bytes` (default 32, floor 16) from a CSPRNG, base64url-encodes them, and persists the value alongside the instance. Stability is load-bearing: a token-signing secret (e.g. `BETTER_AUTH_SECRET`) that changed on restart would invalidate every live session, so the value is read back from storage on every `.env` rewrite, not regenerated. Security hardening of this path (env-var delivery surface, at-rest encryption, rotation) is open — `NEXT.md` # App-secret injection hardening.
 
@@ -270,7 +272,7 @@ Caveat: apps with framework-embedded schedulers (Sidekiq-cron, APScheduler, etc.
 Extend the catalog as concrete app demand justifies. We **host the substrates apps already use** rather than inventing new APIs — same shape as Postgres/Valkey today.
 
 Plausible additions:
-- **MongoDB** — common in modern self-hosted apps.
+- **MongoDB** — common in modern self-hosted apps, but **declined as a managed type, not deferred** (#253, `docs/progress/mongodb-compat-spike.md`, `DECISIONS.md` 2026-06-25). The license-clean engine (FerretDB v2, the redis→valkey substitution for SSPL Mongo) lacks change streams / oplog / replica sets / transactions (blocks Rocket.Chat et al.) and, decisively, enforces no per-database authorization, so the # Per-app isolation contract can't be met on a shared instance; real MongoDB can't be the managed engine either, because malmo *serving* the database is the SSPL trigger. There is deliberately no `mongodb`→FerretDB alias (FerretDB is not a drop-in, unlike Valkey for Redis). **Mongo-needing apps bundle their own engine** (the Umbrel/CasaOS pattern, which ships real MongoDB and raises no SSPL obligation when the app uses it internally); curation accepts them per `NEXT.md` # Store catalog curation policy.
 - **Kafka, RabbitMQ** — queue/streaming *substrates*, if app demand emerges.
 
 (MariaDB graduated from this list to the v1 catalog alongside MySQL — `DECISIONS.md` 2026-06-09.)
@@ -312,7 +314,7 @@ Locked now: **the malmo mesh is the intended transport for future cross-box serv
 - **Provisioning via a one-shot client container, not a brain SQL client.** The brain runs the service's own client (`psql` / `mysql` / `mariadb` / `valkey-cli`) in a throwaway `docker run --rm` container joined to the service network to create per-app databases/roles, so the brain itself never joins that network — same principle as probing through Caddy (`DECISIONS.md` 2026-06-15, superseding the original `docker exec` approach which the socket-proxy denies — 2026-06-14). The client connects over TCP to the service's in-network DNS alias (the DSN host); the service container's fixed `container_name` is the brain's readiness-inspect handle.
 - **Cross-version migration: auto-migrate** with an automatic pre-migration backup as the rollback safety net. No prompts.
 - **Network isolation:** apps reach Tier-1 services only via dedicated Docker networks; no manifest declaration → no network membership → no reachability.
-- **Env-var injection:** stable `MALMO_SERVICE_*` names; app maps them in its compose to whatever it actually expects (per `APP_MANIFEST.md`). Same contract for the rest of the `MALMO_*` family (`MALMO_FOLDER_*`, `MALMO_APP_URL`, `MALMO_SECRET_*`).
+- **Env-var injection:** stable `MALMO_SERVICE_*` names; app maps them in its compose to whatever it actually expects (per `APP_MANIFEST.md`). Same contract for the rest of the `MALMO_*` family (`MALMO_FOLDER_*`, `MALMO_APP_URL`, `MALMO_SECRET_*`). **Exception:** user-supplied `config:` (`APP_MANIFEST.md` # D4) is injected **directly under the app's own `app_env` name** with no `MALMO_*` indirection and no mapping line — the value is the app's native variable, not a malmo-owned value the app must adapt to.
 - **Generated secrets (`MALMO_SECRET_*`):** a manifest `secrets:` declaration makes the brain generate a CSPRNG value once at install, persist it, and re-emit it stably across restarts. The only injected variable malmo creates rather than reflects. A secret marked `show: true` is owner-visible at `GET /apps/{id}/secrets` (owner-or-admin, surfaced on the app detail page) so a self-auth app's bootstrap token can be per-instance random instead of a published constant (#152); unmarked secrets stay internal. Security hardening is open (`NEXT.md` # App-secret injection hardening).
 - **Outgoing mail is BYO (`MALMO_MAIL_*`), not a malmo relay.** Admins register external SMTP providers; the brain injects the bound provider's credentials per instance and the app dials the provider itself. No smarthost, no queue, no inbound mail in v1; unbound apps get nothing injected and must run with email off (`mail: optional: true` is the only admitted shape).
 - **Tier 2 is curated, not open.** No third-party Tier-2 in v1.

@@ -90,7 +90,7 @@ services:
 	})
 
 	inst, err := m.Install(ctx, "liveapp",
-		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil)
+		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -187,7 +187,7 @@ services:
 	})
 
 	inst, err := m.Install(ctx, "livemysql",
-		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil)
+		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -282,7 +282,7 @@ services:
 	})
 
 	inst, err := m.Install(ctx, "livecache",
-		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil)
+		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -419,7 +419,7 @@ services:
 	writeLiveCatalogApp(t, catDir, "liveuser", compose, man)
 
 	inst, err := m.Install(ctx, "liveuser",
-		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil)
+		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -556,7 +556,7 @@ func TestLiveKanBoot(t *testing.T) {
 	})
 
 	inst, err := m.Install(ctx, "kan",
-		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil)
+		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("install kan: %v", err)
 	}

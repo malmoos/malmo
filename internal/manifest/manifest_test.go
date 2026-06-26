@@ -240,6 +240,93 @@ secrets:
 	}
 }
 
+// TestParseConfigHappy: a valid config block parses, Type defaults to "text",
+// and the field shape round-trips (APP_MANIFEST.md # D4).
+func TestParseConfigHappy(t *testing.T) {
+	src := []byte(`
+id: kan
+manifest_version: 1
+name: Kan
+version: "1.0"
+compose_file: compose.yml
+main_service: web
+main_port: 3000
+config:
+  - app_env: OPENAI_API_KEY
+    title: "OpenAI API key"
+    description: "From platform.openai.com."
+    secret: true
+    required: true
+  - app_env: OPENAI_MODEL
+    title: "Model"
+    description: "Which model to use."
+    type: enum
+    options: ["gpt-4o", "gpt-4o-mini"]
+    default: "gpt-4o-mini"
+  - app_env: VERBOSE
+    title: "Verbose logging"
+    description: "Log extra detail."
+    type: bool
+    default: "false"
+  - app_env: ENDPOINT
+    title: "Endpoint"
+    description: "Base URL."
+`)
+	m, err := Parse(src)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(m.Config) != 4 {
+		t.Fatalf("config: got %d fields, want 4", len(m.Config))
+	}
+	if m.Config[0].AppEnv != "OPENAI_API_KEY" || !m.Config[0].Secret || !m.Config[0].Required {
+		t.Errorf("config[0]: %+v", m.Config[0])
+	}
+	if m.Config[0].Type != "text" {
+		t.Errorf("config[0].Type = %q, want text (default)", m.Config[0].Type)
+	}
+	if m.Config[3].Type != "text" {
+		t.Errorf("config[3].Type = %q, want text (default)", m.Config[3].Type)
+	}
+}
+
+func TestParseRejectsBadConfig(t *testing.T) {
+	cases := map[string]string{
+		"lowercase app_env":   "- app_env: openai_key\n    title: T\n    description: D",
+		"hyphen app_env":      "- app_env: API-KEY\n    title: T\n    description: D",
+		"leading digit":       "- app_env: 2FA\n    title: T\n    description: D",
+		"MALMO_ prefix":       "- app_env: MALMO_X\n    title: T\n    description: D",
+		"reserved PATH":       "- app_env: PATH\n    title: T\n    description: D",
+		"reserved LD_PRELOAD": "- app_env: LD_PRELOAD\n    title: T\n    description: D",
+		"duplicate app_env":   "- app_env: TOKEN\n    title: T\n    description: D\n  - app_env: TOKEN\n    title: T2\n    description: D2",
+		"missing title":       "- app_env: TOKEN\n    description: D",
+		"missing description": "- app_env: TOKEN\n    title: T",
+		"enum no options":     "- app_env: MODEL\n    title: T\n    description: D\n    type: enum",
+		"options on text":     "- app_env: MODEL\n    title: T\n    description: D\n    options: [a, b]",
+		"secret with default": "- app_env: TOKEN\n    title: T\n    description: D\n    secret: true\n    default: x",
+		"bool no default":     "- app_env: FLAG\n    title: T\n    description: D\n    type: bool",
+		"bool bad default":    "- app_env: FLAG\n    title: T\n    description: D\n    type: bool\n    default: yes",
+		"enum default off":    "- app_env: MODEL\n    title: T\n    description: D\n    type: enum\n    options: [a, b]\n    default: c",
+		"unknown type":        "- app_env: TOKEN\n    title: T\n    description: D\n    type: number",
+	}
+	for label, block := range cases {
+		src := []byte(`
+id: kan
+manifest_version: 1
+name: Kan
+version: "1.0"
+compose_file: compose.yml
+main_service: web
+main_port: 3000
+config:
+  ` + block + `
+`)
+		if _, err := Parse(src); err == nil {
+			t.Errorf("%s: Parse accepted invalid config, want error", label)
+		}
+	}
+}
+
 func TestParseServicesHappy(t *testing.T) {
 	src := []byte(`
 id: kan
@@ -300,6 +387,9 @@ services:
 
 func TestParseRejectsBadServices(t *testing.T) {
 	cases := map[string]string{
+		// mongodb is deliberately not a recognised managed type — malmo declined a
+		// managed MongoDB service; Mongo apps bundle their own engine
+		// (DECISIONS.md 2026-06-25, docs/progress/mongodb-compat-spike.md). Keep it rejected.
 		"unknown type":    "database:\n    type: mongodb\n    version: \"7\"",
 		"bad pg version":  "database:\n    type: postgres\n    version: \"13\"",
 		"bad redis ver":   "cache:\n    type: redis\n    version: \"6\"",

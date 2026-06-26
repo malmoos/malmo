@@ -101,6 +101,14 @@ enable_unit /etc/systemd/system/malmo-load-images.service malmo-load-images.serv
 # no-ops on an un-seeded boot.
 enable_unit /etc/systemd/system/malmo-seed.service malmo-seed.service
 
+# Block app-container egress to the cloud metadata endpoint (169.254.169.254) so an
+# untrusted app container cannot read the first-boot seed secrets via the classic
+# cloud-metadata SSRF (#251, ENVIRONMENT.md # Provisioning & first-boot). A standing
+# forward-hook nft DROP applied every boot before docker/host-agent start any
+# container; the host-root seed fetch (OUTPUT path) is untouched. The unit + ruleset
+# are committed static files under mkosi.extra/ (etc/malmo/metadata-firewall.nft).
+enable_unit /etc/systemd/system/malmo-metadata-firewall.service malmo-metadata-firewall.service
+
 # malmo primary group (GID 3000, FIRST_RUN.md # Identity) — new users are created
 # with `useradd --gid malmo`; the brain's /setup needs it present. malmo-app /
 # malmo-shared (2000/2001, APP_ISOLATION.md # Runtime identity) are the well-known

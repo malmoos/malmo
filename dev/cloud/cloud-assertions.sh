@@ -195,6 +195,50 @@ done
 brain_sock="$(docker inspect malmo-brain --format '{{range .Mounts}}{{println .Source}}{{end}}' 2>/dev/null | grep -c 'docker.sock' || true)"
 [ "$brain_sock" = 0 ] || fail "raw docker.sock mounted into malmo-brain (proxy boundary breached)"
 
+# --- 6b. metadata SSRF block (#251): forwarded / app-container egress to the cloud
+# metadata endpoint (169.254.169.254) is dropped, while the host-root first-boot
+# seed fetch (OUTPUT path) is not. The QEMU lane delivers the seed over SMBIOS, so
+# there is no real 169.254.169.254 server to positively probe host reachability —
+# instead assert the rule's SHAPE (a forward hook, never an output hook, matching
+# the metadata IP) plus that a real container packet HITS the drop: probe from
+# inside the brain's netns (a genuine forward-path source over malmo-ingress) and
+# require the drop counter to increment. Together: containers blocked, the host
+# OUTPUT path structurally untouched (so the seed fetch still works).
+fw_rules="$(nft list table inet malmo_metadata 2>/dev/null)" || \
+    fail "metadata firewall: nft table 'inet malmo_metadata' absent — egress block not loaded (#251; malmo-metadata-firewall.service is $(systemctl is-active malmo-metadata-firewall.service 2>&1))"
+grep -q 'hook forward' <<<"$fw_rules" || \
+    fail "metadata firewall: drop chain is not a forward hook (#251) — rules: $(tr '\n' ' ' <<<"$fw_rules")"
+grep -q 'hook output' <<<"$fw_rules" && \
+    fail "metadata firewall: an output hook is present — would break the host-root first-boot seed fetch (#251)"
+grep -q '169\.254\.169\.254' <<<"$fw_rules" || \
+    fail "metadata firewall: no rule matches 169.254.169.254 (#251) — rules: $(tr '\n' ' ' <<<"$fw_rules")"
+
+# Drop-counter probe: read packets matched before/after a container-origin connect.
+md_packets() { nft list table inet malmo_metadata 2>/dev/null | awk '/169\.254\.169\.254/{for(i=1;i<=NF;i++) if($i=="packets") print $(i+1)}' | head -1; }
+md_pid="$(docker inspect -f '{{.State.Pid}}' malmo-brain 2>/dev/null)"
+[ -n "$md_pid" ] || fail "metadata firewall: malmo-brain pid not found for the egress probe (#251)"
+# The live drop-counter probe needs the HOST to have a route to the metadata IP, so
+# the container's forwarded packet is actually routed (and so traverses the forward
+# hook) rather than rejected at the routing stage. The host does on a real cloud (it
+# reaches 169.254.169.254 to fetch the seed) and under QEMU slirp (DHCP hands out a
+# default route that covers it). If a routeless lane ever lacks it, fall back to the
+# shape assertions above (rule loaded + forward-only) rather than a false-fail.
+if ip route get 169.254.169.254 >/dev/null 2>&1; then
+    md_before="$(md_packets)"
+    # A DROP gives no RST, so the connect would hang — bound it; the SYN is emitted
+    # (and counted) immediately, so 3s is ample. The probe is EXPECTED not to connect.
+    # stderr is NOT suppressed so nsenter infrastructure failures (stale PID, permission
+    # denied) appear in the serial log and are distinguishable from "DROP working".
+    timeout 3 nsenter -t "$md_pid" -n bash -c 'exec 3<>/dev/tcp/169.254.169.254/80' 2>&1 || true
+    md_after="$(md_packets)"
+    [ -n "$md_before" ] && [ -n "$md_after" ] || fail "metadata firewall: could not read the drop counter (#251)"
+    [ "$md_after" -gt "$md_before" ] || \
+        fail "metadata firewall: a container probe to 169.254.169.254 did NOT hit the forward DROP (counter $md_before -> $md_after) — SSRF still open (#251)"
+    echo "cloud-assertions: metadata SSRF block (#251) — forward-hook DROP loaded; container egress to 169.254.169.254 dropped (counter $md_before -> $md_after)"
+else
+    echo "cloud-assertions: metadata SSRF block (#251) — forward-hook DROP loaded (shape verified); live drop-probe skipped — host has no route to 169.254.169.254 in this lane"
+fi
+
 # HTTP over Caddy :80 via bash /dev/tcp (no curl in the lean image). Same idiom
 # as medium-assertions. Prints the status line; HTTP/1.0 + Connection: close so
 # the server closes the stream.

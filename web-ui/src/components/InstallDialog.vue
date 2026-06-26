@@ -10,7 +10,8 @@
 // (APP_MANIFEST.md:218, APP_ISOLATION.md # User content).
 import { computed, ref } from "vue";
 import { RouterLink } from "vue-router";
-import type { InstallPlan, InstallPlanFolder, InstallRequest, FolderElection, Scope } from "../api";
+import { SwitchRoot, SwitchThumb } from "reka-ui";
+import type { InstallPlan, InstallPlanFolder, InstallPlanConfigField, InstallRequest, FolderElection, Scope } from "../api";
 import { useAuth } from "../auth";
 import { formatSize } from "../utils";
 
@@ -107,6 +108,23 @@ const mailProviderId = ref<string>(mailProviders.value.length === 1 ? (mailProvi
 // Members can't register providers, so the add link is admin-only.
 const canAddProvider = computed(() => currentUser.value?.role === "admin");
 
+// ── User-supplied setup fields (APP_MANIFEST.md # D4) ─────────────────────────
+// Values only the user can provide (an API token, a model selector). Each is the
+// app's own env var, injected verbatim under its app_env. Required fields gate
+// the Install button; optional blanks are omitted so the app keeps its own
+// default. A secret never carries a default; a bool always does.
+const configFields = computed<InstallPlanConfigField[]>(() => props.plan.config ?? []);
+const configValues = ref<Record<string, string>>({});
+for (const f of configFields.value) {
+  configValues.value[f.app_env] = f.default ?? "";
+}
+
+// Install is blocked until every required field has a non-empty value — an app
+// missing a required token would install straight into a crash-loop.
+const configComplete = computed(() =>
+  configFields.value.every((f) => !f.required || (configValues.value[f.app_env] ?? "").trim() !== ""),
+);
+
 // ── Human-readable helpers ────────────────────────────────────────────────────
 
 function capitalize(s: string): string {
@@ -149,6 +167,18 @@ function handleSubmit() {
   };
   if (props.plan.mail && mailProviderId.value) {
     req.config!.mail_provider_id = mailProviderId.value;
+  }
+
+  // Collect the setup answers. An optional field left blank is omitted (it
+  // injects nothing); a bool always carries "true"/"false". Required fields are
+  // guaranteed non-empty by the configComplete gate on the Install button.
+  const fields: Record<string, string> = {};
+  for (const f of configFields.value) {
+    const v = configValues.value[f.app_env] ?? "";
+    if (v !== "") fields[f.app_env] = v;
+  }
+  if (Object.keys(fields).length > 0) {
+    req.config!.fields = fields;
   }
 
   emit("submit", req);
@@ -307,6 +337,61 @@ function handleSubmit() {
           </p>
         </div>
 
+        <!-- User-supplied setup fields (APP_MANIFEST.md # D4). Each value is the
+             app's own env var; required fields gate the Install button. -->
+        <div v-if="configFields.length > 0" class="space-y-3">
+          <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Setup</p>
+          <div
+            v-for="f in configFields"
+            :key="f.app_env"
+            class="space-y-2 rounded-xl border border-border px-3 py-2.5"
+          >
+            <div>
+              <p class="text-sm font-medium">
+                {{ f.title }}<span v-if="f.required" class="text-destructive"> *</span>
+              </p>
+              <p class="text-xs text-muted-foreground">{{ f.description }}</p>
+              <p class="mt-0.5 font-mono text-xs text-muted-foreground">Sets {{ f.app_env }}</p>
+            </div>
+
+            <!-- enum: a select of the declared options -->
+            <select
+              v-if="f.type === 'enum'"
+              v-model="configValues[f.app_env]"
+              class="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm outline-none focus:border-accent"
+            >
+              <!-- A required enum with no default starts unset: a disabled
+                   placeholder keeps the displayed value matching the empty model
+                   (so the Install gate stays honest) until the user picks. -->
+              <option v-if="!f.required" value="">None</option>
+              <option v-else value="" disabled>Select…</option>
+              <option v-for="opt in (f.options ?? [])" :key="opt" :value="opt">{{ opt }}</option>
+            </select>
+
+            <!-- bool: a toggle; the value travels as "true"/"false" -->
+            <SwitchRoot
+              v-else-if="f.type === 'bool'"
+              :model-value="configValues[f.app_env] === 'true'"
+              class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-border bg-muted outline-none transition-colors data-[state=checked]:border-accent data-[state=checked]:bg-accent"
+              @update:model-value="(on: boolean) => (configValues[f.app_env] = on ? 'true' : 'false')"
+            >
+              <SwitchThumb
+                class="pointer-events-none block size-4 translate-x-0.5 rounded-full bg-card shadow transition-transform data-[state=checked]:translate-x-[1.125rem]"
+              />
+            </SwitchRoot>
+
+            <!-- secret / text: a single-line input, masked for secrets -->
+            <input
+              v-else
+              v-model="configValues[f.app_env]"
+              :type="f.secret ? 'password' : 'text'"
+              :placeholder="f.secret ? '' : (f.default ?? '')"
+              autocomplete="off"
+              class="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm outline-none focus:border-accent"
+            />
+          </div>
+        </div>
+
         <!-- Storage footprint — what installing costs the box (DASHBOARD.md #
              the consent screen shows the on-disk footprint). -->
         <div v-if="hasFootprint" class="space-y-1.5">
@@ -349,6 +434,7 @@ function handleSubmit() {
         </button>
         <button
           class="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-accent-foreground hover:opacity-90 disabled:opacity-50"
+          :disabled="!configComplete"
           @click="handleSubmit"
         >
           Install

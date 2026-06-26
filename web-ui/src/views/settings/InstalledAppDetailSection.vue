@@ -12,7 +12,8 @@ import { computed, ref, watch } from "vue";
 import { useRoute, useRouter, RouterLink } from "vue-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/vue-query";
 import { AppWindow, ChevronDown } from "lucide-vue-next";
-import { api, waitForJob, type Instance, type CatalogDetail, type Job, type MailProviderOption, type AppSecrets, type AppSecret } from "@/api";
+import { SwitchRoot, SwitchThumb } from "reka-ui";
+import { api, waitForJob, type Instance, type CatalogDetail, type Job, type MailProviderOption, type AppSecrets, type AppSecret, type AppConfig, type AppConfigField } from "@/api";
 import { useAuth } from "@/auth";
 import AppLogs from "@/components/AppLogs.vue";
 
@@ -152,6 +153,84 @@ async function copySecret(s: AppSecret) {
     // No clipboard on an insecure context — the value is on screen to copy by hand.
   }
 }
+
+// ── Settings — user-supplied config (APP_MANIFEST.md # D4) ───────────────────
+// Fields the app declared a `config:` block for (an API token, a model picker).
+// GET never returns a secret's value (only `set`), so secrets show as set/not-set
+// with a Replace affordance; non-secret values are editable inline. Save sends a
+// PARTIAL update — only the fields the user actually changed — so an untouched
+// secret is never resent (we don't have it) and never accidentally cleared. The
+// PUT restarts the app as a job. Gated to canControl; the brain re-checks.
+const configQuery = useQuery({
+  queryKey: computed(() => ["app-config", id.value]),
+  queryFn: () => api.get<AppConfig>(`/apps/${id.value}/config`),
+  enabled: computed(() => canControl.value),
+});
+const configFields = computed<AppConfigField[]>(() => configQuery.data.value?.fields ?? []);
+
+// edits is the local buffer: non-secret fields start at their stored value;
+// secret fields start empty and only carry a value once the user hits Replace.
+// replacing tracks which secrets are mid-edit (showing an input vs the set badge).
+const edits = ref<Record<string, string>>({});
+const replacing = ref<Set<string>>(new Set());
+
+watch(
+  configFields,
+  (fields) => {
+    const next: Record<string, string> = {};
+    for (const f of fields) next[f.app_env] = f.secret ? "" : f.value;
+    edits.value = next;
+    replacing.value = new Set();
+  },
+  { immediate: true },
+);
+
+function startReplace(appEnv: string) {
+  const next = new Set(replacing.value);
+  next.add(appEnv);
+  replacing.value = next;
+  edits.value[appEnv] = "";
+}
+function cancelReplace(appEnv: string) {
+  const next = new Set(replacing.value);
+  next.delete(appEnv);
+  replacing.value = next;
+  edits.value[appEnv] = "";
+}
+
+// changedFields is the partial-update payload: a non-secret field whose buffer
+// differs from its stored value, and a secret only when the user typed a new,
+// non-empty value (a blank Replace box is ignored — we never blank a secret here).
+function changedFields(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const f of configFields.value) {
+    const v = edits.value[f.app_env] ?? "";
+    if (f.secret) {
+      if (replacing.value.has(f.app_env) && v !== "") out[f.app_env] = v;
+    } else if (v !== f.value) {
+      out[f.app_env] = v;
+    }
+  }
+  return out;
+}
+const dirty = computed(() => Object.keys(changedFields()).length > 0);
+
+// Block Save if a required NON-secret field has been cleared — the brain would
+// 422 it. A required secret is already set (install enforced it) and can only be
+// replaced, never blanked from here, so it never gates Save.
+const configValid = computed(() =>
+  configFields.value.every(
+    (f) => !f.required || f.secret || (edits.value[f.app_env] ?? "").trim() !== "",
+  ),
+);
+
+const saveConfig = useMutation({
+  mutationFn: async () => awaitJob(await api.put<Job>(`/apps/${id.value}/config`, { fields: changedFields() })),
+  onSettled: () => {
+    invalidate();
+    qc.invalidateQueries({ queryKey: ["app-config", id.value] });
+  },
+});
 </script>
 
 <template>
@@ -326,6 +405,110 @@ async function copySecret(s: AppSecret) {
             </button>
           </li>
         </ul>
+      </section>
+
+      <!-- Settings — user-supplied config (APP_MANIFEST.md # D4). Hidden when the
+           app declares no config: block. Non-secret values edit inline; secrets
+           show set/not-set with a Replace box. Save sends only what changed and
+           restarts the app. -->
+      <p v-if="configQuery.isError.value" class="text-sm text-destructive">
+        Couldn't load settings: {{ (configQuery.error.value as Error)?.message }}
+      </p>
+      <section v-if="canControl && configFields.length" class="space-y-2">
+        <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Settings</h2>
+        <p class="text-xs text-muted-foreground">Changing these restarts {{ app.name }} briefly.</p>
+        <div class="space-y-2">
+          <div
+            v-for="f in configFields"
+            :key="f.app_env"
+            class="space-y-2 rounded-xl border border-border bg-card px-4 py-3"
+          >
+            <div>
+              <div class="text-sm font-medium">
+                {{ f.title }}<span v-if="f.required" class="text-destructive"> *</span>
+              </div>
+              <div class="text-xs text-muted-foreground">{{ f.description }}</div>
+              <div class="mt-0.5 font-mono text-xs text-muted-foreground">Sets {{ f.app_env }}</div>
+            </div>
+
+            <!-- secret: set/not-set badge + replace affordance -->
+            <template v-if="f.secret">
+              <div v-if="!replacing.has(f.app_env)" class="flex items-center gap-3">
+                <span class="text-sm text-muted-foreground">{{ f.set ? "•••••••• (set)" : "Not set" }}</span>
+                <button
+                  type="button"
+                  class="rounded-lg border border-border px-3 py-1 text-sm hover:bg-muted"
+                  @click="startReplace(f.app_env)"
+                >
+                  {{ f.set ? "Replace" : "Set" }}
+                </button>
+              </div>
+              <div v-else class="flex items-center gap-2">
+                <input
+                  v-model="edits[f.app_env]"
+                  type="password"
+                  autocomplete="off"
+                  placeholder="Enter a new value"
+                  class="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm outline-none focus:border-accent"
+                />
+                <button
+                  type="button"
+                  class="shrink-0 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
+                  @click="cancelReplace(f.app_env)"
+                >
+                  Cancel
+                </button>
+              </div>
+            </template>
+
+            <!-- non-secret enum: select of declared options -->
+            <select
+              v-else-if="f.type === 'enum'"
+              v-model="edits[f.app_env]"
+              class="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm outline-none focus:border-accent"
+            >
+              <option v-if="!f.required" value="">None</option>
+              <option v-for="opt in (f.options ?? [])" :key="opt" :value="opt">{{ opt }}</option>
+            </select>
+
+            <!-- non-secret bool: toggle; value travels as "true"/"false" -->
+            <SwitchRoot
+              v-else-if="f.type === 'bool'"
+              :model-value="edits[f.app_env] === 'true'"
+              class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-border bg-muted outline-none transition-colors data-[state=checked]:border-accent data-[state=checked]:bg-accent"
+              @update:model-value="(on: boolean) => (edits[f.app_env] = on ? 'true' : 'false')"
+            >
+              <SwitchThumb
+                class="pointer-events-none block size-4 translate-x-0.5 rounded-full bg-card shadow transition-transform data-[state=checked]:translate-x-[1.125rem]"
+              />
+            </SwitchRoot>
+
+            <!-- non-secret text -->
+            <input
+              v-else
+              v-model="edits[f.app_env]"
+              type="text"
+              class="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm outline-none focus:border-accent"
+            />
+          </div>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <button
+            type="button"
+            class="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-accent-foreground hover:opacity-90 disabled:opacity-50"
+            :disabled="!dirty || !configValid || saveConfig.isPending.value"
+            @click="saveConfig.mutate()"
+          >
+            {{ saveConfig.isPending.value ? "Saving…" : "Save changes" }}
+          </button>
+          <span v-if="saveConfig.isPending.value" class="text-xs text-muted-foreground">
+            The app restarts briefly.
+          </span>
+        </div>
+        <p v-if="saveConfig.isError.value" class="text-sm text-destructive">
+          Couldn't save settings: {{ (saveConfig.error.value as Error)?.message }}
+        </p>
       </section>
 
       <!-- Logs — collapsed by default; a full-width accordion row (styled like

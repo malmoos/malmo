@@ -51,7 +51,7 @@ func installMailApp(t *testing.T, e *testEnv, providerID string) (store.Instance
 	e.writeCatalogApp(t, "mailapp", mailCompose, mailManifest)
 	e.docker.digests[testImage] = testDigest
 	inst, err := e.m.Install(context.Background(), "mailapp",
-		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, providerID, nil)
+		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, providerID, nil, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestInstallMailElectionOnNonMailApp(t *testing.T) {
 	e.writeCatalogApp(t, "whoami", mailCompose, whoamiManifest(testDigest))
 	e.docker.digests[testImage] = testDigest
 	_, err := e.m.Install(context.Background(), "whoami",
-		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "mp_test", nil)
+		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "mp_test", nil, nil)
 	if err == nil {
 		t.Fatal("want error binding a provider to an app without a mail block")
 	}
@@ -124,7 +124,7 @@ func TestInstallMissingProviderRollsBack(t *testing.T) {
 	e.writeCatalogApp(t, "mailapp", mailCompose, mailManifest)
 	e.docker.digests[testImage] = testDigest
 	_, err := e.m.Install(context.Background(), "mailapp",
-		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "mp_ghost", nil)
+		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "mp_ghost", nil, nil)
 	if err == nil {
 		t.Fatal("want error binding a nonexistent provider")
 	}
@@ -175,7 +175,7 @@ func TestRebindMail(t *testing.T) {
 	// A non-mail app rejects a binding.
 	e.writeCatalogApp(t, "whoami", mailCompose, whoamiManifest(testDigest))
 	plain, err := e.m.Install(context.Background(), "whoami",
-		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil)
+		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("install plain app: %v", err)
 	}
