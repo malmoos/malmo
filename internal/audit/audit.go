@@ -52,6 +52,11 @@ const (
 	ActionMailProviderDelete = "mail.provider.delete"
 	ActionMailProviderTest   = "mail.provider.test"
 	ActionAppMailRebind      = "app.mail.rebind"
+
+	// User-supplied app config update (APP_MANIFEST.md # D4). Changing a config
+	// value (an API token, a connection string) is elevation-class, so it audits
+	// success and failure.
+	ActionAppConfigUpdate = "app.config.update"
 )
 
 // Target describes the object the action acts on. Both fields are optional.

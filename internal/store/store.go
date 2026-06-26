@@ -134,6 +134,20 @@ func (s *Store) migrate() error {
 			PRIMARY KEY (instance_id, name),
 			FOREIGN KEY (instance_id) REFERENCES instances(id) ON DELETE CASCADE
 		);
+		-- instance_config: per-instance user-supplied configuration values
+		-- (APP_MANIFEST.md # D4). Keyed by the app's own env-var name (app_env);
+		-- value is stamped verbatim into the compose-override environment. The
+		-- secret flag marks values the read API must never return and the UI masks.
+		-- Plaintext at rest (same trust model as instance_secrets; hardening
+		-- deferred, NEXT.md # App-secret injection hardening). Cascades on uninstall.
+		CREATE TABLE IF NOT EXISTS instance_config (
+			instance_id TEXT    NOT NULL,
+			app_env     TEXT    NOT NULL,
+			value       TEXT    NOT NULL,
+			secret      INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (instance_id, app_env),
+			FOREIGN KEY (instance_id) REFERENCES instances(id) ON DELETE CASCADE
+		);
 		-- instance_resource_limits: the per-instance cgroup limit policy applied
 		-- to the app's main service (ENVIRONMENT.md # Per-instance resource
 		-- limits). At most one row per instance; absence means uncapped burst,
@@ -491,6 +505,61 @@ func (s *Store) GetInstanceSecrets(instanceID string) ([]InstanceSecret, error) 
 			return nil, err
 		}
 		out = append(out, sec)
+	}
+	return out, rows.Err()
+}
+
+// InstanceConfig is one user-supplied config value (APP_MANIFEST.md # D4).
+// AppEnv is the app's own env-var name (the storage key and the variable stamped
+// into the compose override); Value is the user's answer; Secret marks values
+// the read API must never return and the UI masks.
+type InstanceConfig struct {
+	AppEnv string
+	Value  string
+	Secret bool
+}
+
+// SetInstanceConfig replaces an instance's stored config values in one
+// transaction. Called at install and on every post-install config edit. Values
+// are written verbatim (plaintext at rest — the compose override on disk holds
+// the same value; row-level encryption is deferred, NEXT.md # App-secret
+// injection hardening).
+func (s *Store) SetInstanceConfig(instanceID string, cfg []InstanceConfig) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM instance_config WHERE instance_id=?`, instanceID); err != nil {
+		return err
+	}
+	for _, c := range cfg {
+		if _, err := tx.Exec(
+			`INSERT INTO instance_config (instance_id, app_env, value, secret) VALUES (?,?,?,?)`,
+			instanceID, c.AppEnv, c.Value, c.Secret); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetInstanceConfig returns an instance's stored config values, ordered by
+// app_env.
+func (s *Store) GetInstanceConfig(instanceID string) ([]InstanceConfig, error) {
+	rows, err := s.db.Query(
+		`SELECT app_env, value, secret FROM instance_config
+		 WHERE instance_id=? ORDER BY app_env`, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []InstanceConfig
+	for rows.Next() {
+		var c InstanceConfig
+		if err := rows.Scan(&c.AppEnv, &c.Value, &c.Secret); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
 	}
 	return out, rows.Err()
 }

@@ -108,6 +108,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/apps/{id}/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read an app instance's user-supplied configuration (owner or admin) */
+        get: operations["get-app-config"];
+        /** Update an app instance's user-supplied configuration (owner or admin) */
+        put: operations["update-app-config"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/apps/{id}/mail-binding": {
         parameters: {
             query?: never;
@@ -746,6 +764,27 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AppConfigDTO: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/AppConfigDTO.json
+             */
+            readonly $schema?: string;
+            fields: components["schemas"]["AppConfigFieldDTO"][] | null;
+        };
+        AppConfigFieldDTO: {
+            app_env: string;
+            default?: string;
+            description: string;
+            options?: string[] | null;
+            required: boolean;
+            secret: boolean;
+            set: boolean;
+            title: string;
+            type: string;
+            value: string;
+        };
         AppSecretDTO: {
             name: string;
             value: string;
@@ -817,6 +856,9 @@ export interface components {
             first_run_complete: boolean;
         };
         ConfigStruct: {
+            fields?: {
+                [key: string]: string;
+            };
             folders?: components["schemas"]["FolderElection"][] | null;
             mail_provider_id?: string;
         };
@@ -1029,6 +1071,16 @@ export interface components {
             permissions?: components["schemas"]["CustomPermsInput"];
             scope?: string;
         };
+        InstallPlanConfigField: {
+            app_env: string;
+            default?: string;
+            description: string;
+            options?: string[] | null;
+            required: boolean;
+            secret: boolean;
+            title: string;
+            type: string;
+        };
         InstallPlanDTO: {
             /**
              * Format: uri
@@ -1036,6 +1088,7 @@ export interface components {
              * @example https://example.com/schemas/InstallPlanDTO.json
              */
             readonly $schema?: string;
+            config?: components["schemas"]["InstallPlanConfigField"][] | null;
             footprint: components["schemas"]["InstallPlanFootprint"];
             mail?: components["schemas"]["InstallPlanMail"];
             manifest_id: string;
@@ -1455,6 +1508,17 @@ export interface components {
             /** Format: int64 */
             count: number;
         };
+        "Update-app-configRequest": {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/Update-app-configRequest.json
+             */
+            readonly $schema?: string;
+            fields: {
+                [key: string]: string;
+            };
+        };
         "Update-user-roleRequest": {
             /**
              * Format: uri
@@ -1726,6 +1790,72 @@ export interface operations {
         responses: {
             /** @description Accepted */
             202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "get-app-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppConfigDTO"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "update-app-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Update-app-configRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

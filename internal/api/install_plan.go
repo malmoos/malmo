@@ -37,6 +37,24 @@ type InstallPlanDTO struct {
 	Footprint    InstallPlanFootprint   `json:"footprint"`
 	Permissions  InstallPlanPermissions `json:"permissions"`
 	Mail         *InstallPlanMail       `json:"mail,omitempty"`
+	// Config is the user-supplied configuration form schema (APP_MANIFEST.md # D4),
+	// present only when the manifest declares a config: block. Schema only — never
+	// a value (a secret field has none; defaults/options are part of the schema).
+	Config []InstallPlanConfigField `json:"config,omitempty"`
+}
+
+// InstallPlanConfigField is one user-supplied config field's form schema
+// (APP_MANIFEST.md # D4). It carries everything the install form needs to render
+// the input — never a value.
+type InstallPlanConfigField struct {
+	AppEnv      string   `json:"app_env"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Secret      bool     `json:"secret"`
+	Required    bool     `json:"required"`
+	Type        string   `json:"type"`
+	Options     []string `json:"options,omitempty"`
+	Default     string   `json:"default,omitempty"`
 }
 
 // InstallPlanMail is the outgoing-mail picker block, present only when the
@@ -178,6 +196,20 @@ func buildInstallPlan(man *manifest.Manifest, isAdmin bool) InstallPlanDTO {
 		devices = []string{}
 	}
 
+	config := make([]InstallPlanConfigField, 0, len(man.Config))
+	for _, c := range man.Config {
+		config = append(config, InstallPlanConfigField{
+			AppEnv:      c.AppEnv,
+			Title:       c.Title,
+			Description: c.Description,
+			Secret:      c.Secret,
+			Required:    c.Required,
+			Type:        c.Type,
+			Options:     c.Options,
+			Default:     c.Default,
+		})
+	}
+
 	return InstallPlanDTO{
 		ManifestID:   man.ID,
 		Name:         man.Name,
@@ -191,6 +223,7 @@ func buildInstallPlan(man *manifest.Manifest, isAdmin bool) InstallPlanDTO {
 			Devices:  devices,
 			Folders:  folders,
 		},
+		Config: config,
 	}
 }
 
