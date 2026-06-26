@@ -7,6 +7,7 @@ package manifest
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -112,6 +113,16 @@ type Manifest struct {
 	// convention as MALMO_SECRET_* / MALMO_SERVICE_*. Absent ⇒ no picker, never
 	// injected. nil-able so "no block" and "block present" are distinguishable.
 	Mail *Mail `yaml:"mail,omitempty"`
+
+	// Config declares user-supplied configuration fields (APP_MANIFEST.md # D4):
+	// values only the user can provide (a third-party API token, an external
+	// connection string, a provider/model selector). Unlike the MALMO_* injected
+	// family, each value lands DIRECTLY under its own AppEnv name in the target
+	// service's compose-override environment — no indirection, no mapping line —
+	// because it is the app's own native variable, not a malmo-owned value the app
+	// must adapt to. The brain renders a form at install (required fields gate the
+	// install button) and on the app detail page after. Absent ⇒ no form.
+	Config []ConfigField `yaml:"config,omitempty"`
 }
 
 // Description holds the app's catalog-facing text (APP_MANIFEST.md # A).
@@ -414,6 +425,29 @@ type Mail struct {
 	Optional bool `yaml:"optional"`
 }
 
+// ConfigField is one user-supplied configuration field (APP_MANIFEST.md # D4).
+// AppEnv is the app's own environment-variable name: it is the storage key, the
+// form hint shown in monospace, AND the variable the brain stamps verbatim into
+// the target service's compose-override environment (so `app_env: OPENAI_API_KEY`
+// sets `OPENAI_API_KEY=<the user's answer>`). There is no MALMO_* indirection —
+// see the Manifest.Config doc and DECISIONS.md 2026-06-26.
+//
+// Because the value lands directly under AppEnv and the override wins over the
+// base compose, AppEnv is a security boundary: it is validated to be a bare
+// uppercase env-var identifier, never the brain-owned MALMO_ prefix and never a
+// loader/runtime-critical var (# Reserved names; reservedConfigEnv).
+type ConfigField struct {
+	AppEnv      string   `yaml:"app_env"`
+	Title       string   `yaml:"title"`
+	Description string   `yaml:"description"`
+	Secret      bool     `yaml:"secret,omitempty"`   // masked input; stored + handled like MALMO_SECRET_*; no default allowed
+	Required    bool     `yaml:"required,omitempty"` // gates the install button until provided
+	Type        string   `yaml:"type,omitempty"`     // text|enum|bool (default text); normalized in place
+	Options     []string `yaml:"options,omitempty"`  // enum only, non-empty
+	Default     string   `yaml:"default,omitempty"`  // prefill / value-when-blank; required on bool; forbidden on secret
+	Service     string   `yaml:"service,omitempty"`  // target compose service; default main_service
+}
+
 // serviceVersions is the allowlist of versions per managed-service type
 // (SERVICE_PROVISIONING.md # Catalog (v1)). A manifest declaring a type/version
 // outside this set is rejected at parse time. New manifests should prefer
@@ -442,6 +476,22 @@ const MinSecretBytes = 16
 // unambiguous environment-variable suffix: `auth`, `session_key` ok; `Auth`,
 // `2fa`, `a-b` rejected.
 var secretName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// configEnvName matches a bare uppercase env-var identifier for a config field's
+// `app_env` (APP_MANIFEST.md # D4). Uppercase-only is enforced (not merely
+// conventional) so the MALMO_-prefix and reservedConfigEnv boundaries can't be
+// bypassed by a lowercase variant: `OPENAI_API_KEY` ok; `openai_key`, `2fa`,
+// `API-KEY` rejected.
+var configEnvName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+
+// reservedConfigEnv is the loader/runtime denylist a config `app_env` may never
+// take (APP_MANIFEST.md # D4 # Reserved names): names that reach process or
+// platform internals. The MALMO_ prefix is rejected separately (the brain's
+// injected family). Grows if a new sensitive loader var appears (THREAT_MODEL.md).
+var reservedConfigEnv = map[string]bool{
+	"PATH": true, "HOME": true, "USER": true, "SHELL": true, "HOSTNAME": true,
+	"IFS": true, "LD_PRELOAD": true, "LD_LIBRARY_PATH": true, "LD_AUDIT": true,
+}
 
 // folderTaxonomy is the fixed v1 use-case folder set (APP_ISOLATION.md # User
 // content). User-defined folders are deferred.
@@ -512,6 +562,9 @@ func (m *Manifest) validate() error {
 	if err := m.validateSecrets(); err != nil {
 		return err
 	}
+	if err := m.validateConfig(); err != nil {
+		return err
+	}
 	if err := m.validateServices(); err != nil {
 		return err
 	}
@@ -540,6 +593,68 @@ func (m *Manifest) validateSecrets() error {
 			s.Bytes = DefaultSecretBytes
 		} else if s.Bytes < MinSecretBytes {
 			s.Bytes = MinSecretBytes
+		}
+	}
+	return nil
+}
+
+// validateConfig checks the user-supplied config block and normalizes each
+// field's type default in place (APP_MANIFEST.md # D4). Absent ⇒ no-op. The
+// `service` field is NOT checked against the compose here (validate() has no
+// compose); lifecycle backstops a non-existent service at install time.
+func (m *Manifest) validateConfig() error {
+	seen := make(map[string]bool, len(m.Config))
+	for i := range m.Config {
+		c := &m.Config[i]
+		if !configEnvName.MatchString(c.AppEnv) {
+			return fmt.Errorf("config: app_env %q must be an uppercase env-var name (e.g. OPENAI_API_KEY)", c.AppEnv)
+		}
+		if strings.HasPrefix(c.AppEnv, "MALMO_") {
+			return fmt.Errorf("config: app_env %q may not use the reserved MALMO_ prefix", c.AppEnv)
+		}
+		if reservedConfigEnv[c.AppEnv] {
+			return fmt.Errorf("config: app_env %q is a reserved runtime variable and may not be set", c.AppEnv)
+		}
+		if seen[c.AppEnv] {
+			return fmt.Errorf("config: duplicate app_env %q", c.AppEnv)
+		}
+		seen[c.AppEnv] = true
+		if c.Title == "" {
+			return fmt.Errorf("config[%s]: title is required", c.AppEnv)
+		}
+		if c.Description == "" {
+			return fmt.Errorf("config[%s]: description is required", c.AppEnv)
+		}
+		if c.Type == "" {
+			c.Type = "text"
+		}
+		switch c.Type {
+		case "text":
+		case "enum":
+			if len(c.Options) == 0 {
+				return fmt.Errorf("config[%s]: type enum requires a non-empty options list", c.AppEnv)
+			}
+		case "bool":
+			// A toggle always carries a concrete value, so an optional-blank bool
+			// has no "inject nothing" state. Requiring a default keeps the toggle
+			// well-defined and means the author explicitly owns the variable.
+			if c.Default == "" {
+				return fmt.Errorf("config[%s]: type bool requires a default of \"true\" or \"false\"", c.AppEnv)
+			}
+			if c.Default != "true" && c.Default != "false" {
+				return fmt.Errorf("config[%s]: bool default must be \"true\" or \"false\", got %q", c.AppEnv, c.Default)
+			}
+		default:
+			return fmt.Errorf("config[%s]: unknown type %q (allowed: text, enum, bool)", c.AppEnv, c.Type)
+		}
+		if c.Type != "enum" && len(c.Options) > 0 {
+			return fmt.Errorf("config[%s]: options is only valid with type enum", c.AppEnv)
+		}
+		if c.Secret && c.Default != "" {
+			return fmt.Errorf("config[%s]: a secret field may not carry a default", c.AppEnv)
+		}
+		if c.Type == "enum" && c.Default != "" && !slices.Contains(c.Options, c.Default) {
+			return fmt.Errorf("config[%s]: default %q is not one of the options", c.AppEnv, c.Default)
 		}
 	}
 	return nil

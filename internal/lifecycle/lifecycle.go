@@ -278,12 +278,12 @@ type Owner struct {
 	Username string
 }
 
-func (m *Manager) Install(ctx context.Context, manifestID string, owner Owner, scope string, mounts []FolderMount, mailProviderID string, progress func(step string)) (store.Instance, error) {
+func (m *Manager) Install(ctx context.Context, manifestID string, owner Owner, scope string, mounts []FolderMount, mailProviderID string, config []store.InstanceConfig, progress func(step string)) (store.Instance, error) {
 	man, composeBytes, err := m.catalog.Load(manifestID)
 	if err != nil {
 		return store.Instance{}, err
 	}
-	return m.install(ctx, man, composeBytes, owner, scope, mounts, mailProviderID, progress)
+	return m.install(ctx, man, composeBytes, owner, scope, mounts, mailProviderID, config, progress)
 }
 
 // CustomSpec is a user-pasted (Door-2) app: a raw compose plus the bits the
@@ -308,7 +308,8 @@ func (m *Manager) InstallCustom(ctx context.Context, spec CustomSpec, owner Owne
 	if err != nil {
 		return store.Instance{}, err
 	}
-	return m.install(ctx, man, composeBytes, owner, scope, customMounts(man.Permissions.Folders, scope), "", progress)
+	// Door-2 pastes have no config: block (APP_MANIFEST.md # D4) — pass nil.
+	return m.install(ctx, man, composeBytes, owner, scope, customMounts(man.Permissions.Folders, scope), "", nil, progress)
 }
 
 // customMounts resolves a Door-2 manifest's folder grants into FolderMounts.
@@ -340,7 +341,7 @@ func customMounts(folders []manifest.Folder, scope string) []FolderMount {
 // the app's core function cannot run, so there is no "proceed anyway".
 var ErrNoGPU = errors.New("this app needs a GPU, and no usable GPU was detected on this box")
 
-func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBytes []byte, owner Owner, scope string, mounts []FolderMount, mailProviderID string, progress func(step string)) (store.Instance, error) {
+func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBytes []byte, owner Owner, scope string, mounts []FolderMount, mailProviderID string, config []store.InstanceConfig, progress func(step string)) (store.Instance, error) {
 	step := func(s string) {
 		if progress != nil {
 			progress(s)
@@ -352,6 +353,14 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	// is the transaction owner's backstop, checked before any state is written.
 	if mailProviderID != "" && man.Mail == nil {
 		return store.Instance{}, fmt.Errorf("app %q does not declare mail support", man.ID)
+	}
+
+	// A config field may target a non-main compose service (APP_MANIFEST.md # D4);
+	// verify each named service exists before any state is written. The manifest
+	// validator can't check this (it has no compose), so this is the transaction
+	// owner's backstop, fail-fast like the GPU/mail gates above.
+	if err := validateConfigServices(man, composeBytes); err != nil {
+		return store.Instance{}, err
 	}
 
 	// 1-2. Manifest validated by the caller; admit the compose + the manifest's
@@ -467,6 +476,15 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	}
 	if err := m.store.SetInstanceSecrets(id, secrets); err != nil {
 		return rollback(fmt.Errorf("persist secrets: %w", err))
+	}
+
+	// 5b'. Persist the user-supplied config values (APP_MANIFEST.md # D4) before
+	// the override is written, so writeOverride stamps each one under its own
+	// app_env into the target service's environment. The API validated them
+	// against the manifest. On a later rollback the instance Delete cascades them
+	// away. Door-2 / config-less apps pass none.
+	if err := m.store.SetInstanceConfig(id, config); err != nil {
+		return rollback(fmt.Errorf("persist config: %w", err))
 	}
 
 	// 5c. Provision the manifest's declared managed services (Postgres in v1):
@@ -1450,6 +1468,14 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 	// compose joins them — kan's `migrate` job and `web` both need the DSN — so
 	// membership, not a software allowlist, is what gates reachability.
 	svcNets := serviceNetworkNames(man.Services)
+	// User-supplied config values stamped into each target service's environment
+	// under the app's own env-var name (APP_MANIFEST.md # D4). Read from the store
+	// (persisted in install step 5b'); restampConfigEnv patches this same block on
+	// a post-install edit.
+	envByService, err := m.configEnvByService(id, man)
+	if err != nil {
+		return err
+	}
 	services := map[string]any{}
 	for svc := range svcs {
 		nets := map[string]any{appNet: nil}
@@ -1553,6 +1579,12 @@ func (m *Manager) writeOverride(id string, man *manifest.Manifest, composeBytes 
 		}
 		if len(devices) > 0 {
 			entry["devices"] = devices
+		}
+		// User-supplied config (APP_MANIFEST.md # D4): inject each value verbatim
+		// under its own app_env. The override wins over the base compose, so a
+		// value the user set overrides any placeholder in the author's compose.
+		if env := envByService[svc]; len(env) > 0 {
+			entry["environment"] = env
 		}
 		services[svc] = entry
 	}

@@ -1,5 +1,61 @@
 components:
   schemas:
+    AppConfigDTO:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/AppConfigDTO.json
+          format: uri
+          readOnly: true
+          type: string
+        fields:
+          items:
+            $ref: "#/components/schemas/AppConfigFieldDTO"
+          type:
+            - array
+            - "null"
+      required:
+        - fields
+      type: object
+    AppConfigFieldDTO:
+      additionalProperties: false
+      properties:
+        app_env:
+          type: string
+        default:
+          type: string
+        description:
+          type: string
+        options:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        required:
+          type: boolean
+        secret:
+          type: boolean
+        set:
+          type: boolean
+        title:
+          type: string
+        type:
+          type: string
+        value:
+          type: string
+      required:
+        - app_env
+        - title
+        - description
+        - secret
+        - required
+        - type
+        - value
+        - set
+      type: object
     AppSecretDTO:
       additionalProperties: false
       properties:
@@ -146,6 +202,10 @@ components:
     ConfigStruct:
       additionalProperties: false
       properties:
+        fields:
+          additionalProperties:
+            type: string
+          type: object
         folders:
           items:
             $ref: "#/components/schemas/FolderElection"
@@ -572,6 +632,37 @@ components:
         - compose
         - main_port
       type: object
+    InstallPlanConfigField:
+      additionalProperties: false
+      properties:
+        app_env:
+          type: string
+        default:
+          type: string
+        description:
+          type: string
+        options:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        required:
+          type: boolean
+        secret:
+          type: boolean
+        title:
+          type: string
+        type:
+          type: string
+      required:
+        - app_env
+        - title
+        - description
+        - secret
+        - required
+        - type
+      type: object
     InstallPlanDTO:
       additionalProperties: false
       properties:
@@ -582,6 +673,12 @@ components:
           format: uri
           readOnly: true
           type: string
+        config:
+          items:
+            $ref: "#/components/schemas/InstallPlanConfigField"
+          type:
+            - array
+            - "null"
         footprint:
           $ref: "#/components/schemas/InstallPlanFootprint"
         mail:
@@ -1452,6 +1549,23 @@ components:
       required:
         - count
       type: object
+    Update-app-configRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/Update-app-configRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        fields:
+          additionalProperties:
+            type: string
+          type: object
+      required:
+        - fields
+      type: object
     Update-user-roleRequest:
       additionalProperties: false
       properties:
@@ -1677,6 +1791,57 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       summary: Get one app instance
+  /api/v1/apps/{id}/config:
+    get:
+      operationId: get-app-config
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppConfigDTO"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Read an app instance's user-supplied configuration (owner or admin)
+    put:
+      operationId: update-app-config
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Update-app-configRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Update an app instance's user-supplied configuration (owner or admin)
   /api/v1/apps/{id}/mail-binding:
     put:
       operationId: set-app-mail-binding

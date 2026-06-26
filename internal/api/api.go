@@ -145,6 +145,7 @@ func (s *Server) registerAll(api huma.API) {
 	s.registerSystem(api)
 	s.registerFirstRun(api)
 	s.registerAppSecrets(api)
+	s.registerAppConfig(api)
 }
 
 // OpenAPIDocument builds the brain's full REST surface against a throwaway mux
@@ -474,6 +475,10 @@ func (s *Server) installApp(ctx context.Context, in *struct {
 			// MailProviderID binds a mail-capable app to a registered outgoing-mail
 			// provider (SERVICE_PROVISIONING.md # BYO outgoing mail). Empty ⇒ unbound.
 			MailProviderID string `json:"mail_provider_id,omitempty"`
+			// Fields carries the user-supplied config answers keyed by app_env
+			// (APP_MANIFEST.md # D4). Validated against the manifest; required fields
+			// must be present, optional-blank injects nothing.
+			Fields map[string]string `json:"fields,omitempty"`
 		} `json:"config,omitempty"` // per-folder source/subfolder elections (consent screen)
 	}
 }) (*struct{ Body Job }, error) {
@@ -526,12 +531,21 @@ func (s *Server) installApp(ctx context.Context, in *struct {
 			return nil, huma.Error500InternalServerError("mail provider lookup failed")
 		}
 	}
+	// Resolve the user-supplied config answers against the manifest, like the
+	// folder/mail elections above. An invalid answer is an elevation-class
+	// rejection ⇒ audits success=false.
+	config, err := resolveInstallConfig(man, in.Body.Config.Fields)
+	if err != nil {
+		s.auditor.Record(ctx, audit.ActionAppInstall, audit.Target{Kind: "app"},
+			map[string]any{"manifest_id": manifestID, "scope": scope, "owner_user_id": owner.UserID}, false)
+		return nil, err
+	}
 	if err := s.checkDuplicate(ctx, manifestID, in.Body.Confirm, audit.ActionAppInstall); err != nil {
 		return nil, err
 	}
 	jobCtx := ctx // capture for audit inside the job goroutine
 	job := s.jobs.run("app-install", func(job *Job) (map[string]any, error) {
-		inst, err := s.life.Install(context.Background(), manifestID, owner, scope, mounts, mailProviderID, job.setStep)
+		inst, err := s.life.Install(context.Background(), manifestID, owner, scope, mounts, mailProviderID, config, job.setStep)
 		target := audit.Target{Kind: "app"}
 		// confirm records a deliberate override of the duplicate-install warning,
 		// so the Activity view can see "installed a second copy on purpose".
