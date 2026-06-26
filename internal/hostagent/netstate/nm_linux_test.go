@@ -1,4 +1,4 @@
-//go:build linux && nmtest
+//go:build linux && nmtest && !hosted
 
 // Package netstate — integration tests against a real NetworkManager.
 //

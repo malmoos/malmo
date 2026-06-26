@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux && !hosted
 
 // NetworkManager LAN-set provider. NM is the source of truth for which
 // interfaces face the LAN (BOOT.md # NetworkManager owns the network stack):
