@@ -22,6 +22,10 @@ const { profile } = useAuth();
 const username = ref("");
 const password = ref("");
 const bootstrapSecret = ref("");
+// Focused after a link-prefill so the operator lands on the username field
+// instead of the already-filled secret field (which keeps its autofocus for the
+// manual-paste path).
+const usernameInput = ref<HTMLInputElement>();
 
 // The one-time setup secret is a fixed-shape token: 43 base64url characters
 // (the cloud mints 32 random bytes, base64url without padding). Validating that
@@ -32,15 +36,21 @@ const secretShape = /^[A-Za-z0-9_-]{43}$/;
 // The portal links here with the secret in the URL fragment
 // (<box>/setup#secret=...), so the operator never re-types it. A fragment is
 // never sent to the server, so reading it here keeps the secret out of the
-// access log and Referer. Prefill the field, then strip the hash from the
-// address bar (and history) so the secret does not linger on screen.
+// access log and Referer. Prefill the field, strip the hash from the address
+// bar (and history) so the secret does not linger on screen, then move focus to
+// the username so the prefilled happy path needs no extra tab. Parse with
+// URLSearchParams (not decodeURIComponent) so any percent-encoded byte the
+// portal sent round-trips correctly; base64url carries no '+', so the
+// form-decoding of '+' as space cannot bite the current token shape.
 onMounted(() => {
   const fromLink = new URLSearchParams(location.hash.replace(/^#/, "")).get("secret");
   if (fromLink) {
     bootstrapSecret.value = fromLink;
     history.replaceState(null, "", location.pathname + location.search);
+    usernameInput.value?.focus();
   }
 });
+
 const recovery = ref(true);
 const submitting = ref(false);
 const error = ref("");
@@ -121,6 +131,7 @@ async function submit() {
     <label>
       Username
       <input
+        ref="usernameInput"
         v-model="username"
         autocomplete="username"
         required
