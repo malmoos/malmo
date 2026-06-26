@@ -258,6 +258,45 @@ environment:
 
 v1 admits only `optional: true` — an app that *can't* run unbound (`optional: false` or a bare `mail: {}`) is rejected at parse, because a box with no registered providers couldn't install it. Required-mail semantics (blocking install until a provider is picked) is a possible later loosening; declare-and-degrade is the v1 contract.
 
+### D4. User-supplied configuration
+
+Some apps need a value only the *user* can provide — an API token for a third-party provider (`OPENAI_API_KEY`, a PlanetScale auth token), an external account's connection string, a region or model selector. The app already reads these from environment variables, but the author can't ship a value (it's the user's own credential) and the brain can't generate one (unlike a `secret:`, it has external meaning). Without a surface for it the app installs into a useless or crash-looping state — this is the single largest class of apps the catalog rejects today, tracked as the `operator-env-config` gap (`docs/dev/catalog-import-gaps.md`). The `config:` block is that surface: the manifest declares the fields, the brain renders a form, and the user's answers are injected into the app's environment.
+
+```yaml
+config:
+  - app_env: OPENAI_API_KEY          # the app's own env var — the field's identifier
+    title: "OpenAI API key"
+    description: "From your account at platform.openai.com; lets this app call OpenAI on your behalf."
+    secret: true                     # masked input; stored + handled like a secret, never logged
+    required: true                   # blocks install until provided
+  - app_env: OPENAI_MODEL
+    title: "Model"
+    description: "Which model the app uses for new chats."
+    type: enum                       # text (default) | enum | bool
+    options: ["gpt-4o", "gpt-4o-mini"]
+    default: "gpt-4o-mini"
+```
+
+**The value is injected under the app's own variable name — there is no `MALMO_*` indirection.** `app_env` is *both* the form's technical hint and the variable the brain sets: with `app_env: OPENAI_API_KEY`, the brain stamps `OPENAI_API_KEY=<the user's answer>` straight into the app's environment. No compose mapping line is needed, and nothing in the compose has to change. This is a deliberate divergence from the rest of the injected family (`MALMO_SERVICE_*`, `MALMO_SECRET_*`, `MALMO_FOLDER_*`, `MALMO_MAIL_*`), which exists *because* the brain owns those values and the app must adapt to receive them. A user-supplied config value is not malmo's to own — it is the app's own native variable that the user would set by hand when running the app standalone — so the indirection buys no portability here, and injecting `app_env` directly means the field the user reads in the app's upstream docs (`OPENAI_API_KEY`) is exactly the name shown on the form and exactly the name set in the container. See `DECISIONS.md` 2026-06-26 and `SERVICE_PROVISIONING.md` # Env-var injection.
+
+**Where it lands.** The brain writes each provided value into the target service's `environment:` in the compose override it already stamps (the same override that pins `user:` and `cap_drop`), not through the interpolation `.env` the `MALMO_*` family uses. The target is `main_service` by default; a field may name a different service (or one shared by a worker and a web tier) with `service:`. Compose merges override `environment:` over the base, so a value the manifest sets wins over any placeholder in the author's compose.
+
+**Reserved names — the collision rule.** Because the value lands directly under `app_env` and the override *wins* over the base compose, `app_env` is a security boundary: an unconstrained name could overwrite a runtime-critical or brain-owned variable. So `app_env` is rejected at manifest parse (and re-checked at admission, defense in depth) when it (a) begins with the **`MALMO_`** prefix — that namespace is the brain's injected family (`MALMO_SERVICE_*`, `MALMO_SECRET_*`, `MALMO_FOLDER_*`, `MALMO_MAIL_*`, `MALMO_APP_URL`, `MALMO_DATA_DIR`, `MALMO_INSTANCE_ID`), never user-settable — or (b) matches a reserved **loader/runtime denylist** (`PATH`, `HOME`, `USER`, `SHELL`, `HOSTNAME`, `IFS`, and the dynamic-linker set `LD_PRELOAD` / `LD_LIBRARY_PATH` / `LD_AUDIT`). A user-config field names an *app's own* configuration variable; it never reaches process or platform internals. The denylist lives with the validator and grows if a new injected family or sensitive loader var appears (`THREAT_MODEL.md`).
+
+**Field shape.**
+
+- **`app_env`** (required) — the app's environment-variable name. Unique within the manifest, a valid env-var identifier (`[A-Z_][A-Z0-9_]*` by convention), and not a reserved name (# Reserved names above). It is the storage key, the form hint, and the injected variable.
+- **`title`** (required) — the human label on the form ("OpenAI API key"). The user may not recognize `OPENAI_API_KEY`; the title + description bridge to it, and the monospace `app_env` is shown beneath so a user reading the app's own docs can confirm the match.
+- **`description`** (required) — one or two sentences: what it is, and where to get it.
+- **`secret`** (default `false`) — when set, the input is masked, the value is stored and handled like a `MALMO_SECRET_*` value (never logged, never echoed into compose output; folds into `NEXT.md` # App-secret injection hardening), and the post-install editor shows "set" with a **replace** affordance rather than revealing it. A `secret` field may not carry a `default` — a published default for a credential defeats the point.
+- **`required`** (default `false`) — a required field blocks the **install button** until the user supplies it, so the app never installs into a guaranteed crash-loop. An optional field left blank injects **nothing** — the app falls back to its own compose default and degrades gracefully, the same declare-and-degrade contract as `mail: {optional: true}`.
+- **`type`** (default `text`) — `text` | `enum` | `bool`. `enum` requires `options` (a non-empty list of allowed strings, rendered as a select); `bool` renders a toggle and injects `true`/`false`.
+- **`options`** (enum only), **`default`** (prefill / value-when-blank; not allowed on `secret`), **`service`** (target compose service; default `main_service`).
+
+**Lifecycle — two entry points, both required.** Config is collected in the install consent form (`DASHBOARD.md` # Install authorization) *before* the first `compose up`, because several apps exit immediately without their token. It is also editable after install on the app detail page (`DASHBOARD.md` # Installed apps), owner-or-admin gated like every other app control; saving rewrites the override and restarts the app. Tokens expire and rotate, so post-install editing is not optional.
+
+**Door 2 (custom paste) has no `config:` block.** A pasted third-party compose already carries (or hardcodes) its own env; the admin sets values directly in the compose via the install form's **Edit as YAML** path (# Custom container — synthetic manifest). `config:` is a Door-1 authored convenience, the same way `target` on folder grants is Door-2-only in the other direction.
+
 ### E. Permissions and capabilities
 
 What the app is allowed to touch. Default is "very little"; manifest opts in to specific things.
@@ -459,6 +498,7 @@ permissions:
 - **Public, versioned spec.** Third-party stores depend on it.
 - **Env-var injection: app-defined naming.** App's compose maps malmo's stable `MALMO_SERVICE_*` variables to whatever names the app expects. No auto-rewrite. Authors adapt; we document.
 - **Generated secrets are declared, brain-generated, and stable.** A manifest declares `secrets: [{name, bytes?, show?}]`; the brain draws each from a CSPRNG once at install, persists it, and injects it as `MALMO_SECRET_<NAME>` — re-emitted verbatim on every restart so token-signing secrets don't rotate underneath live sessions. Same app-defined wiring as `MALMO_SERVICE_*` (# D2). `show: true` makes one owner-visible on the app detail page (so a self-auth app's bootstrap token can be per-instance random, not a published constant — #152); omitted keeps it internal. Security hardening (delivery surface, at-rest, rotation) is tracked open in `NEXT.md` # App-secret injection hardening.
+- **User-supplied config is declared, form-collected, and injected under the app's own var name — no `MALMO_*` indirection.** A manifest declares `config: [{app_env, title, description, secret?, required?, type?, options?, default?, service?}]` (# D4); the brain renders a form, collects answers at install (required ones gate the install button) and on the app detail page after, and stamps each value into the target service's `environment:` override under `app_env` verbatim. Unlike `MALMO_SERVICE_*`/`MALMO_SECRET_*`/`MALMO_FOLDER_*`/`MALMO_MAIL_*`, the value is the app's own native variable the user would set by hand, not a malmo-owned value the app must adapt to — so there is no indirection and no compose mapping line. Because the override wins over the base compose, `app_env` is reserved-name checked at parse: never the `MALMO_` prefix and never a loader/runtime-critical var (`PATH`, `LD_PRELOAD`, …), so user input can't clobber brain-owned or process-critical environment (# D4 # Reserved names). `secret: true` masks + protects the value like a generated secret (folds into `NEXT.md` # App-secret injection hardening). Closes the `operator-env-config` catalog gap. Door-2 paste has no `config:` (the admin edits env in the YAML escape hatch). See `DECISIONS.md` 2026-06-26 (#264).
 - **Outgoing mail is declared optional-only (`mail: {optional: true}`).** The declaration unlocks the install-time provider picker and per-instance `MALMO_MAIL_*` injection (# D3, `SERVICE_PROVISIONING.md` # BYO outgoing mail); unbound apps get nothing injected and must run with email off. `optional: false` (and a bare `mail: {}`) is rejected at parse in v1.
 - **Permissions granularity: medium for v1.** Internet, LAN, shared storage, devices, privileged, network isolation. Not coarse-only, not fine-grained Kubernetes-style.
 - **Custom apps can request managed services.** Allowed, not encouraged.
