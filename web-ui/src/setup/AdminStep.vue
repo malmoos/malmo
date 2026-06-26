@@ -12,7 +12,7 @@
 // NOTE (known gap): the field is a Linux username, not the display-name → slug
 // mapping FIRST_RUN.md # Identity & display names specs. That slugification is
 // deferred; tracked in the progress entry.
-import { ref } from "vue";
+import { onMounted, ref } from "vue";
 import { setup, useAuth } from "../auth";
 import type { ApiError } from "../api";
 
@@ -22,6 +22,25 @@ const { profile } = useAuth();
 const username = ref("");
 const password = ref("");
 const bootstrapSecret = ref("");
+
+// The one-time setup secret is a fixed-shape token: 43 base64url characters
+// (the cloud mints 32 random bytes, base64url without padding). Validating that
+// shape before we hit /setup turns the most common failure — a partial paste —
+// into an actionable message instead of an opaque 401 from the bootstrap gate.
+const secretShape = /^[A-Za-z0-9_-]{43}$/;
+
+// The portal links here with the secret in the URL fragment
+// (<box>/setup#secret=...), so the operator never re-types it. A fragment is
+// never sent to the server, so reading it here keeps the secret out of the
+// access log and Referer. Prefill the field, then strip the hash from the
+// address bar (and history) so the secret does not linger on screen.
+onMounted(() => {
+  const fromLink = new URLSearchParams(location.hash.replace(/^#/, "")).get("secret");
+  if (fromLink) {
+    bootstrapSecret.value = fromLink;
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+});
 const recovery = ref(true);
 const submitting = ref(false);
 const error = ref("");
@@ -59,6 +78,14 @@ async function copyCode() {
 
 async function submit() {
   error.value = "";
+  // Catch a malformed (usually truncated) setup secret before the round-trip,
+  // so a bad paste gets a clear "doesn't look complete" instead of the gate's
+  // generic 401. Hosted only — the appliance ignores the secret entirely.
+  if (profile.value === "hosted" && !secretShape.test(bootstrapSecret.value.trim())) {
+    error.value =
+      "That doesn't look like a complete setup secret. Paste the full 43-character code shown when your box was created.";
+    return;
+  }
   submitting.value = true;
   try {
     const res = await setup(username.value.trim(), password.value, {
