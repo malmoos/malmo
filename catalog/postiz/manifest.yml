@@ -56,11 +56,14 @@ storage:
   estimated_size: 220M
   app_managed_user_content: true
 
-# Postiz signs its session JWTs with JWT_SECRET; the brain generates it once at
-# install and injects it as MALMO_SECRET_JWT, stable across restarts so existing
-# sessions stay valid.
+# Postiz signs its session JWTs with JWT_SECRET and AES-encrypts every stored
+# credential (OAuth tokens, Bluesky app-passwords, Mastodon tokens) with
+# ENCRYPTION_KEY. Both are generated once at install by the brain and injected as
+# MALMO_SECRET_JWT / MALMO_SECRET_ENCRYPTION_KEY; losing either invalidates
+# sessions or renders stored credentials unreadable.
 secrets:
   - name: jwt
+  - name: encryption_key
 
 # Postgres holds all Postiz data (posts, connected accounts, settings); Redis
 # backs the BullMQ queues that drive scheduled publishing. The brain provisions

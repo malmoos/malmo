@@ -36,9 +36,10 @@
 #
 # Env rewiring (the brain injects the values; the compose maps them to Postiz's
 # own names):
-#   DATABASE_URL -> ${MALMO_SERVICE_DATABASE_DSN}  (managed Postgres 16)
-#   REDIS_URL    -> ${MALMO_SERVICE_CACHE_DSN}      (managed Valkey 8; redis:// scheme)
-#   JWT_SECRET   -> ${MALMO_SECRET_JWT}             (CSPRNG, generated once at install)
+#   DATABASE_URL     -> ${MALMO_SERVICE_DATABASE_DSN}     (managed Postgres 16)
+#   REDIS_URL        -> ${MALMO_SERVICE_CACHE_DSN}        (managed Valkey 8; redis:// scheme)
+#   JWT_SECRET       -> ${MALMO_SECRET_JWT}               (CSPRNG, generated once at install)
+#   ENCRYPTION_KEY   -> ${MALMO_SECRET_ENCRYPTION_KEY}   (AES key for stored OAuth tokens/passwords)
 #   MAIN_URL / FRONTEND_URL / NEXT_PUBLIC_BACKEND_URL -> ${MALMO_APP_URL}(/api)
 #
 # Social-provider OAuth keys (X, LinkedIn, Facebook, ...) are operator-supplied
@@ -52,7 +53,7 @@ services:
       temporal:
         condition: service_healthy
     tmpfs:
-      - /var/lib/nginx:exec,mode=1777
+      - /var/lib/nginx:mode=1777
       - /run:exec,mode=1777
       - /var/log/nginx:mode=1777
     environment:
@@ -65,6 +66,7 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_NAMESPACE: default
       JWT_SECRET: ${MALMO_SECRET_JWT}
+      ENCRYPTION_KEY: ${MALMO_SECRET_ENCRYPTION_KEY}
       IS_GENERAL: "true"
       STORAGE_PROVIDER: local
       UPLOAD_DIRECTORY: /uploads
