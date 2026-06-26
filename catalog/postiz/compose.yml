@@ -43,9 +43,11 @@
 #   MAIN_URL / FRONTEND_URL / NEXT_PUBLIC_BACKEND_URL -> ${MALMO_APP_URL}(/api)
 #
 # Social-provider OAuth keys (X, LinkedIn, Facebook, ...) are operator-supplied
-# developer-app credentials with no malmo env surface, so they are omitted; the
-# in-UI-credential networks (Bluesky, Mastodon, ...) and the full scheduler work
-# without them. See the manifest long description + the PR's Platform gaps.
+# developer-app credentials. They are declared as `config:` fields in the manifest
+# (APP_MANIFEST.md # D4) and the brain stamps each one into this service's
+# environment override under its own name (X_API_KEY, LINKEDIN_CLIENT_ID, ...), so
+# they are not listed here. All optional — Postiz and the in-UI-credential
+# networks (Bluesky, ...) work without any. See the manifest long description.
 services:
   postiz:
     image: ghcr.io/gitroomhq/postiz-app:v2.21.10
