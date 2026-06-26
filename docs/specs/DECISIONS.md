@@ -31,6 +31,18 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 **Affected docs:** `APP_MANIFEST.md` (# D4 + locked decision), `SERVICE_PROVISIONING.md` (# Env-var injection), `DASHBOARD.md` (install form + app detail editor), `BRAIN_UI_PROTOCOL.md` (install-plan config schema + install payload + config endpoint). Closes the `operator-env-config` gap in `docs/dev/catalog-import-gaps.md`; the blocked/degraded apps re-screen against it.
 
+## 2026-06-26 — Hosted `/setup` prefills the admin-bootstrap secret from a link fragment; the form validates its shape
+
+**Previously:** The hosted first-run wizard collected the admin-bootstrap secret as a plain pasted field. The operator read the one-time secret from the cloud portal and re-typed/re-pasted it by hand into `/setup`; a mistyped character produced the gate's opaque "invalid admin bootstrap secret" (401), indistinguishable from a genuinely wrong secret.
+
+**Now:** The control plane links to the box's `/setup` with the secret in a URL **fragment** (`<box-url>/setup#secret=<value>`). `AdminStep.vue` reads `location.hash` on mount, prefills the field, and strips the hash via `history.replaceState`. The form also shape-validates the secret (43-char base64url, `/^[A-Za-z0-9_-]{43}$/`) before calling `/setup`, so a truncated paste gets an actionable message instead of the gate's 401. The gate itself (`gateBootstrap`, constant-time SHA-256 compare) and the `bootstrap_secret` wire field are unchanged.
+
+**Why:** A live box rejected a *correct* secret — the failure was the manual hand-off, not the gate. Removing the re-type (the prefill) eliminates the common error; the shape check makes the residual hand-paste path fail loudly and early. A fragment, not a query string, keeps the secret out of the brain's access log and the `Referer` header — it carries no new exposure since the same value is already on screen. This is a **two-side seam** co-owned with the cloud control plane: the `#secret=<value>` link format is now a contract, and the `{43}` shape mirrors the cloud's one-time-secret format (32 bytes, base64url, no padding) — a documented coupling to update on both sides together.
+
+**Affected docs:** `ENVIRONMENT.md` # Admin bootstrap (transport + client-side check; gate unchanged). Progress: `docs/progress/setup-secret-prefill.md`. Cloud half: `malmoos/cloud` `internal/web/static/dashboard.js`.
+
+---
+
 ## 2026-06-25 — No managed MongoDB type; Mongo apps bundle their own engine (#253)
 
 **Previously:** MongoDB was listed as a plausible post-v1 managed Tier-1 service (`SERVICE_PROVISIONING.md`), to be built like Postgres/MySQL/Valkey on a license-clean engine — [FerretDB](https://www.ferretdb.com/) v2, the redis→valkey substitution applied to SSPL MongoDB. #253 gated that on a Phase 0 compatibility spike.
