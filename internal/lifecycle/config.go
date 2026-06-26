@@ -90,9 +90,14 @@ func (m *Manager) configEnvByService(id string, man *manifest.Manifest) (map[str
 // them into its compose override (APP_MANIFEST.md # D4). A running instance's
 // containers are recreated with `compose up -d` — env is read only at container
 // create — so the change takes effect immediately; a stopped instance picks it
-// up on its next Start. Brain commits first: if the recreate fails the store and
-// override already hold the desired state and the reconcile pass converges the
-// containers (same posture as RebindMail). The caller (API) validates the values
+// up on its next Start. Brain commits first (same posture as RebindMail): the
+// store and override hold the desired state before the recreate, so the host is
+// reconstructible from them. If the recreate fails the job reports failure but
+// the override already holds the desired config, so a container that fell over
+// (or a later brain restart) is brought back up against it by the reconcile
+// pass; a container that is still running with the old env keeps it until the
+// user retries the edit — reconcile re-creates a running container only on
+// resource-limit drift, not config drift. The caller (API) validates the values
 // against the manifest before this runs.
 func (m *Manager) SetConfig(ctx context.Context, id string, cfg []store.InstanceConfig) error {
 	defer m.lockInstance(id)()

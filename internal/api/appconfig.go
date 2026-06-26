@@ -111,10 +111,12 @@ func (s *Server) updateAppConfig(ctx context.Context, in *struct {
 	tgt := audit.Target{Kind: "app", ID: id}
 	man, err := s.life.InstanceManifest(id)
 	if err != nil {
+		s.auditor.Record(ctx, audit.ActionAppConfigUpdate, tgt, nil, false)
 		return nil, huma.Error500InternalServerError("load manifest failed", err)
 	}
 	current, err := s.store.GetInstanceConfig(id)
 	if err != nil {
+		s.auditor.Record(ctx, audit.ActionAppConfigUpdate, tgt, nil, false)
 		return nil, huma.Error500InternalServerError("read config failed", err)
 	}
 	resolved, err := resolvePutConfig(man, current, in.Body.Fields)

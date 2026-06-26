@@ -292,6 +292,15 @@ func TestGetAppConfig_OtherMember_404(t *testing.T) {
 	}
 }
 
+func TestGetAppConfig_NoIdentity_401(t *testing.T) {
+	s, id, _ := configServer(t, "u_owner", store.ScopePersonal, "running", nil)
+	if _, err := getConfig(t, s, context.Background(), id); err == nil {
+		t.Fatal("want 401 for unauthenticated request")
+	} else {
+		assertStatus(t, err, http.StatusUnauthorized)
+	}
+}
+
 func awaitJob(t *testing.T, s *Server, jobID string) Job {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -381,6 +390,32 @@ func TestUpdateAppConfig_RejectClearRequired_Audits422(t *testing.T) {
 	}
 	if !auditedConfigUpdate(t, s, false) {
 		t.Errorf("rejected update was not audited as failure")
+	}
+}
+
+func TestUpdateAppConfig_NoIdentity_401(t *testing.T) {
+	s, id, _ := configServer(t, "u_owner", store.ScopePersonal, "stopped", nil)
+	if _, err := putConfig(t, s, context.Background(), id, map[string]string{"OPENAI_API_KEY": "sk-x"}); err == nil {
+		t.Fatal("want 401 for unauthenticated request")
+	} else {
+		assertStatus(t, err, http.StatusUnauthorized)
+	}
+}
+
+func TestUpdateAppConfig_ManifestLoadFails_Audits500(t *testing.T) {
+	s, id, instDir := configServer(t, "u_owner", store.ScopePersonal, "stopped", nil)
+	// Drop the manifest so InstanceManifest fails before any value is resolved;
+	// the 500 path must still audit the rejected mutation as a failure.
+	if err := os.Remove(filepath.Join(instDir, "manifest.yml")); err != nil {
+		t.Fatalf("remove manifest: %v", err)
+	}
+	if _, err := putConfig(t, s, adminCtx("u_admin"), id, map[string]string{"OPENAI_API_KEY": "sk-x"}); err == nil {
+		t.Fatal("want 500 when the manifest can't be loaded")
+	} else {
+		assertStatus(t, err, http.StatusInternalServerError)
+	}
+	if !auditedConfigUpdate(t, s, false) {
+		t.Errorf("manifest-load failure was not audited")
 	}
 }
 

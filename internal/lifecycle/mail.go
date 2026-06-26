@@ -64,7 +64,9 @@ func mailDSN(p store.MailProvider) string {
 // read only at container create — so the change takes effect immediately; a
 // stopped instance picks it up on its next Start (same op). Brain commits
 // first: if the recreate fails the binding and .env already hold the desired
-// state, and the reconcile pass's ComposeUp converges the containers.
+// state, so a container that fell over (or a later brain restart) is brought
+// back up against it by the reconcile pass; a container still running with the
+// old binding keeps it until the user retries.
 func (m *Manager) RebindMail(ctx context.Context, id, providerID string) error {
 	defer m.lockInstance(id)()
 	inst, err := m.store.Get(id)
