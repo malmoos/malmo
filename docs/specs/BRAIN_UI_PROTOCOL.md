@@ -27,6 +27,8 @@ For anything under ~5s and not needing progress.
 ```
 GET  /api/v1/apps                          → list installed instances
 GET  /api/v1/apps/:id                      → instance detail
+GET  /api/v1/apps/:id/config               → user-supplied config values (APP_MANIFEST.md # D4; secret fields masked)
+PUT  /api/v1/apps/:id/config               → update config values; rewrites override + restarts the app
 POST /api/v1/users                         → create user
 GET  /api/v1/settings/network              → current network config
 GET  /api/v1/health                        → active health issues (see HEALTH.md; v1 path, in the OpenAPI spec as of issue #12)
@@ -82,7 +84,25 @@ Returns everything the install-consent screen needs before the user confirms. Re
         }
       }
     ]
-  }
+  },
+  "config": [                          // user-supplied config fields (APP_MANIFEST.md # D4); omitted when the manifest declares none
+    {
+      "app_env": "OPENAI_API_KEY",     // the app's own env var — also the form's monospace hint
+      "title": "OpenAI API key",
+      "description": "From your account at platform.openai.com; lets this app call OpenAI on your behalf.",
+      "secret": true,                  // masked input; never echoed back
+      "required": true,                // gates the Install button
+      "type": "text"                   // "text" | "enum" | "bool"
+    },
+    {
+      "app_env": "OPENAI_MODEL",
+      "title": "Model",
+      "description": "Which model the app uses for new chats.",
+      "type": "enum",
+      "options": ["gpt-4o", "gpt-4o-mini"],
+      "default": "gpt-4o-mini"
+    }
+  ]
 }
 ```
 
@@ -92,6 +112,7 @@ Returns everything the install-consent screen needs before the user confirms. Re
 - **Role-derived scope options.** `scope_options` and `scope_default` are computed from the caller's role. `POST /api/v1/apps` enforces the same rule (members are rejected on household scope). The scope is no longer selected inside the consent dialog — it is set externally by the split-button in the store row (see `DASHBOARD.md` # single-user simplification) and passed into the dialog as context. `scope_options`/`scope_default` remain in the response for future use but the dashboard does not render a picker from them.
 - **Per-scope source menus (Option A).** Each folder carries `sources.household` and `sources.personal`, each a `{options, default}` menu. The UI does zero policy derivation: pick a scope, look up `folder.sources[<scope>]`, render. A single-option menu (`household → ["shared"]`) renders as fixed/disabled. Both menus are always populated regardless of the caller's role — the household menu is unreachable for members (household scope isn't offered) but keeping the shape uniform means the UI doesn't branch on role when rendering a folder row.
 - **Structured fields only, no copy.** The brain returns `mode`/`scope`/`subfolder_default` and source fields. The UI owns all wording ("can add, change & delete files in…", "Which folder should this app manage?"). This matches how the rest of the brain returns data, not sentences.
+- **Config schema, not values.** `config` carries each declared field's *schema* so the dialog can render and validate the setup-fields form (`DASHBOARD.md` # Install authorization). It never carries a value — `secret` fields have none yet, and a `default`/`options` are part of the schema. The user's answers come back in the `POST /api/v1/apps` `config` body alongside the folder/scope elections, where the brain validates them (required present, enum within `options`, `app_env` recognized) and stamps each into the app's compose-override `environment:` under its `app_env` — directly, with no `MALMO_*` indirection (`APP_MANIFEST.md` # D4, `SERVICE_PROVISIONING.md` # Env-var injection). After install, values are read/updated through `GET`/`PUT /api/v1/apps/{id}/config`.
 - **Advisory, not authoritative.** The install-plan drives the consent screen. The authoritative validation + override stamping happen in slice 4 when `POST /api/v1/apps` receives the user's elections in its `config`. This endpoint makes no *mutating* host calls and changes nothing on the box — the footprint's read-only host (free space) and Docker (already-present images) queries are its only host contact, and a failure of either degrades to zeros rather than failing the plan.
 
 **`single_user_mode` on session-bearing responses.** `GET /api/v1/me`, `POST /api/v1/login`, and `POST /api/v1/setup` all return a `UserDTO` that includes `"single_user_mode": true|false` — computed as `user_count == 1`. The flag is present on every session-establishing response (not just `/me`) so the UI has the correct value from the moment the session is created, without a follow-up fetch. Other endpoints that return `UserDTO` (user-management list/patch) omit it (`omitempty`). The dashboard uses this flag to: (a) show a plain Install button instead of a split-button, (b) suppress the Household/Yours section headers on the home grid, (c) hide the scope label on app tiles and in Settings, and (d) relabel the shared folder source from "The household's shared X" to "Shared X (accessible from your other devices)" in the consent dialog.
@@ -126,6 +147,10 @@ POST /api/v1/jobs/j_a4f7b2/cancel
 Status values: `running`, `completed`, `failed`, `cancelled`, `cancelling`, `stalled` — same vocabulary as host-agent jobs. On `completed`, the response carries `result`. On `failed`, an `error` with `code` + `message`.
 
 **Owner-scoping on install (`DASHBOARD.md` # the apps model).** `scope` is `"household"` or `"personal"`. Members may only install `personal` instances (a `household` request is `403`); admins choose, defaulting to `household` when omitted. The owner is always the calling user — there is no "install on behalf of" parameter. Installed instances carry `owner_user_id`, `owner_username`, and `scope` in the `GET /api/v1/apps` / `:id` DTO; `GET /api/v1/apps` is scoped to the caller (own personal + all household; admins see all), and `GET /api/v1/apps/:id` returns `404` (not `403`) for a personal instance the caller doesn't own, so existence isn't disclosed.
+
+**The install `config` body carries the user's elections — folder sources, subfolders, mail binding, and user-supplied config values.** Setup-field answers (`APP_MANIFEST.md` # D4) arrive keyed by `app_env`, e.g. `"config": { ..., "fields": { "OPENAI_API_KEY": "sk-…", "OPENAI_MODEL": "gpt-4o-mini" } }`. The brain validates against the manifest (every `required` field present and non-empty, `enum` values within `options`, no unknown `app_env`) → `422` with per-field `errors` on failure; on success it stamps each value into the target service's `environment:` in the compose override, under the `app_env` verbatim, before the first `compose up`. Secret-field values are persisted like `MALMO_SECRET_*` and never returned by any read endpoint.
+
+**`GET`/`PUT /api/v1/apps/{id}/config` edit the values after install.** `GET` returns the field schema plus current non-secret values; a secret field reports `"set": true|false` but never its value. `PUT` accepts a `fields` map (same validation as install), rewrites the override, and restarts the app so the new environment takes effect — a job, since `compose up` recreates containers. Both follow the app-control gate (admin for any app, owner for a personal app — the same gate as stop/start and the secret reveal); a config change is an elevation-class mutation and audits success and failure (`CONTROL_PLANE.md`).
 
 **Warn, don't block, on duplicate install (`DASHBOARD.md` # warn, don't block).** A `POST /api/v1/apps` with `confirm` unset/false, when an instance of that manifest already exists that the caller can see (a household instance or their own personal one), returns `409 Conflict` with `code: "duplicate-install"` and an `errors` array summarizing the existing copies. The UI surfaces "open it" vs. "install your own copy"; the latter retries the same request with `confirm: true`, which skips the check.
 
