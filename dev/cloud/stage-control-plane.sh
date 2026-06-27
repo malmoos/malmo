@@ -62,7 +62,8 @@ stage_control_plane() {
              "$WIRING/usr/local/bin" \
              "$WIRING/etc/pam.d" \
              "$WIRING/var/lib/malmo/control-plane-images" \
-             "$WIRING/var/lib/malmo/control-plane"
+             "$WIRING/var/lib/malmo/control-plane" \
+             "$WIRING/var/lib/malmo/catalog"
 
     # Slim host-agent at the production path host-agent.service ExecStarts.
     cp "$hostagent_bin" "$WIRING/usr/lib/malmo/host-agent-real"
@@ -117,6 +118,16 @@ EOF
     # container sees (same-path bind constraint — socket-proxy-compose-validation.md).
     cp "${REPO_ROOT}/dev/control-plane/compose.yml" "$WIRING/var/lib/malmo/control-plane/"
     cp "${REPO_ROOT}/dev/control-plane/caddy.json"   "$WIRING/var/lib/malmo/control-plane/"
+
+    # Door-1 app-store catalog. The brain installs store apps from MALMO_CATALOG_DIR,
+    # which host-agent-real defaults to <DataDir>/catalog = /var/lib/malmo/catalog
+    # (cmd/host-agent-real/main.go); it rides the brain's /var/lib/malmo bind mount
+    # (read-only — manifests + icons). Without it the store can't load
+    # ("read catalog: open /var/lib/malmo/catalog: no such file or directory").
+    # The real shipping catalog (catalog/) is baked, unlike the test lanes' test-only
+    # whoami catalog. It is data, not apt packages, so the lean package check is
+    # unaffected.
+    cp -r "${REPO_ROOT}/catalog/." "$WIRING/var/lib/malmo/catalog/"
 
     # First-boot provisioning-seed materializer + its oneshot (C3a cloud-lane, #220).
     # Lands the delivered seed at /var/lib/malmo/seed.json before host-agent launches
