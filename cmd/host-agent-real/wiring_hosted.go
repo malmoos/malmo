@@ -54,7 +54,7 @@ func buildAgent() (*hostagent.Agent, func()) {
 	a.UserMgr = &usermgr.LinuxUserManager{}
 	a.Timezone = timezone.New()
 	a.Health = healthsource.New(healthsource.DefaultPath)
-	a.Services = servicehealth.New()
+	a.Services = servicehealth.New(servicehealth.HostedUnits)
 	a.Time = clockhealth.New()
 	a.Logs = journalsource.New()
 	a.Resources = rampressure.New()
