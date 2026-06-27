@@ -169,7 +169,7 @@ These defaults apply to **every** detector unless its row overrides them. `HEALT
 | `disk-nearly-full` | `statfs` %used per drive | 5 min | ≥90% data / ≥85% OS | <88% / <83% |
 | `disk-full` | `statfs` %used per drive | 5 min | ≥95% either drive | <93% |
 | `disk-smart-failing` | `smartctl -H` + reallocated/pending/uncorrectable sector counts | 6h | SMART health FAIL **or** sector count >0 and growing | sticky — clears only when the drive is replaced (UUID change) |
-| `service-down` (host units) | `systemctl is-active` over the host-unit allowlist: `docker`, `avahi-daemon`, `chrony`, `smbd`, `host-agent` | 60s | `failed`/`inactive` | `active` |
+| `service-down` (host units) | `systemctl is-active` over the **profile-specific** host-unit allowlist — appliance: `docker`, `avahi-daemon`, `chrony`, `smbd`, `host-agent`; hosted: `docker` only (the lean cloud image cuts Avahi/chrony/Samba, `ENVIRONMENT.md` # How the profile is realized). Caddy is **never** in either set — it is a brain-managed container, not a host unit (locus C, below). | 60s | `failed`/`inactive` | `active` |
 | `ram-pressure` | `/proc/pressure/memory` (PSI `some avg60`) | 60s | sustained > threshold (tune at first soak) | below threshold |
 | `clock-not-synced` | `chronyc tracking` — last sync age + offset | 5 min | >6h since sync **or** offset >10s | synced and offset <10s |
 | `mdns-down` | `systemctl is-active avahi-daemon` + publish state | 60s | not publishing | publishing |

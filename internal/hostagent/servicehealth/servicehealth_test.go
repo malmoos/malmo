@@ -35,7 +35,7 @@ func TestRead_ReportsOnlyNonActiveUnits(t *testing.T) {
 // (nil) result, not an error.
 func TestRead_AllActiveReturnsNil(t *testing.T) {
 	r := &Reporter{
-		units:    CoreUnits,
+		units:    ApplianceUnits,
 		isActive: func(string) (bool, string) { return true, "active" },
 	}
 
@@ -74,17 +74,39 @@ func TestRead_OneFindingPerDownUnit(t *testing.T) {
 	}
 }
 
-// TestNew_WatchesCoreUnits guards that the real constructor watches the
-// documented core-unit allowlist and never includes host-agent itself (a dead
-// host-agent can't report on its own state).
-func TestNew_WatchesCoreUnits(t *testing.T) {
-	r := New()
-	if !reflect.DeepEqual(r.units, CoreUnits) {
-		t.Errorf("New().units: got %v, want CoreUnits %v", r.units, CoreUnits)
+// TestNew_WatchesGivenUnits guards that the constructor watches exactly the
+// allowlist it is handed, so each profile's wiring controls its own unit set.
+func TestNew_WatchesGivenUnits(t *testing.T) {
+	r := New(HostedUnits)
+	if !reflect.DeepEqual(r.units, HostedUnits) {
+		t.Errorf("New(HostedUnits).units: got %v, want %v", r.units, HostedUnits)
 	}
-	for _, u := range r.units {
-		if u == "host-agent.service" {
-			t.Error("host-agent must not be in the allowlist — it can't report on itself")
+}
+
+// TestAllowlists_NoPhantomOrSelfUnits guards the two defects this detector has
+// to avoid raising a permanent false service-down on a healthy box:
+//   - caddy is a brain-managed container, not a host systemd unit, so it must
+//     not appear in any systemctl allowlist (HEALTH.md # Locus C).
+//   - host-agent can't report on its own state, so it is never watched here.
+//
+// It also pins the hosted profile to docker-only — the lean cloud image ships
+// none of Avahi/chrony/Samba, so watching them there is a guaranteed false
+// positive.
+func TestAllowlists_NoPhantomOrSelfUnits(t *testing.T) {
+	for name, units := range map[string][]string{
+		"appliance": ApplianceUnits,
+		"hosted":    HostedUnits,
+	} {
+		for _, u := range units {
+			if u == "caddy.service" {
+				t.Errorf("%s: caddy is a container, not a host unit — must not be watched via systemctl", name)
+			}
+			if u == "host-agent.service" {
+				t.Errorf("%s: host-agent must not be in the allowlist — it can't report on itself", name)
+			}
 		}
+	}
+	if !reflect.DeepEqual(HostedUnits, []string{"docker.service"}) {
+		t.Errorf("HostedUnits: want docker-only (lean image cuts Avahi/chrony/Samba), got %v", HostedUnits)
 	}
 }

@@ -1,9 +1,9 @@
 // Package servicehealth is host-agent's locus-B service-down detector
 // (HEALTH.md # Detector catalog, the service-down row). It runs
-// `systemctl is-active` over a fixed allowlist of core system units and emits
-// one `service-down` finding (with the unit name as instance_key) for each unit
-// that isn't active. The brain reconciles them under the report's `services`
-// category and surfaces them as `state`-category issues, debouncing them (raise
+// `systemctl is-active` over a profile-specific allowlist of host systemd units
+// and emits one `service-down` finding (with the unit name as instance_key) for
+// each unit that isn't active. The brain reconciles them under the report's
+// `services` category and surfaces them as `state`-category issues, debouncing them (raise
 // on 2 consecutive bad samples).
 //
 // The detector reports the instantaneous state every poll; debounce and
@@ -21,16 +21,33 @@ import (
 // issueServiceDown is the registered issue ID raised per non-active unit.
 const issueServiceDown = "service-down"
 
-// CoreUnits is the allowlist of core system units the service-down detector
-// watches (HEALTH.md: "Docker, Caddy, Avahi, chrony, Samba, host-agent"). The
-// names are the Debian systemd unit names. host-agent is intentionally absent —
-// a dead host-agent can't report on itself, so checking it here is pointless.
-var CoreUnits = []string{
+// ApplianceUnits is the host-unit allowlist the service-down detector watches on
+// the appliance profile (HEALTH.md # Detector catalog, the locus-B row: Docker,
+// Avahi, chrony, Samba). The names are the Debian systemd unit names.
+//
+// Two units that an older list named are intentionally absent:
+//   - caddy — Caddy is a brain-managed container (malmo-caddy), not a host
+//     systemd unit, on every profile; there is no caddy.service for
+//     `systemctl is-active` to query, so watching it here only ever yields a
+//     phantom service-down. Its liveness is a locus-C check (HEALTH.md
+//     # Locus C — deferred until the brain owns Caddy's container lifecycle).
+//   - host-agent — a dead host-agent can't report on itself, so checking it
+//     here is pointless.
+var ApplianceUnits = []string{
 	"docker.service",
-	"caddy.service",
 	"avahi-daemon.service",
 	"chrony.service",
 	"smbd.service",
+}
+
+// HostedUnits is the allowlist for the lean hosted-cloud profile. The cloud
+// image installs none of Avahi, Samba, or chrony — they are cut, not
+// disabled (ENVIRONMENT.md # How the profile is realized) — and Caddy is a
+// container there too, so docker.service is the only core host systemd unit a
+// hosted box runs. Watching the appliance units on a hosted box would raise a
+// permanent service-down for each absent unit on an otherwise-healthy box.
+var HostedUnits = []string{
+	"docker.service",
 }
 
 // Reporter implements hostagent.ServiceReporter. isActive is injectable so
@@ -40,10 +57,11 @@ type Reporter struct {
 	isActive func(unit string) (active bool, state string)
 }
 
-// New returns a Reporter over the core-unit allowlist, backed by real
-// `systemctl is-active`.
-func New() *Reporter {
-	return &Reporter{units: CoreUnits, isActive: systemctlIsActive}
+// New returns a Reporter over the given host-unit allowlist, backed by real
+// `systemctl is-active`. Callers pass the profile's unit set — ApplianceUnits
+// from the appliance wiring, HostedUnits from the slim cloud wiring.
+func New(units []string) *Reporter {
+	return &Reporter{units: units, isActive: systemctlIsActive}
 }
 
 // Read returns one service-down finding per non-active core unit. It always
