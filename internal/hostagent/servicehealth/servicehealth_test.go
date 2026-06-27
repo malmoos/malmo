@@ -12,9 +12,9 @@ import (
 // instance_key and its raw state in details) and skips active units.
 func TestRead_ReportsOnlyNonActiveUnits(t *testing.T) {
 	r := &Reporter{
-		units: []string{"docker.service", "caddy.service", "smbd.service"},
+		units: []string{"docker.service", "foo.service", "smbd.service"},
 		isActive: func(unit string) (bool, string) {
-			if unit == "caddy.service" {
+			if unit == "foo.service" {
 				return false, "failed"
 			}
 			return true, "active"
@@ -23,7 +23,7 @@ func TestRead_ReportsOnlyNonActiveUnits(t *testing.T) {
 
 	got := r.Read()
 	want := []protocol.Finding{
-		{ID: "service-down", InstanceKey: "caddy.service", Details: "caddy.service is failed"},
+		{ID: "service-down", InstanceKey: "foo.service", Details: "foo.service is failed"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Read: got %v, want %v", got, want)
@@ -51,7 +51,7 @@ func TestRead_AllActiveReturnsNil(t *testing.T) {
 // into one.
 func TestRead_OneFindingPerDownUnit(t *testing.T) {
 	r := &Reporter{
-		units:    []string{"docker.service", "caddy.service"},
+		units:    []string{"docker.service", "foo.service"},
 		isActive: func(string) (bool, string) { return false, "inactive" },
 	}
 
@@ -69,7 +69,7 @@ func TestRead_OneFindingPerDownUnit(t *testing.T) {
 		}
 		seen[f.InstanceKey] = true
 	}
-	if !seen["docker.service"] || !seen["caddy.service"] {
+	if !seen["docker.service"] || !seen["foo.service"] {
 		t.Errorf("want a finding for each down unit, got keys %v", seen)
 	}
 }
