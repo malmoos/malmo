@@ -8,18 +8,14 @@
 # deferred its green build to "the maintainer's joint cloud live run". This lane
 # makes the build (and its lean check) run on every dev/cloud/** change instead.
 #
-# Triggers on PRs into main, only when cloud-image-relevant files change (path
-# filter) — same narrow-trigger pattern as ci-go.yml. workflow_dispatch is kept
-# for manual re-runs while iterating on the lane.
+# Manual-only (workflow_dispatch): the full mkosi build is expensive (bootstraps
+# a Debian tools tree and builds the whole hosted image, up to ~40 min), so it is
+# not worth running on every PR. Trigger it by hand from the Actions tab — or with
+# `gh workflow run "CI / Cloud image"` — when iterating on the cloud-image lane or
+# before cutting a hosted release.
 name: CI / Cloud image
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "dev/cloud/**"
-      - "Makefile"
-      - ".github/workflows/ci-cloud-image.yml"
   workflow_dispatch:
 
 # Cancel superseded runs on the same ref (e.g. force-pushes to a PR branch).
