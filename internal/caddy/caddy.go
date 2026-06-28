@@ -160,7 +160,11 @@ func (c *Client) EnsureDashboard(ctx context.Context, host, brainUpstream, uiUps
 			"handler": "subroute",
 			"routes": []any{
 				map[string]any{
-					"match": []any{map[string]any{"path": []string{"/api/*"}}},
+					// /api/* is the brain's REST+SSE surface; /_malmo/* is the brain's
+					// non-API browser endpoints (today the portal-to-box SSO landing
+					// GET /_malmo/sso). Both leg to the brain; everything else is the
+					// dashboard SPA.
+					"match": []any{map[string]any{"path": []string{"/api/*", "/_malmo/*"}}},
 					"handle": []any{map[string]any{
 						"handler":        "reverse_proxy",
 						"flush_interval": -1,

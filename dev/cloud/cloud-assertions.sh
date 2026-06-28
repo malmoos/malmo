@@ -10,27 +10,28 @@
 # The cloud analogue of dev/test-qemu/medium-assertions.sh. Every boot first does
 # the control-plane-up proof (systemd userspace up with no failed units, PSI live,
 # the baked control-plane images loaded, the four containers running, the dashboard
-# + /api answering through Caddy), then asserts the hosted /setup admin-bootstrap
-# gate (ENVIRONMENT.md # Admin bootstrap — as built) for the scenario the harness
-# selected via the malmo.assert credential:
+# + /api answering through Caddy), then asserts the hosted portal-to-box SSO gate
+# (#275; ENVIRONMENT.md # Admin bootstrap — as built) for the scenario the harness
+# selected via the malmo.assert credential. This box-only lane has no portal private
+# key, so it asserts the gate's negative properties (the verifier is armed and
+# refuses what it should); the positive owner-create + wizard path needs a real
+# assertion and is the joint cloud on-ramp acceptance (cloud docs/ops/e2e-onramp.md):
 #
-#     unseeded         no seed ingested → POST /setup ⇒ 503 (gate armed, closed)
-#     seeded           seed on disk → wrong secret ⇒ 401, correct ⇒ 200 + box_id;
-#                      then the new admin drives the first-run wizard to completion
-#                      (C4 #208): PAM /login → set timezone + telemetry → first-run-
-#                      complete, asserting the box becomes admin-owned and served with
-#                      the marker set and box_id persisted (the C5 #209 acceptance bar)
-#     frozen:<box-id>  reboot with a DIFFERENT seed → /login still reports <box-id>
-#                      (the brain's persisted identity is frozen; the new seed is
-#                      ignored), seed.json on disk holds the new ignored box-id, and
-#                      first_run_complete persists (the wizard does not reappear)
+#     unseeded         no seed → no verification key → GET /_malmo/sso ⇒ 503;
+#                      POST /setup ⇒ 403 (disabled on hosted)
+#     seeded           seed on disk → key ingested → a bad/unsigned token on
+#                      GET /_malmo/sso ⇒ 401 (verifier armed); /setup ⇒ 403; the
+#                      brain logged 'provisioning seed ingested'
+#     frozen:<box-id>  reboot with a DIFFERENT seed → the dashboard + /api still
+#                      serve under the ORIGINAL <box-id> (Caddy route unchanged ⇒
+#                      identity frozen), and the brain does NOT re-ingest the seed
 #
 # On PASS the script powers the box off cleanly (the serial-only analogue of the
 # medium lane's SSH `systemctl poweroff`) so the brain's SQLite box-id write flushes
 # to the persisted overlay before the harness boots the next scenario.
 #
-# -u + pipefail but NOT -e: every check is `... || fail`. The gate POSTs create at
-# most one admin (the seeded scenario); all other checks are reads.
+# -u + pipefail but NOT -e: every check is `... || fail`. All checks are reads or
+# rejected probes — no admin is created in this lane.
 set -uo pipefail
 
 SENTINEL=/dev/console
@@ -42,12 +43,6 @@ SEED=/var/lib/malmo/seed.json
 # the box's wildcard cert (C3b, #207). The assertion is a Host-header route match over
 # localhost — no DNS/mDNS involved. Default is the unprovisioned host.
 DASH_HOST=malmo.local
-# First-admin credentials the seeded scenario creates and the frozen scenario logs
-# back in with (a fresh process each boot; these constants are the only shared
-# state besides the persisted disk). pam_unix has no complexity policy, but keep a
-# realistic password. validateUsername only bars '--'/'xn--' prefixes.
-SETUP_USER=admin
-SETUP_PW=malmo-setup-pw-2026
 # Which scenario to assert — set by the harness over SMBIOS (ImportCredential=
 # malmo.assert in the unit). Absent/empty ⇒ unseeded (the bare boot-proof default).
 MODE="$(tr -d '\r\n' < "${CREDENTIALS_DIRECTORY:-/nonexistent}/malmo.assert" 2>/dev/null || true)"
@@ -104,7 +99,7 @@ diag() {
         echo "-- malmo-brain logs (tail 40) --"
         docker logs malmo-brain 2>&1 | tail -40
         echo "-- malmo-brain resolved profile (grep, not tail) --"
-        docker logs malmo-brain 2>&1 | grep -iE 'environment profile resolved|provisioning seed|setup stays closed' || echo "(no profile line in brain log)"
+        docker logs malmo-brain 2>&1 | grep -iE 'environment profile resolved|provisioning seed|SSO stays closed' || echo "(no profile line in brain log)"
         echo "-- malmo-brain mounts (is /etc/malmo/profile bind-mounted?) --"
         docker inspect malmo-brain --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}' 2>&1
         echo "-- host-agent journal (tail 15) --"
@@ -257,66 +252,18 @@ http_post_status() { # PATH HOST JSON -> status line
     head -1 <&3
     exec 3>&- 3<&-
 }
-# Like http_post_status but returns the FULL response (status line + headers +
-# body) so the gate scenarios can read box_id out of the JSON body, not just the
-# status. The body is single-line JSON from the brain, so a `tail -1` grabs it.
-http_post() { # PATH HOST JSON -> full response
-    local body="$3" len
-    len="$(printf '%s' "$body" | wc -c | tr -d ' ')"
-    exec 3<>/dev/tcp/127.0.0.1/80 || return 1
-    printf 'POST %s HTTP/1.0\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' \
-        "$1" "$2" "$len" "$body" >&3
-    cat <&3
-    exec 3>&- 3<&-
-}
 # Extract a JSON string field's value from a compact one-line document. The seed
-# the harness generates is compact and its fields (box_id, admin_bootstrap_secret)
+# the harness generates is compact and its fields (box_id, assertion_verification_key)
 # are plain strings with no embedded quotes, so a targeted sed is sufficient (no
 # jq in the lean image).
 json_str() { # FILE KEY -> value
     sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" | head -1
 }
 
-# Extract the session cookie ("malmo_session=<tok>") from a /login (or /setup)
-# response's Set-Cookie header, dropping the attributes after the first ';'. The
-# wizard's box-configuration endpoints are admin-gated, so they need this cookie.
-# Match the malmo_session header specifically (not just the first Set-Cookie) so
-# an unrelated cookie can't be returned and silently fail every later auth call.
-session_cookie() { # RESPONSE -> "malmo_session=<tok>"
-    grep -i '^Set-Cookie:.*malmo_session=' <<<"$1" \
-        | sed -E 's/^[Ss]et-[Cc]ookie:[[:space:]]*(malmo_session=[^;]*).*/\1/' | tr -d '\r' | head -1
-}
-# Authenticated POST carrying the session cookie -> full response. An empty body
-# arg is sent as a bodyless POST (Content-Length: 0, no Content-Type) for the
-# no-body endpoints (POST /system/first-run-complete).
-auth_post() { # COOKIE PATH HOST [JSON] -> full response
-    local cookie="$1" path="$2" host="$3" body="${4:-}" len
-    exec 3<>/dev/tcp/127.0.0.1/80 || return 1
-    if [ -n "$body" ]; then
-        len="$(printf '%s' "$body" | wc -c | tr -d ' ')"
-        printf 'POST %s HTTP/1.0\r\nHost: %s\r\nCookie: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' \
-            "$path" "$host" "$cookie" "$len" "$body" >&3
-    else
-        printf 'POST %s HTTP/1.0\r\nHost: %s\r\nCookie: %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n' \
-            "$path" "$host" "$cookie" >&3
-    fi
-    cat <&3
-    exec 3>&- 3<&-
-}
-# Authenticated GET carrying the session cookie -> full response.
-auth_get() { # COOKIE PATH HOST -> full response
-    exec 3<>/dev/tcp/127.0.0.1/80 || return 1
-    printf 'GET %s HTTP/1.0\r\nHost: %s\r\nCookie: %s\r\nConnection: close\r\n\r\n' "$2" "$3" "$1" >&3
-    cat <&3
-    exec 3>&- 3<&-
-}
-# First line of an HTTP response, CR-stripped (for status-line checks/messages).
-status_of() { printf '%s' "$1" | head -1 | tr -d '\r'; }
-
 # Resolve the Host the brain actually serves the dashboard under for this scenario
 # (see DASH_HOST above). A provisioned box (seeded/frozen) serves at its wildcard apex
-# "<box-id>.malmo.network", not "malmo.local" — so steps 7–9 (and the wizard block in
-# the seeded scenario) must probe that host or Caddy's catch-all answers 404. Seeded
+# "<box-id>.malmo.network", not "malmo.local" — so steps 7–9 must probe that host or
+# Caddy's catch-all answers 404. Seeded
 # reads the box-id from the just-materialized seed; frozen uses the persisted identity
 # carried in MODE (the brain ignores this boot's re-delivered seed, so the route stays
 # under the original box-id).
@@ -347,131 +294,81 @@ for _i in $(seq 1 60); do
 done
 grep -qE ' (200|401)' <<<"$api" || fail "/api not routed to the brain through Caddy: status='$api'"
 
-# --- 9. the hosted /setup admin-bootstrap gate (ENVIRONMENT.md # Admin bootstrap).
-# The brain resolved profile=hosted in its container (host-agent mounts the marker;
-# brainlaunch.Config.ProfileMarkerPath) and gates /setup on the seeded secret. The
-# scenario the harness selected (MODE) decides what to assert.
+# --- 9. the hosted portal-to-box SSO gate (#275; ENVIRONMENT.md # Admin bootstrap).
+# The hosted box bootstraps its first admin through the portal-to-box SSO handshake,
+# not a /setup secret. /setup is disabled on hosted, and GET /_malmo/sso verifies a
+# portal-signed ownership assertion against the seed-delivered verification key.
+# This lane has no portal private key, so it asserts the *negative* gate properties
+# (the verifier is armed and refuses every token it shouldn't accept); the positive
+# path — a valid assertion → owner auto-create → session → wizard completion — needs
+# the real portal key and is the joint cloud on-ramp acceptance (cloud
+# docs/ops/e2e-onramp.md), not this box-only boot lane.
 
-# Wait until /setup answers definitively — the brain ran its synchronous seed
-# ingestion before it began serving, so a settled /setup means ingestion is done.
-# A deliberately-wrong secret is a safe probe: it never reaches first-admin creation
-# (unseeded ⇒ 503, seeded/frozen ⇒ 401), so no admin is created here.
+# /setup is disabled on every hosted boot (the owner uses SSO): 403, never the
+# appliance's open empty-box 200/409. Proof the profile marker reached the container.
 setup=""
 for _i in $(seq 1 30); do
     setup="$(http_post_status /api/v1/setup "$DASH_HOST" \
-        '{"username":"probe","password":"probe-pw-once","bootstrap_secret":"definitely-wrong"}' 2>/dev/null || true)"
-    grep -qE ' (503|401|409|200)' <<<"$setup" && break
+        '{"username":"probe","password":"probe-pw-once"}' 2>/dev/null || true)"
+    grep -qE ' (403|503|409|200)' <<<"$setup" && break
     sleep 1
 done
+grep -q ' 403' <<<"$setup" || fail "hosted /setup not disabled: status='$setup' (want 403; an appliance-mode brain would 409/200 — profile marker not reaching the container?)"
+echo "cloud-assertions: hosted /setup disabled (403 — bootstrap is via SSO)"
 
 case "$MODE" in
 unseeded)
-    # No seed ingested → 503, NOT the appliance's open empty-box 200/409. Proof the
-    # gate stays closed until a seed lands (never falling back to open /setup).
-    grep -q ' 503' <<<"$setup" || fail "unseeded /setup gate not armed: status='$setup' (want 503; an appliance-mode brain would 409/200 — profile marker not reaching the container?)"
-    echo "cloud-assertions: hosted /setup gate armed (503, unprovisioned)"
+    # No seed ingested → no verification key → GET /_malmo/sso returns 503, NOT a
+    # redirect or a fall-through. Proof the SSO gate stays closed until a seed lands.
+    sso="$(http_status '/_malmo/sso?token=x.y' "$DASH_HOST" 2>/dev/null || true)"
+    grep -q ' 503' <<<"$sso" || fail "unseeded /_malmo/sso gate not armed: status='$sso' (want 503, unprovisioned)"
+    echo "cloud-assertions: hosted SSO gate armed (503, unprovisioned)"
     ;;
 seeded)
     [ -f "$SEED" ] || fail "seeded mode but $SEED absent (seed materializer did not run?)"
     box_id="$(json_str "$SEED" box_id)"
-    secret="$(json_str "$SEED" admin_bootstrap_secret)"
-    [ -n "$box_id" ] && [ -n "$secret" ] || fail "could not read box_id/admin_bootstrap_secret from $SEED"
+    key="$(json_str "$SEED" assertion_verification_key)"
+    [ -n "$box_id" ] && [ -n "$key" ] || fail "could not read box_id/assertion_verification_key from $SEED"
 
-    # Wrong secret → 401: the seed was ingested (the gate has a hash) and rejects a
-    # bad secret, audited as setup.failure.
-    wrong="$(http_post_status /api/v1/setup "$DASH_HOST" \
-        "{\"username\":\"$SETUP_USER\",\"password\":\"$SETUP_PW\",\"bootstrap_secret\":\"wrong-$secret\"}" 2>/dev/null || true)"
-    grep -q ' 401' <<<"$wrong" || fail "seeded /setup with a wrong secret: status='$wrong' (want 401)"
+    # The seed's verification key was ingested: GET /_malmo/sso now runs the verifier
+    # and a syntactically-valid-but-unsigned token fails the signature check → 401
+    # (not 503). Proof the key loaded and the verifier is wired on this box.
+    sso="$(http_status '/_malmo/sso?token=ZmFrZQ.ZmFrZXNpZw' "$DASH_HOST" 2>/dev/null || true)"
+    grep -q ' 401' <<<"$sso" || fail "seeded /_malmo/sso with a bad token: status='$sso' (want 401 — key loaded, signature rejected)"
+    echo "cloud-assertions: hosted SSO verifier armed (bad token 401, key loaded from seed; box_id=$box_id)"
 
-    # Correct secret → 200: first admin created, and the response surfaces the
-    # provisioned box_id (fullUserDTO; ENVIRONMENT.md # Admin bootstrap — box_id on /me).
-    resp="$(http_post /api/v1/setup "$DASH_HOST" \
-        "{\"username\":\"$SETUP_USER\",\"password\":\"$SETUP_PW\",\"bootstrap_secret\":\"$secret\"}" 2>/dev/null || true)"
-    line="$(printf '%s' "$resp" | head -1)"
-    grep -q ' 200' <<<"$line" || fail "seeded /setup with the correct secret: status='$line' (want 200)"
-    grep -q "\"box_id\":\"$box_id\"" <<<"$resp" || fail "seeded /setup 200 did not surface box_id=$box_id (body: $(printf '%s' "$resp" | tail -1))"
-    echo "cloud-assertions: hosted /setup gate — wrong secret 401, correct secret 200 + box_id=$box_id"
-
-    # --- Wizard completion end-to-end (C4 #208; the C5 #209 acceptance bar). The
-    # admin just created drives the trimmed hosted first-run wizard to completion,
-    # turning the seeded box into a working, admin-owned, served, first-run-complete
-    # malmo. The brain endpoints are admin-gated, so first authenticate.
-
-    # PAM login: the new admin authenticates against /etc/shadow via host-agent
-    # verify-password (the real PAM path, not the seed secret). Keep the session
-    # cookie for the admin-gated wizard steps.
-    login="$(http_post /api/v1/login "$DASH_HOST" \
-        "{\"username\":\"$SETUP_USER\",\"password\":\"$SETUP_PW\"}" 2>/dev/null || true)"
-    grep -q ' 200' <<<"$(status_of "$login")" || \
-        fail "PAM /login after setup: status='$(status_of "$login")' (want 200 — verify-password against /etc/shadow)"
-    cookie="$(session_cookie "$login")"
-    [ -n "$cookie" ] || fail "no session cookie from /login (status: $(status_of "$login"))"
-
-    # Wizard step — time zone: a real pass-through to host-agent timedatectl (wired
-    # in the hosted build). 200 proves the step works on the real hosted box, not
-    # only against the fake host-agent. This is the first C4 (#208) endpoint the
-    # lane hits, so its status discriminates the two likely setup mistakes: 404 ⇒
-    # the baked brain image predates C4 (rebuild the control-plane bundle with
-    # MALMO_REBUILD_CP=1); 502 ⇒ timedatectl rejected the zone, i.e. tzdata missing
-    # from the lean image (dev/cloud/mkosi.conf).
-    tz="$(auth_post "$cookie" /api/v1/system/timezone "$DASH_HOST" '{"timezone":"Europe/Stockholm"}' 2>/dev/null || true)"
-    grep -q ' 200' <<<"$(status_of "$tz")" || \
-        fail "wizard set-timezone: status='$(status_of "$tz")' (want 200; 404 ⇒ baked brain predates C4 — rebuild the CP bundle, MALMO_REBUILD_CP=1; 502 ⇒ timedatectl failed — tzdata missing from the image?)"
-
-    # Wizard step — telemetry: record the box-level choice (off; TELEMETRY.md — the
-    # founding admin makes the box-wide decision once).
-    tel="$(auth_post "$cookie" /api/v1/system/telemetry "$DASH_HOST" '{"enabled":false}' 2>/dev/null || true)"
-    grep -q ' 200' <<<"$(status_of "$tel")" || \
-        fail "wizard set-telemetry: status='$(status_of "$tel")' (want 200)"
-
-    # Wizard step — Done: mark first-run complete (the bootstrap marker C5 asserts).
-    done_resp="$(auth_post "$cookie" /api/v1/system/first-run-complete "$DASH_HOST" '' 2>/dev/null || true)"
-    grep -q ' 200' <<<"$(status_of "$done_resp")" || \
-        fail "wizard first-run-complete: status='$(status_of "$done_resp")' (want 200)"
-    grep -q '"first_run_complete":true' <<<"$done_resp" || \
-        fail "first-run-complete 200 did not confirm the marker (body: $(printf '%s' "$done_resp" | tail -1))"
-
-    # The wizard will not reappear: the public bootstrap probe now reports
-    # first_run_complete=true (App.vue gates the wizard on this flag, not has_users).
-    state="$(auth_get "$cookie" /api/v1/auth/state "$DASH_HOST" 2>/dev/null || true)"
-    grep -q '"first_run_complete":true' <<<"$state" || \
-        fail "/auth/state first_run_complete != true after the wizard — it would reappear (body: $(printf '%s' "$state" | tail -1))"
-
-    # box_id is persisted and surfaced on the authenticated identity (/me), not just
-    # echoed by the one-shot /setup response.
-    me="$(auth_get "$cookie" /api/v1/me "$DASH_HOST" 2>/dev/null || true)"
-    grep -q "\"box_id\":\"$box_id\"" <<<"$me" || \
-        fail "/me did not surface persisted box_id=$box_id after the wizard (body: $(printf '%s' "$me" | tail -1))"
-    echo "cloud-assertions: wizard complete — PAM /login 200, tz+telemetry set, first-run-complete; box_id=$box_id persisted on /me; wizard will not reappear"
+    # The synchronous seed ingestion ran before the brain served (the brain logs it).
+    docker logs malmo-brain 2>&1 | grep -q 'provisioning seed ingested' || \
+        fail "brain did not log 'provisioning seed ingested' on the seeded boot"
+    echo "cloud-assertions: seed ingested (box_id=$box_id persisted)"
     ;;
 frozen:*)
     expect="${MODE#frozen:}"
     [ -n "$expect" ] || fail "frozen mode missing the expected box-id (MODE='$MODE')"
-    # A DIFFERENT seed was delivered + materialized this boot, but the brain's identity
-    # is frozen in SQLite: it loads the persisted box-id and ignores the new seed. Log
-    # in as the seeded boot's admin (persisted on the shared disk) and assert /me-grade
-    # identity still reports the original box_id, not this boot's seed.
-    login="$(http_post /api/v1/login "$DASH_HOST" \
-        "{\"username\":\"$SETUP_USER\",\"password\":\"$SETUP_PW\"}" 2>/dev/null || true)"
-    line="$(printf '%s' "$login" | head -1)"
-    grep -q ' 200' <<<"$line" || fail "frozen mode: /login status='$line' (want 200 — the seeded boot's admin should persist across the reboot)"
-    grep -q "\"box_id\":\"$expect\"" <<<"$login" || fail "frozen mode: /login box_id != $expect — a re-delivered seed re-keyed the box! (body: $(printf '%s' "$login" | tail -1))"
-    # The first-run-complete marker written during the seeded boot survives the
-    # power-cycle: the wizard does not reappear after a reboot (FIRST_RUN.md # Phase 3).
-    fr_cookie="$(session_cookie "$login")"
-    [ -n "$fr_cookie" ] || fail "frozen mode: no session cookie from /login (status: $(status_of "$login"))"
-    fr_state="$(auth_get "$fr_cookie" /api/v1/auth/state "$DASH_HOST" 2>/dev/null || true)"
-    grep -q '"first_run_complete":true' <<<"$fr_state" || \
-        fail "frozen mode: first_run_complete not persisted across the reboot — the wizard would reappear (body: $(printf '%s' "$fr_state" | tail -1))"
+    # A DIFFERENT seed was delivered this boot, but the brain's identity is frozen in
+    # SQLite: it loads the persisted box-id and ignores the new seed. Two proofs that
+    # need no admin session:
+    #   1. The dashboard + /api checks above ran against DASH_HOST=<expect>.malmo.network
+    #      (the ORIGINAL box-id) and passed — if a re-delivered seed had re-keyed the
+    #      box, Caddy's dashboard route would be under this boot's box-id and those
+    #      probes would have 404'd. So serving under <expect> *is* the frozen-identity
+    #      proof.
+    #   2. This boot does NOT re-ingest: the brain loads the persisted identity and
+    #      never logs 'provisioning seed ingested' (that line is first-boot-only).
+    sso="$(http_status '/_malmo/sso?token=ZmFrZQ.ZmFrZXNpZw' "$DASH_HOST" 2>/dev/null || true)"
+    grep -q ' 401' <<<"$sso" || fail "frozen mode: /_malmo/sso bad token status='$sso' (want 401 — verifier still armed from the persisted key)"
+    if docker logs malmo-brain 2>&1 | grep -q 'provisioning seed ingested'; then
+        fail "frozen mode: brain re-ingested a seed — a re-delivered seed must be ignored on a frozen-identity boot"
+    fi
     # Confirm the on-disk seed really is this boot's distinct seed (a no-op overwrite
     # would make the frozen assertion vacuous). A warning, not a failure: the identity
-    # assertion above is the real proof.
+    # proof above is the real signal.
     if [ -f "$SEED" ]; then
         disk_box="$(json_str "$SEED" box_id)"
         [ -n "$disk_box" ] && [ "$disk_box" = "$expect" ] && \
             echo "cloud-assertions: WARN frozen seed.json box_id ($disk_box) == frozen identity — re-delivery not distinct" >&2
     fi
-    echo "cloud-assertions: frozen identity held across reboot — box_id still $expect (re-delivered seed ignored)"
+    echo "cloud-assertions: frozen identity held across reboot — served under box_id $expect, re-delivered seed ignored"
     ;;
 *)
     fail "unknown assert mode '$MODE'"

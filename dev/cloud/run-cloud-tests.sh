@@ -17,15 +17,17 @@
 # writes its verdict to the serial console, and powers the box off cleanly on PASS
 # (no SSH in hosted — ENVIRONMENT.md # Access & files). This driver greps the verdict:
 #
-#   boot 1  un-seeded   no seed → POST /setup ⇒ 503 (gate armed, stays closed)
-#   boot 2  seeded      seed A over SMBIOS → wrong secret ⇒ 401, correct ⇒ 200 + box_id;
-#                       first admin created and persisted on the overlay, then that
-#                       admin drives the first-run wizard to completion (C4 #208): PAM
-#                       /login → timezone + telemetry → first-run-complete, asserting the
-#                       box is admin-owned, served, marked complete (the C5 #209 bar)
+#   boot 1  un-seeded   no seed → GET /_malmo/sso ⇒ 503; /setup ⇒ 403 (gate armed)
+#   boot 2  seeded      seed A over SMBIOS → assertion key ingested → a bad token on
+#                       GET /_malmo/sso ⇒ 401 (verifier armed); /setup ⇒ 403; brain
+#                       logged 'provisioning seed ingested' under box_id A
 #   boot 3  frozen      a DIFFERENT seed B delivered, same overlay → the brain ignores
-#                       it (identity frozen in SQLite); /login still reports box_id A and
-#                       first_run_complete persists (the wizard does not reappear)
+#                       it (identity frozen in SQLite); the dashboard + /api still serve
+#                       under box_id A and the brain does not re-ingest
+#
+# The positive SSO path (a valid portal assertion → owner auto-create → box session →
+# first-run wizard) needs the portal's private signing key, so it is the joint cloud
+# on-ramp acceptance (cloud docs/ops/e2e-onramp.md), not this box-only boot lane.
 #
 # The seed is delivered as a systemd credential over SMBIOS type 11 (the same
 # mechanism the medium lane uses for the LUKS passphrase; on a real cloud the same
@@ -132,14 +134,15 @@ ACCEL=tcg
 if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then ACCEL=kvm; fi
 
 # Build a compact seed JSON for a box-id and base64-encode it for an SMBIOS binary
-# credential. The admin-bootstrap secret is random per run (hex, so it embeds
-# cleanly in JSON and survives the in-VM sed extraction); only the in-VM script
-# needs it (it reads it back out of the materialized seed.json), so we don't track
-# it here. Prints `io.systemd.credential.binary:malmo.seed=<base64>`.
+# credential. The assertion-verification key is a random 32-byte value (standard
+# base64, the wire shape of a real portal Ed25519 public key) so the box loads its
+# SSO verifier; this lane has no matching private key, so it only exercises the
+# verifier's rejection path (a real portal assertion is the cloud on-ramp's job).
+# Prints `io.systemd.credential.binary:malmo.seed=<base64>`.
 seed_cred() { # box_id -> SMBIOS value string
-    local box_id="$1" secret json
-    secret="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-    json="$(printf '{"box_id":"%s","admin_bootstrap_secret":"%s"}' "$box_id" "$secret")"
+    local box_id="$1" key json
+    key="$(head -c 32 /dev/urandom | base64 -w0)"
+    json="$(printf '{"box_id":"%s","assertion_verification_key":"%s"}' "$box_id" "$key")"
     printf 'io.systemd.credential.binary:malmo.seed=%s' "$(printf '%s' "$json" | base64 -w0)"
 }
 
@@ -222,35 +225,36 @@ run_boot() {
 }
 
 # --- 4. boot 1: un-seeded. No seed credential → the brain stays unprovisioned and
-# /setup returns 503 (the gate is armed but closed — never the appliance's open
-# empty-box behavior). This is also the standalone C2 control-plane-up proof.
+# GET /_malmo/sso returns 503 and /setup returns 403 (the SSO gate is armed but
+# closed — never the appliance's open empty-box behavior). Also the standalone C2
+# control-plane-up proof.
 if ! run_boot "unseeded" "unseeded"; then
     echo "cloud gate proof: ${VERDICT}" >&2
     exit 1
 fi
-echo "boot 1 OK — control plane up, hosted /setup gate armed (503, unprovisioned)"
+echo "boot 1 OK — control plane up, hosted SSO gate armed (503, unprovisioned)"
 
-# --- 5. boot 2: seeded. Deliver seed A → the brain ingests it; a wrong secret is
-# 401, the correct secret creates the first admin (200) and the response surfaces
-# box_id A. The admin then drives the first-run wizard to completion (PAM /login →
-# timezone + telemetry → first-run-complete). The admin, box-id, and first-run
-# marker persist on the overlay.
+# --- 5. boot 2: seeded. Deliver seed A → the brain ingests the assertion key; a
+# bad/unsigned token on /_malmo/sso is 401 (the verifier is armed) and /setup is 403
+# (disabled on hosted). The ingested box-id A persists on the overlay. The positive
+# owner-create + wizard path needs the portal private key (cloud on-ramp).
 if ! run_boot "seeded" "seeded" -smbios "type=11,value=$(seed_cred "$BOX_ID_A")"; then
     echo "cloud gate proof: ${VERDICT}" >&2
     exit 1
 fi
-echo "boot 2 OK — seed ingested (401/200 + box_id=${BOX_ID_A}), first-run wizard completed (PAM login, tz+telemetry, marker set)"
+echo "boot 2 OK — seed ingested (assertion key loaded, bad-token 401), box_id=${BOX_ID_A}"
 
 # --- 6. boot 3: frozen identity. Re-deliver a DIFFERENT seed B over the SAME
 # overlay. The brain loads its persisted box-id A from SQLite and ignores the new
-# seed; /login (the admin from boot 2) still reports box_id A. Proves a re-delivered
-# or changed seed cannot re-key a provisioned box (MALMO_NETWORK.md frozen identity).
+# seed; the dashboard + /api still serve under box_id A and the brain does not
+# re-ingest. Proves a re-delivered or changed seed cannot re-key a provisioned box
+# (MALMO_NETWORK.md frozen identity).
 if ! run_boot "frozen" "frozen:${BOX_ID_A}" -smbios "type=11,value=$(seed_cred "$BOX_ID_B")"; then
     echo "cloud gate proof: ${VERDICT}" >&2
     exit 1
 fi
-echo "boot 3 OK — frozen identity held across reboot (re-delivered seed B ignored, box_id still ${BOX_ID_A}, first-run marker persisted)"
+echo "boot 3 OK — frozen identity held across reboot (re-delivered seed B ignored, box_id still ${BOX_ID_A})"
 
-echo "cloud end-to-end: PASS (un-seeded 503 → seeded 401/200+box_id+wizard → frozen reboot)"
+echo "cloud end-to-end: PASS (un-seeded 503 → seeded SSO-verifier-armed+box_id → frozen reboot)"
 echo "qcow2 cloud artifact: ${QCOW2}"
 exit 0

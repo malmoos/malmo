@@ -7,16 +7,21 @@
 //
 // The wizard (not just "an admin exists") is gated on first_run_complete so a
 // half-finished wizard resumes rather than dropping the user onto the dashboard
-// (FIRST_RUN.md # Phase 3). profile selects the wizard's step set and whether
-// the admin step shows the hosted bootstrap-secret field (ENVIRONMENT.md
-// # Provisioning).
+// (FIRST_RUN.md # Phase 3). profile selects the bootstrap path: appliance shows a
+// login/setup page, while hosted has neither — an unauthenticated hosted visitor
+// is bounced to the portal, which signs them back in via the portal-to-box SSO
+// handshake (ENVIRONMENT.md # Provisioning; cloud specs/AUTH_AND_ACCESS.md).
 //
 // Any 401 from a later API call drops currentUser to null via the handler
 // registered with setUnauthenticatedHandler — that's the single route the
-// router uses to fall back to the login screen.
+// router uses to fall back to the login screen (or, on hosted, the portal).
 
 import { ref, computed } from "vue";
 import { api, setUnauthenticatedHandler, type AuthState, type SetupResult, type User } from "./api";
+
+// portalURL is the malmo.network control plane an unauthenticated hosted box
+// bounces to. The box lives at "<box-id>.malmo.network"; the portal is the apex.
+const portalURL = "https://malmo.network";
 
 const currentUser = ref<User | null>(null);
 const hasUsers = ref<boolean | null>(null);
@@ -27,6 +32,19 @@ const booted = ref(false);
 setUnauthenticatedHandler(() => {
   currentUser.value = null;
 });
+
+// isHosted reports whether the box runs the hosted profile (no login/setup page).
+export function isHosted() {
+  return profile.value === "hosted";
+}
+
+// redirectToPortal sends the browser to the malmo.network portal, which mints a
+// fresh SSO assertion and lands the owner back on the box dashboard. Used as the
+// hosted stand-in for the login screen. replace() so the unauthenticated box URL
+// doesn't linger in history.
+export function redirectToPortal() {
+  window.location.replace(portalURL);
+}
 
 export async function bootstrap() {
   if (booted.value) return;
@@ -50,13 +68,12 @@ export async function login(username: string, password: string) {
   hasUsers.value = true;
 }
 
-// SetupOptions carries the first-run admin step's two profile-aware choices:
-// recovery (FIRST_RUN.md # Step 2a, on by default) and bootstrapSecret (the
-// hosted one-time admin-bootstrap secret the operator pastes, forwarded as
-// C3a's `bootstrap_secret` body field — ENVIRONMENT.md # Admin bootstrap).
+// SetupOptions carries the first-run admin step's choice: recovery (FIRST_RUN.md
+// # Step 2a, on by default). /setup is the appliance bootstrap; the hosted box
+// auto-creates its admin via the portal-to-box SSO handshake, so there is no
+// hosted setup field here (ENVIRONMENT.md # Provisioning).
 export interface SetupOptions {
   recovery: boolean;
-  bootstrapSecret?: string;
 }
 
 // setup creates the first admin. Unlike login it is followed by the rest of the
@@ -72,7 +89,6 @@ export async function setup(
     username,
     password,
     recovery: opts.recovery,
-    ...(opts.bootstrapSecret ? { bootstrap_secret: opts.bootstrapSecret } : {}),
   });
   currentUser.value = res.user;
   hasUsers.value = true;

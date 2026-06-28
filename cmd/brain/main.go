@@ -5,8 +5,8 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -68,12 +68,24 @@ func main() {
 	defer st.Close()
 
 	// Hosted profile: ingest the first-boot provisioning seed (box-id, the
-	// admin-bootstrap secret hash, and the acme-dns enrollment credentials) and
-	// resolve the box's identity (ENVIRONMENT.md # Provisioning). Done early so
-	// the lifecycle manager (per-app route hosts) and the wildcard-cert pass
-	// below both see the box-id. Appliance is a no-op: every value stays
-	// zero-valued and the hosted seams below are skipped.
-	boxID, bootstrapHash, enrollment := loadHostedEnvironment(prof, st, cfg.seedPath)
+	// portal's assertion-verification key, and the acme-dns enrollment
+	// credentials) and resolve the box's identity (ENVIRONMENT.md # Provisioning).
+	// Done early so the lifecycle manager (per-app route hosts) and the
+	// wildcard-cert pass below both see the box-id. Appliance is a no-op: every
+	// value stays zero-valued and the hosted seams below are skipped.
+	boxID, assertionKeyB64, enrollment := loadHostedEnvironment(prof, st, cfg.seedPath)
+	// Decode the portal verification key the SSO handler checks ownership
+	// assertions against (internal/assertion). An invalid key disables SSO (nil
+	// key ⇒ /_malmo/sso returns 503) rather than crashing the brain — the box can
+	// still serve once re-seeded. Empty on appliance / an un-seeded hosted box.
+	var assertionKey ed25519.PublicKey
+	if assertionKeyB64 != "" {
+		if k, err := decodeAssertionKey(assertionKeyB64); err != nil {
+			slog.Error("hosted: assertion verification key invalid; SSO disabled", "err", err)
+		} else {
+			assertionKey = k
+		}
+	}
 
 	cat := catalog.New(cfg.catalogDir)
 	host := hostclient.New(cfg.agentSock)
@@ -235,11 +247,12 @@ func main() {
 	// active follow to the process lifetime.
 	applogs := applog.NewRegistry(pollCtx, host)
 
-	// The resolved hosted identity (box-id + bootstrap hash) gates /setup
-	// (ENVIRONMENT.md # Provisioning); both come from loadHostedEnvironment above.
-	// Appliance leaves them empty and /setup keeps its open-on-empty-box behavior.
+	// The resolved hosted identity (box-id + the portal assertion key) drives the
+	// SSO bootstrap (ENVIRONMENT.md # Provisioning; the portal-to-box handshake in
+	// internal/api/sso.go); both come from loadHostedEnvironment above. Appliance
+	// leaves them empty and keeps its open-on-empty-box /setup.
 	srv := api.NewServer(st, cat, life, bus, authMgr, host, auditor, healthMgr, live, applogs)
-	srv.SetEnvironment(prof, boxID, bootstrapHash)
+	srv.SetEnvironment(prof, boxID, assertionKey)
 	httpSrv := &http.Server{Handler: srv.Handler()}
 
 	// Bind the listener before advertising the dashboard route to Caddy. Once the
@@ -322,43 +335,44 @@ type boxMetaStore interface {
 }
 
 // loadHostedEnvironment resolves the hosted box's provisioning identity
-// (ENVIRONMENT.md # Provisioning) for the /setup gate and the wildcard-cert pass.
-// It returns the box-id, the hex sha256 of the admin-bootstrap secret, and the
-// per-box acme-dns enrollment credentials. An empty box-id/hash means "no gate"
-// (appliance, or a hosted box not yet provisioned — which keeps /setup closed,
-// never falling back to the appliance's open behavior); an incomplete enrollment
-// means "no cert pass" (the box still gates /setup, it just can't get HTTPS).
+// (ENVIRONMENT.md # Provisioning) for the SSO bootstrap and the wildcard-cert
+// pass. It returns the box-id, the portal's base64 assertion-verification key,
+// and the per-box acme-dns enrollment credentials. An empty box-id/key means "no
+// SSO" (appliance, or a hosted box not yet provisioned — which keeps SSO closed,
+// never falling back to the appliance's open /setup); an incomplete enrollment
+// means "no cert pass" (the box still bootstraps via SSO, it just can't get
+// HTTPS).
 //
 // On appliance it is a no-op. On hosted: a box-id already persisted is the
-// install's frozen identity (MALMO_NETWORK.md) — load it, the stored hash, and
-// the stored enrollment, and ignore the seed on every subsequent boot (so a
+// install's frozen identity (MALMO_NETWORK.md) — load it, the stored key, and the
+// stored enrollment, and ignore the seed on every subsequent boot (so a
 // re-delivered seed cannot re-key a provisioned box). Otherwise this is the first
-// hosted boot: read the seed, persist the hash and enrollment *then* the box-id
+// hosted boot: read the seed, persist the key and enrollment *then* the box-id
 // (box-id last as the commit marker, so a crash mid-write re-ingests next boot
-// rather than leaving a box-id with no secret), and return them. An absent or
+// rather than leaving a box-id with no key), and return them. An absent or
 // unreadable seed logs and returns empty — the brain stays pre-setup rather than
 // crashing.
-func loadHostedEnvironment(prof profile.Profile, bm boxMetaStore, seedPath string) (boxID, secretHash string, enr profile.EnrollmentCredentials) {
+func loadHostedEnvironment(prof profile.Profile, bm boxMetaStore, seedPath string) (boxID, assertionKeyB64 string, enr profile.EnrollmentCredentials) {
 	if prof != profile.Hosted {
 		return "", "", profile.EnrollmentCredentials{}
 	}
 	if id, err := bm.GetBoxMeta(store.BoxMetaBoxID); err == nil {
-		hash, hErr := bm.GetBoxMeta(store.BoxMetaBootstrapSecretHash)
-		if hErr != nil {
-			// The hash is persisted *before* the box-id (the box-id is the
-			// commit marker), so a box-id with no hash should be unreachable.
-			// If it happens anyway (a store read error, or the hash row gone),
-			// log it loudly — the gate stays closed (503) and the silent symptom
+		key, kErr := bm.GetBoxMeta(store.BoxMetaAssertionKey)
+		if kErr != nil {
+			// The key is persisted *before* the box-id (the box-id is the
+			// commit marker), so a box-id with no key should be unreachable.
+			// If it happens anyway (a store read error, or the key row gone),
+			// log it loudly — SSO stays closed (503) and the silent symptom
 			// would otherwise be an unexplained "not provisioned" on a box that
 			// already has an identity.
-			if errors.Is(hErr, store.ErrNotFound) {
-				slog.Error("hosted: box-id persisted but bootstrap hash missing; /setup stays closed", "box_id", id)
+			if errors.Is(kErr, store.ErrNotFound) {
+				slog.Error("hosted: box-id persisted but assertion key missing; SSO stays closed", "box_id", id)
 			} else {
-				slog.Error("hosted: read persisted bootstrap hash failed; /setup stays closed", "err", hErr)
+				slog.Error("hosted: read persisted assertion key failed; SSO stays closed", "err", kErr)
 			}
 			return id, "", profile.EnrollmentCredentials{}
 		}
-		return id, hash, loadEnrollment(bm)
+		return id, key, loadEnrollment(bm)
 	} else if !errors.Is(err, store.ErrNotFound) {
 		slog.Error("hosted: read persisted box-id failed; staying pre-setup", "err", err)
 		return "", "", profile.EnrollmentCredentials{}
@@ -366,7 +380,7 @@ func loadHostedEnvironment(prof profile.Profile, bm boxMetaStore, seedPath strin
 
 	seed, err := profile.ReadSeed(seedPath)
 	if errors.Is(err, profile.ErrSeedAbsent) {
-		slog.Warn("hosted box has no provisioning seed; /setup stays closed until one lands", "src", seedPath)
+		slog.Warn("hosted box has no provisioning seed; SSO stays closed until one lands", "src", seedPath)
 		return "", "", profile.EnrollmentCredentials{}
 	}
 	if err != nil {
@@ -374,9 +388,8 @@ func loadHostedEnvironment(prof profile.Profile, bm boxMetaStore, seedPath strin
 		return "", "", profile.EnrollmentCredentials{}
 	}
 
-	hash := sha256Hex(seed.AdminBootstrapSecret)
-	if err := bm.SetBoxMeta(store.BoxMetaBootstrapSecretHash, hash); err != nil {
-		slog.Error("hosted: persist bootstrap hash failed; staying pre-setup", "err", err)
+	if err := bm.SetBoxMeta(store.BoxMetaAssertionKey, seed.AssertionVerificationKey); err != nil {
+		slog.Error("hosted: persist assertion key failed; staying pre-setup", "err", err)
 		return "", "", profile.EnrollmentCredentials{}
 	}
 	// Enrollment is persisted *before* the box-id commit marker, and a complete
@@ -385,8 +398,8 @@ func loadHostedEnvironment(prof profile.Profile, bm boxMetaStore, seedPath strin
 	// issuer; if this write silently failed but the box-id still committed, this
 	// boot would get a cert and no subsequent boot ever would. So a write failure
 	// aborts before the commit marker — the seed is re-ingested next boot — exactly
-	// like the hash-persist abort above. A seed with no enrollment is a legitimate
-	// "no HTTPS" box: it provisions, gates /setup, and skips the cert pass.
+	// like the key-persist abort above. A seed with no enrollment is a legitimate
+	// "no HTTPS" box: it provisions, bootstraps via SSO, and skips the cert pass.
 	if seed.Enrollment.Complete() {
 		if err := persistEnrollment(bm, seed.Enrollment); err != nil {
 			slog.Error("hosted: persist enrollment failed; staying pre-setup", "err", err)
@@ -400,14 +413,22 @@ func loadHostedEnvironment(prof profile.Profile, bm boxMetaStore, seedPath strin
 		return "", "", profile.EnrollmentCredentials{}
 	}
 	slog.Info("hosted: provisioning seed ingested", "box_id", seed.BoxID)
-	return seed.BoxID, hash, seed.Enrollment
+	return seed.BoxID, seed.AssertionVerificationKey, seed.Enrollment
 }
 
-// sha256Hex returns the hex-encoded SHA-256 of s. Used to store the admin-
-// bootstrap secret as a hash, never plaintext (ENVIRONMENT.md # Admin bootstrap).
-func sha256Hex(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])
+// decodeAssertionKey decodes the portal's standard-base64 Ed25519 public key (as
+// the cloud writes it into the seed) and validates its length, so a truncated or
+// wrong-type key fails loudly here (SSO disabled) rather than at the first
+// ed25519.Verify. Standard base64 because the seed is JSON, not a URL component.
+func decodeAssertionKey(b64 string) (ed25519.PublicKey, error) {
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil, fmt.Errorf("decode assertion key: %w", err)
+	}
+	if len(raw) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("assertion key must be %d bytes, got %d", ed25519.PublicKeySize, len(raw))
+	}
+	return ed25519.PublicKey(raw), nil
 }
 
 // persistEnrollment stores the acme-dns credentials as JSON under

@@ -74,7 +74,7 @@ func TestParseURL(t *testing.T) {
 }
 
 func TestFetchSeed200WritesBodyVerbatim(t *testing.T) {
-	const seed = `{"box_id":"cindy-fox","admin_bootstrap_secret":"deadbeef"}`
+	const seed = `{"box_id":"cindy-fox","assertion_verification_key":"a2V5"}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/hetzner/v1/userdata" {
 			http.NotFound(w, r)
@@ -110,7 +110,7 @@ func TestFetchSeed200KeepAliveSocketStillLandsSeed(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("materializer uses bash /dev/tcp + timeout; Linux-only")
 	}
-	const seed = `{"box_id":"keepalive-otter","admin_bootstrap_secret":"c0ffee"}`
+	const seed = `{"box_id":"keepalive-otter","assertion_verification_key":"a2V5"}`
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)

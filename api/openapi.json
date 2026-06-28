@@ -2045,9 +2045,6 @@
             "readOnly": true,
             "type": "string"
           },
-          "bootstrap_secret": {
-            "type": "string"
-          },
           "password": {
             "type": "string"
           },

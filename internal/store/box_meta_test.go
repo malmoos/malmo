@@ -15,8 +15,8 @@ func TestBoxMetaRoundtrip(t *testing.T) {
 	if err := s.SetBoxMeta(BoxMetaBoxID, "cindy-fox"); err != nil {
 		t.Fatalf("set box_id: %v", err)
 	}
-	if err := s.SetBoxMeta(BoxMetaBootstrapSecretHash, "deadbeef"); err != nil {
-		t.Fatalf("set hash: %v", err)
+	if err := s.SetBoxMeta(BoxMetaAssertionKey, "dGVzdGtleQ=="); err != nil {
+		t.Fatalf("set assertion key: %v", err)
 	}
 
 	got, err := s.GetBoxMeta(BoxMetaBoxID)
@@ -26,12 +26,12 @@ func TestBoxMetaRoundtrip(t *testing.T) {
 	if got != "cindy-fox" {
 		t.Errorf("box_id = %q, want cindy-fox", got)
 	}
-	got, err = s.GetBoxMeta(BoxMetaBootstrapSecretHash)
+	got, err = s.GetBoxMeta(BoxMetaAssertionKey)
 	if err != nil {
-		t.Fatalf("get hash: %v", err)
+		t.Fatalf("get assertion key: %v", err)
 	}
-	if got != "deadbeef" {
-		t.Errorf("hash = %q, want deadbeef", got)
+	if got != "dGVzdGtleQ==" {
+		t.Errorf("assertion key = %q, want dGVzdGtleQ==", got)
 	}
 }
 

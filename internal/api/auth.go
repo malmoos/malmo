@@ -3,8 +3,6 @@ package api
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -33,6 +31,10 @@ var publicPaths = map[string]bool{
 	"/api/v1/recover":    true,
 	"/api/v1/auth/state": true,
 	"/api/v1/auth/users": true,
+	// The portal-to-box SSO landing: the assertion in the query is the
+	// credential, so the box has no session to check here — it mints one
+	// (sso.go). Hosted-only at the handler; public to the middleware.
+	"/_malmo/sso": true,
 	// huma exposes these by default; leave them public so curl/devtools work.
 	"/openapi.json": true,
 	"/openapi.yaml": true,
@@ -184,9 +186,10 @@ func (s *Server) registerAuth(api huma.API) {
 // session exists. has_users drives the login-vs-setup split; first_run_complete
 // is the wizard's reappearance gate (FIRST_RUN.md # Phase 3 — more than "an
 // admin exists", so a half-finished wizard resumes rather than dropping the user
-// onto the dashboard); profile lets the wizard pick its step set and show the
-// admin-bootstrap-secret field on hosted (ENVIRONMENT.md # Provisioning). The
-// box-id and the secret itself are never surfaced here.
+// onto the dashboard); profile lets the dashboard pick its bootstrap path — on
+// hosted an unauthenticated visitor is bounced to the portal instead of a login
+// or /setup page (ENVIRONMENT.md # Provisioning). The box-id is never surfaced
+// here.
 func (s *Server) authState(ctx context.Context, _ *struct{}) (*struct {
 	Body struct {
 		HasUsers         bool   `json:"has_users"`
@@ -243,31 +246,6 @@ func (s *Server) authUsers(ctx context.Context, _ *struct{}) (*struct {
 	return out, nil
 }
 
-// gateBootstrap enforces the hosted-profile admin-bootstrap secret on /setup.
-// On appliance it is a no-op (open-on-empty-box). On hosted: a box with no
-// seeded secret is not yet provisioned to accept setup, so it stays closed →
-// 503 (never falling back to the appliance's open /setup); a missing or wrong
-// secret → 401, audited as an elevation-class failure (CLAUDE.md # elevation-
-// class mutations audit success and failure). The supplied secret is hashed and
-// constant-time compared against the stored hex sha256, so neither a timing side
-// channel nor the at-rest value can recover it.
-func (s *Server) gateBootstrap(ctx context.Context, supplied, username string) error {
-	if s.profile != profile.Hosted {
-		return nil
-	}
-	if s.bootstrapSecretHash == "" {
-		return huma.Error503ServiceUnavailable("box is not provisioned for setup")
-	}
-	suppliedHash := sha256.Sum256([]byte(supplied))
-	suppliedHex := hex.EncodeToString(suppliedHash[:])
-	if subtle.ConstantTimeCompare([]byte(suppliedHex), []byte(s.bootstrapSecretHash)) != 1 {
-		s.auditor.Record(ctx, audit.ActionSetupFailure, audit.Target{Kind: "user"},
-			map[string]any{"username": username}, false)
-		return huma.Error401Unauthorized("invalid admin bootstrap secret")
-	}
-	return nil
-}
-
 // setup creates the first admin. Two ordering invariants matter here:
 // (1) brain commits first, so the empty-table guard fences any concurrent
 // caller atomically (store.CreateFirstAdmin uses a transaction); (2) the
@@ -275,14 +253,15 @@ func (s *Server) gateBootstrap(ctx context.Context, supplied, username string) e
 // carries its hash from the start. If host-agent SetPassword fails after the
 // brain has committed, we roll the brain row back so /v1/setup can be
 // retried — the brain is the durable side, host-agent is reconstructible.
+//
+// Profile gate: /setup is the appliance's bootstrap. On hosted the first admin
+// is created via the portal-to-box SSO handshake (sso.go), so /setup is disabled
+// and returns 403 — a hosted box has no setup page (cloud
+// specs/AUTH_AND_ACCESS.md # Portal-to-box SSO).
 func (s *Server) setup(ctx context.Context, in *struct {
 	Body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
-		// BootstrapSecret is the one-time secret seeded at provision time. It is
-		// required only in the hosted profile (gateBootstrap); appliance ignores
-		// it entirely, so an appliance request need not send it.
-		BootstrapSecret string `json:"bootstrap_secret,omitempty"`
 		// Recovery toggles the first-run recovery code (FIRST_RUN.md # Step 2a,
 		// on by default). nil ⇒ on (back-compat: the M1c headless /setup and any
 		// older caller that omits the field still get a code). Explicit false is
@@ -298,21 +277,17 @@ func (s *Server) setup(ctx context.Context, in *struct {
 		RecoveryCode string  `json:"recovery_code"`
 	}
 }, error) {
+	// Hosted: no /setup. The owner bootstraps through SSO, which auto-creates the
+	// first admin; an exposed /setup would be a second, unauthenticated path to
+	// create the founding admin. Audit the rejection (elevation-class) and 403.
+	if s.profile == profile.Hosted {
+		s.auditor.Record(ctx, audit.ActionSetupFailure, audit.Target{Kind: "user"}, nil, false)
+		return nil, huma.Error403Forbidden("setup is disabled on hosted boxes; sign in through the portal")
+	}
+
 	username := strings.TrimSpace(in.Body.Username)
 	password := in.Body.Password
 	withRecovery := in.Body.Recovery == nil || *in.Body.Recovery
-
-	// Hosted profile: the seeded admin-bootstrap secret gates /setup before any
-	// other processing (ENVIRONMENT.md # Admin bootstrap). Runs ahead of the
-	// empty-box CreateFirstAdmin guard so a caller without the secret never
-	// reaches first-admin creation. Appliance is a no-op — byte-unchanged.
-	// Trim the submitted secret to match ReadSeed, which trims the seeded value
-	// before hashing: an out-of-band hand-off (cloud console copy-paste) commonly
-	// carries trailing whitespace, and an untrimmed compare would 401 a correct
-	// secret against the trimmed stored hash.
-	if err := s.gateBootstrap(ctx, strings.TrimSpace(in.Body.BootstrapSecret), username); err != nil {
-		return nil, err
-	}
 
 	if username == "" || password == "" {
 		return nil, huma.Error422UnprocessableEntity("username and password are required")
