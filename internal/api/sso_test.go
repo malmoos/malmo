@@ -267,6 +267,26 @@ func TestSSO_ApplianceReturns404(t *testing.T) {
 	}
 }
 
+func TestSSOUsername(t *testing.T) {
+	cases := map[string]string{
+		"Owner@Example.com":    "owner",
+		"jane.doe@example.com": "jane_doe",
+		"a+b@x.io":             "a_b",
+		"123start@x.io":        "owner_123start", // must start with a letter
+		"@x.io":                "owner",          // empty local part
+		"weird!!!@x.io":        "weird",
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@x.io": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // capped at 32
+	}
+	for email, want := range cases {
+		if got := ssoUsername(email); got != want {
+			t.Errorf("ssoUsername(%q) = %q; want %q", email, got, want)
+		}
+		if got := ssoUsername(email); len(got) > maxSSOUsernameLen {
+			t.Errorf("ssoUsername(%q) = %q exceeds %d chars", email, got, maxSSOUsernameLen)
+		}
+	}
+}
+
 func findCookie(cookies []*http.Cookie, name string) *http.Cookie {
 	for _, c := range cookies {
 		if c.Name == name {

@@ -31,9 +31,14 @@ var errSSONotOwner = errors.New("sso: assertion is not from the box owner")
 // host-only box session, and 303s to the dashboard. Hosted-only — the appliance
 // has no portal and keeps its /setup bootstrap.
 //
-// Every failure returns one opaque status with no detail echoed to the client
-// and audits sso.failure; the precise reason is logged, never returned. The token
-// is a credential, so it is never written to a log line.
+// Every assertion that fails verification or box-side policy (bad signature,
+// expiry, wrong issuer/box, replay, non-owner) returns one opaque status and
+// audits sso.failure, mirroring login.failure so the Activity view sees mutation
+// attempts. The pre-checks that precede any credential evaluation — a missing
+// token, or an un-provisioned box — return without auditing (like login's
+// empty-credential 401), so an unauthenticated probe can't append audit rows. The
+// precise reason is logged, never returned; the token is a credential and is never
+// written to a log line.
 func (s *Server) ssoLanding(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -200,6 +205,12 @@ func (s *Server) createSSOOwner(ctx context.Context, claims assertion.Claims) (s
 // meta does not): the existing admin under the derived username becomes the
 // owner. Verifies the row is actually an admin before adopting so an unexpected
 // non-admin row surfaces as an error rather than silently granting ownership.
+//
+// The partial state can also have lost its host account: rollbackSSOUser is
+// best-effort, so a prior attempt may have deleted the PAM user but failed to
+// delete the brain row. Re-running SetPassword/SetRole here (both idempotent on
+// the host) re-establishes the account, so an adopted owner always has a PAM
+// entry to back the box session — never a session with no underlying account.
 func (s *Server) adoptSSOOwner(ctx context.Context, claims assertion.Claims, username string) (store.User, error) {
 	u, err := s.store.GetUserByUsername(username)
 	if err != nil {
@@ -207,6 +218,16 @@ func (s *Server) adoptSSOOwner(ctx context.Context, claims assertion.Claims, use
 	}
 	if u.Role != store.RoleAdmin {
 		return store.User{}, errors.New("sso: existing user for owner email is not an admin")
+	}
+	password, err := randomPassword()
+	if err != nil {
+		return store.User{}, err
+	}
+	if err := s.host.SetPassword(ctx, username, password); err != nil {
+		return store.User{}, err
+	}
+	if err := s.host.SetRole(ctx, username, store.RoleAdmin); err != nil {
+		return store.User{}, err
 	}
 	if err := s.recordSSOOwner(claims.Sub, u.ID); err != nil {
 		return store.User{}, err
@@ -238,12 +259,20 @@ func (s *Server) rollbackSSOUser(ctx context.Context, u store.User) {
 	}
 }
 
+// maxSSOUsernameLen caps the derived username at the conservative classic Linux
+// username length, so an over-long email local-part can't produce a name useradd
+// or a hardened PAM stack rejects. The result is ASCII, so a byte slice is safe.
+const maxSSOUsernameLen = 32
+
 // ssoUsername derives a valid Linux/PAM username from the owner's email: the
 // local part, lowercased, with every character outside [a-z0-9] folded to '_'.
 // Folding (rather than emitting '-') keeps the result clear of the '--' instance
 // separator and the 'xn--' prefix validateUsername guards (users.go), and the
-// leading-letter guard satisfies useradd. Falls back to "owner" when the email
-// yields nothing usable.
+// leading-letter guard satisfies useradd. The derivation is the canonical source
+// of a valid username here (the SSO path doesn't round-trip through
+// validateUsername); it folds to ASCII [a-z0-9_], starts with a letter, and is
+// length-capped, so it satisfies every current validateUsername rule by
+// construction. Falls back to "owner" when the email yields nothing usable.
 func ssoUsername(email string) string {
 	local, _, _ := strings.Cut(email, "@")
 	local = strings.ToLower(strings.TrimSpace(local))
@@ -260,6 +289,12 @@ func ssoUsername(email string) string {
 	if name == "" || name[0] < 'a' || name[0] > 'z' {
 		name = "owner_" + name
 		name = strings.TrimRight(name, "_")
+	}
+	if len(name) > maxSSOUsernameLen {
+		name = strings.TrimRight(name[:maxSSOUsernameLen], "_")
+		if name == "" {
+			name = "owner"
+		}
 	}
 	return name
 }
