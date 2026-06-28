@@ -27,19 +27,19 @@ func TestReadSeed(t *testing.T) {
 		wantErr    error  // sentinel to match with errors.Is; nil means "no error"
 		wantErrSub string // substring the error must contain (when wantErr is nil but an error is expected)
 		wantBox    string
-		wantSecret string
+		wantKey    string
 	}{
 		{
-			name:       "valid seed",
-			content:    ptr(`{"box_id":"cindy-fox","admin_bootstrap_secret":"s3cr3t"}`),
-			wantBox:    "cindy-fox",
-			wantSecret: "s3cr3t",
+			name:    "valid seed",
+			content: ptr(`{"box_id":"cindy-fox","assertion_verification_key":"a2V5"}`),
+			wantBox: "cindy-fox",
+			wantKey: "a2V5",
 		},
 		{
-			name:       "surrounding whitespace trimmed",
-			content:    ptr(`{"box_id":"  cindy-fox \n","admin_bootstrap_secret":"\t s3cr3t  "}`),
-			wantBox:    "cindy-fox",
-			wantSecret: "s3cr3t",
+			name:    "surrounding whitespace trimmed",
+			content: ptr(`{"box_id":"  cindy-fox \n","assertion_verification_key":"\t a2V5  "}`),
+			wantBox: "cindy-fox",
+			wantKey: "a2V5",
 		},
 		{
 			name:    "absent file returns ErrSeedAbsent",
@@ -53,23 +53,23 @@ func TestReadSeed(t *testing.T) {
 		},
 		{
 			name:       "missing box_id is a hard error",
-			content:    ptr(`{"admin_bootstrap_secret":"s3cr3t"}`),
+			content:    ptr(`{"assertion_verification_key":"a2V5"}`),
 			wantErrSub: "missing box_id",
 		},
 		{
 			name:       "blank box_id is a hard error",
-			content:    ptr(`{"box_id":"   ","admin_bootstrap_secret":"s3cr3t"}`),
+			content:    ptr(`{"box_id":"   ","assertion_verification_key":"a2V5"}`),
 			wantErrSub: "missing box_id",
 		},
 		{
-			name:       "missing admin_bootstrap_secret is a hard error",
+			name:       "missing assertion_verification_key is a hard error",
 			content:    ptr(`{"box_id":"cindy-fox"}`),
-			wantErrSub: "missing admin_bootstrap_secret",
+			wantErrSub: "missing assertion_verification_key",
 		},
 		{
-			name:       "blank admin_bootstrap_secret is a hard error",
-			content:    ptr(`{"box_id":"cindy-fox","admin_bootstrap_secret":"  "}`),
-			wantErrSub: "missing admin_bootstrap_secret",
+			name:       "blank assertion_verification_key is a hard error",
+			content:    ptr(`{"box_id":"cindy-fox","assertion_verification_key":"  "}`),
+			wantErrSub: "missing assertion_verification_key",
 		},
 	}
 	for _, tt := range tests {
@@ -95,8 +95,8 @@ func TestReadSeed(t *testing.T) {
 				if got.BoxID != tt.wantBox {
 					t.Errorf("BoxID = %q, want %q", got.BoxID, tt.wantBox)
 				}
-				if got.AdminBootstrapSecret != tt.wantSecret {
-					t.Errorf("AdminBootstrapSecret = %q, want %q", got.AdminBootstrapSecret, tt.wantSecret)
+				if got.AssertionVerificationKey != tt.wantKey {
+					t.Errorf("AssertionVerificationKey = %q, want %q", got.AssertionVerificationKey, tt.wantKey)
 				}
 			}
 		})
@@ -122,7 +122,7 @@ func TestReadSeed_UnreadableIsHardError(t *testing.T) {
 // wildcard cert). The field names must match the cloud's
 // internal/seed.EnrollmentCredentials byte-for-byte.
 func TestReadSeed_EnrollmentParsed(t *testing.T) {
-	raw := `{"box_id":"cindy-fox","admin_bootstrap_secret":"s3cr3t","enrollment":{"subdomain":"abc-123","username":"user","password":"pass"}}`
+	raw := `{"box_id":"cindy-fox","assertion_verification_key":"a2V5","enrollment":{"subdomain":"abc-123","username":"user","password":"pass"}}`
 	got, err := ReadSeed(writeSeed(t, raw))
 	if err != nil {
 		t.Fatalf("ReadSeed: %v", err)
@@ -136,10 +136,10 @@ func TestReadSeed_EnrollmentParsed(t *testing.T) {
 }
 
 // TestReadSeed_EnrollmentOptional confirms a seed with no enrollment block still
-// parses (box-id + bootstrap gate work) and reports an incomplete enrollment so
+// parses (box-id + assertion key work) and reports an incomplete enrollment so
 // the cert pass skips rather than handing Caddy a half-configured issuer.
 func TestReadSeed_EnrollmentOptional(t *testing.T) {
-	got, err := ReadSeed(writeSeed(t, `{"box_id":"cindy-fox","admin_bootstrap_secret":"s3cr3t"}`))
+	got, err := ReadSeed(writeSeed(t, `{"box_id":"cindy-fox","assertion_verification_key":"a2V5"}`))
 	if err != nil {
 		t.Fatalf("ReadSeed: %v", err)
 	}

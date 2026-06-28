@@ -6,6 +6,7 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,12 +53,12 @@ type Server struct {
 	// Environment profile and hosted-only provisioning identity, set once at
 	// startup via SetEnvironment (ENVIRONMENT.md # Provisioning). On appliance
 	// these stay zero-valued and every hosted seam is a no-op. boxID is surfaced
-	// on /me; bootstrapSecretHash (hex sha256 of the seeded one-time secret)
-	// gates /setup. An empty bootstrapSecretHash on a hosted box means "no seed
-	// yet" — /setup stays closed.
-	profile             profile.Profile
-	boxID               string
-	bootstrapSecretHash string
+	// on /me; assertionKey is the portal's Ed25519 verification key the SSO
+	// handler verifies ownership assertions against (GET /_malmo/sso). A nil
+	// assertionKey on a hosted box means "no seed yet" — SSO returns 503.
+	profile      profile.Profile
+	boxID        string
+	assertionKey ed25519.PublicKey
 }
 
 func NewServer(
@@ -85,14 +86,15 @@ func NewServer(
 // SetEnvironment records the resolved environment profile and, on a hosted box,
 // its provisioning identity (ENVIRONMENT.md # Provisioning). cmd/brain calls it
 // once at startup after reading the profile marker and (on hosted) the seed.
-// box-id is surfaced on /me; bootstrapSecretHash is the hex sha256 of the
-// seeded one-time admin-bootstrap secret that gates /setup — empty means the
-// hosted box has no seed yet. Appliance leaves both empty, so every hosted seam
-// is a no-op. Not concurrency-guarded: called before the server starts serving.
-func (s *Server) SetEnvironment(prof profile.Profile, boxID, bootstrapSecretHash string) {
+// box-id is surfaced on /me; assertionKey is the portal's Ed25519 verification
+// key the SSO handler checks ownership assertions against — nil means the hosted
+// box has no seed yet (SSO returns 503). Appliance passes an empty box-id and a
+// nil key, so every hosted seam is a no-op. Not concurrency-guarded: called
+// before the server starts serving.
+func (s *Server) SetEnvironment(prof profile.Profile, boxID string, assertionKey ed25519.PublicKey) {
 	s.profile = prof
 	s.boxID = boxID
-	s.bootstrapSecretHash = bootstrapSecretHash
+	s.assertionKey = assertionKey
 }
 
 // OpenAPI document identity. Shared by Handler (live serving) and
@@ -123,6 +125,14 @@ func (s *Server) Handler() http.Handler {
 	// directly in <img> tags (APP_STORE.md # Catalog schema).
 	mux.HandleFunc("GET /api/v1/catalog/{id}/icon", s.catalogIcon)
 	mux.HandleFunc("GET /api/v1/catalog/{id}/screenshots/{n}", s.catalogScreenshot)
+
+	// Portal-to-box SSO landing (hosted only): the portal redirects the owner's
+	// browser here with a signed ownership assertion; the handler verifies it,
+	// auto-creates the owner admin on first use, issues a box session, and 303s to
+	// the dashboard. A redirect-and-Set-Cookie endpoint, not JSON — registered raw
+	// and outside the OpenAPI surface (sso.go; cloud specs/AUTH_AND_ACCESS.md #
+	// Portal-to-box SSO). Public (the assertion is the credential).
+	mux.HandleFunc("GET /_malmo/sso", s.ssoLanding)
 
 	return withCORS(s.authMiddleware(s.rateLimit(mux)))
 }

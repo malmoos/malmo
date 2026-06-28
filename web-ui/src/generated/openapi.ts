@@ -1461,7 +1461,6 @@ export interface components {
              * @example https://example.com/schemas/SetupRequest.json
              */
             readonly $schema?: string;
-            bootstrap_secret?: string;
             password: string;
             recovery?: boolean;
             username: string;

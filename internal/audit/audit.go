@@ -15,12 +15,18 @@ import (
 
 // v1 action vocabulary (LOGGING.md # Write path).
 const (
-	ActionSetupComplete   = "setup.complete"
-	ActionSetupFailure    = "setup.failure"
-	ActionLoginSuccess    = "login.success"
-	ActionLoginFailure    = "login.failure"
-	ActionLoginLockout    = "login.lockout"
-	ActionLogout          = "logout"
+	ActionSetupComplete = "setup.complete"
+	ActionSetupFailure  = "setup.failure"
+	ActionLoginSuccess  = "login.success"
+	ActionLoginFailure  = "login.failure"
+	ActionLoginLockout  = "login.lockout"
+	ActionLogout        = "logout"
+	// Portal-to-box SSO handshake (hosted only; cloud
+	// specs/AUTH_AND_ACCESS.md # Portal-to-box SSO). Success mints a box
+	// session (and, on first use, the owner admin); failure covers a rejected,
+	// replayed, wrong-box, or non-owner assertion.
+	ActionSSOSuccess      = "sso.success"
+	ActionSSOFailure      = "sso.failure"
 	ActionAppInstall      = "app.install"
 	ActionAppUninstall    = "app.uninstall"
 	ActionAppCustomCreate = "app.custom.create"

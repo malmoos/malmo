@@ -328,11 +328,22 @@ func (s *Store) migrate() error {
 		-- box_meta: a tiny key/value table for singleton box-level facts that
 		-- aren't per-instance and don't warrant their own table. Today it holds
 		-- the hosted-profile provisioning identity (ENVIRONMENT.md # Provisioning):
-		-- the box-id and the hash of the one-time admin-bootstrap secret. The
-		-- appliance profile never writes a row, so the table stays empty there.
+		-- the box-id, the portal's assertion-verification key, and the SSO owner's
+		-- portal account id + user-id. The appliance profile never writes a row, so
+		-- the table stays empty there.
 		CREATE TABLE IF NOT EXISTS box_meta (
 			key   TEXT PRIMARY KEY,
 			value TEXT NOT NULL
+		);
+		-- used_assertions: single-use ledger for portal SSO assertion nonces
+		-- (jti). Replay protection is the box's job — the cloud only guarantees
+		-- per-mint uniqueness — so the SSO handler records each accepted jti here
+		-- and rejects a second use. Rows expire with the ~60s-lived token; the
+		-- handler prunes past-expiry rows on each write so the table stays tiny.
+		-- Hosted-only; appliance never writes a row.
+		CREATE TABLE IF NOT EXISTS used_assertions (
+			jti        TEXT PRIMARY KEY,
+			expires_at INTEGER NOT NULL
 		);`)
 	if err != nil {
 		return err
@@ -930,14 +941,28 @@ func (s *Store) HasAnyUser() (bool, error) {
 	return n > 0, err
 }
 
-// Box-level metadata keys for the box_meta KV table. box_id and the bootstrap
-// secret hash are set on a hosted box from the first-boot seed (ENVIRONMENT.md
-// # Provisioning) and absent on appliance; telemetry consent and first-run
+// Box-level metadata keys for the box_meta KV table. box_id and the assertion
+// verification key are set on a hosted box from the first-boot seed
+// (ENVIRONMENT.md # Provisioning) and absent on appliance; the SSO owner keys are
+// recorded on the first valid portal assertion; telemetry consent and first-run
 // completion are box-wide facts the first-run wizard records on both profiles
 // (FIRST_RUN.md # Step 4, # Phase 3 / TELEMETRY.md).
 const (
-	BoxMetaBoxID               = "box_id"
-	BoxMetaBootstrapSecretHash = "admin_bootstrap_secret_hash"
+	BoxMetaBoxID = "box_id"
+	// BoxMetaAssertionKey holds the portal's Ed25519 verification key (standard
+	// base64) ingested from the seed, so later (frozen-identity) boots verify SSO
+	// assertions without re-reading the seed the brain otherwise ignores. It
+	// replaces the prior one-time admin-bootstrap secret hash.
+	BoxMetaAssertionKey = "assertion_verification_key"
+	// BoxMetaOwnerSub is the portal account id (assertion `sub`) of the box owner,
+	// recorded on the first valid SSO assertion. v1 is owner-only: a later
+	// assertion whose `sub` differs is rejected (cloud specs/AUTH_AND_ACCESS.md —
+	// granting other accounts is deferred).
+	BoxMetaOwnerSub = "sso_owner_sub"
+	// BoxMetaOwnerUserID is the brain user-id of the auto-created owner admin, so
+	// every subsequent owner assertion issues a session for the same account
+	// rather than re-deriving it from the email.
+	BoxMetaOwnerUserID = "sso_owner_user_id"
 	// BoxMetaTelemetryConsent is "true"/"false"; unset ⇒ off (TELEMETRY.md
 	// # Locked: off by default).
 	BoxMetaTelemetryConsent = "telemetry_consent"
@@ -976,6 +1001,33 @@ func (s *Store) SetBoxMeta(key, value string) error {
 		`INSERT INTO box_meta (key, value) VALUES (?,?)
 		 ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
+}
+
+// UseAssertionJTI records a portal SSO assertion nonce as spent, enforcing
+// single-use: a first insert returns nil, a second insert of the same jti
+// returns ErrConflict (the replay signal the SSO handler maps to a rejection).
+// expiresAt is the token's own Exp; pruning past-expiry rows here (now is the
+// caller's clock) keeps the ledger bounded to roughly the in-flight token set,
+// since accepted tokens are ~60s-lived. Pruning runs before the insert so a jti
+// can never be evicted in the same call that records it.
+func (s *Store) UseAssertionJTI(jti string, expiresAt, now time.Time) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM used_assertions WHERE expires_at <= ?`, now.Unix()); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO used_assertions (jti, expires_at) VALUES (?,?)`,
+		jti, expiresAt.Unix()); err != nil {
+		if isUniqueErr(err) {
+			return ErrConflict
+		}
+		return err
+	}
+	return tx.Commit()
 }
 
 // CreateSession persists a freshly issued session. Caller picks the token.

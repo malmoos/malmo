@@ -89,8 +89,9 @@ func TestEnsureDashboardInstallsSplitRoute(t *testing.T) {
 	routes := handle["routes"].([]any)
 	apiLeg := routes[0].(map[string]any)
 	apiMatch := apiLeg["match"].([]any)[0].(map[string]any)
-	if got := apiMatch["path"].([]any)[0]; got != "/api/*" {
-		t.Errorf("api leg path = %v, want /api/*", got)
+	apiPaths := apiMatch["path"].([]any)
+	if len(apiPaths) != 2 || apiPaths[0] != "/api/*" || apiPaths[1] != "/_malmo/*" {
+		t.Errorf("api leg paths = %v, want [/api/* /_malmo/*]", apiPaths)
 	}
 	apiProxy := apiLeg["handle"].([]any)[0].(map[string]any)
 	if apiProxy["handler"] != "reverse_proxy" {
