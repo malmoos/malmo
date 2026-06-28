@@ -72,9 +72,15 @@ func (s *Server) ssoLanding(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Box-side policy the cloud verifier deliberately leaves to us: the assertion
-	// must be minted by this box's own control plane (iss) for this box (box).
-	if claims.Iss != profile.NetworkApex || claims.Box != s.boxID {
-		slog.Warn("sso: assertion not for this box", "iss", claims.Iss, "box_id", claims.Box)
+	// must be minted by this box's own control plane (iss) for this box (box), and
+	// must carry the identity fields the box persists — sub (owner identity), email
+	// (PAM username), jti (replay key). A signed-but-empty field would otherwise
+	// poison box state: an empty sub records the owner as "", after which every real
+	// owner assertion is rejected as non-owner and the box can never complete SSO
+	// again. Reject before the jti is recorded so an empty jti can't consume a slot.
+	if claims.Iss != profile.NetworkApex || claims.Box != s.boxID ||
+		claims.Sub == "" || claims.Email == "" || claims.JTI == "" {
+		slog.Warn("sso: assertion not usable for this box", "iss", claims.Iss, "box_id", claims.Box)
 		s.auditSSOFailure(ctx)
 		http.Error(w, "invalid assertion", http.StatusForbidden)
 		return
@@ -123,7 +129,13 @@ func (s *Server) ssoLanding(w http.ResponseWriter, r *http.Request) {
 	idCtx := auth.WithIdentity(ctx, auth.Identity{User: user, Session: sess})
 	s.auditor.Record(idCtx, audit.ActionSSOSuccess, audit.Target{Kind: "user", ID: user.ID}, nil, true)
 
-	http.Redirect(w, r, "https://"+profile.HostedDashboardHost(s.boxID)+"/", http.StatusSeeOther)
+	// Redirect to the dashboard relatively ("/"), so the browser resolves it
+	// against the URL it arrived on — the same scheme+host that just served this
+	// request. The portal only ever sends the owner here over HTTPS, so an absolute
+	// "https://<box-id>..." would be equivalent, but a relative target avoids
+	// hardcoding the scheme and can't strand a no-cert box on an HTTPS URL it can't
+	// serve.
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 // auditSSOFailure records an sso.failure with no actor (the caller is

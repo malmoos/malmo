@@ -105,8 +105,8 @@ func TestSSO_ValidAssertionCreatesOwnerAndSession(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("sso = %d; want 303", rec.Code)
 	}
-	if loc := rec.Header().Get("Location"); loc != "https://cindy-fox.malmo.network/" {
-		t.Fatalf("redirect = %q; want the box dashboard", loc)
+	if loc := rec.Header().Get("Location"); loc != "/" {
+		t.Fatalf("redirect = %q; want the box dashboard root", loc)
 	}
 
 	// The owner admin was auto-created from the email local-part.
@@ -168,6 +168,34 @@ func TestSSO_NonOwnerRejected(t *testing.T) {
 	}
 	if h.ssoFailureCount(t) == 0 {
 		t.Fatal("non-owner rejection was not audited")
+	}
+}
+
+// A signed assertion missing an identity field the box persists (sub/email/jti)
+// is rejected before any owner state is written — an empty sub would otherwise
+// record the owner as "" and wedge SSO for the real account.
+func TestSSO_EmptyClaimFieldsRejected(t *testing.T) {
+	for _, field := range []string{"sub", "email", "jti"} {
+		h, priv := ssoHarness(t)
+		c := ownerClaims()
+		switch field {
+		case "sub":
+			c.Sub = ""
+		case "email":
+			c.Email = ""
+		case "jti":
+			c.JTI = ""
+		}
+		rec := h.sso(mint(t, priv, c))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("empty %s sso = %d; want 403", field, rec.Code)
+		}
+		if n, _ := h.st.UserCount(); n != 0 {
+			t.Fatalf("empty %s: user count = %d; want 0 (no owner state)", field, n)
+		}
+		if _, err := h.st.GetBoxMeta(store.BoxMetaOwnerSub); err == nil {
+			t.Fatalf("empty %s: owner sub recorded; want none", field)
+		}
 	}
 }
 
