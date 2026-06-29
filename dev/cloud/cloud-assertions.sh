@@ -349,6 +349,38 @@ seeded)
     docker logs malmo-brain 2>&1 | grep -q 'provisioning seed ingested' || \
         fail "brain did not log 'provisioning seed ingested' on the seeded boot"
     echo "cloud-assertions: seed ingested (box_id=$box_id persisted)"
+
+    # The seed's complete acme-dns enrollment drives the brain's wildcard-TLS pass
+    # (cmd/brain EnsureWildcardTLS): it configures Caddy's acme-dns DNS-01 issuer for
+    # the apex + "*.$box_id.malmo.network" and adds the :443 listener. Real issuance
+    # can't run here — air-gapped (restrict=on), no reach to acme-dns or Let's Encrypt
+    # — so no cert is obtained; what this asserts is that the brain REACHES and APPLIES
+    # the config and :443 actually binds. That application is the exact step a booted
+    # hosted box was failing (#278: box-id site unrouted, :443 never bound, no wildcard
+    # cert), and the air-gapped lane never exercised it before — the prior seed carried
+    # no enrollment, so EnsureWildcardTLS was skipped.
+
+    # (a) The brain configured wildcard TLS. Poll: the success log line is emitted once
+    # during startup and a single-shot grep can lose the race to the docker json-log.
+    for _i in $(seq 1 30); do
+        docker logs malmo-brain 2>&1 | grep -q 'caddy: wildcard TLS configured' && break
+        sleep 1
+    done
+    docker logs malmo-brain 2>&1 | grep -q 'caddy: wildcard TLS configured' || \
+        fail "brain did not configure wildcard TLS on the seeded boot (#278 — EnsureWildcardTLS not reached/applied)"
+    echo "cloud-assertions: wildcard TLS configured (acme-dns DNS-01 issuer + :443 set for *.$box_id.malmo.network)"
+
+    # (b) The :443 listener actually bound. A plain TCP connect to Caddy's HTTPS port
+    # succeeds even with no cert (the TLS handshake would fail, but the socket is
+    # listening) — the ":443 never binds" symptom from #278, asserted positively. Poll:
+    # the listener is patched in a beat after the config PUT.
+    bound=""
+    for _i in $(seq 1 30); do
+        if timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/443' 2>/dev/null; then bound=1; break; fi
+        sleep 1
+    done
+    [ -n "$bound" ] || fail "Caddy :443 listener not bound on the seeded boot (#278 — :443 never came up)"
+    echo "cloud-assertions: Caddy :443 listener bound"
     ;;
 frozen:*)
     expect="${MODE#frozen:}"
