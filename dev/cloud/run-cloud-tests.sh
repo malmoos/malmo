@@ -56,6 +56,19 @@ VERDICT=""
 BOX_ID_A=cindy-fox
 BOX_ID_B=rusty-hawk
 
+# Which boots to run, space-separated (unseeded seeded frozen). Default: all.
+# A subset is for callers that can't satisfy a boot's preconditions — notably
+# the publish gate on a KVM-less CI runner, where the QEMU TCG fallback makes
+# the frozen boot's cross-boot persistence unreliable: it needs boot 2's clean
+# guest poweroff to flush box-id A to the overlay within the shutdown budget,
+# and a slow TCG shutdown can be hard-killed before that flush lands, so boot 3
+# reads a stale overlay and (correctly, given an empty store) re-ingests. The
+# frozen-identity invariant is therefore validated where KVM is available, not
+# in the publish gate. Order still holds: frozen reuses the overlay seeded
+# leaves behind, so run seeded whenever frozen runs.
+BOOTS="${MALMO_CLOUD_BOOTS:-unseeded seeded frozen}"
+should_run() { case " $BOOTS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
 # QEMU writes serial logs as root (this script runs under sudo). Resolve the
 # invoking user so kept diagnostics are caller-readable.
 CALLER="${SUDO_USER:-}"
@@ -228,33 +241,39 @@ run_boot() {
 # GET /_malmo/sso returns 503 and /setup returns 403 (the SSO gate is armed but
 # closed — never the appliance's open empty-box behavior). Also the standalone C2
 # control-plane-up proof.
+if should_run unseeded; then
 if ! run_boot "unseeded" "unseeded"; then
     echo "cloud gate proof: ${VERDICT}" >&2
     exit 1
 fi
 echo "boot 1 OK — control plane up, hosted SSO gate armed (503, unprovisioned)"
+fi
 
 # --- 5. boot 2: seeded. Deliver seed A → the brain ingests the assertion key; a
 # bad/unsigned token on /_malmo/sso is 401 (the verifier is armed) and /setup is 403
 # (disabled on hosted). The ingested box-id A persists on the overlay. The positive
 # owner-create + wizard path needs the portal private key (cloud on-ramp).
+if should_run seeded; then
 if ! run_boot "seeded" "seeded" -smbios "type=11,value=$(seed_cred "$BOX_ID_A")"; then
     echo "cloud gate proof: ${VERDICT}" >&2
     exit 1
 fi
 echo "boot 2 OK — seed ingested (assertion key loaded, bad-token 401), box_id=${BOX_ID_A}"
+fi
 
 # --- 6. boot 3: frozen identity. Re-deliver a DIFFERENT seed B over the SAME
 # overlay. The brain loads its persisted box-id A from SQLite and ignores the new
 # seed; the dashboard + /api still serve under box_id A and the brain does not
 # re-ingest. Proves a re-delivered or changed seed cannot re-key a provisioned box
 # (MALMO_NETWORK.md frozen identity).
+if should_run frozen; then
 if ! run_boot "frozen" "frozen:${BOX_ID_A}" -smbios "type=11,value=$(seed_cred "$BOX_ID_B")"; then
     echo "cloud gate proof: ${VERDICT}" >&2
     exit 1
 fi
 echo "boot 3 OK — frozen identity held across reboot (re-delivered seed B ignored, box_id still ${BOX_ID_A})"
+fi
 
-echo "cloud end-to-end: PASS (un-seeded 503 → seeded SSO-verifier-armed+box_id → frozen reboot)"
+echo "cloud end-to-end: PASS (boots: ${BOOTS})"
 echo "qcow2 cloud artifact: ${QCOW2}"
 exit 0
