@@ -246,6 +246,49 @@ func TestSetServiceIdentity(t *testing.T) {
 	}
 }
 
+func TestSetInstancePendingRecreate(t *testing.T) {
+	s := open(t)
+	if err := s.Create(sample("a", "alpha")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// Fresh rows are not pending-recreate.
+	row, err := s.Get("a")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if row.PendingRecreate {
+		t.Fatalf("fresh row PendingRecreate = true, want false")
+	}
+	if err := s.SetInstancePendingRecreate("a", true); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	row, err = s.Get("a")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !row.PendingRecreate {
+		t.Fatalf("flag did not round-trip through Get")
+	}
+	// Must also survive the List path (same scan).
+	list, err := s.List()
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list: %v (%d rows)", err, len(list))
+	}
+	if !list[0].PendingRecreate {
+		t.Fatalf("flag did not round-trip through List")
+	}
+	// Clearing takes.
+	if err := s.SetInstancePendingRecreate("a", false); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if row, _ := s.Get("a"); row.PendingRecreate {
+		t.Fatalf("clear did not take")
+	}
+	if err := s.SetInstancePendingRecreate("missing", true); err != ErrNotFound {
+		t.Fatalf("set on missing instance: err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestSetStateOnMissingInstanceErrors(t *testing.T) {
 	s := open(t)
 	if err := s.SetState("nope", "running"); err != ErrNotFound {
