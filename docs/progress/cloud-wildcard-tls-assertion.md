@@ -13,7 +13,7 @@ This is a **test-lane coverage** change — no brain/host-agent/UI behavior chan
 ### The seeded boot now delivers a complete enrollment (`dev/cloud/run-cloud-tests.sh`)
 
 - `seed_cred()` adds an `enrollment` object (`subdomain`/`username`/`password`) to the seed JSON alongside `box_id` + `assertion_verification_key`. The values are **inert** in this lane: air-gapped, the box never reaches acme-dns or Let's Encrypt, so no real cert issues. Their only job is to make `enrollment.Complete()` true so the brain runs `EnsureWildcardTLS`. The header scenario comment for boot 2 records the added wildcard-TLS application step.
-- Verified the brain's own parser accepts the new wire shape: a throwaway `internal/profile` test confirmed `ReadSeed` parses it and `Enrollment.Complete()` returns true (the os↔cloud meeting point is the seed's JSON, not a shared Go type).
+- The brain's own parser already guards the new wire shape: `TestReadSeed_EnrollmentParsed` / `TestReadSeed_EnrollmentOptional` in `internal/profile/seed_test.go` (committed with #275/#276) assert `ReadSeed` parses the `subdomain`/`username`/`password` block and that `Enrollment.Complete()` reports present-vs-absent correctly — the same JSON shape the lane now emits (the os↔cloud meeting point is the seed's JSON, not a shared Go type). I re-ran them against the lane's exact bytes to confirm; no new Go test was needed.
 
 ### Two new seeded-boot assertions (`dev/cloud/cloud-assertions.sh`)
 
