@@ -1,0 +1,33 @@
+# Author's compose, held verbatim by malmo. Vaultwarden is a single static Rust
+# binary (upstream's start.sh just sources optional config and execs it — no
+# chown, no privilege drop), so it runs cleanly as the brain-pinned non-root
+# elected UID under cap_drop: ALL / no-new-privileges.
+#
+# ROCKET_PORT moves the listener off the image's default :80 to :8080 so it
+# binds without CAP_NET_BIND_SERVICE (dropped in the sandbox). ROCKET_ADDRESS
+# is already 0.0.0.0 in the image, so the brain routes inbound traffic to it.
+#
+# DATA_FOLDER pins everything Vaultwarden persists — the SQLite database, the
+# RSA keypair, the icon cache, attachments, and sends — under the single ./data
+# bind. The database defaults to sqlite://${DATA_FOLDER}/db.sqlite3, so no
+# external database is needed.
+#
+# DOMAIN must be the exact URL clients reach the server at; the brain injects
+# the app's canonical URL as MALMO_APP_URL. It drives WebAuthn/passkey origin
+# checks and the links Vaultwarden embeds in emails and attachments.
+#
+# ADMIN_TOKEN gates the /admin page; the brain generates it (manifest `secrets:`,
+# show: true) and the owner reads it from the app's detail page. With it set,
+# /admin is reachable — the owner uses it to manage users and close signups after
+# the first account. Unset, /admin is disabled entirely, with no way for the
+# owner to recover the token, so it is wired here rather than omitted.
+services:
+  vaultwarden:
+    image: vaultwarden/server:1.36.0
+    environment:
+      DOMAIN: ${MALMO_APP_URL}
+      ROCKET_PORT: "8080"
+      DATA_FOLDER: /data
+      ADMIN_TOKEN: ${MALMO_SECRET_ADMIN_TOKEN}
+    volumes:
+      - ./data:/data

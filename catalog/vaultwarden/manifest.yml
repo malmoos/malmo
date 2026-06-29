@@ -1,0 +1,76 @@
+id: vaultwarden
+manifest_version: 1
+name: Vaultwarden
+version: "1.36.0"
+description:
+  short: "Self-hosted password manager — your vault on your own server, synced to every Bitwarden app."
+  long: |
+    Vaultwarden is a lightweight server that speaks the Bitwarden client API, so the official Bitwarden apps — browser extensions, desktop, mobile, and the CLI — sync against your malmo instead of Bitwarden's cloud. It holds your logins, secure notes, cards, identities, TOTP codes, passkeys, and file attachments in an end-to-end encrypted vault that only your master password unlocks; the server only ever stores ciphertext it cannot read. Written in Rust, it runs comfortably in a few hundred megabytes where the official self-hosted stack wants gigabytes. Open the web vault on first visit to create your account, then point your Bitwarden apps at this server's address. Your vault lives in a SQLite database stored with the app — there is no separate database to set up. New-account signups are open at first so you can create that account; afterwards, open the admin page (its access token is shown on this app's page in malmo) to switch signups off and keep the vault to yourself.
+icon: ./icon.svg
+categories: [security, productivity]
+author:
+  name: Vaultwarden
+  url: https://github.com/dani-garcia/vaultwarden
+license: AGPL-3.0
+links:
+  homepage: https://github.com/dani-garcia/vaultwarden
+  source: https://github.com/dani-garcia/vaultwarden
+  support: https://github.com/dani-garcia/vaultwarden/wiki
+changelog_url: https://github.com/dani-garcia/vaultwarden/releases
+
+compose_file: compose.yml
+main_service: vaultwarden
+main_port: 8080
+preferred_slugs: [vaultwarden, vault]
+
+# Vaultwarden's passkey (WebAuthn) sign-in and second-factor rely on a browser
+# secure context, so the brain warns at install if the app would be served over
+# the HTTP .local URL. An author hint only (APP_MANIFEST.md # needs_secure_context):
+# it never blocks install, and TOTP/email 2FA and the core vault work over HTTP.
+needs_secure_context: true
+
+# /alive returns the server time (200, no auth) — the same endpoint upstream's
+# own container healthcheck hits. First boot generates the RSA keypair and the
+# SQLite schema, so allow a short start period before probing.
+health_probe:
+  path: /alive
+  start_period: 30s
+
+# A Rust binary with a SQLite backend; idles around 45M and barely moves under
+# a household's vault. 256M leaves comfortable headroom for the install-time
+# capacity check and the store's footprint display.
+resources:
+  recommended: { memory: 256M }
+
+# One ./data bind holds everything Vaultwarden persists: the SQLite database
+# (vault items, accounts, RSA keys), attachments, sends, and the website-icon
+# cache. The icon cache is the only regenerable part, but it is tiny and would
+# just re-fetch, so there is nothing worth excluding from backup. Measured at
+# first healthy boot.
+storage:
+  data_volumes: [./data]
+  estimated_size: 1M
+
+# The brain generates this once at install and injects it as MALMO_SECRET_ADMIN_TOKEN;
+# the compose maps it to ADMIN_TOKEN, which gates Vaultwarden's /admin page. show:
+# true surfaces the value to the instance owner on the app's detail page (the
+# Unleash pattern, APP_MANIFEST.md # secrets) — the owner reads it there to open
+# /admin and, e.g., turn signups off after creating the first account.
+secrets:
+  - name: admin_token
+    show: true
+
+# internet: Vaultwarden reaches the public internet to fetch website favicons
+# for vault entries and to run breach (HaveIBeenPwned) reports. The core vault
+# — storing, syncing, and unlocking — works fully offline; only those
+# conveniences degrade without it. lan: not needed; the brain routes inbound
+# client traffic, and Vaultwarden initiates no LAN connections of its own.
+permissions:
+  internet: true
+  lan: false
+
+images:
+  vaultwarden/server:1.36.0:
+    digest: sha256:d626d04934cd1192ad8ced1adb975099fca78cec33ab467d2d3c923cde7f3b0c
+    download_bytes: 80556110
+    disk_bytes: 258838016
