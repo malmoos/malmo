@@ -5,7 +5,7 @@ version: "3.0.2"
 description:
   short: "Self-hosted PDF document signing and form filling."
   long: |
-    DocuSeal lets you create fillable PDF forms, collect legally-binding e-signatures, and manage the full signing workflow from a single dashboard — without routing documents through a third-party cloud. Build templates with a visual drag-and-drop editor, send signature requests to multiple recipients via email, and download completed PDFs when the workflow is done. Documents and signatures live entirely on your own hardware.
+    DocuSeal lets you create fillable PDF forms, collect legally-binding e-signatures, and manage the full signing workflow from a single dashboard — without routing documents through a third-party cloud. Build templates with a visual drag-and-drop editor, send signature requests to multiple recipients via email, and download completed PDFs when the workflow is done. Documents and signatures live entirely on your own hardware. Sending signature requests by email works once an administrator adds an outgoing email account in malmo's Settings → Outgoing email and binds DocuSeal to it; DocuSeal's own built-in email settings page isn't used.
 
     Note: email-based signing is currently limited. Signature-request links point to this app's local network address, so a recipient can only open them from a device on your home network — links sent to people off your network won't resolve until remote access is available. Use DocuSeal on your LAN, or share completed documents another way.
 icon: ./icon.svg
@@ -42,6 +42,13 @@ services:
   database:
     type: postgres
     version: "16"
+
+# Email-based signing (signature-request invites, completion notices) needs an
+# outgoing-mail provider — compose maps the MALMO_MAIL_* fields onto DocuSeal's
+# SMTP_* mailer env. Unbound, every send path is gated off and email features
+# stay dark until an admin binds a provider.
+mail:
+  optional: true
 
 permissions:
   internet: true
