@@ -57,15 +57,15 @@ BOX_ID_A=cindy-fox
 BOX_ID_B=rusty-hawk
 
 # Which boots to run, space-separated (unseeded seeded frozen). Default: all.
-# A subset is for callers that can't satisfy a boot's preconditions — notably
-# the publish gate on a KVM-less CI runner, where the QEMU TCG fallback makes
-# the frozen boot's cross-boot persistence unreliable: it needs boot 2's clean
-# guest poweroff to flush box-id A to the overlay within the shutdown budget,
-# and a slow TCG shutdown can be hard-killed before that flush lands, so boot 3
-# reads a stale overlay and (correctly, given an empty store) re-ingests. The
-# frozen-identity invariant is therefore validated where KVM is available, not
-# in the publish gate. Order still holds: frozen reuses the overlay seeded
-# leaves behind, so run seeded whenever frozen runs.
+# A subset lets a caller run only the boots it needs — notably the cloud-image
+# publish gate, which runs "unseeded seeded" to prove the built image's brain
+# accepts the current seed schema (the regression that gate exists for) and
+# leaves out the frozen-identity boot. Frozen is orthogonal to that gate (it
+# checks that a re-delivered seed is IGNORED on a later boot) and has shown a
+# flaky false "re-ingested" verdict in CI whose root cause is still open — so
+# it is kept in the default full run (where it can be triaged) but out of the
+# publish gate. Order still holds: frozen reuses the overlay seeded leaves
+# behind, so run seeded whenever frozen runs.
 BOOTS="${MALMO_CLOUD_BOOTS:-unseeded seeded frozen}"
 should_run() { case " $BOOTS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 

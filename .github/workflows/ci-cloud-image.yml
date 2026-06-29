@@ -113,11 +113,11 @@ jobs:
       #    test image reuses the control-plane bundle built in step 1, so it
       #    exercises the same brain that ships.
       # Scope to unseeded + seeded: those guard the regression this gate exists
-      # for (the brain accepting the current seed schema) and need no cross-boot
-      # disk persistence. The frozen-identity boot is excluded here because it
-      # depends on boot 2's clean-shutdown flush surviving into a third boot,
-      # which is unreliable under this runner's QEMU TCG fallback (no KVM); it is
-      # validated on a KVM-capable host instead (MALMO_CLOUD_BOOTS default = all).
+      # for — the built image's brain accepting the current seed schema. The
+      # frozen-identity boot is orthogonal (it checks a re-delivered seed is
+      # ignored on a later boot) and has shown a flaky false "re-ingested"
+      # verdict whose root cause is still open, so it is left to the full local
+      # run (MALMO_CLOUD_BOOTS default = all) rather than blocking publish.
       - name: Seeded-boot test (brain accepts the current seed schema)
         env:
           MALMO_CLOUD_BOOTS: "unseeded seeded"
