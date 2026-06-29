@@ -1,63 +1,75 @@
-# CI gate for the hosted cloud-VM image: build it with mkosi and assert it stays
-# lean. The CI realization of `make build-cloud-image` (docs/specs/TESTING.md).
+# Build the hosted cloud-VM image with mkosi, prove the brain accepts the CURRENT
+# first-boot seed schema (seeded QEMU boot), assert it stays lean, then publish it
+# to Hetzner as a snapshot and print the snapshot id. Manual-only
+# (workflow_dispatch) — the full build is expensive (~40 min) and a publish is a
+# deliberate act, not a per-push one.
 #
 # Closes the gap #189/#238 carried: until now the cloud image had NO automated
 # build — `make build-cloud-image` ran only by hand, and on an Ubuntu 24.04 box
-# mkosi 26's rootless sandbox dies before it starts (PR_CAPBSET_DROP EPERM)
-# under the AppArmor unprivileged-userns restriction. The whole cloud track
-# deferred its green build to "the maintainer's joint cloud live run". This lane
-# makes the build (and its lean check) run on every dev/cloud/** change instead.
+# mkosi 26's rootless sandbox dies before it starts (PR_CAPBSET_DROP EPERM) under
+# the AppArmor unprivileged-userns restriction. This lane makes the build run on
+# demand instead.
 #
-# Manual-only (workflow_dispatch): the full mkosi build is expensive (bootstraps
-# a Debian tools tree and builds the whole hosted image, up to ~40 min), so it is
-# not worth running on every PR. Trigger it by hand from the Actions tab — or with
-# `gh workflow run "CI / Cloud image"` — when iterating on the cloud-image lane or
-# before cutting a hosted release.
+# Why the seeded-boot gate exists: a cloud-image build can ship a brain that
+# rejects the live seed — e.g. one that still required the old
+# admin_bootstrap_secret after the SSO change removed it. Such a box boots, never
+# configures wildcard TLS, and provisioning hangs at the SSL step. The seeded
+# QEMU boot asserts the brain logs 'provisioning seed ingested'; a stale/skewed
+# brain fails there and is never published. A fresh runner (no .dev/ cache) also
+# rebuilds the control-plane images from source, so the "image labeled new, brain
+# baked old" skew cannot recur.
+#
+# Trigger from the Actions tab or `gh workflow run "CI / Cloud image"`. The run
+# prints `MALMO_HETZNER_IMAGE=<id>`; set that on the control-plane and deploy.
+#
+# Required secret: HCLOUD_TOKEN — a Hetzner Cloud API token (publish only).
 name: CI / Cloud image
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the built image to Hetzner as a snapshot"
+        type: boolean
+        default: true
 
-# Cancel superseded runs on the same ref (e.g. force-pushes to a PR branch).
+# Cancel superseded runs on the same ref.
 concurrency:
   group: ci-cloud-image-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   cloud-image:
-    name: Build hosted cloud image + lean check
+    name: Build + seeded-boot test + publish hosted cloud image
     # Pin 24.04 explicitly: this is the exact environment that reproduces the
     # mkosi-sandbox EPERM (#189), so the fix has to be proven here, not on a
     # floating ubuntu-latest.
     runs-on: ubuntu-24.04
-    # mmdebstrap + apt fetch over the network; cap the run so a stalled mirror or
-    # a build loop can't hold the runner for the 6-hour Actions default.
-    timeout-minutes: 40
+    # Two mkosi builds (production image + QEMU test image), three QEMU boots, and
+    # the rescue-server publish. Generous vs the old build-only 40m cap.
+    timeout-minutes: 120
+    outputs:
+      image_id: ${{ steps.publish.outputs.image_id }}
     steps:
       - uses: actions/checkout@v5
 
       # mkosi 26 builds rootless: it unshares a user namespace and drops
       # capabilities inside it. Ubuntu 24.04 ships
-      # kernel.apparmor_restrict_unprivileged_userns=1, which hands an
-      # unconfined process a userns with no CAP_SETPCAP, so mkosi's
-      # PR_CAPBSET_DROP returns EPERM and the build dies at sandbox bring-up
-      # (#189). Relaxing the knob is safe on an ephemeral runner; on a dev box
-      # the bootstrap scripts detect the restriction and point at this remedy.
+      # kernel.apparmor_restrict_unprivileged_userns=1, which hands an unconfined
+      # process a userns with no CAP_SETPCAP, so mkosi's PR_CAPBSET_DROP returns
+      # EPERM and the build dies at sandbox bring-up (#189). Relaxing the knob is
+      # safe on an ephemeral runner.
       - name: Relax AppArmor unprivileged-userns restriction
         run: |
           knob=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
-          echo "before: $(cat "$knob" 2>/dev/null || echo 'n/a (no AppArmor userns restriction)')"
+          echo "before: $(cat "$knob" 2>/dev/null || echo 'n/a')"
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           echo "after:  $(cat "$knob")"
 
-      # Host tooling mkosi needs to bootstrap a Debian tools tree (the Ubuntu
-      # host resolves ToolsTree=default to Debian) and to build rootless:
-      #   - uidmap: newuidmap/newgidmap for mkosi's --map-auto userns mapping
-      #   - mmdebstrap + debian-archive-keyring: bootstrap + verify the tools tree
-      #   - dosfstools/mtools: lay down the FAT ESP; squashfs-tools, e2fsprogs:
-      #     the ext4 root; systemd-container: nspawn for the build sandbox.
-      #   - libpam0g-dev: PAM headers for the slim host-agent-real CGO build
-      #     that bootstrap.sh stages (preflight checks for /usr/include/security/pam_appl.h).
+      # Host tooling mkosi needs to bootstrap a Debian tools tree and build
+      # rootless (uidmap/mmdebstrap/keyring; dosfstools/mtools for the ESP;
+      # squashfs-tools/e2fsprogs for the root; systemd-container for the nspawn
+      # build sandbox; libpam0g-dev for the slim host-agent-real CGO build).
       - name: Install mkosi and image-build tooling
         run: |
           sudo apt-get update
@@ -65,14 +77,17 @@ jobs:
             uidmap mmdebstrap debian-archive-keyring \
             dosfstools mtools squashfs-tools e2fsprogs systemd-container \
             libpam0g-dev
-          # Clone mkosi at the pinned tag and symlink its launcher into /usr/local/bin
-          # so root finds it when bootstrap.sh runs under sudo (sudo's secure_path
-          # drops ~/.local/bin and /opt/pipx_bin). bin/mkosi uses readlink -f to
-          # resolve PYTHONPATH back to the checkout regardless of where the symlink
-          # lives — the same approach mkosi's own setup-mkosi action.yaml uses.
           git clone --depth=1 --branch v26 \
             https://github.com/systemd/mkosi.git /tmp/mkosi-src
           sudo ln -sf /tmp/mkosi-src/bin/mkosi /usr/local/bin/mkosi
+
+      # QEMU + UEFI firmware for the seeded-boot test lane (run-cloud-tests.sh).
+      # GitHub-hosted Linux runners expose /dev/kvm; the lane uses it when present
+      # and falls back to TCG otherwise (slower, still correct).
+      - name: Install QEMU + OVMF for the seeded-boot test
+        run: |
+          sudo apt-get install -y qemu-system-x86 qemu-utils ovmf
+          echo "kvm: $(ls -l /dev/kvm 2>/dev/null || echo 'none — test lane will use TCG')"
 
       - name: Versions
         run: |
@@ -81,13 +96,90 @@ jobs:
           echo "subuid: $(grep "^$(id -un):" /etc/subuid || echo MISSING)"
           echo "subgid: $(grep "^$(id -un):" /etc/subgid || echo MISSING)"
 
-      # Fast isolation of the #189 fix: exercise exactly the sandbox code path
-      # that EPERM'd (acquire_privileges -> drop_capabilities) before spending
-      # minutes on the full build. If this fails, the userns knob did not take
-      # and the build diagnosis is unambiguous; if it passes but the build
-      # fails, the cause is a build dependency, not the sandbox.
+      # Fast isolation of the #189 fix: exercise exactly the sandbox code path that
+      # EPERM'd (acquire_privileges -> drop_capabilities) before the full build.
       - name: mkosi sandbox smoke (validates the userns fix in isolation)
         run: mkosi sandbox -- true
 
+      # 1. Build the production image that will be published. A fresh checkout has
+      #    no .dev/ cache, so make rebuilds the control-plane images (brain/ui)
+      #    from source — this is what removes the stale-cached-brain failure mode.
       - name: Build the hosted cloud image (+ lean check)
         run: make build-cloud-image
+
+      # 2. SEEDED-BOOT GATE. Boot the image under QEMU with a current-schema seed
+      #    and assert the brain ingests it (cloud-assertions.sh 'seeded' boot). A
+      #    brain that rejects the live seed fails here -> nothing is published. The
+      #    test image reuses the control-plane bundle built in step 1, so it
+      #    exercises the same brain that ships.
+      - name: Seeded-boot test (brain accepts the current seed schema)
+        run: make test-cloud-qemu
+
+      # ---- publish to Hetzner (only when requested) --------------------------
+
+      - name: Set up Go (for hcloud-upload-image)
+        if: ${{ inputs.publish }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Install hcloud-upload-image
+        if: ${{ inputs.publish }}
+        run: |
+          go install github.com/apricote/hcloud-upload-image@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # Hetzner Cloud has no native custom-image upload API: a snapshot is made by
+      # booting a throwaway rescue server, dd'ing the image onto its disk, and
+      # snapshotting it. apricote/hcloud-upload-image does that dance. We tag the
+      # snapshot with a unique label so its id is resolvable deterministically
+      # afterwards (the tool only logs it). The .raw built in step 1 lives under
+      # .dev/cloud/; we xz it for a smaller upload.
+      - name: Publish image to Hetzner + resolve snapshot id
+        id: publish
+        if: ${{ inputs.publish }}
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          set -euo pipefail
+          [ -n "${HCLOUD_TOKEN:-}" ] || { echo "::error::HCLOUD_TOKEN secret not set"; exit 1; }
+
+          raw="$(ls -t .dev/cloud/*.raw 2>/dev/null | head -n1 || true)"
+          [ -n "$raw" ] && [ -f "$raw" ] || { echo "::error::no .raw under .dev/cloud/ (build failed?)"; exit 1; }
+          echo "image: $raw ($(du -h "$raw" | cut -f1))"
+          xz -T0 -c -- "$raw" > "$raw.xz"
+          echo "compressed: $(du -h "$raw.xz" | cut -f1)"
+
+          run_id="$(date +%Y%m%d-%H%M%S)"
+          os_rev="$(git rev-parse --short HEAD)"
+          desc="malmo hosted cloud image (C2) ${run_id} os@${os_rev}"
+          labels="malmo-image=hosted-cloud,malmo-c2-upload=${run_id},malmo-os-rev=${os_rev}"
+
+          hcloud-upload-image upload \
+            --image-path "$raw.xz" \
+            --compression xz \
+            --architecture x86 \
+            --location nbg1 \
+            --description "$desc" \
+            --labels "$labels"
+
+          id="$(curl -fsS -G "https://api.hetzner.cloud/v1/images" \
+            -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
+            --data-urlencode "type=snapshot" \
+            --data-urlencode "sort=created:desc" \
+            --data-urlencode "label_selector=malmo-c2-upload=${run_id}" \
+            | python3 -c 'import sys,json; i=json.load(sys.stdin).get("images",[]); print(i[0]["id"] if i else "")')"
+          [ -n "$id" ] || { echo "::error::upload finished but no snapshot found for label malmo-c2-upload=${run_id}"; exit 1; }
+
+          echo "image_id=$id" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Hosted cloud image published"
+            echo ""
+            echo "Set this on the control-plane, then deploy:"
+            echo ""
+            echo '```'
+            echo "MALMO_HETZNER_IMAGE=${id}"
+            echo '```'
+            echo ""
+            echo "_description: ${desc}_"
+          } >> "$GITHUB_STEP_SUMMARY"
