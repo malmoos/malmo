@@ -337,7 +337,15 @@ seeded)
     grep -q ' 401' <<<"$sso" || fail "seeded /_malmo/sso with a bad token: status='$sso' (want 401 — key loaded, signature rejected)"
     echo "cloud-assertions: hosted SSO verifier armed (bad token 401, key loaded from seed; box_id=$box_id)"
 
-    # The synchronous seed ingestion ran before the brain served (the brain logs it).
+    # The synchronous seed ingestion ran before the brain served (the brain logs
+    # it). Poll rather than read once: the brain emits this line during startup
+    # and the bad-token 401 above can win the race to the docker json-log, so a
+    # single-shot grep is flaky (the line is there moments later). Bounded — the
+    # ingest log is first-boot-synchronous, so a few seconds is ample.
+    for _i in $(seq 1 30); do
+        docker logs malmo-brain 2>&1 | grep -q 'provisioning seed ingested' && break
+        sleep 1
+    done
     docker logs malmo-brain 2>&1 | grep -q 'provisioning seed ingested' || \
         fail "brain did not log 'provisioning seed ingested' on the seeded boot"
     echo "cloud-assertions: seed ingested (box_id=$box_id persisted)"
