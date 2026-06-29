@@ -1,3 +1,29 @@
+# DocuSeal (Rails) adapted for malmo's Tier-3 sandbox. The single ./data/app
+# bind holds uploaded documents, generated PDFs, and signatures; the database is
+# a managed Postgres declared in the manifest (the brain injects the DSN).
+#
+# Outgoing mail (manifest `mail:` block, #122). DocuSeal reads a full set of
+# SMTP_* env vars at boot (config/environments/production.rb): once SMTP_ADDRESS
+# is set ActionMailer switches to :smtp, and these env settings take precedence
+# over DocuSeal's own in-app Email SMTP page (the DB-stored fallback). The brain
+# injects the discrete MALMO_MAIL_* fields when an instance is bound to a
+# provider, and the mapping below projects them onto DocuSeal's names:
+# - SMTP_FROM is mandatory once SMTP is active — DocuSeal's mail interceptor
+#   (lib/action_mailer_configs_interceptor.rb) does ENV.fetch('SMTP_FROM') with
+#   no default and raises without it; it maps to MALMO_MAIL_FROM.
+# - Encryption: DocuSeal takes two independent flags. SMTP_ENABLE_STARTTLS
+#   defaults to ON (disabled only by the literal "false"), so it's driven
+#   explicitly from MALMO_MAIL_USE_TLS (the brain's STARTTLS projection);
+#   SMTP_ENABLE_SSL (implicit TLS / SMTPS) is driven from MALMO_MAIL_USE_SSL.
+#   The two booleans are mutually exclusive, matching DocuSeal's expectation.
+# Unbound, MALMO_MAIL_* are absent and the defaults below leave the SMTP_* vars
+# empty. An empty SMTP_ADDRESS is still truthy to DocuSeal's boot check, so
+# ActionMailer sits in :smtp mode with no real settings — but DocuSeal gates
+# every send-email path (UI views and the invitation job) on can_send_emails?,
+# which is false until a provider is bound, so no mail is offered or sent while
+# unbound. The one consequence is that DocuSeal's own in-app Email SMTP page is
+# shadowed (ignored) until a malmo provider is bound; outgoing mail is meant to
+# be configured through Settings -> Outgoing email, not the app's page.
 services:
   app:
     image: docuseal/docuseal:3.0.2
@@ -5,3 +31,10 @@ services:
       - ./data/app:/data/docuseal
     environment:
       DATABASE_URL: ${MALMO_SERVICE_DATABASE_DSN}
+      SMTP_ADDRESS: "${MALMO_MAIL_HOST:-}"
+      SMTP_PORT: "${MALMO_MAIL_PORT:-587}"
+      SMTP_USERNAME: "${MALMO_MAIL_USER:-}"
+      SMTP_PASSWORD: "${MALMO_MAIL_PASSWORD:-}"
+      SMTP_FROM: "${MALMO_MAIL_FROM:-}"
+      SMTP_ENABLE_STARTTLS: "${MALMO_MAIL_USE_TLS:-false}"
+      SMTP_ENABLE_SSL: "${MALMO_MAIL_USE_SSL:-false}"
