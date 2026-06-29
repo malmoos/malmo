@@ -1,0 +1,120 @@
+id: cube
+manifest_version: 1
+name: Cube
+version: "1.6.64"
+description:
+  short: "Open-source semantic layer that turns your data warehouse into one consistent metrics API for BI, embedded analytics, and AI."
+  long: |
+    Cube is the headless semantic layer for your data. It sits in front of a data warehouse you already run — Postgres, MySQL, ClickHouse, BigQuery, Snowflake, and many others — and lets you define your metrics, dimensions, and access rules once, in version-controlled data models, then serve them through a single consistent REST, GraphQL, and SQL API. Every dashboard, embedded chart, and AI agent that queries Cube gets the same definition of "revenue" or "active users", with caching and pre-aggregations handled by the bundled Cube Store so heavy queries stay fast without hammering your warehouse.
+
+    On malmo, Cube runs in production mode, which is the secure way to self-host it: the API is authenticated with a signing secret malmo generates for you, and Cube connects to your warehouse using the credentials you enter in this app's configuration form (at install or later under settings). Point it at a database on your home network or a cloud warehouse, write your data models, and Cube becomes the metrics backend the rest of your stack queries.
+
+    Two things to know going in. Cube here is an **API service, not a clickable dashboard** — the Developer Playground (Cube's in-browser model builder and query explorer) only runs in development mode, which malmo deliberately does not enable because it turns off API authentication and would expose your warehouse to anyone who can reach the app. And because data models are config-as-code under Cube's own config directory, authoring them today needs file access to the app's data folder rather than an in-app editor. Cube is a developer-facing building block for analytics, not a turnkey app you click and browse.
+icon: ./icon.svg
+categories: [analytics, developer-tools]
+author:
+  name: Cube Dev
+  url: https://cube.dev
+license: Apache-2.0
+links:
+  homepage: https://cube.dev
+  source: https://github.com/cube-js/cube
+  support: https://cube.dev/docs
+changelog_url: https://github.com/cube-js/cube/releases
+
+compose_file: compose.yml
+main_service: cube
+main_port: 4000
+preferred_slugs: [cube, semantic-layer, analytics]
+
+# /livez is Cube's Kubernetes-style liveness endpoint on the API port; it flips
+# healthy once the API server is up. Liveness, not /readyz, so the install gate
+# tracks "Cube booted and serves HTTP" rather than the reachability of the
+# external warehouse the user supplies (/readyz reports DOWN until a data source
+# is connected). The cube image is large (~1.1 GB on disk) so the cold start is
+# slower, and Cube Store builds its metastore on first boot — allow a generous
+# start period.
+health_probe:
+  path: /livez
+  start_period: 60s
+
+# Cube's node API and the Rust Cube Store both sit idle-light but the JVM-free
+# node stack plus Cube Store's in-memory pre-aggregation engine want headroom on
+# the low-end hardware malmo targets; 1.5 GB keeps both comfortable before any
+# large pre-aggregation build.
+resources:
+  recommended: { memory: 1536M, cpu: 1 }
+
+# ./data/conf is Cube's config directory — the user-authored data models and
+# cube config (config-as-code); it must be backed up. ./data/cubestore is Cube
+# Store's pre-aggregation materializations and metadata, regenerable from the
+# source warehouse, so it is cache. The user's actual analytics data never lives
+# here — it stays in the external warehouse Cube queries. estimated_size measured
+# at first-healthy on a clean boot with no data models authored yet.
+storage:
+  data_volumes: [./data/conf]
+  cache_volumes: [./data/cubestore]
+  estimated_size: 1M
+
+# Cube requires an API signing secret in production mode (CUBEJS_API_SECRET); it
+# signs and verifies the JWTs that authenticate every API call. The brain
+# generates it once at install and injects it as MALMO_SECRET_API; the owner can
+# read it to mint signed tokens for clients that query the API.
+secrets:
+  - name: api
+
+# The data-source connection is the operator's own warehouse — malmo can neither
+# generate these values nor ship them, so they're collected as config fields
+# (APP_MANIFEST.md # D4) and injected verbatim under Cube's own env-var names (no
+# MALMO_* indirection) into the cube service. These cover Cube's host-based
+# drivers (Postgres, MySQL, ClickHouse, Redshift, Materialize, …); warehouses
+# with their own credential model (BigQuery service-account JSON, Snowflake
+# account/warehouse) use driver-specific variables not on this form yet — see the
+# Platform gaps note on the PR. CUBEJS_DB_TYPE is required so the app never
+# installs without a declared warehouse type; the connection params are optional
+# because the required subset differs per driver, and Cube reads whichever are
+# set. Targets main_service (cube) by default — no `service:` needed.
+config:
+  - app_env: CUBEJS_DB_TYPE
+    title: "Data source type"
+    description: "Which warehouse Cube connects to, e.g. postgres, mysql, clickhouse, redshift, materialize. See cube.dev/docs for the full driver list and any driver-specific variables."
+    required: true
+  - app_env: CUBEJS_DB_HOST
+    title: "Database host"
+    description: "Hostname or IP of your warehouse, reachable from your home server (a LAN address or a cloud endpoint)."
+  - app_env: CUBEJS_DB_PORT
+    title: "Database port"
+    description: "Port your warehouse listens on. Leave blank to use the driver's default (e.g. 5432 for Postgres)."
+  - app_env: CUBEJS_DB_NAME
+    title: "Database name"
+    description: "The database (or schema/dataset) Cube queries."
+  - app_env: CUBEJS_DB_USER
+    title: "Database user"
+    description: "Username Cube authenticates to the warehouse with."
+  - app_env: CUBEJS_DB_PASS
+    title: "Database password"
+    description: "Password for the database user. Leave blank if your warehouse uses passwordless/trust auth."
+    secret: true
+  - app_env: CUBEJS_DB_SSL
+    title: "Use SSL/TLS"
+    description: "Encrypt the connection to the warehouse. Enable for cloud warehouses that require TLS."
+    type: bool
+    default: "false"
+
+# internet: warehouses are routinely cloud-hosted (BigQuery, Snowflake, a managed
+# Postgres), which Cube must reach to answer queries. lan: a self-hosted
+# warehouse is just as often another box on the home network. Cube connects
+# outward to whichever the user configures; the brain still routes all inbound.
+permissions:
+  internet: true
+  lan: true
+
+images:
+  cubejs/cube:v1.6.64:
+    digest: sha256:42418fc85830763178abd45ca93e60fefec27effb92418f9d977699bc38483f5
+    download_bytes: 332624667
+    disk_bytes: 1083945984
+  cubejs/cubestore:v1.6.64:
+    digest: sha256:6494961cd5de30bba97608ad46ed5e164adf23eeb211f0ebcfcce7e9b56251ff
+    download_bytes: 95248729
+    disk_bytes: 265027072

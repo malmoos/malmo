@@ -1,0 +1,65 @@
+# Cube adapted for malmo's Tier-3 sandbox (cap_drop: ALL, no-new-privileges,
+# brain-pinned non-root user:). Upstream's production compose is a five-service
+# scale-out (a Cube API instance, a refresh worker, a Cube Store router, and two
+# Cube Store workers) that publishes host port 4000. malmo drops the host port
+# (the brain routes to main_port 4000) and collapses the cluster to the smallest
+# stack that runs a real semantic layer: one Cube API container plus a single
+# Cube Store node. The refresh worker is folded away — pre-aggregations refresh
+# in-process for a single-instance home deployment — and the two Cube Store
+# workers collapse into the one standalone node, which is how Cube Store runs
+# when no CUBESTORE_WORKERS list is set.
+#
+# Production mode, never dev mode. CUBEJS_DEV_MODE is pinned false: dev mode
+# disables Cube's API authentication entirely and exposes the Developer
+# Playground, which on a routable app URL is an unauthenticated query gateway to
+# the connected warehouse. The cost is that the Playground UI is dev-only — a
+# production Cube is a headless REST/GraphQL/SQL API with no web dashboard.
+#
+# Env rewiring (the brain injects the values; the compose maps them to Cube's
+# own names):
+#   CUBEJS_API_SECRET  -> ${MALMO_SECRET_API}   (CSPRNG, generated once at
+#                                                install; signs/verifies the API
+#                                                JWTs Cube requires in production)
+#   CUBEJS_CUBESTORE_HOST/PORT                   point the API at the bundled
+#                                                single Cube Store node
+#
+# The data-source connection (CUBEJS_DB_TYPE + CUBEJS_DB_* credentials) is the
+# operator's own warehouse, which malmo can neither generate nor ship. Those are
+# declared as `config:` fields in the manifest (APP_MANIFEST.md # D4) and the
+# brain stamps each one into this service's environment override under its own
+# name (CUBEJS_DB_HOST, CUBEJS_DB_PASS, ...), so they are not listed here.
+services:
+  cube:
+    image: cubejs/cube:v1.6.64
+    depends_on:
+      - cubestore
+    environment:
+      CUBEJS_DEV_MODE: "false"
+      CUBEJS_API_SECRET: ${MALMO_SECRET_API}
+      CUBEJS_CUBESTORE_HOST: cubestore
+      CUBEJS_CUBESTORE_PORT: "3030"
+    volumes:
+      # Cube loads its data models and config from /cube/conf — the user-authored
+      # semantic layer, kept across restarts. App state, not user content.
+      - ./data/conf:/cube/conf
+    # The image ships node but no curl/wget, so probe /livez (Cube's
+    # Kubernetes-style liveness endpoint) with the bundled node runtime. Liveness
+    # rather than /readyz so the install gate tracks "Cube booted and serves
+    # HTTP", not the reachability of an external warehouse the user supplies.
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/livez',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 60s
+
+  cubestore:
+    image: cubejs/cubestore:v1.6.64
+    volumes:
+      # Single standalone node (no CUBESTORE_WORKERS): Cube Store persists its
+      # RocksDB metastore and pre-aggregation materializations under its default
+      # data dir, /cube/.cubestore. That baked path is unwritable to the non-root
+      # sandbox uid, so bind it — otherwise Cube Store panics on startup trying to
+      # create the metastore directory. The contents are regenerable from the
+      # source warehouse, so the bind is declared cache, not backed-up data.
+      - ./data/cubestore:/cube/.cubestore
