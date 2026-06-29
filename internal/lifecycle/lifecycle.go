@@ -1147,6 +1147,40 @@ func (m *Manager) teardown(ctx context.Context, inst store.Instance, removeDir b
 	return nil
 }
 
+// recreateRunning applies an env-restamping edit (config or mail) to a running
+// instance with `compose up -d` and reconciles its pending-recreate marker so a
+// failed recreate self-heals. The brain has already committed the new
+// override/.env (brain commits first; CLAUDE.md # Load-bearing decisions): on a
+// ComposeUp failure the instance is marked pending so the reconcile pass retries
+// the recreate against the committed state, and on success the marker is cleared.
+// This is what converges a container left on stale env by a failed edit (#268).
+func (m *Manager) recreateRunning(ctx context.Context, inst store.Instance) error {
+	upCtx, cancel := context.WithTimeout(ctx, m.healthWait)
+	defer cancel()
+	if out, err := m.docker.ComposeUp(upCtx, m.instanceDir(inst.ID), "malmo-"+inst.ID); err != nil {
+		if !inst.PendingRecreate {
+			if serr := m.store.SetInstancePendingRecreate(inst.ID, true); serr != nil {
+				slog.Warn("mark pending recreate", "instance_id", inst.ID, "err", serr)
+			}
+		}
+		return fmt.Errorf("compose up: %w\n%s", err, out)
+	}
+	m.clearPendingRecreate(inst)
+	return nil
+}
+
+// clearPendingRecreate clears an instance's owed-recreate marker after a
+// successful compose up has brought its container to the committed override/.env
+// (#268). A no-op when the marker is already clear, so it never writes needlessly.
+func (m *Manager) clearPendingRecreate(inst store.Instance) {
+	if !inst.PendingRecreate {
+		return
+	}
+	if err := m.store.SetInstancePendingRecreate(inst.ID, false); err != nil {
+		slog.Warn("clear pending recreate", "instance_id", inst.ID, "err", err)
+	}
+}
+
 // Reconcile is the brain-startup pass (APP_LIFECYCLE.md # reconciliation is
 // imperative, with a startup pass). It walks SQLite (desired state), compares
 // against Docker (actual state), and converges:
@@ -1212,31 +1246,42 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 						"instance_id", inst.ID, "err", err, "output", out)
 					continue
 				}
+				// The instance is up against the current override/.env now, so any
+				// env recreate owed by a failed config/mail edit is satisfied (#268).
+				m.clearPendingRecreate(inst)
 			} else {
-				// Containers already up: re-apply the resource-limit policy and
-				// recreate the app only if it changed, so a policy change takes
-				// effect here without a reinstall (ENVIRONMENT.md # Per-instance
-				// resource limits).
+				// Containers already up: recreate the app when its resource-limit
+				// policy drifted OR an env-restamping edit (config/mail) committed
+				// the override/.env but its follow-up compose up failed, stranding
+				// the container on stale env (#268). Either way one `compose up -d`
+				// converges it — env is read at container-create — so a policy
+				// change and a stranded edit both apply here without a reinstall
+				// (ENVIRONMENT.md # Per-instance resource limits).
 				changed, restore, err := m.reapplyResourceLimits(inst.ID)
 				if err != nil {
 					slog.Warn("reconcile: re-apply resource limits",
 						"instance_id", inst.ID, "err", err)
-				} else if changed {
-					slog.Info("reconcile: re-applying resource-limit policy",
-						"instance_id", inst.ID)
+				}
+				if changed || inst.PendingRecreate {
+					slog.Info("reconcile: recreating drifted running instance",
+						"instance_id", inst.ID,
+						"resource_drift", changed, "pending_recreate", inst.PendingRecreate)
 					if out, err := m.docker.ComposeUp(ctx, m.instanceDir(inst.ID), "malmo-"+inst.ID); err != nil {
 						slog.Warn("reconcile: compose up",
 							"instance_id", inst.ID, "err", err, "output", out)
-						// ComposeUp failed after the override was patched. Rewind it
-						// so the next reconcile re-detects the change and retries,
-						// instead of treating the patched-but-unapplied file as
-						// converged and leaving the old limits in place.
-						if rerr := restore(); rerr != nil {
-							slog.Warn("reconcile: restore override after failed re-apply",
-								"instance_id", inst.ID, "err", rerr)
+						// ComposeUp failed. Rewind any resource-stanza patch so the
+						// next reconcile re-detects it instead of treating the
+						// patched-but-unapplied file as converged; the pending marker
+						// stays set so the env recreate is retried too.
+						if restore != nil {
+							if rerr := restore(); rerr != nil {
+								slog.Warn("reconcile: restore override after failed re-apply",
+									"instance_id", inst.ID, "err", rerr)
+							}
 						}
 						continue
 					}
+					m.clearPendingRecreate(inst)
 				}
 			}
 			// Re-assert Caddy + mDNS. Track Avahi replay outcome for the

@@ -38,7 +38,12 @@ type Instance struct {
 	// at uninstall.
 	ServiceUID int
 	ServiceGID int
-	CreatedAt  time.Time
+	// PendingRecreate marks a running instance whose committed override/.env was
+	// changed by an env-restamping edit (config or mail) but whose follow-up
+	// `compose up` failed, leaving its container on stale env. The reconcile pass
+	// retries the recreate while it is set, then clears it (#268).
+	PendingRecreate bool
+	CreatedAt       time.Time
 }
 
 const (
@@ -117,6 +122,7 @@ func (s *Store) migrate() error {
 			scope         TEXT NOT NULL DEFAULT 'household' CHECK (scope IN ('household','personal')),
 			service_uid INTEGER NOT NULL DEFAULT 0,
 			service_gid INTEGER NOT NULL DEFAULT 0,
+			pending_recreate INTEGER NOT NULL DEFAULT 0,
 			created_at  INTEGER NOT NULL
 		);
 		CREATE TABLE IF NOT EXISTS instance_images (
@@ -363,6 +369,7 @@ func (s *Store) migrate() error {
 		{"instances", "scope", "ALTER TABLE instances ADD COLUMN scope TEXT NOT NULL DEFAULT 'household'"},
 		{"instances", "service_uid", "ALTER TABLE instances ADD COLUMN service_uid INTEGER NOT NULL DEFAULT 0"},
 		{"instances", "service_gid", "ALTER TABLE instances ADD COLUMN service_gid INTEGER NOT NULL DEFAULT 0"},
+		{"instances", "pending_recreate", "ALTER TABLE instances ADD COLUMN pending_recreate INTEGER NOT NULL DEFAULT 0"},
 	} {
 		has, hErr := s.hasColumn(col.table, col.name)
 		if hErr != nil {
@@ -745,12 +752,32 @@ func (s *Store) SetServiceIdentity(id string, uid, gid int) error {
 	return nil
 }
 
+// SetInstancePendingRecreate marks (or clears) an instance's owed-recreate flag
+// (#268). The reconcile pass recreates a running container while this is set —
+// the recovery path when an env-restamping edit (config or mail) committed the
+// override/.env but its follow-up `compose up` failed, stranding the container
+// on stale env — and clears it once a recreate succeeds.
+func (s *Store) SetInstancePendingRecreate(id string, pending bool) error {
+	v := 0
+	if pending {
+		v = 1
+	}
+	res, err := s.db.Exec(`UPDATE instances SET pending_recreate=? WHERE id=?`, v, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) Delete(id string) error {
 	_, err := s.db.Exec(`DELETE FROM instances WHERE id=?`, id)
 	return err
 }
 
-const instanceColumns = `id, manifest_id, name, slug, version, state, mdns_name, owner_user_id, scope, service_uid, service_gid, created_at`
+const instanceColumns = `id, manifest_id, name, slug, version, state, mdns_name, owner_user_id, scope, service_uid, service_gid, pending_recreate, created_at`
 
 func (s *Store) Get(id string) (Instance, error) {
 	return scan(s.db.QueryRow(
@@ -1277,14 +1304,15 @@ type scanner interface{ Scan(dest ...any) error }
 
 func scan(row scanner) (Instance, error) {
 	var i Instance
-	var created int64
-	err := row.Scan(&i.ID, &i.ManifestID, &i.Name, &i.Slug, &i.Version, &i.State, &i.MDNSName, &i.OwnerUserID, &i.Scope, &i.ServiceUID, &i.ServiceGID, &created)
+	var created, pendingRecreate int64
+	err := row.Scan(&i.ID, &i.ManifestID, &i.Name, &i.Slug, &i.Version, &i.State, &i.MDNSName, &i.OwnerUserID, &i.Scope, &i.ServiceUID, &i.ServiceGID, &pendingRecreate, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Instance{}, ErrNotFound
 	}
 	if err != nil {
 		return Instance{}, fmt.Errorf("scan instance: %w", err)
 	}
+	i.PendingRecreate = pendingRecreate != 0
 	i.CreatedAt = time.Unix(created, 0)
 	return i, nil
 }
