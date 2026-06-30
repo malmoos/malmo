@@ -2,11 +2,11 @@
 
 # malmo
 
-**A home-server OS for people who want to own their data — not become sysadmins.**
+**A home-server OS for people who want to own their data, not become sysadmins.**
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
-[What is malmo?](#what-is-malmo) · [Principles](#principles) · [Status](#status) · [Quickstart](#quickstart-local-dev-no-vm) · [Documentation](#documentation) · [Contributing](#contributing) · [Contributors](#contributors)
+[What is malmo?](#what-is-malmo) · [Principles](#principles) · [Two profiles](#two-profiles-appliance-and-hosted) · [Status](#status) · [Architecture](#architecture) · [Quickstart](#quickstart-local-dev-no-vm) · [Documentation](#documentation) · [Contributing](#contributing) · [Contributors](#contributors)
 
 </div>
 
@@ -16,41 +16,90 @@
 
 malmo is a home-server OS in the same category as **Umbrel / ZimaOS / CasaOS**. Its north star is **simplicity for non-technical users**.
 
-Install it on an old laptop or PC, leave it running in the pantry, and run the apps you use daily — photos, notes, files, a shared grocery list — on hardware you own, with data you own. If the original app developer disappears, your app keeps working.
+Install it on an old laptop or PC, leave it running in the pantry, and run the apps you use daily (photos, notes, files, a shared grocery list) on hardware you own, with data you own. Apps are Docker containers installed from a catalog or pasted in as a compose file. If the original app developer disappears, your app keeps working, and uninstalling an app never deletes your content.
 
 > See [`docs/specs/SPEC.md`](docs/specs/SPEC.md) for the full vision.
 
 ## Principles
 
 - **Files are first-class, apps are windows.** Your content lives in `~/Photos/`, not inside an app's opaque library. Uninstalling an app never deletes your photos.
-- **We are not a NAS.** Storage is plumbing in service of apps — no pools, no vdevs, no parity-as-first-class.
-- **Closed by default.** No public exposure in v1; identity-based mesh only.
-- **The UI is the path.** Every privileged operation has a UI path; SSH is rescue-only, never required for daily use.
+- **We are not a NAS.** Storage is plumbing in service of apps. No pools, no vdevs, no parity-as-first-class, and no NAS vocabulary in the UI.
+- **The UI is the path.** Every privileged operation has a UI path. SSH is rescue-only, never required for daily use, and one malmo password (PAM-backed) covers the dashboard, SSH, and SMB.
+- **Closed by default (on the appliance).** No public exposure for the home box in v1. Identity-based mesh only, opt-in.
+- **One control plane, two environments.** The same brain, dashboard, app model, and auth run whether malmo is the box in your pantry or a malmo-operated cloud VM. The profile only changes the boring host layer underneath.
+
+## Two profiles: appliance and hosted
+
+malmo is built for two environments from one codebase. The split is a build-and-config **profile**, not a fork. The control plane (roughly 95% of malmo's logic) is identical across both; only the base image and the privileged host layer diverge. Full design in [`docs/specs/ENVIRONMENT.md`](docs/specs/ENVIRONMENT.md).
+
+| | `appliance` (default) | `hosted` |
+|---|---|---|
+| **What it is** | bring-your-own x86 box on your LAN | malmo-operated cloud VM, one per tenant |
+| **Audience** | households and families | small and medium businesses |
+| **Reachability** | `<slug>.local` on the LAN; `.malmo.network` HTTPS opt-in | `<slug>.<box-id>.malmo.network` public HTTPS, always on |
+| **Install** | USB installer, wipe disk | provisioned from a cloud image, cloud-init-style first boot |
+| **Storage** | physical OS + data drives, LUKS+TPM, mergerfs | virtual block volume(s), provider/KMS encryption |
+| **Network** | NetworkManager (ethernet + WiFi), Avahi/mDNS, Samba/SMB | single virtual NIC, no mDNS, no SMB |
+| **Posture** | closed by default | public-by-default, authentication is the gate |
 
 ## Status
 
-**Spec + early implementation.** The design is captured as a set of detailed specs in [`docs/specs/`](docs/specs/); a **walking-skeleton** implementation now lives alongside them and proves the architecture spine end-to-end (UI → brain → docker compose → Caddy route → SSE → uninstall).
+**A working control plane, with the host layer and the hosted cloud image actively coming online.** This is well past the original walking skeleton.
 
-See [`docs/progress/`](docs/progress/) for what's built and what's next.
+What runs today (mostly in the native inner loop, see [Quickstart](#quickstart-local-dev-no-vm)):
+
+- **App lifecycle.** Install from the catalog (door 1) or paste a compose file (door 2, admin-only), with an admission policy, image digest pinning, a reconcile pass, health-wait, splash-to-real-upstream routing, and stop / start / uninstall. Per-app logs, a consent-and-permissions flow (folders, devices, GPU), generated app secrets, and per-instance resource limits.
+- **Managed databases.** Apps declare `services:` and the brain lazily provisions shared Postgres, MySQL, MariaDB, and Redis/Valkey on an internal network, injecting per-app credentials.
+- **App store UI.** Browse grid with search and category filters, app detail pages (screenshots, markdown descriptions), install footprint and storage estimates, and glyph fallbacks for icon-less apps.
+- **Users and auth.** First-admin setup, PAM-backed login (the host's `/etc/shadow` is the source of truth), opaque cookie sessions, roles mapped to Linux groups, a 5-minute elevation window for destructive ops, recovery-code redemption, rate-limiting and lockout, and an append-only audit log surfaced as an Activity view.
+- **Health and notifications.** A catalog of detectors (service-down, container restart-loop, app-unresponsive, clock-not-synced, RAM pressure, reboot-required, version-mismatch, DB-corrupt) feeding dashboard banners and a notification inbox with per-category mute. Plus live system-resource readouts and disk-usage bars.
+- **Real host-agent (`host-agent-real`).** PAM verify, user create / delete / role / password, real `/proc` sampling, disk and RAM reporting, journal streaming, per-LAN-interface Avahi discovery, and first-boot brain launch (Docker socket proxy + brain container). LUKS/TPM enrollment and the boot-chain units exist and are exercised in the QEMU test lane.
+- **Hosted cloud profile (coming online).** A slim, build-tagged cloud `host-agent`; a lean `mkosi` cloud image with self-bootstrapping first boot; real Let's Encrypt wildcard certs over ACME DNS-01 for `*.<box-id>.malmo.network` (the `auth.malmo.network` acme-dns face is live); an app-container egress block for the cloud metadata endpoint; and a portal-to-box SSO handshake so the owner reaches the box through their existing `malmo.network` login. The image builds, boots, and provisions on a real cloud provider; a CI lane plus a cloud QEMU lane drive the seed → first-run → served-dashboard arc, with full end-to-end acceptance still being hardened.
+
+What is **not** built yet (so this isn't read as a finished-product claim): the appliance storage subsystem (`/srv/malmo`, mergerfs, the LUKS-unlock-at-boot flow), the production install ISO and the update streams, WiFi/NetworkManager configuration in the agent, and the signed remote app-store fetch. The authoritative as-built map is [`docs/architecture.md`](docs/architecture.md) (# What is not built yet); per-change history is in [`docs/progress/`](docs/progress/).
+
+## Architecture
+
+A running malmo is five processes/artifacts. Three are Go, one is JavaScript, one is a container we don't write. [`docs/architecture.md`](docs/architecture.md) is the live, as-built map.
+
+- **`malmo-brain`** (`cmd/brain/`, `internal/`) is the control-plane daemon: one Go binary owning SQLite state, the REST+SSE API, the app lifecycle, and the Caddy config. It drives Docker via the `docker compose` CLI.
+- **`host-agent`** is the privileged side. `cmd/host-agent/` is a fake (real wire protocol, in-memory ops) used in the inner loop; `cmd/host-agent-real/` is the real binary, with a build-tagged slim `hosted` variant for the cloud image.
+- **`web-ui`** (`web-ui/`) is the Vue 3 + Vite + TanStack Query dashboard. It talks only to the brain.
+- **Caddy** (`dev/`) is the reverse proxy. It terminates `*.local` (appliance) or `*.<box-id>.malmo.network` HTTPS (hosted) and routes to app containers and the brain, configured live via Caddy's admin API. Routing is per-subdomain, never path-based (browser same-origin policy is the reason).
+- **SQLite** is the brain's only persistent store (`internal/store/`).
+
+```
+browser → web-ui → brain → docker compose (Docker daemon)
+                         → Caddy admin API (Caddy → app containers)
+                         → host-agent (HTTP/JSON over a UNIX socket)
+```
 
 ## Repository layout
 
 | Path | What lives here |
 |---|---|
-| `cmd/` | Go entrypoints — `brain` (control plane) and `host-agent` |
-| `internal/` | brain packages: `api`, `lifecycle`, `catalog`, `manifest`, `store`, `caddy`, `hostclient`, `events`, `protocol` |
+| `cmd/` | Go entrypoints: `brain`, `host-agent` (fake), `host-agent-real`, plus small tools (`malmo`, `malmo-storage-verify`, `openapi-gen`) |
+| `internal/` | brain packages: `api`, `lifecycle`, `store`, `catalog`, `manifest`, `admission`, `caddy`, `hostclient`, `protocol`, `auth`, `audit`, `events`, `profile`, `assertion`, plus host-integration and health packages |
 | `web-ui/` | Vue 3 + Vite dashboard |
-| `catalog/` | sample app manifests (`manifest.yml` + `compose.yml`) |
-| `dev/` | local dev orchestration (Caddy container, config) |
-| `docs/` | all documentation (specs, progress, dev guides) |
-| `Makefile` | dev workflow — run `make help` |
+| `catalog/` | hand-written sample app manifests (`manifest.yml` + `compose.yml`) |
+| `dev/` | local dev orchestration (Caddy container, config, test lanes) |
+| `docs/` | all documentation (specs, progress, architecture, dev guides) |
+| `Makefile` | dev workflow, run `make help` |
 
 ## Quickstart (local dev, no VM)
 
-**Requirements:** Docker, Node 20+, and Go 1.23+ (`make` uses `~/.local/go` if `go` isn't on `PATH`).
-Full guide: [`docs/dev/running-locally.md`](docs/dev/running-locally.md).
+About 90% of development happens in an all-native inner loop: the brain and dashboard run directly on your machine against the local Docker socket, and the host-agent is the fake that speaks the real protocol but stubs host ops. It works on macOS, Windows (WSL2), or Linux with no platform-specific setup.
 
-Run each in a separate terminal:
+**Requirements:** Docker + `docker compose`, Node 20+, Go 1.23+, host port `:80` free, and `avahi-daemon` running on Linux so `.local` names resolve. Full guide: [`docs/dev/running-locally.md`](docs/dev/running-locally.md).
+
+```bash
+make dev          # the whole inner-loop stack in one terminal:
+                  # Caddy (container) + fake host-agent + brain + Vite
+```
+
+Then open <http://localhost:5173> and install **Whoami** from the catalog. `make dev` also publishes each app's `<slug>.local` name over real Avahi, so installed apps are reachable by their portless `.local` URL from this box and other LAN devices (Android browsers don't resolve `.local`). Ctrl-C stops everything.
+
+Prefer separate terminals? Run the pieces individually:
 
 ```bash
 make caddy        # dev reverse proxy (container; apps on :80, admin :2019)
@@ -59,30 +108,37 @@ make run-brain    # malmo-brain (:8080, native Go)
 make ui           # dashboard (Vite, :5173)
 ```
 
-Then open <http://localhost:5173> and install **Whoami** from the catalog.
+Before opening a PR:
 
-> **Tip:** `make dev` runs all of the above in one terminal and additionally publishes each app's `<slug>.local` name over real Avahi (`MALMO_DEV_AVAHI=1`), so installed apps are reachable by their portless `.local` URL from this box and other LAN devices (non-Android). Requires `avahi-daemon` running and host port `:80` free.
+```bash
+make check        # pre-PR gate: gofmt + vet + OpenAPI freshness + full Go test suite
+make check-web    # pre-PR gate for web-ui changes: typecheck + production build
+```
+
+The host-integrated parts (boot ordering, LUKS/TPM, systemd, the cloud image) are the outer loop and run in a QEMU VM. See [`docs/specs/TESTING.md`](docs/specs/TESTING.md) and `make help` for the test lanes.
 
 ## Documentation
 
 | Link | What it covers |
 |---|---|
-| [`docs/README.md`](docs/README.md) | The map of everything — one line per spec doc |
+| [`docs/architecture.md`](docs/architecture.md) | The as-built map: components, wiring, per-package table, what's not built |
+| [`docs/README.md`](docs/README.md) | The map of every spec, one line each |
 | [`docs/specs/SPEC.md`](docs/specs/SPEC.md) | Top-level vision and architecture |
+| [`docs/specs/ENVIRONMENT.md`](docs/specs/ENVIRONMENT.md) | The appliance / hosted profile split (home for all hosted design) |
 | [`docs/specs/`](docs/specs/) | All design specs (source of truth) |
-| [`docs/progress/`](docs/progress/) | Implementation progress (what's built, what's next) |
+| [`docs/progress/`](docs/progress/) | Per-change implementation history (what's built, what's next) |
 | [`docs/dev/`](docs/dev/) | Developer how-to (running locally, code-level architecture) |
 | [`docs/dev/contributing.md`](docs/dev/contributing.md) | The contributor workflow, end to end |
 | [`CLAUDE.md`](CLAUDE.md) | Working conventions for this repo |
 
 ## Contributing
 
-New contributor (or pointing a coding agent at the repo)? Start with [`docs/dev/contributing.md`](docs/dev/contributing.md) — the end-to-end loop (orient → pick a task → branch → build → test → document → PR).
+New contributor (or pointing a coding agent at the repo)? Start with [`docs/dev/contributing.md`](docs/dev/contributing.md), the end-to-end loop (orient → pick a task → branch → build → test → document → PR).
 
 - Open implementation tasks live in [GitHub Issues](https://github.com/malmoos/malmo/issues) (`gh issue list --label P1`).
-- All work happens on a branch and lands via a PR into `main`.
+- All work happens on a branch off latest `main` and lands via a PR. Never commit straight to `main`.
 - Link the issue your PR closes with `Closes #<N>`.
-- **Every change ships with documentation** — a code change is not complete until its docs are written in the same change.
+- **Every change ships with documentation.** A code change is not complete until its docs are written in the same change.
 
 ## License
 
@@ -106,3 +162,5 @@ malmo is licensed under the [GNU Affero General Public License v3.0](LICENSE) (A
     </td>
   </tr>
 </table>
+</content>
+</invoke>
