@@ -18,9 +18,12 @@
 # (no SSH in hosted — ENVIRONMENT.md # Access & files). This driver greps the verdict:
 #
 #   boot 1  un-seeded   no seed → GET /_malmo/sso ⇒ 503; /setup ⇒ 403 (gate armed)
-#   boot 2  seeded      seed A over SMBIOS → assertion key ingested → a bad token on
-#                       GET /_malmo/sso ⇒ 401 (verifier armed); /setup ⇒ 403; brain
-#                       logged 'provisioning seed ingested' under box_id A
+#   boot 2  seeded      seed A over SMBIOS (with a complete acme-dns enrollment) →
+#                       assertion key ingested → a bad token on GET /_malmo/sso ⇒ 401
+#                       (verifier armed); /setup ⇒ 403; brain logged 'provisioning
+#                       seed ingested' under box_id A; the brain APPLIES the wildcard-
+#                       TLS config (acme-dns DNS-01 issuer + :443 bound) — no real cert
+#                       (air-gapped), just that the box reaches and binds it (#278)
 #   boot 3  frozen      a DIFFERENT seed B delivered, same overlay → the brain ignores
 #                       it (identity frozen in SQLite); the dashboard + /api still serve
 #                       under box_id A and the brain does not re-ingest
@@ -147,15 +150,25 @@ ACCEL=tcg
 if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then ACCEL=kvm; fi
 
 # Build a compact seed JSON for a box-id and base64-encode it for an SMBIOS binary
-# credential. The assertion-verification key is a random 32-byte value (standard
-# base64, the wire shape of a real portal Ed25519 public key) so the box loads its
-# SSO verifier; this lane has no matching private key, so it only exercises the
-# verifier's rejection path (a real portal assertion is the cloud on-ramp's job).
+# credential. Two parts mirror a real cloud seed:
+#   - assertion_verification_key: a random 32-byte value (standard base64, the wire
+#     shape of a real portal Ed25519 public key) so the box loads its SSO verifier;
+#     this lane has no matching private key, so it only exercises the verifier's
+#     rejection path (a real portal assertion is the cloud on-ramp's job).
+#   - enrollment: a COMPLETE acme-dns credential block, so the brain runs its
+#     wildcard-TLS pass (cmd/brain EnsureWildcardTLS) — configures Caddy's acme-dns
+#     DNS-01 issuer for "*.<box-id>.malmo.network" and binds :443. The values are
+#     inert here: air-gapped (restrict=on) the box never reaches acme-dns/Let's
+#     Encrypt, so no real cert issues — the lane asserts the brain APPLIES the
+#     config and :443 comes up (the #278 regression class), not that a cert exists.
+#     A seed with no enrollment (the prior shape) skipped that pass entirely, which
+#     is exactly why CI never caught a hosted box failing to bind :443.
 # Prints `io.systemd.credential.binary:malmo.seed=<base64>`.
 seed_cred() { # box_id -> SMBIOS value string
     local box_id="$1" key json
     key="$(head -c 32 /dev/urandom | base64 -w0)"
-    json="$(printf '{"box_id":"%s","assertion_verification_key":"%s"}' "$box_id" "$key")"
+    json="$(printf '{"box_id":"%s","assertion_verification_key":"%s","enrollment":{"subdomain":"%s","username":"%s","password":"%s"}}' \
+        "$box_id" "$key" "cloud-lane-acmedns-subdomain" "cloud-lane-acmedns-user" "cloud-lane-acmedns-pass")"
     printf 'io.systemd.credential.binary:malmo.seed=%s' "$(printf '%s' "$json" | base64 -w0)"
 }
 

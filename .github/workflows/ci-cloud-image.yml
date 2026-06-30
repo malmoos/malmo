@@ -13,8 +13,12 @@
 # Why the seeded-boot gate exists: a cloud-image build can ship a brain that
 # rejects the live seed — e.g. one that still required the old
 # admin_bootstrap_secret after the SSO change removed it. Such a box boots, never
-# configures wildcard TLS, and provisioning hangs at the SSL step. The seeded
-# QEMU boot asserts the brain logs 'provisioning seed ingested'; a stale/skewed
+# configures wildcard TLS, and provisioning hangs at the SSL step. The seeded QEMU
+# boot asserts the brain logs 'provisioning seed ingested', AND — since the seed
+# now carries a complete (inert, air-gapped) acme-dns enrollment — that the brain
+# applies its wildcard-TLS pass: 'caddy: wildcard TLS configured' is logged and
+# :443 binds (cloud-assertions.sh 'seeded'; #278). Real cert issuance can't run
+# air-gapped, so this gates config application, not a live cert. A stale/skewed
 # brain fails there and is never published. A fresh runner (no .dev/ cache) also
 # rebuilds the control-plane images from source, so the "image labeled new, brain
 # baked old" skew cannot recur.
