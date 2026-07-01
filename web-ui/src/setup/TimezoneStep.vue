@@ -8,6 +8,7 @@
 import { ref } from "vue";
 import { setSystemTimezone } from "../auth";
 import type { ApiError } from "../api";
+import Button from "@/components/ui/Button.vue";
 
 const emit = defineEmits<{ done: [] }>();
 
@@ -46,9 +47,9 @@ async function submit() {
         <option v-for="z in zones" :key="z" :value="z">{{ z }}</option>
       </select>
     </label>
-    <button type="submit" :disabled="submitting">
+    <Button type="submit" :disabled="submitting" class="mt-2">
       {{ submitting ? "Saving…" : "Continue" }}
-    </button>
+    </Button>
     <p v-if="error" class="error">{{ error }}</p>
   </form>
 </template>

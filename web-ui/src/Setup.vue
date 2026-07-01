@@ -12,6 +12,7 @@ import AdminStep from "./setup/AdminStep.vue";
 import TimezoneStep from "./setup/TimezoneStep.vue";
 import TelemetryStep from "./setup/TelemetryStep.vue";
 import DoneStep from "./setup/DoneStep.vue";
+import Heading from "@/components/ui/Heading.vue";
 
 const { hasUsers } = useAuth();
 
@@ -35,7 +36,7 @@ function next() {
 
 <template>
   <main class="auth">
-    <h1>malmo</h1>
+    <Heading :level="1" class="mb-8 text-center text-[2.75rem] leading-none">malmo</Heading>
     <component :is="step" @done="next" />
   </main>
 </template>

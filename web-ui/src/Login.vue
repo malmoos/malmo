@@ -7,6 +7,8 @@ import { RouterLink } from "vue-router";
 import { useQuery } from "@tanstack/vue-query";
 import { api, type ApiError } from "./api";
 import { login } from "./auth";
+import Button from "@/components/ui/Button.vue";
+import Heading from "@/components/ui/Heading.vue";
 
 interface PickerUser { id: string; username: string; }
 
@@ -57,7 +59,7 @@ function glyphColor(username: string): string {
 
 <template>
   <main class="auth">
-    <h1>malmo</h1>
+    <Heading :level="1" class="mb-8 text-center text-[2.75rem] leading-none">malmo</Heading>
 
     <!-- User picker -->
     <div v-if="!selected" class="card">
@@ -97,9 +99,9 @@ function glyphColor(username: string): string {
           autofocus
         />
       </label>
-      <button type="submit" :disabled="submitting">
+      <Button type="submit" :disabled="submitting" class="mt-2">
         {{ submitting ? "Signing in…" : "Sign in" }}
-      </button>
+      </Button>
       <p v-if="error" class="error">{{ error }}</p>
       <RouterLink to="/recover" class="forgot">Forgot password?</RouterLink>
     </form>
