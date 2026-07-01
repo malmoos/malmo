@@ -1,25 +1,54 @@
 /* Tailwind 4 entry (WEB_UI.md: CSS-based config via @theme, no tailwind.config.js).
-   Design tokens follow the shadcn-vue variable convention so shadcn components
-   added later via the CLI inherit the palette. Light theme only for now; the
-   dark-mode trigger is a downstream decision (WEB_UI.md). */
+   The @theme block is the Oatmeal design system — the olive palette + Inter /
+   Instrument Serif — shared verbatim with cloud (internal/web/tailwind/input.css)
+   so the two malmo surfaces match exactly (DECISIONS.md 2026-07-01). The app's
+   existing shadcn-vue semantic tokens (background, foreground, accent, …) are
+   repointed onto olive values here, so the whole UI recolors from this one file.
+   Light theme only for now; the dark-mode trigger is a downstream decision.
+   The @font-face declarations for Inter / Instrument Serif live in a separate
+   file (assets/fonts/fonts.css, imported from main.ts) — Tailwind's Lightning CSS
+   transform drops the first @font-face in this entry, so they can't live here. */
 @import "tailwindcss";
 
 @theme {
-  /* Calm-launcher palette: near-white canvas, muted ink, one quiet accent. */
-  --color-background: #f6f6f7;
-  --color-foreground: #1a1a1a;
-  --color-card: #ffffff;
-  --color-card-foreground: #1a1a1a;
-  --color-muted: #eeeeef;
-  --color-muted-foreground: #6b7280;
-  --color-border: #e6e6e8;
-  --color-accent: #2b6cb0;
-  --color-accent-foreground: #ffffff;
-  --color-destructive: #a11;
-  --color-success: #1b6b34;
+  /* Olive palette (OKLCH) — lifted verbatim from cloud's input.css. */
+  --color-olive-50: oklch(98.8% 0.003 106.5);
+  --color-olive-100: oklch(96.6% 0.005 106.5);
+  --color-olive-200: oklch(93% 0.007 106.5);
+  --color-olive-300: oklch(88% 0.011 106.6);
+  --color-olive-400: oklch(73.7% 0.021 106.9);
+  --color-olive-500: oklch(58% 0.031 107.3);
+  --color-olive-600: oklch(46.6% 0.025 107.3);
+  --color-olive-700: oklch(39.4% 0.023 107.4);
+  --color-olive-800: oklch(28.6% 0.016 107.4);
+  --color-olive-900: oklch(22.8% 0.013 107.4);
+  --color-olive-950: oklch(15.3% 0.006 107.1);
+
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-display: "Instrument Serif", serif;
+
+  /* Semantic tokens repointed onto olive. The app's ~1,000 utility references
+     (bg-background, text-muted-foreground, …) recolor from these lines alone.
+     The accent is monochrome dark olive — Oatmeal has no separate accent hue;
+     cloud's CTAs are bg-olive-950 hover:bg-olive-800 (matched here). */
+  --color-background: var(--color-olive-100);
+  --color-foreground: var(--color-olive-950);
+  --color-card: var(--color-olive-50);
+  --color-card-foreground: var(--color-olive-950);
+  --color-muted: var(--color-olive-100);
+  --color-muted-foreground: var(--color-olive-600);
+  --color-border: var(--color-olive-200);
+  --color-accent: var(--color-olive-900);
+  --color-accent-foreground: var(--color-olive-50);
+
+  /* destructive / success stay semantic status colors — olive is monochrome and
+     has no red or green, and cloud itself keeps red for errors (bg-red-50
+     text-red-800). Retuned to OKLCH so they sit in the same color space, muted
+     to read as olive-adjacent rather than pure signal colors. */
+  --color-destructive: oklch(48% 0.16 27);
+  --color-success: oklch(48% 0.11 150);
 
   --radius: 0.75rem;
-  --font-sans: ui-sans-serif, system-ui, sans-serif;
 }
 
 html,
@@ -28,28 +57,38 @@ body,
   height: 100%;
 }
 
-/* Shared auth screen styles (Login.vue + Setup.vue). */
-.auth { max-width: 360px; margin: 4rem auto; padding: 0 1rem; }
-.auth h1 { font-size: 1.6rem; margin-bottom: 1.5rem; text-align: center; }
-.auth form, .auth .card { background: #fff; border: 1px solid #e6e6e8; border-radius: 12px; padding: 1.5rem; display: flex; flex-direction: column; gap: 0.75rem; }
-.auth h2 { margin: 0 0 0.5rem; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.04em; color: #666; }
-.auth label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; color: #444; }
-.auth input, .auth select { border: 1px solid #ddd; border-radius: 8px; padding: 0.5rem 0.7rem; font-size: 0.95rem; background: #fff; }
-.auth button[type="submit"] { border: 1px solid #2b6cb0; background: #2b6cb0; color: #fff; border-radius: 8px; padding: 0.55rem 0.9rem; cursor: pointer; font-size: 0.9rem; margin-top: 0.5rem; }
+/* Shared auth-screen composition (Login.vue + Setup.vue + its steps +
+   RecoverView.vue all inherit these classes). Restructured to the Oatmeal
+   composition — Instrument Serif display wordmark, olive-50 card panels,
+   rounded-full inputs/buttons, dark-olive CTA — so every auth surface adopts the
+   theme from this one block (issue #260 restructure). No raw hex: colors come
+   from the olive semantic tokens above. */
+.auth { max-width: 26rem; margin: 4rem auto; padding: 0 1.5rem; }
+.auth h1 { font-family: var(--font-display); font-size: 2.75rem; line-height: 1.05; letter-spacing: -0.02em; margin-bottom: 2rem; text-align: center; color: var(--color-foreground); }
+.auth form, .auth .card { background: var(--color-card); border: 1px solid var(--color-border); border-radius: 1rem; padding: 1.75rem; display: flex; flex-direction: column; gap: 1rem; }
+.auth h2 { margin: 0 0 0.25rem; font-size: 1.05rem; font-weight: 600; letter-spacing: -0.01em; color: var(--color-foreground); }
+.auth label { display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.875rem; font-weight: 500; color: var(--color-foreground); }
+.auth input, .auth select { border: 1px solid var(--color-border); border-radius: 9999px; padding: 0.55rem 1rem; font-size: 0.9rem; background: var(--color-card); color: var(--color-foreground); outline: none; }
+.auth input:focus, .auth select:focus { border-color: var(--color-accent); }
+.auth button[type="submit"] { border: none; background: var(--color-accent); color: var(--color-accent-foreground); border-radius: 9999px; padding: 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; font-weight: 500; margin-top: 0.5rem; }
+.auth button[type="submit"]:hover { background: var(--color-olive-800); }
 .auth button[type="submit"]:disabled { opacity: 0.6; cursor: default; }
-.auth .error { color: #a11; font-size: 0.85rem; margin: 0; }
-.auth .hint { color: #666; font-size: 0.8rem; margin: 0; }
-.auth .recovery { background: #fff8d9; border: 1px solid #e6d27a; border-radius: 8px; padding: 0.75rem; font-family: ui-monospace, monospace; font-size: 0.9rem; word-break: break-all; }
+.auth .error { color: var(--color-destructive); font-size: 0.85rem; margin: 0; }
+.auth .hint { color: var(--color-muted-foreground); font-size: 0.8rem; margin: 0; }
+.auth .recovery { background: var(--color-muted); border: 1px solid var(--color-border); border-radius: 0.75rem; padding: 0.75rem; font-family: ui-monospace, monospace; font-size: 0.9rem; word-break: break-all; color: var(--color-foreground); }
 .auth .recovery-row { display: flex; align-items: stretch; gap: 0.5rem; }
 .auth .recovery-row .recovery { flex: 1; }
-.auth button.copy { border: 1px solid #cbd5e0; background: #f7fafc; color: #2d3748; border-radius: 8px; padding: 0 0.8rem; cursor: pointer; font-size: 0.85rem; flex-shrink: 0; }
+.auth button.copy { border: 1px solid var(--color-border); background: var(--color-muted); color: var(--color-foreground); border-radius: 9999px; padding: 0 1rem; cursor: pointer; font-size: 0.85rem; flex-shrink: 0; }
+.auth button.copy:hover { background: var(--color-olive-200); }
 /* First-run wizard controls (Setup.vue steps). */
-.auth label.check { flex-direction: row; align-items: flex-start; gap: 0.5rem; color: #444; }
+.auth label.check { flex-direction: row; align-items: flex-start; gap: 0.5rem; color: var(--color-foreground); }
 .auth label.check input { width: auto; margin-top: 0.15rem; flex-shrink: 0; }
-.auth .hint.warn { color: #a05a00; }
+/* No dedicated warning token yet; the recovery-code caution borrows destructive
+   (the consequence — a lost code — is close to an error). */
+.auth .hint.warn { color: var(--color-destructive); }
 .auth .hint.details { display: flex; flex-direction: column; gap: 0.4rem; }
 .auth .hint.details ul { margin: 0; padding-left: 1.1rem; }
-.auth button.link { align-self: flex-start; background: none; border: none; color: #2b6cb0; font-size: 0.8rem; cursor: pointer; padding: 0; }
+.auth button.link { align-self: flex-start; background: none; border: none; color: var(--color-accent); font-size: 0.8rem; cursor: pointer; padding: 0; }
 .auth button.link:hover { text-decoration: underline; }
 
 body {
@@ -57,4 +96,6 @@ body {
   background: var(--color-background);
   color: var(--color-foreground);
   font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }

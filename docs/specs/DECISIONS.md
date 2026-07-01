@@ -21,6 +21,23 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-07-01 — OS dashboard adopts cloud's Oatmeal/olive design system; fonts self-hosted, not CDN (#260)
+
+**Previously:** The dashboard used a bespoke "calm launcher" palette — near-white `#f6f6f7` canvas, a blue `#2b6cb0` accent, system-ui fonts — defined ad hoc in `web-ui/src/style.css`. Cloud, meanwhile, shipped the Tailwind Plus **Oatmeal** kit's olive palette + Inter / Instrument Serif.
+
+**Now:** Both malmo surfaces share **one design system**. The OS dashboard's `@theme` block carries the same `--color-olive-50…950` OKLCH ramp and the same two fonts as cloud, lifted verbatim from cloud's `internal/web/tailwind/input.css`. The app's existing shadcn-vue semantic tokens (`background`, `foreground`, `accent`, …) are **repointed onto olive values** rather than rewritten at ~1,000 call sites, so the whole UI recolors from a single file. The accent is monochrome dark olive (no separate accent hue — matching cloud's `bg-olive-950` CTAs). `destructive`/`success` stay semantic red/green (olive is monochrome; cloud keeps red for errors too).
+
+**Divergence — fonts are self-hosted, not loaded from the Google Fonts CDN** (unlike cloud and the Oatmeal README). The dashboard is served over `.local` **HTTP on a LAN that may be offline**; a CDN `<link>` yields broken/unstyled fonts on an air-gapped box. Inter + Instrument Serif ship as bundled `woff2` (`web-ui/src/assets/fonts/`) with their SIL OFL 1.1 notices included.
+
+**Why:**
+- Visual consistency between the two malmo surfaces is worth more than palette independence, and Oatmeal is a mature, coherent system we already own the license for.
+- The semantic-remap strategy (vs. find-and-replace to literal `bg-olive-*`) avoids ~1,000 edits across 38 files and keeps a clean dark-mode-by-token-swap path. Class names are never literally shared with cloud anyway (OS is Vue, cloud is Go templates), so literal olive classes would buy nothing.
+- Self-hosting is a hard requirement of the offline-LAN deployment model, not a preference. Licensing allows it: this copies only palette *values* and font *choices* (config, not Oatmeal component source), inside the Tailwind Plus End-Product allowance; Inter and Instrument Serif are both SIL OFL 1.1.
+
+**Affected docs:** `WEB_UI.md` # Styling, `docs/progress/oatmeal-theme.md`, `docs/dev/web-ui.md`.
+
+---
+
 ## 2026-06-26 — User-supplied app config injected under the app's own var name, no `MALMO_*` indirection (#264)
 
 **Previously:** malmo had no surface for a value only the user can supply — a third-party API token, an external connection string, a provider selector. The catalog coined this the `operator-env-config` gap (`docs/dev/catalog-import-gaps.md`) and it became the single largest class of rejected/degraded apps (browser-use, hayhooks, dub, betterbox, cube, beeper-bridge-manager, valour, formbricks integrations, …): "no install-form field, no post-install editor, and SSH is rescue-only." Every other injected value rides the `MALMO_*` family (`MALMO_SERVICE_*`, `MALMO_SECRET_*`, `MALMO_FOLDER_*`, `MALMO_MAIL_*`) — a brain-owned stable name the app's compose maps to whatever it expects.

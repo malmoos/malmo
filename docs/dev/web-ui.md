@@ -116,7 +116,7 @@ When an app has no raster icon (`icon_url`), both the card and the detail header
 
 ## Styling
 
-`style.css` is the Tailwind 4 entry: `@import "tailwindcss"` then an `@theme` block of design tokens named to the **shadcn-vue CSS-variable convention** (`--color-background`, `--color-card`, `--color-accent`, …) so shadcn components added later inherit the palette automatically. Light theme only for now (dark-mode trigger is deferred). Use these semantic token classes (`bg-background`, `text-muted-foreground`, `border-border`) rather than raw hex so the eventual dark theme is a token swap.
+`style.css` is the Tailwind 4 entry: `@import "tailwindcss"` then an `@theme` block of design tokens named to the **shadcn-vue CSS-variable convention** (`--color-background`, `--color-card`, `--color-accent`, …) so shadcn components added later inherit the palette automatically. The block **is** the Oatmeal design system shared with cloud — the `--color-olive-50…950` OKLCH ramp + Inter / Instrument Serif — and the semantic tokens are repointed onto olive values, so the whole app recolors from this one file (`WEB_UI.md` # Styling; `DECISIONS.md` 2026-07-01). Light theme only for now (dark-mode trigger is deferred). Use the semantic token classes (`bg-background`, `text-muted-foreground`, `border-border`) rather than raw hex so the eventual dark theme is a token swap. Fonts are **self-hosted** in `src/assets/fonts/` (with OFL notices) and declared via `@font-face` in `src/assets/fonts/fonts.css`, imported from `main.ts` — kept out of `style.css` because Tailwind's Lightning CSS transform drops the first `@font-face` in the `@import "tailwindcss"` entry.
 
 ## OpenAPI codegen workflow
 
