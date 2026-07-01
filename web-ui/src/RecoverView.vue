@@ -64,7 +64,7 @@ function done() {
 
 <template>
   <main class="auth">
-    <Heading :level="1" class="mb-8 text-center text-[2.75rem] leading-none">malmo</Heading>
+    <Heading :level="1" class="mb-8 text-center">malmo</Heading>
 
     <!-- Phase 1: redeem the recovery code -->
     <form v-if="!newCode" class="card" @submit.prevent="submit">
@@ -110,8 +110,9 @@ function done() {
 </template>
 
 <style>
-/* Recovery-specific styles (auth base styles live in style.css). Colors come from
-   the olive semantic tokens; the copy button inherits .auth button.copy. */
+/* Recovery-specific styles (auth base styles live in style.css). Colors on
+   .back-link / .ack come from the olive semantic tokens; the Copy button is now
+   the shared <Button variant="secondary">, not a .auth CSS rule. */
 .auth .back-link { align-self: center; color: var(--color-muted-foreground); font-size: 0.85rem; text-decoration: none; margin-top: 0.25rem; }
 .auth .back-link:hover { color: var(--color-foreground); }
 .auth .ack { flex-direction: row; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: var(--color-foreground); }

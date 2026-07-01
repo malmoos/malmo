@@ -12,7 +12,8 @@ const props = withDefaults(
 );
 
 const sizes: Record<NonNullable<typeof props.level>, string> = {
-  1: "text-4xl/10",
+  // Level 1 is the hero/wordmark size (the auth-screen "malmo" wordmark).
+  1: "text-[2.75rem] leading-none",
   2: "text-2xl/8",
   3: "text-xl/7",
 };

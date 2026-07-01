@@ -2,7 +2,7 @@
 
 - **Status:** done
 - **Date:** 2026-07-01
-- **Specs touched:** docs/specs/WEB_UI.md, docs/specs/DASHBOARD.md
+- **Specs touched:** none (design unchanged — DASHBOARD.md/WEB_UI.md referenced but not edited; docs/dev/web-ui.md updated)
 - **Closes:** #261
 - **Stacked on:** #260 (`oatmeal-theme.md`) — this branch builds on `feat/260-oatmeal-theme`; its PR targets that branch.
 
@@ -26,6 +26,7 @@ With #260's palette + fonts in place, this slice applies Oatmeal's signature **e
 - **`primary` hover uses a literal `olive-800`, not a token.** There is no accent-hover token; the fill lightens `olive-900 → olive-800` to match cloud's `bg-olive-950 hover:bg-olive-800`. It's the same hover #260's `.auth` submit button used — contained to the one component.
 - **In-card auth section titles (`.auth h2`) stay sans, not `<Heading>` serif.** The display idiom is applied to the wordmark (the primary display heading) and the chrome; making every small form-section title serif reads heavy against the calm posture. Section-heading rollout across Home/Settings pages is part of the composition restructure (#290), which will consume `<Heading>`.
 - **Idiom rollout is bounded to the issue's named chrome + auth.** Prominent buttons elsewhere (Home app actions, Store install, dialogs, `SplitButton`) are **not** converted here — they're outside #261's Touch list and belong to #290 (Home/Settings composition), which now has `<Button>`/`<Heading>` to build on. Called out so the partial coverage isn't mistaken for completeness.
+- **RecoverView's Copy button gains `self-start`.** It's now a compact, left-aligned pill (matching `AdminStep`'s copy button), an intentional change from its prior full-width stretch under `.auth form`'s column flex.
 - **Overlap with #290.** #261 delivers the reusable idiom components + applies them to chrome/auth; #290 restructures Home/Settings composition and will consume them. The two are complementary, not conflicting.
 - **Visual verification.** The components were rendered headlessly against the production CSS (round dark-olive icon Button, Instrument Serif wordmark, secondary + primary pill buttons, muted-red error) and `make check-web` passes. Home stays token-recolored from #260; its idiom pass is #290.
 

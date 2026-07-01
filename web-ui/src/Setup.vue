@@ -36,7 +36,7 @@ function next() {
 
 <template>
   <main class="auth">
-    <Heading :level="1" class="mb-8 text-center text-[2.75rem] leading-none">malmo</Heading>
+    <Heading :level="1" class="mb-8 text-center">malmo</Heading>
     <component :is="step" @done="next" />
   </main>
 </template>
