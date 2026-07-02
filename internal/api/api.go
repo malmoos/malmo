@@ -182,6 +182,29 @@ func (s *Server) register(api huma.API) {
 		Summary: "List installable apps from the catalog",
 	}, s.listCatalog)
 
+	// The segmented store surface (issue #63): the box UI browses through these
+	// same-origin, box-identity-gated endpoints instead of pulling the whole
+	// catalog and filtering client-side. They mirror the control plane's public
+	// /catalog/{home,category,search} (cloud specs/CATALOG.md # Serve) but are served
+	// from the box's own synced snapshot, so browse still works offline (step 3's
+	// last-good cache). "home" and "search" are literal path segments; "category"
+	// takes ?name= rather than a /category/{cat} path so it does not collide with the
+	// /catalog/{id}/install-plan route under net/http's mux precedence.
+	huma.Register(api, huma.Operation{
+		OperationID: "catalog-home", Method: "GET", Path: "/api/v1/catalog/home",
+		Summary: "Store landing: available categories + featured apps",
+	}, s.catalogHome)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "catalog-category", Method: "GET", Path: "/api/v1/catalog/category",
+		Summary: "Apps in one category (+ featured), selected by ?name=",
+	}, s.catalogCategory)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "catalog-search", Method: "GET", Path: "/api/v1/catalog/search",
+		Summary: "Search the catalog by ?q= (name, tagline, categories)",
+	}, s.catalogSearch)
+
 	huma.Register(api, huma.Operation{
 		OperationID: "get-catalog-app", Method: "GET", Path: "/api/v1/catalog/{id}",
 		Summary: "Full detail-page view of one catalog app",
@@ -331,6 +354,56 @@ func (s *Server) getCatalogApp(ctx context.Context, in *struct {
 		return nil, huma.Error500InternalServerError("catalog read failed", err)
 	}
 	return &struct{ Body catalog.Detail }{Body: d}, nil
+}
+
+// catalogHome serves the store landing (issue #63): the categories present on this
+// box's surface plus the curated featured row, so the browser never pulls the whole
+// catalog to render the entry point.
+func (s *Server) catalogHome(ctx context.Context, _ *struct{}) (*struct{ Body catalog.Home }, error) {
+	h, err := s.catalog.Home()
+	if err != nil {
+		return nil, huma.Error500InternalServerError("catalog read failed", err)
+	}
+	return &struct{ Body catalog.Home }{Body: h}, nil
+}
+
+// catalogCategory serves one category's apps (+ featured), selected by ?name=. An
+// empty or unknown category is a 404, matching the flat detail route's not-found
+// semantics — the UI only ever links categories the landing advertised.
+func (s *Server) catalogCategory(ctx context.Context, in *struct {
+	Name string `query:"name"`
+}) (*struct{ Body catalog.Category }, error) {
+	c, err := s.catalog.Category(in.Name)
+	if errors.Is(err, catalog.ErrNotFound) {
+		return nil, huma.Error404NotFound("no such category")
+	}
+	if err != nil {
+		return nil, huma.Error500InternalServerError("catalog read failed", err)
+	}
+	return &struct{ Body catalog.Category }{Body: c}, nil
+}
+
+// catalogSearch serves the apps matching ?q= over name, tagline, and categories. A
+// blank query returns an empty list (search narrows; browse is the whole store), so
+// the field clears back to no results rather than dumping the catalog.
+func (s *Server) catalogSearch(ctx context.Context, in *struct {
+	Q string `query:"q"`
+}) (*struct {
+	Body struct {
+		Apps []catalog.Entry `json:"apps"`
+	}
+}, error) {
+	apps, err := s.catalog.Search(in.Q)
+	if err != nil {
+		return nil, huma.Error500InternalServerError("catalog read failed", err)
+	}
+	out := &struct {
+		Body struct {
+			Apps []catalog.Entry `json:"apps"`
+		}
+	}{}
+	out.Body.Apps = apps
+	return out, nil
 }
 
 // catalogIcon and catalogScreenshot serve an app's raw image bytes from the

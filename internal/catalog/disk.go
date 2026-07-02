@@ -68,6 +68,12 @@ func (d *diskSource) List() ([]Entry, error) {
 	return out, nil
 }
 
+// featured returns nothing: featuring is store curation carried on the published
+// snapshot (Featured/Rank), which a disk manifest tree has no notion of. The disk
+// source backs only tests now, so its Home/Category views render with an empty
+// featured row — honest, and enough for the handler tests that exercise it.
+func (d *diskSource) featured() ([]Entry, error) { return nil, nil }
+
 // Entry returns the grid summary for one app by id, honestly — it does *not*
 // apply the store-visibility filter, so an unlisted-but-installed app still
 // resolves its card metadata. ErrNotFound when the manifest doesn't exist; other

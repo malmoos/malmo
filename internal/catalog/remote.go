@@ -282,8 +282,9 @@ func (a *wireApp) visibleIn(env string) bool {
 // entryOfApp / detailOfApp project a published app into the box's grid / detail
 // shapes. The icon and screenshot URLs are the brain's own asset routes (the
 // remote source proxies the underlying control-plane asset behind them), so the UI
-// contract is identical to the disk source. Featured/Rank are not surfaced — the
-// box store has no curated rows.
+// contract is identical to the disk source. Featured/Rank stay off Entry/Detail (a
+// card is a card); the segmented Home/Category views select the featured apps and
+// project each as a plain Entry (see featured, below).
 func entryOfApp(a *wireApp) Entry {
 	e := Entry{
 		ID:               a.ID,
@@ -330,6 +331,39 @@ func (r *remoteSource) List() ([]Entry, error) {
 		}
 	}
 	return out, nil
+}
+
+// featured returns the curated top apps visible on this box's surface, ascending by
+// rank (the sync tool guarantees a featured app carries a rank; guard nil anyway).
+// It reads Featured/Rank straight off the snapshot — the fields the box carries for
+// wire fidelity but keeps off Entry/Detail (wire.go). An empty or never-synced
+// store has no featured apps.
+func (r *remoteSource) featured() ([]Entry, error) {
+	snap := r.current()
+	if snap == nil {
+		return nil, nil
+	}
+	var top []*wireApp
+	for i := range snap.apps {
+		if snap.apps[i].Featured && snap.apps[i].visibleIn(r.env) {
+			top = append(top, &snap.apps[i])
+		}
+	}
+	sort.SliceStable(top, func(i, j int) bool { return rankOf(top[i]) < rankOf(top[j]) })
+	out := make([]Entry, len(top))
+	for i, a := range top {
+		out[i] = entryOfApp(a)
+	}
+	return out, nil
+}
+
+// rankOf reads an app's curated rank, treating an absent rank as last so a
+// misconfigured featured app sinks rather than jumps to the front.
+func rankOf(a *wireApp) int {
+	if a.Rank == nil {
+		return 1 << 30
+	}
+	return *a.Rank
 }
 
 // Entry returns the grid summary for one app by id, unfiltered by environment — so
