@@ -106,10 +106,9 @@ function done() {
 </template>
 
 <style>
-/* Recovery-specific styles (auth base styles live in style.css). */
-.auth .back-link { align-self: center; color: #666; font-size: 0.85rem; text-decoration: none; margin-top: 0.25rem; }
-.auth .back-link:hover { color: #222; }
-.auth .copy { align-self: flex-start; border: 1px solid #ddd; background: #fff; border-radius: 8px; padding: 0.35rem 0.7rem; font-size: 0.85rem; cursor: pointer; }
-.auth .copy:hover { background: #f4f4f6; }
-.auth .ack { flex-direction: row; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #444; }
+/* Recovery-specific styles (auth base styles live in style.css). Colors come from
+   the olive semantic tokens; the copy button inherits .auth button.copy. */
+.auth .back-link { align-self: center; color: var(--color-muted-foreground); font-size: 0.85rem; text-decoration: none; margin-top: 0.25rem; }
+.auth .back-link:hover { color: var(--color-foreground); }
+.auth .ack { flex-direction: row; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: var(--color-foreground); }
 </style>

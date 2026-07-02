@@ -1,0 +1,39 @@
+/* Self-hosted @font-face declarations for the Oatmeal typography (Inter + Instrument
+   Serif). Kept OUT of style.css and imported separately from main.ts on purpose:
+   Tailwind v4's Lightning CSS transform of the `@import "tailwindcss"` entry silently
+   drops the *first* @font-face rule in that file, so hosting these here (a plain CSS
+   file Tailwind never processes) is the reliable way to emit all four faces.
+
+   Fonts are bundled, NOT loaded from the Google Fonts CDN (a divergence from cloud and
+   the Oatmeal README): the dashboard is served over .local HTTP on a LAN that may be
+   offline, where a CDN <link> yields unstyled fonts. OFL 1.1 notices ship alongside the
+   woff2 in ./inter/OFL.txt and ./instrument-serif/OFL.txt (DECISIONS.md 2026-07-01).
+   Vite fingerprints these url()s into the build. */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./inter/inter-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("./inter/inter-latin-500-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("./inter/inter-latin-600-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Instrument Serif";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./instrument-serif/instrument-serif-latin-400-normal.woff2") format("woff2");
+}
