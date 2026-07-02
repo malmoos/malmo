@@ -112,14 +112,14 @@ onUnmounted(() => document.removeEventListener("click", onDocClick));
   width: 2rem;
   height: 2rem;
   padding: 0;
-  color: #555;
-  border: 1px solid #ddd;
-  background: #fff;
-  border-radius: 8px;
+  color: var(--color-muted-foreground);
+  border: 1px solid var(--color-border);
+  background: var(--color-card);
+  border-radius: var(--radius);
   cursor: pointer;
 }
-.bell:hover { background: #f4f4f5; }
-.bell.active { background: #eef1f5; border-color: #c8cfd8; }
+.bell:hover { background: var(--color-muted); }
+.bell.active { background: var(--color-muted); border-color: var(--color-olive-300); }
 .badge {
   position: absolute;
   top: -6px;
@@ -131,9 +131,9 @@ onUnmounted(() => document.removeEventListener("click", onDocClick));
   font-weight: 600;
   line-height: 1rem;
   text-align: center;
-  color: #fff;
-  background: #e03131;
-  border: 1px solid #fff;
+  color: var(--color-olive-50);
+  background: var(--color-destructive);
+  border: 1px solid var(--color-background);
   border-radius: 999px;
 }
 
@@ -144,9 +144,9 @@ onUnmounted(() => document.removeEventListener("click", onDocClick));
   width: 340px;
   max-height: 460px;
   overflow-y: auto;
-  background: #fff;
-  border: 1px solid #e6e6e8;
-  border-radius: 10px;
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12);
   z-index: 50;
 }
@@ -155,28 +155,28 @@ onUnmounted(() => document.removeEventListener("click", onDocClick));
   align-items: center;
   justify-content: space-between;
   padding: 0.6rem 0.85rem;
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid var(--color-border);
   position: sticky;
   top: 0;
-  background: #fff;
+  background: var(--color-card);
 }
 .inbox-head strong { font-size: 0.85rem; }
 .link {
   border: none;
   background: none;
   padding: 0;
-  color: #2b6cb0;
+  color: var(--color-accent);
   font-size: 0.78rem;
   cursor: pointer;
 }
 .link:hover { text-decoration: underline; }
-.empty { color: #999; font-size: 0.85rem; text-align: center; padding: 1.4rem 1rem; margin: 0; }
+.empty { color: var(--color-muted-foreground); font-size: 0.85rem; text-align: center; padding: 1.4rem 1rem; margin: 0; }
 
 .group-label {
   font-size: 0.65rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #999;
+  color: var(--color-muted-foreground);
   padding: 0.5rem 0.85rem 0.25rem;
 }
 .row {
@@ -184,12 +184,14 @@ onUnmounted(() => document.removeEventListener("click", onDocClick));
   gap: 0.55rem;
   align-items: flex-start;
   padding: 0.6rem 0.85rem;
-  border-top: 1px solid #f1f1f2;
+  border-top: 1px solid var(--color-border);
   cursor: pointer;
 }
-.row:hover { background: #fafafa; }
-.row.unread { background: #f7faff; }
-.row.unread:hover { background: #eef4fd; }
+.row:hover { background: var(--color-muted); }
+/* Unread lacks a distinct hue in the monochrome palette; the bold summary and
+   colored severity dot carry the signal, with a light olive resting tint. */
+.row.unread { background: var(--color-muted); }
+.row.unread:hover { background: var(--color-olive-200); }
 .row.unread .row-summary { font-weight: 600; }
 .dot {
   flex: 0 0 8px;
@@ -197,27 +199,27 @@ onUnmounted(() => document.removeEventListener("click", onDocClick));
   height: 8px;
   margin-top: 0.35rem;
   border-radius: 999px;
-  background: #adb5bd;
+  background: var(--color-muted-foreground);
 }
-.dot[data-sev="info"] { background: #4dabf7; }
-.dot[data-sev="warning"] { background: #f59f00; }
-.dot[data-sev="error"] { background: #e8590c; }
-.dot[data-sev="critical"] { background: #e03131; }
+.dot[data-sev="info"] { background: var(--color-info); }
+.dot[data-sev="warning"] { background: var(--color-warning); }
+.dot[data-sev="error"] { background: var(--color-destructive); }
+.dot[data-sev="critical"] { background: var(--color-destructive); }
 .row-main { flex: 1; min-width: 0; }
-.row-summary { font-size: 0.85rem; color: #1a1a1a; }
-.row-body { font-size: 0.78rem; color: #777; margin-top: 2px; }
-.row-meta { display: flex; gap: 0.5rem; align-items: center; margin-top: 4px; font-size: 0.72rem; color: #999; }
-.resolved { color: #2f9e44; }
-.action { color: #2b6cb0; }
+.row-summary { font-size: 0.85rem; color: var(--color-foreground); }
+.row-body { font-size: 0.78rem; color: var(--color-muted-foreground); margin-top: 2px; }
+.row-meta { display: flex; gap: 0.5rem; align-items: center; margin-top: 4px; font-size: 0.72rem; color: var(--color-muted-foreground); }
+.resolved { color: var(--color-success); }
+.action { color: var(--color-accent); }
 .dismiss {
   flex: 0 0 auto;
   border: none;
   background: none;
-  color: #bbb;
+  color: var(--color-muted-foreground);
   font-size: 1.1rem;
   line-height: 1;
   padding: 0 0.15rem;
   cursor: pointer;
 }
-.dismiss:hover { color: #777; }
+.dismiss:hover { color: var(--color-foreground); }
 </style>

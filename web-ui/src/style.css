@@ -41,11 +41,18 @@
   --color-accent: var(--color-olive-900);
   --color-accent-foreground: var(--color-olive-50);
 
-  /* destructive / success stay semantic status colors — olive is monochrome and
-     has no red or green, and cloud itself keeps red for errors (bg-red-50
-     text-red-800). Retuned to OKLCH so they sit in the same color space, muted
-     to read as olive-adjacent rather than pure signal colors. */
+  /* Status colors — olive is monochrome and has no red/amber/blue/green, and
+     cloud itself keeps red for errors (bg-red-50 text-red-800). Retuned to OKLCH
+     so they sit in the same color space, muted to read as olive-adjacent rather
+     than pure signal colors. destructive/success back error and success states;
+     info/warning back the remaining notification + health severities
+     (NOTIFICATIONS.md # Severities: info | warning | error | critical) so every
+     severity stays distinguishable without leaving the palette. error and
+     critical both map to destructive — red reads as "bad" for both; the row
+     label carries the finer distinction. */
   --color-destructive: oklch(48% 0.16 27);
+  --color-warning: oklch(54% 0.13 70);
+  --color-info: oklch(52% 0.12 245);
   --color-success: oklch(48% 0.11 150);
 
   --radius: 0.75rem;
