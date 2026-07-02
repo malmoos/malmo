@@ -15,6 +15,7 @@ import { RouterLink } from "vue-router";
 import { useAuth } from "../auth";
 import NotificationBell from "../NotificationBell.vue";
 import LiveResources from "../LiveResources.vue";
+import Button from "./ui/Button.vue";
 
 const { currentUser } = useAuth();
 const menuOpen = ref(false);
@@ -32,14 +33,15 @@ function initial(name: string | undefined): string {
       <LiveResources />
 
       <div class="relative">
-        <button
+        <Button
           type="button"
-          class="grid size-8 place-items-center rounded-full bg-accent text-sm font-medium text-accent-foreground"
+          variant="primary"
+          size="icon"
           :title="currentUser?.username"
           @click="menuOpen = !menuOpen"
         >
           {{ initial(currentUser?.username) }}
-        </button>
+        </Button>
         <div
           v-if="menuOpen"
           class="absolute right-0 z-10 mt-2 w-44 rounded-lg border border-border bg-card py-1 shadow-lg"

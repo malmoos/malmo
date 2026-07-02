@@ -12,6 +12,8 @@ import { ref } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 import { redeemRecoveryCode } from "./auth";
 import type { ApiError } from "./api";
+import Button from "@/components/ui/Button.vue";
+import Heading from "@/components/ui/Heading.vue";
 
 const router = useRouter();
 
@@ -62,7 +64,7 @@ function done() {
 
 <template>
   <main class="auth">
-    <h1>malmo</h1>
+    <Heading :level="1" class="mb-8 text-center">malmo</Heading>
 
     <!-- Phase 1: redeem the recovery code -->
     <form v-if="!newCode" class="card" @submit.prevent="submit">
@@ -80,9 +82,9 @@ function done() {
         New password
         <input v-model="newPassword" type="password" autocomplete="new-password" required />
       </label>
-      <button type="submit" :disabled="submitting">
+      <Button type="submit" :disabled="submitting" class="mt-2">
         {{ submitting ? "Resetting…" : "Reset password" }}
-      </button>
+      </Button>
       <p v-if="error" class="error">{{ error }}</p>
       <RouterLink to="/" class="back-link">← Back to sign in</RouterLink>
     </form>
@@ -95,19 +97,22 @@ function done() {
         don't store the code itself, just a hash.
       </p>
       <div class="recovery">{{ newCode }}</div>
-      <button type="button" class="copy" @click="copyCode">{{ copied ? "Copied" : "Copy" }}</button>
+      <Button type="button" variant="secondary" size="sm" class="self-start" @click="copyCode">
+        {{ copied ? "Copied" : "Copy" }}
+      </Button>
       <label class="ack">
         <input type="checkbox" v-model="saved" />
         I've saved this recovery code
       </label>
-      <button type="submit" :disabled="!saved">Continue to sign in</button>
+      <Button type="submit" :disabled="!saved" class="mt-2">Continue to sign in</Button>
     </form>
   </main>
 </template>
 
 <style>
-/* Recovery-specific styles (auth base styles live in style.css). Colors come from
-   the olive semantic tokens; the copy button inherits .auth button.copy. */
+/* Recovery-specific styles (auth base styles live in style.css). Colors on
+   .back-link / .ack come from the olive semantic tokens; the Copy button is now
+   the shared <Button variant="secondary">, not a .auth CSS rule. */
 .auth .back-link { align-self: center; color: var(--color-muted-foreground); font-size: 0.85rem; text-decoration: none; margin-top: 0.25rem; }
 .auth .back-link:hover { color: var(--color-foreground); }
 .auth .ack { flex-direction: row; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: var(--color-foreground); }

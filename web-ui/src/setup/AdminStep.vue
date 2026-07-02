@@ -16,6 +16,7 @@
 import { ref } from "vue";
 import { setup } from "../auth";
 import type { ApiError } from "../api";
+import Button from "@/components/ui/Button.vue";
 
 const emit = defineEmits<{ done: [] }>();
 
@@ -100,9 +101,9 @@ async function submit() {
       Continue without a recovery code?
     </p>
 
-    <button type="submit" :disabled="submitting">
+    <Button type="submit" :disabled="submitting" class="mt-2">
       {{ submitting ? "Creating…" : "Continue" }}
-    </button>
+    </Button>
     <p v-if="error" class="error">{{ error }}</p>
   </form>
 
@@ -114,9 +115,9 @@ async function submit() {
     </p>
     <div class="recovery-row">
       <div class="recovery">{{ recoveryCode }}</div>
-      <button type="button" class="copy" @click="copyCode">
+      <Button type="button" variant="secondary" size="sm" @click="copyCode">
         {{ copied ? "Copied" : "Copy" }}
-      </button>
+      </Button>
     </div>
 
     <label class="check">
@@ -124,6 +125,6 @@ async function submit() {
       I have saved this recovery code
     </label>
 
-    <button type="submit" :disabled="!acknowledged">Continue</button>
+    <Button type="submit" :disabled="!acknowledged" class="mt-2">Continue</Button>
   </form>
 </template>

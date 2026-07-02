@@ -59,27 +59,22 @@ body,
 
 /* Shared auth-screen composition (Login.vue + Setup.vue + its steps +
    RecoverView.vue all inherit these classes). Restructured to the Oatmeal
-   composition — Instrument Serif display wordmark, olive-50 card panels,
-   rounded-full inputs/buttons, dark-olive CTA — so every auth surface adopts the
-   theme from this one block (issue #260 restructure). No raw hex: colors come
-   from the olive semantic tokens above. */
+   composition — olive-50 card panels, rounded-full inputs — so every auth surface
+   adopts the theme from this one block (issue #260 restructure). No raw hex: colors
+   come from the olive semantic tokens above. The pill submit buttons and the display
+   wordmark are the shared `components/ui/Button.vue` / `Heading.vue` idioms (#261),
+   so their styling is not duplicated here. */
 .auth { max-width: 26rem; margin: 4rem auto; padding: 0 1.5rem; }
-.auth h1 { font-family: var(--font-display); font-size: 2.75rem; line-height: 1.05; letter-spacing: -0.02em; margin-bottom: 2rem; text-align: center; color: var(--color-foreground); }
 .auth form, .auth .card { background: var(--color-card); border: 1px solid var(--color-border); border-radius: 1rem; padding: 1.75rem; display: flex; flex-direction: column; gap: 1rem; }
 .auth h2 { margin: 0 0 0.25rem; font-size: 1.05rem; font-weight: 600; letter-spacing: -0.01em; color: var(--color-foreground); }
 .auth label { display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.875rem; font-weight: 500; color: var(--color-foreground); }
 .auth input, .auth select { border: 1px solid var(--color-border); border-radius: 9999px; padding: 0.55rem 1rem; font-size: 0.9rem; background: var(--color-card); color: var(--color-foreground); outline: none; }
 .auth input:focus, .auth select:focus { border-color: var(--color-accent); }
-.auth button[type="submit"] { border: none; background: var(--color-accent); color: var(--color-accent-foreground); border-radius: 9999px; padding: 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; font-weight: 500; margin-top: 0.5rem; }
-.auth button[type="submit"]:hover { background: var(--color-olive-800); }
-.auth button[type="submit"]:disabled { opacity: 0.6; cursor: default; }
 .auth .error { color: var(--color-destructive); font-size: 0.85rem; margin: 0; }
 .auth .hint { color: var(--color-muted-foreground); font-size: 0.8rem; margin: 0; }
 .auth .recovery { background: var(--color-muted); border: 1px solid var(--color-border); border-radius: 0.75rem; padding: 0.75rem; font-family: ui-monospace, monospace; font-size: 0.9rem; word-break: break-all; color: var(--color-foreground); }
 .auth .recovery-row { display: flex; align-items: stretch; gap: 0.5rem; }
 .auth .recovery-row .recovery { flex: 1; }
-.auth button.copy { border: 1px solid var(--color-border); background: var(--color-muted); color: var(--color-foreground); border-radius: 9999px; padding: 0 1rem; cursor: pointer; font-size: 0.85rem; flex-shrink: 0; }
-.auth button.copy:hover { background: var(--color-olive-200); }
 /* First-run wizard controls (Setup.vue steps). */
 .auth label.check { flex-direction: row; align-items: flex-start; gap: 0.5rem; color: var(--color-foreground); }
 .auth label.check input { width: auto; margin-top: 0.15rem; flex-shrink: 0; }
