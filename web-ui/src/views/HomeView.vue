@@ -100,18 +100,20 @@ const empty = computed(() => household.value.length === 0 && yours.value.length 
 </template>
 
 <style scoped>
-/* Severity palette shared with NotificationBell's dots (HEALTH.md severities). */
+/* Severity palette shared with NotificationBell's dots (HEALTH.md severities):
+   the muted status tokens — warning stays amber, error/critical both map to
+   destructive (red reads as "bad" for both; the badge label distinguishes). */
 .health-dot {
   flex: 0 0 8px;
   width: 8px;
   height: 8px;
   margin-top: 0.4rem;
   border-radius: 999px;
-  background: #adb5bd;
+  background: var(--color-muted-foreground);
 }
-.health-dot[data-sev="warning"] { background: #f59f00; }
-.health-dot[data-sev="error"] { background: #e8590c; }
-.health-dot[data-sev="critical"] { background: #e03131; }
+.health-dot[data-sev="warning"] { background: var(--color-warning); }
+.health-dot[data-sev="error"] { background: var(--color-destructive); }
+.health-dot[data-sev="critical"] { background: var(--color-destructive); }
 .health-sev {
   flex: 0 0 auto;
   align-self: center;
@@ -121,10 +123,10 @@ const empty = computed(() => household.value.length === 0 && yours.value.length 
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: #fff;
-  background: #adb5bd;
+  color: var(--color-olive-50);
+  background: var(--color-muted-foreground);
 }
-.health-sev[data-sev="warning"] { background: #f59f00; }
-.health-sev[data-sev="error"] { background: #e8590c; }
-.health-sev[data-sev="critical"] { background: #e03131; }
+.health-sev[data-sev="warning"] { background: var(--color-warning); }
+.health-sev[data-sev="error"] { background: var(--color-destructive); }
+.health-sev[data-sev="critical"] { background: var(--color-destructive); }
 </style>

@@ -297,16 +297,16 @@ const hasLinks = computed(
 .markdown-body :deep(ul) { list-style: disc; }
 .markdown-body :deep(ol) { list-style: decimal; }
 .markdown-body :deep(li) { margin: 0.25rem 0; }
-.markdown-body :deep(a) { color: var(--accent, #2563eb); text-decoration: underline; }
+.markdown-body :deep(a) { color: var(--color-accent); text-decoration: underline; }
 .markdown-body :deep(code) {
   font-family: ui-monospace, monospace;
   font-size: 0.85em;
-  background: var(--muted, #f1f3f5);
+  background: var(--color-muted);
   padding: 0.1em 0.3em;
   border-radius: 0.25rem;
 }
 .markdown-body :deep(pre) {
-  background: var(--muted, #f1f3f5);
+  background: var(--color-muted);
   padding: 0.75rem;
   border-radius: 0.5rem;
   overflow-x: auto;

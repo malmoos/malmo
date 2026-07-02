@@ -235,45 +235,45 @@ function diskBar(d: DiskSpace): number {
   width: 2rem;
   height: 2rem;
   padding: 0;
-  color: #555;
-  border: 1px solid #ddd;
-  background: #fff;
-  border-radius: 8px;
+  color: var(--color-muted-foreground);
+  border: 1px solid var(--color-border);
+  background: var(--color-card);
+  border-radius: var(--radius);
   cursor: pointer;
 }
-.live-btn:hover { background: #f4f4f5; }
-.live-btn.active { background: #eef1f5; border-color: #c8cfd8; }
+.live-btn:hover { background: var(--color-muted); }
+.live-btn.active { background: var(--color-muted); border-color: var(--color-olive-300); }
 
 .panel {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
   width: 280px;
-  background: #fff;
-  border: 1px solid #e6e6e8;
-  border-radius: 10px;
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12);
   z-index: 50;
   padding: 0.5rem 0.85rem 0.7rem;
 }
 .panel-head { padding: 0.3rem 0 0.5rem; }
 .panel-head strong { font-size: 0.85rem; }
-.empty { color: #999; font-size: 0.85rem; text-align: center; padding: 1rem; margin: 0; }
+.empty { color: var(--color-muted-foreground); font-size: 0.85rem; text-align: center; padding: 1rem; margin: 0; }
 
 .metric { margin-bottom: 0.6rem; }
 .metric-row { display: flex; justify-content: space-between; align-items: baseline; }
-.label { font-size: 0.78rem; color: #555; }
-.value { font-size: 0.8rem; color: #1a1a1a; font-variant-numeric: tabular-nums; }
+.label { font-size: 0.78rem; color: var(--color-muted-foreground); }
+.value { font-size: 0.8rem; color: var(--color-foreground); font-variant-numeric: tabular-nums; }
 .bar {
   margin-top: 4px;
   height: 5px;
   border-radius: 999px;
-  background: #eef0f2;
+  background: var(--color-muted);
   overflow: hidden;
 }
 .bar-fill {
   height: 100%;
-  background: #4dabf7;
+  background: var(--color-accent);
   border-radius: 999px;
   transition: width 0.4s ease;
 }
@@ -293,7 +293,7 @@ function diskBar(d: DiskSpace): number {
 .storage-head .chev {
   width: 14px;
   height: 14px;
-  color: #aaa;
+  color: var(--color-muted-foreground);
   align-self: center;
   transition: transform 0.2s ease;
 }
@@ -306,7 +306,7 @@ function diskBar(d: DiskSpace): number {
   font-size: 0.65rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #999;
+  color: var(--color-muted-foreground);
   margin-bottom: 0.2rem;
 }
 .io-row {
@@ -314,20 +314,20 @@ function diskBar(d: DiskSpace): number {
   align-items: baseline;
   gap: 0.5rem;
   font-size: 0.76rem;
-  color: #333;
+  color: var(--color-foreground);
   padding: 0.12rem 0;
 }
-.io-row .label { flex: 1; min-width: 0; color: #777; }
-.io { font-variant-numeric: tabular-nums; color: #1a1a1a; }
+.io-row .label { flex: 1; min-width: 0; color: var(--color-muted-foreground); }
+.io { font-variant-numeric: tabular-nums; color: var(--color-foreground); }
 
 .foot {
   display: flex;
   justify-content: space-between;
   margin-top: 0.6rem;
   padding-top: 0.45rem;
-  border-top: 1px solid #f1f1f2;
+  border-top: 1px solid var(--color-border);
   font-size: 0.72rem;
-  color: #999;
+  color: var(--color-muted-foreground);
   font-variant-numeric: tabular-nums;
 }
 </style>

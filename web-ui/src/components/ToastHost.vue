@@ -38,27 +38,30 @@ const { toasts } = useToasts();
   align-items: flex-start;
   gap: 0.6rem;
   padding: 0.6rem 0.85rem;
-  border-radius: 8px;
+  border-radius: var(--radius);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12);
   pointer-events: auto;
 }
+/* Tinted panels: the muted status token mixed into the card surface for the fill
+   and border, the solid token for the accent stripe and text — so the toasts sit
+   in the olive palette while error/success stay legible signals. */
 .toast[data-variant="error"] {
-  background: #fff5f5;
-  border: 1px solid #f3c0c0;
-  border-left: 3px solid #e03131;
+  background: color-mix(in oklch, var(--color-destructive) 12%, var(--color-card));
+  border: 1px solid color-mix(in oklch, var(--color-destructive) 35%, var(--color-card));
+  border-left: 3px solid var(--color-destructive);
 }
 .toast[data-variant="success"] {
-  background: #ebfbee;
-  border: 1px solid #b2e3bd;
-  border-left: 3px solid #2f9e44;
+  background: color-mix(in oklch, var(--color-success) 12%, var(--color-card));
+  border: 1px solid color-mix(in oklch, var(--color-success) 35%, var(--color-card));
+  border-left: 3px solid var(--color-success);
 }
 .toast-msg {
   flex: 1;
   font-size: 0.82rem;
   line-height: 1.3;
 }
-.toast[data-variant="error"] .toast-msg { color: #842029; }
-.toast[data-variant="success"] .toast-msg { color: #1b5e2a; }
+.toast[data-variant="error"] .toast-msg { color: var(--color-destructive); }
+.toast[data-variant="success"] .toast-msg { color: var(--color-success); }
 .toast-close {
   flex: 0 0 auto;
   padding: 0 0.1rem;
@@ -68,8 +71,8 @@ const { toasts } = useToasts();
   line-height: 1;
   cursor: pointer;
 }
-.toast[data-variant="error"] .toast-close { color: #c08484; }
-.toast[data-variant="error"] .toast-close:hover { color: #842029; }
-.toast[data-variant="success"] .toast-close { color: #8bbf97; }
-.toast[data-variant="success"] .toast-close:hover { color: #1b5e2a; }
+.toast[data-variant="error"] .toast-close { color: color-mix(in oklch, var(--color-destructive) 55%, var(--color-card)); }
+.toast[data-variant="error"] .toast-close:hover { color: var(--color-destructive); }
+.toast[data-variant="success"] .toast-close { color: color-mix(in oklch, var(--color-success) 55%, var(--color-card)); }
+.toast[data-variant="success"] .toast-close:hover { color: var(--color-success); }
 </style>
