@@ -20,9 +20,15 @@ useEvents();
     <!-- Degraded-mode bar: shows above the routed view on every page when an
          error/critical health issue is active (HEALTH.md # Display). -->
     <HealthBanner />
-    <!-- pb-28 keeps the last row clear of the floating dock. -->
-    <main class="flex-1 overflow-y-auto px-4 pb-28 pt-2">
-      <div class="mx-auto h-full max-w-6xl">
+    <!-- The content wrapper is min-h-full (fills the viewport when short, grows
+         with content when long) rather than a fixed h-full box — a fixed box lets
+         tall pages overflow *past* the scroll container's padding, so the fixed
+         dock would cover the last rows. pb-28 rides on the wrapper so the clearance
+         is measured from the bottom of the content, guaranteeing the last row
+         clears the dock on pages of any length. flex-col so a full-height section
+         (Settings' logs pane) can still flex-1 to fill. -->
+    <main class="min-h-0 flex-1 overflow-y-auto px-4 pt-2">
+      <div class="mx-auto flex min-h-full max-w-6xl flex-col pb-28">
         <RouterView />
       </div>
     </main>

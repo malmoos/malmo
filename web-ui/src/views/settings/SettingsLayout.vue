@@ -1,17 +1,20 @@
 <script setup lang="ts">
-// Settings shell — a left nav rail plus a routed content pane (DASHBOARD.md #
+// Settings shell — a left nav panel plus a routed content pane (DASHBOARD.md #
 // global navigation: Settings is "box + account settings, and the home for gated
-// routes"). The internal IA is a two-pane layout: ~1/3 nav on the left, the
-// active section's <RouterView> filling the rest. Each section is its own nested
-// route under /settings, so deep-links and the avatar-menu links keep working.
+// routes"). The internal IA is a two-pane layout: a bordered nav panel on the
+// left, the active section's <RouterView> filling the rest. Each section is its
+// own nested route under /settings, so deep-links and the avatar-menu links keep
+// working.
 //
-// Role gating mirrors AUTH.md: Users is admin-only (hidden from members here;
-// the section view also redirects, defence in depth). Everything else is open to
-// every signed-in user.
+// Role gating mirrors AUTH.md: Users and Outgoing email are admin-only (hidden
+// from members here; the section view also redirects, defence in depth).
+// Everything else is open to every signed-in user. A group left with zero
+// visible items is dropped rather than rendered with a bare label.
 //
-// Responsive: the rail is a sidebar on md+ and collapses to a horizontal,
-// scrollable tab strip above the content on narrow screens — the dock is
-// mobile-first, so Settings must degrade the same way.
+// Responsive: the nav is a bordered panel with grouped sections on md+ and
+// collapses to a flat, horizontally scrollable tab strip above the content on
+// narrow screens — mobile keeps its own off-canvas nav via the Dock
+// (components/Dock.vue), so this doesn't duplicate that with a second slide-over.
 import { computed } from "vue";
 import { RouterLink, RouterView } from "vue-router";
 import { User, Bell, LayoutGrid, Mail, ScrollText, Users, Info, type LucideIcon } from "lucide-vue-next";
@@ -20,32 +23,52 @@ import { useAuth } from "@/auth";
 const { currentUser } = useAuth();
 
 type NavItem = { to: string; label: string; icon: LucideIcon; adminOnly?: boolean };
+type NavGroup = { label: string; items: NavItem[] };
 
-// Order is the menu order. Account first, then Users (admins land on people
-// management right after their own account); the rest follows, About last.
-const allItems: NavItem[] = [
-  { to: "/settings/account", label: "Account", icon: User },
-  { to: "/settings/users", label: "Users", icon: Users, adminOnly: true },
-  { to: "/settings/mail", label: "Outgoing email", icon: Mail, adminOnly: true },
-  { to: "/settings/notifications", label: "Notifications", icon: Bell },
-  { to: "/settings/apps", label: "Installed apps", icon: LayoutGrid },
-  { to: "/settings/activity", label: "Activity", icon: ScrollText },
-  { to: "/settings/about", label: "About", icon: Info },
+// Group and item order is the menu order: your own account first, then
+// System — Installed apps stays first within System, with the admin-only
+// items folded in after it rather than split into their own group.
+const groups: NavGroup[] = [
+  {
+    label: "You",
+    items: [
+      { to: "/settings/account", label: "Account", icon: User },
+      { to: "/settings/notifications", label: "Notifications", icon: Bell },
+    ],
+  },
+  {
+    label: "System",
+    items: [
+      { to: "/settings/apps", label: "Installed apps", icon: LayoutGrid },
+      { to: "/settings/users", label: "Users", icon: Users, adminOnly: true },
+      { to: "/settings/mail", label: "Outgoing email", icon: Mail, adminOnly: true },
+      { to: "/settings/activity", label: "Activity", icon: ScrollText },
+      { to: "/settings/about", label: "About", icon: Info },
+    ],
+  },
 ];
 
-const items = computed(() =>
-  allItems.filter((i) => !i.adminOnly || currentUser.value?.role === "admin"),
+const isAdmin = computed(() => currentUser.value?.role === "admin");
+
+const visibleGroups = computed(() =>
+  groups
+    .map((g) => ({ ...g, items: g.items.filter((i) => !i.adminOnly || isAdmin.value) }))
+    .filter((g) => g.items.length > 0),
 );
+
+// Flat list for the mobile tab strip — same filter, no grouping.
+const flatItems = computed(() => visibleGroups.value.flatMap((g) => g.items));
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col gap-6 pt-2 md:flex-row md:gap-8">
-    <!-- Left nav. Horizontal scroll strip on narrow screens, sticky rail on md+. -->
-    <nav
-      class="-mx-1 flex shrink-0 gap-1 overflow-x-auto px-1 md:mx-0 md:w-56 md:flex-col md:overflow-visible md:px-0"
-    >
+  <!-- flex-1 (not h-full) so the shell fills the AppShell content wrapper, which
+       is now min-h-full rather than a fixed height. min-h-0 keeps the content pane
+       able to host a full-height, internally-scrolling child (the logs pane). -->
+  <div class="flex min-h-0 flex-1 flex-col gap-6 pt-2 md:flex-row md:gap-8">
+    <!-- Mobile: flat, horizontally scrollable tab strip. -->
+    <nav class="-mx-1 flex shrink-0 gap-1 overflow-x-auto px-1 md:hidden">
       <RouterLink
-        v-for="item in items"
+        v-for="item in flatItems"
         :key="item.to"
         :to="item.to"
         active-class="bg-muted text-foreground"
@@ -54,6 +77,25 @@ const items = computed(() =>
         <component :is="item.icon" class="size-4 shrink-0" />
         <span>{{ item.label }}</span>
       </RouterLink>
+    </nav>
+
+    <!-- Desktop: bordered nav panel with grouped sections. -->
+    <nav class="hidden shrink-0 flex-col gap-5 rounded-xl border border-border bg-card p-3 md:flex md:w-64">
+      <div v-for="group in visibleGroups" :key="group.label">
+        <div class="px-3 pb-1 text-xs font-semibold text-muted-foreground">{{ group.label }}</div>
+        <ul class="space-y-1">
+          <li v-for="item in group.items" :key="item.to">
+            <RouterLink
+              :to="item.to"
+              active-class="bg-muted text-accent"
+              class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-semibold text-muted-foreground hover:bg-muted hover:text-accent"
+            >
+              <component :is="item.icon" class="size-6 shrink-0" />
+              {{ item.label }}
+            </RouterLink>
+          </li>
+        </ul>
+      </div>
     </nav>
 
     <!-- Content pane — the active section. flex-col + min-h-0 so a section can
