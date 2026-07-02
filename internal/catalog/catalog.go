@@ -1,36 +1,82 @@
-// Package catalog loads app manifests from a directory tree. v1 catalog is
-// hand-curated by malmo (APP_STORE.md); the signed-JSON remote catalog is a
-// follow-up. Layout: <root>/<manifest_id>/{manifest.yml, <compose_file>}.
+// Package catalog is the box's read model of the app store. It exposes a fixed
+// six-method surface — List, Entry, Detail, IconPath, ScreenshotPath, Load — that
+// internal/api (the box UI's catalog routes) and internal/lifecycle (install) both
+// consume, and hides behind it whether the catalog is synced from the control
+// plane or read from a local directory tree.
+//
+// In production every box — appliance and hosted alike — uses the remote client
+// (NewRemote): a thin HTTP consumer of the control plane's /catalog/sync snapshot
+// with a last-good on-disk cache (remote.go; cloud specs/CATALOG.md # Consume). No
+// catalog is baked into the image (cloud #62). The original disk reader (New) is
+// retained only as the constructor internal/api and internal/lifecycle tests build
+// a controlled catalog with; it implements the same private source interface, so
+// the rest of the brain holds a *Catalog and is agnostic to which is wired.
 package catalog
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
 
 	"github.com/malmoos/malmo/internal/manifest"
 )
 
-// ErrNotFound is returned by Load when no manifest exists for the id (the
-// directory or manifest.yml is absent). It is deliberately distinct from a
-// manifest that exists but fails to parse or is missing its compose file:
-// those are integrity errors a curated catalog should never ship, so the API
-// maps ErrNotFound to 404 and every other Load error to 500. Follows the
-// "typed errors at boundaries" rule (CLAUDE.md) — same shape as store.ErrNotFound.
+// ErrNotFound is returned by the lookup methods when no app exists for the id (on
+// disk: the directory or manifest.yml is absent; remote: no such app in the synced
+// snapshot). It is deliberately distinct from a manifest that exists but fails to
+// parse or is missing its compose file — those are integrity errors a curated
+// catalog should never ship — so the API maps ErrNotFound to 404 and every other
+// error to 500. Follows the "typed errors at boundaries" rule (CLAUDE.md).
 var ErrNotFound = errors.New("catalog: manifest not found")
 
-type Catalog struct{ root string }
+// source is the read model behind Catalog: the six methods the brain consumes,
+// implemented once per backing (disk / remote). Private because the brain always
+// talks to *Catalog; the facade lets the remote client back production while the
+// disk reader stays available to tests, with no change to internal/api or
+// internal/lifecycle.
+type source interface {
+	List() ([]Entry, error)
+	Entry(id string) (Entry, error)
+	Detail(id string) (Detail, error)
+	IconPath(id string) (string, error)
+	ScreenshotPath(id string, i int) (string, error)
+	Load(id string) (*manifest.Manifest, []byte, error)
+}
 
-func New(root string) *Catalog { return &Catalog{root: root} }
+// Catalog is the brain-facing catalog handle. It is a thin facade over a source;
+// New builds the disk-backed one, NewRemote the control-plane client.
+type Catalog struct{ src source }
 
-// Entry is the store-facing summary of one available app. It carries exactly
-// what the browse grid needs to render a card without a second fetch
-// (APP_STORE.md # Catalog schema): the identity, the one-liner, the categories,
-// and an icon URL. The detail page fetches Detail for the rest.
+// New builds a disk-backed catalog rooted at a directory tree of
+// <root>/<manifest_id>/{manifest.yml, <compose_file>}. Production no longer uses
+// it (every box is a control-plane thin client — NewRemote); it is retained as the
+// constructor internal/api and internal/lifecycle tests build a controlled catalog
+// with, off a temp directory.
+func New(root string) *Catalog { return &Catalog{src: newDiskSource(root)} }
+
+func (c *Catalog) List() ([]Entry, error)             { return c.src.List() }
+func (c *Catalog) Entry(id string) (Entry, error)     { return c.src.Entry(id) }
+func (c *Catalog) Detail(id string) (Detail, error)   { return c.src.Detail(id) }
+func (c *Catalog) IconPath(id string) (string, error) { return c.src.IconPath(id) }
+func (c *Catalog) ScreenshotPath(id string, i int) (string, error) {
+	return c.src.ScreenshotPath(id, i)
+}
+func (c *Catalog) Load(id string) (*manifest.Manifest, []byte, error) { return c.src.Load(id) }
+
+// StartRefresh starts the background sync loop of a remote catalog, bound to ctx
+// (it stops when ctx is cancelled). It is a no-op for a disk-backed catalog, so
+// cmd/brain can call it unconditionally. The first sync also runs immediately so a
+// freshly provisioned box populates its store without waiting a full interval.
+func (c *Catalog) StartRefresh(ctx context.Context) {
+	if r, ok := c.src.(*remoteSource); ok {
+		r.startRefresh(ctx)
+	}
+}
+
+// Entry is the store-facing summary of one available app. It carries exactly what
+// the browse grid needs to render a card without a second fetch (APP_STORE.md #
+// Catalog schema): the identity, the one-liner, the categories, and an icon URL.
+// The detail page fetches Detail for the rest.
 type Entry struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
@@ -41,7 +87,10 @@ type Entry struct {
 	// Categories group the app in the store (manifest categories).
 	Categories []string `json:"categories,omitempty"`
 	// IconURL points at the brain's icon asset route for this app, set only when
-	// the manifest declares an icon. Empty ⇒ the store falls back to a glyph.
+	// the app declares an icon. Empty ⇒ the store falls back to a glyph. The route
+	// is always the brain's own /api/v1/catalog/{id}/icon — never the control
+	// plane directly — so the box UI stays on the box origin (AUTH_AND_ACCESS.md;
+	// the brain proxies the asset for a remote catalog).
 	IconURL string `json:"icon_url,omitempty"`
 	// IconGlyph is the manifest's Lucide-icon fallback name (kebab-case) the store
 	// renders when IconURL is empty. Empty (and no IconURL) ⇒ the generic glyph.
@@ -80,177 +129,12 @@ type Detail struct {
 	ChangelogURL string           `json:"changelog_url,omitempty"`
 }
 
-// entryFor builds the grid Entry from a parsed manifest.
-func entryFor(man *manifest.Manifest) Entry {
-	e := Entry{
-		ID:               man.ID,
-		Name:             man.Name,
-		Version:          man.Version,
-		ShortDescription: man.Description.Short,
-		Categories:       man.Categories,
-		IconGlyph:        man.IconGlyph,
-		Footprint:        man.Footprint(),
-	}
-	if man.Icon != "" {
-		e.IconURL = iconURL(man.ID)
-	}
-	return e
-}
-
 // iconURL / screenshotURL are the brain-served asset routes the store loads
-// directly in <img> tags (APP_STORE.md # Catalog schema). Kept here so the URL
-// shape lives next to the path-resolution helpers that serve them.
+// directly in <img> tags (APP_STORE.md # Catalog schema). Both catalog sources
+// project these same brain-origin URLs (the remote source proxies the underlying
+// control-plane asset behind them), so the UI's hard-coded route shapes never
+// change. Kept here so the URL shape lives next to the types that carry it.
 func iconURL(id string) string { return "/api/v1/catalog/" + id + "/icon" }
 func screenshotURL(id string, i int) string {
 	return fmt.Sprintf("/api/v1/catalog/%s/screenshots/%d", id, i)
-}
-
-// List returns the store browse grid: one Entry per *listed* app, sorted by
-// name. Unlisted apps (`listed: false`) are skipped — they exist on disk and
-// load fine (Load/Entry still resolve them for an installed instance's card),
-// but the store doesn't advertise them. For installed-instance enrichment by a
-// known id, use Entry, not List, so an app unlisted after install keeps its
-// metadata (APP_STORE.md # Listed apps).
-func (c *Catalog) List() ([]Entry, error) {
-	dirs, err := os.ReadDir(c.root)
-	if err != nil {
-		return nil, fmt.Errorf("read catalog: %w", err)
-	}
-	var out []Entry
-	for _, d := range dirs {
-		if !d.IsDir() {
-			continue
-		}
-		man, _, err := c.Load(d.Name())
-		if err != nil {
-			continue // skip malformed entries
-		}
-		if !man.IsListed() {
-			continue // hidden from browse (APP_STORE.md # Listed apps)
-		}
-		out = append(out, entryFor(man))
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out, nil
-}
-
-// Entry returns the grid summary for one app by id, honestly — it does *not*
-// apply the store-visibility filter, so an unlisted-but-installed app still
-// resolves its card metadata. ErrNotFound when the manifest doesn't exist; other
-// Load errors are integrity failures. This is the lookup the instance list uses
-// to enrich an installed app; List is the store-facing (filtered) browse.
-func (c *Catalog) Entry(manifestID string) (Entry, error) {
-	man, _, err := c.Load(manifestID)
-	if err != nil {
-		return Entry{}, err
-	}
-	return entryFor(man), nil
-}
-
-// Detail returns the full detail-page view of one app, store-facing: an unlisted
-// app (`listed: false`) is reported as ErrNotFound so its detail page is
-// unreachable through the store, the same as a missing manifest. ErrNotFound is
-// mapped to 404 by the API; other Load errors are integrity failures a curated
-// catalog shouldn't ship and map to 500. (Installed-instance enrichment must not
-// go through here — use Entry, which doesn't hide unlisted apps.)
-func (c *Catalog) Detail(manifestID string) (Detail, error) {
-	man, _, err := c.Load(manifestID)
-	if err != nil {
-		return Detail{}, err
-	}
-	if !man.IsListed() {
-		return Detail{}, fmt.Errorf("%w: %q is unlisted", ErrNotFound, manifestID)
-	}
-	d := Detail{
-		Entry:           entryFor(man),
-		LongDescription: man.Description.Long,
-		License:         man.License,
-		ChangelogURL:    man.ChangelogURL,
-	}
-	if man.Author != (manifest.Author{}) {
-		d.Author = &man.Author
-	}
-	if man.Links != (manifest.Links{}) {
-		d.Links = &man.Links
-	}
-	for i := range man.Screenshots {
-		d.ScreenshotURLs = append(d.ScreenshotURLs, screenshotURL(man.ID, i))
-	}
-	return d, nil
-}
-
-// IconPath resolves the on-disk path of an app's icon for serving. ErrNotFound
-// when the manifest declares no icon (or the app is unknown).
-func (c *Catalog) IconPath(manifestID string) (string, error) {
-	man, _, err := c.Load(manifestID)
-	if err != nil {
-		return "", err
-	}
-	if man.Icon == "" {
-		return "", fmt.Errorf("%w: %q has no icon", ErrNotFound, manifestID)
-	}
-	return c.assetPath(manifestID, man.Icon)
-}
-
-// ScreenshotPath resolves the on-disk path of the i-th screenshot (manifest
-// order, 0-based). ErrNotFound when the index is out of range or the app is
-// unknown.
-func (c *Catalog) ScreenshotPath(manifestID string, i int) (string, error) {
-	man, _, err := c.Load(manifestID)
-	if err != nil {
-		return "", err
-	}
-	if i < 0 || i >= len(man.Screenshots) {
-		return "", fmt.Errorf("%w: %q screenshot %d", ErrNotFound, manifestID, i)
-	}
-	return c.assetPath(manifestID, man.Screenshots[i])
-}
-
-// assetPath resolves a manifest-declared package-relative path (e.g.
-// "./icon.png") to an absolute path inside the app's catalog directory,
-// rejecting anything that would escape it (path traversal). The asset must
-// exist on disk.
-func (c *Catalog) assetPath(manifestID, rel string) (string, error) {
-	dir := filepath.Join(c.root, manifestID)
-	// Treat rel as rooted at the app dir: Clean("/"+rel) collapses any ".."
-	// against that root, then Join re-bases it under dir. The prefix check is a
-	// belt-and-braces guard against symlink-free escapes.
-	full := filepath.Join(dir, filepath.Clean("/"+rel))
-	if full != dir && !strings.HasPrefix(full, dir+string(os.PathSeparator)) {
-		return "", fmt.Errorf("%w: %q asset escapes catalog dir", ErrNotFound, manifestID)
-	}
-	info, err := os.Stat(full)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return "", fmt.Errorf("%w: %q asset %q", ErrNotFound, manifestID, rel)
-		}
-		return "", fmt.Errorf("catalog: stat asset %q for %q: %w", rel, manifestID, err)
-	}
-	// Regular files only: os.Stat succeeds on a directory too, and http.ServeFile
-	// would then serve a listing — leaking the catalog dir structure.
-	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("%w: %q asset %q is not a regular file", ErrNotFound, manifestID, rel)
-	}
-	return full, nil
-}
-
-// Load returns the parsed manifest and the verbatim compose bytes.
-func (c *Catalog) Load(manifestID string) (*manifest.Manifest, []byte, error) {
-	dir := filepath.Join(c.root, manifestID)
-	manBytes, err := os.ReadFile(filepath.Join(dir, "manifest.yml"))
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil, fmt.Errorf("%w: %q", ErrNotFound, manifestID)
-		}
-		return nil, nil, fmt.Errorf("catalog: read manifest for %q: %w", manifestID, err)
-	}
-	man, err := manifest.Parse(manBytes)
-	if err != nil {
-		return nil, nil, err
-	}
-	composeBytes, err := os.ReadFile(filepath.Join(dir, man.ComposeFile))
-	if err != nil {
-		return nil, nil, fmt.Errorf("catalog: compose %q for %q: %w", man.ComposeFile, manifestID, err)
-	}
-	return man, composeBytes, nil
 }

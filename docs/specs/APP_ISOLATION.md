@@ -18,7 +18,7 @@ The manifest declares *intent* (`internet: true`, `lan: false`, `folders: [{fold
 | Who can install | Admin or member (members: personal scope only) | **Admin only** |
 | Manifest source | Catalog repo, reviewed | User-supplied, synthesized from raw compose |
 | Default permissions | Least-permissive (must declare what they need) | Permissive (`internet: true` on by default) |
-| Image binding | Digest from the signed catalog | TOFU — pull, pin the resolved digest |
+| Image binding | Digest from the published catalog | TOFU — pull, pin the resolved digest |
 | Forbidden primitives | `privileged`, docker socket, host ports, host bind mounts, `cap_add`, host namespaces | **Identical to store** — same admission policy runs for both |
 | Enforcement mechanism | Identical to custom | Identical to store |
 

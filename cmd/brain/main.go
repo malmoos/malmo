@@ -87,7 +87,24 @@ func main() {
 		}
 	}
 
-	cat := catalog.New(cfg.catalogDir)
+	// Catalog source (CATALOG step 3, cloud #62). Every box — appliance and hosted
+	// alike — is a thin client of the control plane's public-read catalog API: it
+	// fetches the /catalog/sync snapshot, verifies its integrity digest, caches it
+	// last-good on disk, and projects the six-method surface locally (cloud
+	// specs/CATALOG.md # Consume). The last-good cache is the resilience story: once
+	// a box has synced it browses offline from cache, and a never-synced box shows an
+	// empty store (the documented, accepted behavior — the catalog API is public-read
+	// precisely so an appliance with no portal account can use it, and installing an
+	// app needs internet to pull images regardless). No baked catalog ships in the
+	// image. Env filtering is by the resolved profile.
+	cat := catalog.NewRemote(catalog.RemoteOptions{
+		BaseURL:         cfg.catalogBaseURL,
+		Environment:     string(prof),
+		CacheDir:        cfg.catalogCacheDir,
+		RefreshInterval: cfg.catalogRefresh,
+	})
+	slog.Info("catalog: remote control-plane source",
+		"profile", string(prof), "base_url", cfg.catalogBaseURL, "cache_dir", cfg.catalogCacheDir)
 	host := hostclient.New(cfg.agentSock)
 	cd := caddy.New(cfg.caddyAdmin)
 	bus := events.NewBus()
@@ -190,6 +207,10 @@ func main() {
 	// — the brain runs degraded just like everything else.
 	pollCtx, pollCancel := context.WithCancel(context.Background())
 	defer pollCancel()
+	// Start the remote catalog's background sync loop (an immediate first sync,
+	// then one per interval), bound to the process-lifetime poll context. No-op for
+	// the appliance's baked disk catalog, so it's called unconditionally.
+	cat.StartRefresh(pollCtx)
 	pullSystemHealth(pollCtx, host, healthMgr, auditor, notifier, bus)
 	go systemHealthPollLoop(pollCtx, host, healthMgr, auditor, notifier, bus, cfg.healthPollPeriod)
 
@@ -266,7 +287,7 @@ func main() {
 		fatal("listen", "listen", cfg.listen, "err", err)
 	}
 	slog.Info("malmo-brain listening",
-		"listen", cfg.listen, "state_dir", cfg.stateDir, "catalog_dir", cfg.catalogDir)
+		"listen", cfg.listen, "state_dir", cfg.stateDir, "catalog_cache_dir", cfg.catalogCacheDir)
 
 	// Dashboard host route (WEB_UI.md # deploy model): /api/v1/* → brain,
 	// everything else → malmo-ui. Production-only — gated on the UI upstream being
@@ -470,7 +491,9 @@ func loadEnrollment(bm boxMetaStore) profile.EnrollmentCredentials {
 type config struct {
 	listen                 string
 	stateDir               string
-	catalogDir             string
+	catalogBaseURL         string
+	catalogCacheDir        string
+	catalogRefresh         time.Duration
 	agentSock              string
 	caddyAdmin             string
 	caddyListen            string
@@ -492,13 +515,21 @@ type config struct {
 func loadConfig() config {
 	caddyListen := env("MALMO_CADDY_LISTEN", ":80")
 	return config{
-		listen:        env("MALMO_LISTEN", ":8080"),
-		stateDir:      env("MALMO_STATE_DIR", "./.dev/state"),
-		catalogDir:    env("MALMO_CATALOG_DIR", "./catalog"),
-		agentSock:     env("MALMO_AGENT_SOCK", protocol.SocketPath),
-		caddyAdmin:    env("MALMO_CADDY_ADMIN", "http://localhost:2019"),
-		caddyListen:   caddyListen,
-		caddyProbeURL: env("MALMO_CADDY_PROBE_URL", probeBaseURL(caddyListen)),
+		listen:   env("MALMO_LISTEN", ":8080"),
+		stateDir: env("MALMO_STATE_DIR", "./.dev/state"),
+		// Control-plane catalog: the public-read catalog origin every box syncs the
+		// /catalog/sync snapshot from (CATALOG step 3, cloud #62). Served on the apex
+		// (cloud specs/CATALOG.md), overridable to point a box at staging or an inert
+		// address (the air-gapped test lane). The cache dir holds the last-good
+		// snapshot + proxied assets; it lives under the brain state so it survives a
+		// restart but is not user data.
+		catalogBaseURL:  env("MALMO_CATALOG_URL", "https://malmo.network"),
+		catalogCacheDir: env("MALMO_CATALOG_CACHE_DIR", "/var/lib/malmo/catalog-cache"),
+		catalogRefresh:  envDuration("MALMO_CATALOG_REFRESH", 0), // 0 ⇒ package default
+		agentSock:       env("MALMO_AGENT_SOCK", protocol.SocketPath),
+		caddyAdmin:      env("MALMO_CADDY_ADMIN", "http://localhost:2019"),
+		caddyListen:     caddyListen,
+		caddyProbeURL:   env("MALMO_CADDY_PROBE_URL", probeBaseURL(caddyListen)),
 		// Control-plane / dashboard wiring is production-only. controlPlaneDir and
 		// dashboardUIUpstream default empty so the containerless dev brain skips
 		// both the compose bring-up and the dashboard route; the containerized

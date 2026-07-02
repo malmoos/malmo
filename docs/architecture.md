@@ -81,7 +81,7 @@ are stated below.
 | `api` | HTTP handlers (huma), auth middleware, request/response shapes. The only package that knows about HTTP. | `cmd/brain` |
 | `lifecycle` | The install transaction: door-1 (catalog) and door-2 (paste-a-compose), digest pinning, reconcile pass, health-wait, Caddy timing, uninstall. Defines `DockerDriver` consumer-side. | `api`, `cmd/brain` |
 | `store` | SQLite schema + queries. Sole persistence boundary. `ErrNotFound` is the only typed error. | `api`, `lifecycle`, `auth`, `audit`, `cmd/brain` |
-| `catalog` | Loads + validates store-app manifests from `MALMO_CATALOG_DIR`. Door-1 source. | `lifecycle`, `api`, `cmd/brain` |
+| `catalog` | Door-1 source behind a fixed six-method facade. Production (every profile) uses the control-plane thin client (`NewRemote`, `MALMO_CATALOG_URL`): fetches `GET /catalog/sync`, integrity-digest-verifies, last-good on-disk cache, proxies+caches assets. The disk reader (`New`) is retained only as a test constructor; no catalog is baked into the image. | `lifecycle`, `api`, `cmd/brain` |
 | `manifest` | `manifest.yml` schema (parse + validate), and the synthesizer that wraps a pasted compose into a door-2 manifest. | `catalog`, `lifecycle`, `api` |
 | `admission` | The single compose admission policy applied to both doors (image pinning rules, forbidden constructs, etc.). | `lifecycle` |
 | `caddy` | Client for Caddy's admin API. Site-block JSON generation lives here, plus the hosted wildcard-TLS automation policy (`EnsureWildcardTLS`: ACME DNS-01 via the `acmedns` provider for `*.<box-id>.malmo.network`). | `lifecycle`, `cmd/brain` |
@@ -151,8 +151,7 @@ So this doc isn't read as a claim about the finished product:
 - **Login UI.** `Setup` and `Dashboard` render; `Login.vue` is kept in the tree
   but not routed (single-user dev phase). Cookie sessions and the underlying
   auth pipeline are real.
-- **App store / multi-catalog / signing.** `catalog/` is a hand-written local
-  directory; no signed `store.malmo.network/catalog.json` fetch.
+- **App store.** Every box syncs the catalog from the control plane (`GET /catalog/sync`) with integrity-digest verification, a last-good cache, and TLS for authenticity; no catalog is baked into the image and there is no Ed25519 signature (`DECISIONS.md` 2026-07-02). What remains is cloud-side: the store is the authoring surface, and reconciling the door-1 app-authoring how-to (`docs/dev/authoring-apps-with-an-agent.md`) with that.
 
 For where each of these is planned, see the matching `specs/` doc.
 

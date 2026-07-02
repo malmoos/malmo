@@ -276,11 +276,16 @@ Environment=MALMO_PROXY_IMAGE=tecnativa/docker-socket-proxy:v0.4.2
 Environment=MALMO_PROXY_IMAGE_TAR=/var/lib/malmo/control-plane-images/docker-socket-proxy.tar
 Environment=MALMO_CONTROL_PLANE_DIR=/var/lib/malmo/control-plane
 Environment=MALMO_DASHBOARD_UI_UPSTREAM=malmo-ui:80
-# M2 (#167): the Door-1 catalog the brain installs whoami from (rides the brain's
-# /var/lib/malmo mount), and offline-install mode — the guest is air-gapped, so
-# the brain trusts the catalog-promised digest of the docker-loaded whoami image
-# instead of pulling (APP_LIFECYCLE.md # image digest pinning).
-Environment=MALMO_CATALOG_DIR=/var/lib/malmo/catalog
+# M2 (#167): the Door-1 store (cloud #62). The guest is air-gapped (restrict=on),
+# so the brain can't reach the real control plane; its last-good catalog cache is
+# pre-seeded with a whoami snapshot at build time (see below) and it installs from
+# that (internal/catalog/remote.go # loadCache). Point the catalog URL at an inert
+# address (nothing listening) so the background sync fails fast and cleanly instead
+# of hanging on DNS. Offline-install mode stays on so the brain trusts the
+# catalog-promised digest of the docker-loaded whoami image instead of pulling
+# (APP_LIFECYCLE.md # image digest pinning).
+Environment=MALMO_CATALOG_URL=http://127.0.0.1:9
+Environment=MALMO_CATALOG_CACHE_DIR=/var/lib/malmo/catalog-cache
 Environment=MALMO_OFFLINE_INSTALL=1
 EOF
 
@@ -363,13 +368,19 @@ docker tag "$WHOAMI_REF" traefik/whoami:v1.10.3
 docker save traefik/whoami:v1.10.3 \
     -o "$EXTRA/var/lib/malmo/control-plane-images/whoami.tar"
 
-# Stage the test-only catalog at /var/lib/malmo/catalog/ — the brain's
-# MALMO_CATALOG_DIR (set in the host-agent drop-in below) points here, and it
-# rides the brain's /var/lib/malmo bind mount. It's the dev/test-qemu copy of
-# whoami plus a documents:write folder grant (real bind mount + content-survives-
-# uninstall), kept out of the shipping catalog.
-mkdir -p "$EXTRA/var/lib/malmo/catalog"
-cp -r "${TEST_DIR}/catalog/." "$EXTRA/var/lib/malmo/catalog/"
+# Pre-seed the brain's last-good catalog cache with a whoami snapshot (cloud #62).
+# No catalog/ directory is baked into the image; the guest is air-gapped, so the
+# brain reads this snapshot from its cache at boot exactly as it would a synced-
+# then-offline one (internal/catalog/remote.go # loadCache) and installs whoami
+# from it. mkcatalog generates it from the dev/test-qemu whoami package (a copy of
+# the shipping whoami plus a documents:write folder grant, so install exercises a
+# real use-case-folder bind mount + content-survives-uninstall) and stamps the
+# integrity digest the brain verifies. It rides the brain's /var/lib/malmo mount.
+mkdir -p "$EXTRA/var/lib/malmo/catalog-cache"
+"$GO" -C "$REPO_ROOT" run ./dev/test-qemu/mkcatalog \
+    -pkg "${TEST_DIR}/catalog/whoami" \
+    -environments appliance,hosted \
+    -out "$EXTRA/var/lib/malmo/catalog-cache/catalog.json"
 
 # Stage the control-plane compose + caddy.json at /var/lib/malmo/control-plane/
 # (M1b): the brain runs `docker compose up` here, and Caddy bind-mounts caddy.json

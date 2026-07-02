@@ -13,7 +13,11 @@ AGENT_SOCK := $(abspath $(DEV_DIR)/agent.sock)
 
 export MALMO_AGENT_SOCK := $(AGENT_SOCK)
 export MALMO_STATE_DIR := $(STATE_DIR)
-export MALMO_CATALOG_DIR := ./catalog
+# The brain syncs the catalog from the control plane (MALMO_CATALOG_URL, default
+# the public apex) and caches it last-good here. Point the cache at a writable dev
+# path so `make dev` (native, non-root) can persist it; set MALMO_CATALOG_URL to a
+# local control plane to develop the store offline.
+export MALMO_CATALOG_CACHE_DIR := ./.dev/catalog-cache
 
 .PHONY: build host-agent brain host-agent-real host-agent-real-hosted brain-image ui-image control-plane-images build-cloud-image check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-netstate test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu test-cloud-qemu run-agent run-brain net caddy caddy-down ui dev stop openapi openapi-check clean check-state-owner help
 

@@ -6,6 +6,15 @@ labels: catalog
 assignees: ''
 ---
 
+<!--
+NOTICE: the repo-root catalog/ directory was removed (cloud #62, DECISIONS.md
+2026-07-02). The box is now a thin client of the control plane's catalog API and
+app artifacts live in the cloud-side store, not in this repo. Do not add
+catalog/<id>/{manifest.yml,compose.yml} files here. This template + the
+agent-assisted authoring how-to have not yet been rewritten for the store; the
+authoring adaptations still apply, but the resulting files land in the store.
+-->
+
 **App:** <!-- the app's display name -->
 **Repo:** <!-- upstream GitHub URL -->
 **Docs:** <!-- upstream docs URL, if any — omit the line if none -->

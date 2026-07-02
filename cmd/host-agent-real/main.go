@@ -147,9 +147,13 @@ func brainLaunchConfig(sockPath string) brainlaunch.Config {
 		// (the appliance, no ACME). The hosted image sets MALMO_CADDY_IMAGE to the
 		// caddy-dns/acmedns build for the wildcard cert (os #207/C3b).
 		CaddyImage: env("MALMO_CADDY_IMAGE", ""),
-		// The Door-1 catalog the brain installs from, staged under dataDir so it
-		// rides the brain's DataDir mount (brainlaunch.Config.CatalogDir).
-		CatalogDir:        env("MALMO_CATALOG_DIR", filepath.Join(dataDir, "catalog")),
+		// The control-plane catalog the brain syncs the Door-1 store from, and the
+		// last-good cache dir (under dataDir, so it rides the brain's DataDir mount).
+		// CatalogURL empty ⇒ the brain uses its own default (the public control
+		// plane); the air-gapped lane overrides it to an inert address and relies on
+		// the pre-seeded cache (brainlaunch.Config.CatalogURL / CatalogCacheDir).
+		CatalogURL:        env("MALMO_CATALOG_URL", ""),
+		CatalogCacheDir:   env("MALMO_CATALOG_CACHE_DIR", filepath.Join(dataDir, "catalog-cache")),
 		OfflineInstall:    envBool("MALMO_OFFLINE_INSTALL"),
 		ProfileMarkerPath: profileMarker,
 	}
