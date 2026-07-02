@@ -1,5 +1,7 @@
 # Authoring catalog apps with an agent
 
+> **Notice — the repo-root `catalog/` directory was removed (cloud #62, `DECISIONS.md` 2026-07-02).** The box no longer bakes a catalog; it is a thin client of the control plane's catalog API, and app artifacts now live in the **cloud-side store** (built + published from there, `APP_STORE.md` # What we run). This how-to still describes the old `catalog/<id>/{manifest.yml, compose.yml}` layout and has **not** yet been rewritten for the store — that is a separate follow-up. Do not write files under a repo-root `catalog/` today (there is none); use it only as a reference for the *authoring adaptations* (compose rewrites, env rewiring, digest resolution), which carry over, and land the resulting `manifest.yml` + `compose.yml` in the store.
+
 A reusable agent prompt that turns an upstream `docker-compose.yml` (or a GitHub repo) into a malmo **Door-1** catalog app: it rewrites the compose to pass [admission](../specs/APP_LIFECYCLE.md), rewires env vars to malmo's injected values, resolves image digests, and writes the `catalog/<id>/{manifest.yml, compose.yml}` pair. This is the author-side adaptation the app's developer would do to run on malmo — the tool we use to grow the catalog.
 
 ## How to use it

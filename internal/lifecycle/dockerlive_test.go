@@ -536,13 +536,9 @@ func TestLiveKanBoot(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
-	// Point the catalog at the repo's catalog/ dir (../../catalog from here).
-	repoCatalog, err := filepath.Abs(filepath.Join("..", "..", "catalog"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	catDir := t.TempDir()
 	docker := NewCLIDocker()
-	m := NewManager(s, catalog.New(repoCatalog), newFakeHost(), newFakeCaddy(), docker, events.NewBus(), stateDir)
+	m := NewManager(s, catalog.New(catDir), newFakeHost(), newFakeCaddy(), docker, events.NewBus(), stateDir)
 	m.SetAdmitter(admission.Check)
 	if err := docker.NetworkCreate(ctx, ingressNetwork, false); err != nil {
 		t.Fatalf("ingress net: %v", err)
@@ -554,6 +550,51 @@ func TestLiveKanBoot(t *testing.T) {
 		_ = exec.Command("docker", "run", "--rm", "-v", stateDir+":/s",
 			"alpine", "rm", "-rf", "/s/services").Run()
 	})
+
+	// The real kan app, catalog-authored into a temp dir here (the repo-root
+	// catalog/ moved to the control plane — cloud #62 — so it is no longer on disk).
+	// The compose is kan's own: a migrate service runs first
+	// (service_completed_successfully) then web boots against the provisioned
+	// Postgres with the injected DSN + auth secret. This keeps the one live check
+	// that a real app's own migration job runs against a malmo-provisioned DB.
+	man := `id: kan
+manifest_version: 1
+name: Kan
+version: "0.5.6"
+compose_file: compose.yml
+main_service: web
+main_port: 3000
+preferred_slugs: [kan, kanban]
+services:
+  database:
+    type: postgres
+    version: "15"
+secrets:
+  - name: auth
+permissions:
+  internet: true
+  lan: false
+`
+	compose := `services:
+  migrate:
+    image: ghcr.io/kanbn/kan-migrate:0.5.6
+    restart: "no"
+    environment:
+      POSTGRES_URL: ${MALMO_SERVICE_DATABASE_DSN}
+
+  web:
+    image: ghcr.io/kanbn/kan:0.5.6
+    environment:
+      POSTGRES_URL: ${MALMO_SERVICE_DATABASE_DSN}
+      BETTER_AUTH_SECRET: ${MALMO_SECRET_AUTH}
+      NEXT_PUBLIC_BASE_URL: ${MALMO_APP_URL}
+      NEXT_PUBLIC_ALLOW_CREDENTIALS: "true"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+`
+	writeLiveCatalogApp(t, catDir, "kan", compose, man)
 
 	inst, err := m.Install(ctx, "kan",
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)

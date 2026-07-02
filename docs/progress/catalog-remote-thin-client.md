@@ -59,6 +59,16 @@ A review found one Block and four Notes; all fixed on this branch:
 
 New tests: `TestRemoteSnapshotSizeCapRejects`, `TestRemoteAssetFetchCollapsesConcurrent` (asserts one fetch under 20 concurrent requests, `-race`), `TestRemoteStartRefreshIsIdempotent`.
 
+A follow-up consistency audit found leftovers from the signing/cutover churn, all fixed on this branch:
+
+- **Build-tag-hidden broken test.** `TestLiveKanBoot` (`internal/lifecycle/dockerlive_test.go`, `//go:build dockerlive`) still did `catalog.New("../../catalog")` + installed the deleted `kan` app, so it never compiled after the cutover (normal build/vet never sees the tag). Converted it to the sibling `t.TempDir()` + `writeLiveCatalogApp` pattern with kan's manifest/compose inlined — it keeps the one live check that a real app's own migrate job (`service_completed_successfully`) runs against a malmo-provisioned Postgres. Verified it compiles + vets under `-tags dockerlive`.
+- **`APP_STORE.md` sections that read wrong in isolation.** The top banners only help a top-down reader; the `## Locked decisions`, `## What we run`, and `## Failure modes` sections still asserted signing/CDN as current. Rewrote all three to the shipped reality (dynamic `GET /catalog/sync` thin client, last-good cache, TLS + sha256 integrity digest, no signing) — "Locked decisions" is the canonical current-calls section so it had to be correct, not just banner-guarded.
+- **Stale "signed catalog" phrasing** in `APP_MANIFEST.md` (x2), `APP_ISOLATION.md`, `APP_LIFECYCLE.md` → "published catalog" (digest-pinning semantics kept; `RELEASE_MANIFEST.md` minisign left untouched — separate live feature).
+- **Orphaned `mkdir`** of `var/lib/malmo/catalog` in `dev/cloud/stage-control-plane.sh` (the bake `cp` was already gone) removed, so the image stops shipping an empty unused dir.
+- **`running-locally.md`** override-env list: `MALMO_CATALOG_DIR` → `MALMO_CATALOG_URL`/`MALMO_CATALOG_CACHE_DIR`/`MALMO_CATALOG_REFRESH`.
+- **Authoring surfaces** (`docs/dev/authoring-apps-with-an-agent.md`, `.github/ISSUE_TEMPLATE/catalog-app.md`) got a top notice that the repo-root `catalog/` is gone and app artifacts live in the store — so nobody is led to write dead files today (a full rewrite is a separate cloud-side follow-up).
+- **`DECISIONS.md` 2026-07-02 "Affected docs"** line extended to list the specs this change actually edited.
+
 ## Known gaps / not verified here
 
 - **QEMU + cloud boot-acceptance is deferred**, as with every sibling `dev/cloud` / `dev/test-qemu` change — those lanes need root + KVM + swtpm and aren't in the normal loop. The migration is `bash -n`-clean and the snapshot generator is verified against the box code, but the end-to-end air-gapped install (`whoami` from the pre-seeded cache) and the cloud control-plane-up proof are validated on the next `make deploy-image` + redeploy, not here. The one behavioral thing they rely on — the remote client degrading to an empty store (no hard error) when `/catalog/sync` is unreachable — is covered by the unit tests.

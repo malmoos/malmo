@@ -62,8 +62,7 @@ stage_control_plane() {
              "$WIRING/usr/local/bin" \
              "$WIRING/etc/pam.d" \
              "$WIRING/var/lib/malmo/control-plane-images" \
-             "$WIRING/var/lib/malmo/control-plane" \
-             "$WIRING/var/lib/malmo/catalog"
+             "$WIRING/var/lib/malmo/control-plane"
 
     # Slim host-agent at the production path host-agent.service ExecStarts.
     cp "$hostagent_bin" "$WIRING/usr/lib/malmo/host-agent-real"
