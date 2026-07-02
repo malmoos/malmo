@@ -44,6 +44,11 @@ const activeCategory = ref("all");
 const searchTerm = ref("");
 let debounce: ReturnType<typeof setTimeout> | undefined;
 watch(query, (q) => {
+  // Typing is the "vice versa" of selectCategory: it drops the active pill
+  // immediately (not debounced — mode() already switches to "search" on the same
+  // tick), so a category never lingers underneath a cleared search box and then
+  // pop back in once the query empties out again.
+  if (q.trim() !== "") activeCategory.value = "all";
   clearTimeout(debounce);
   debounce = setTimeout(() => {
     searchTerm.value = q.trim();
@@ -123,11 +128,14 @@ const isError = computed(
     (mode.value === "category" && category.isError.value) ||
     (mode.value === "search" && search.isError.value),
 );
+// Mirrors isError's mode-scoping: a stale error left over on a query that isn't
+// the current mode's (e.g. a failed category fetch from before the user switched
+// to search) must never outrank the error actually driving isError.
 const errorMessage = computed(() => {
   const e =
     (home.error.value as Error) ??
-    (category.error.value as Error) ??
-    (search.error.value as Error);
+    (mode.value === "category" ? (category.error.value as Error) : undefined) ??
+    (mode.value === "search" ? (search.error.value as Error) : undefined);
   return e?.message ?? "";
 });
 
