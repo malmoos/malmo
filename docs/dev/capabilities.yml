@@ -1,0 +1,81 @@
+# malmo platform capabilities — machine-readable manifest.
+#
+# The versioned list of platform capabilities malmo has SHIPPED. Each id is a
+# gap-class from catalog-import-gaps.md: a capability appears here iff that gap is
+# closed in the tree (the ledger entry is `implemented`/`resolved`). This is the
+# mechanical counterpart to the ledger's prose — see CAPABILITIES.md for the full
+# contract.
+#
+# It exists so catalog curation stops depending on memory: a `blocked` app records
+# the gap-classes it waits on, and a cross-check flags the app for re-screen the
+# moment every one of them appears here. Adding an entry to this file is what fires
+# that signal.
+#
+# Discipline (CAPABILITIES.md):
+#   - APPEND only; never remove an id (a shipped capability does not un-ship).
+#   - When a catalog-import-gaps.md entry flips to `implemented`/`resolved`, add its
+#     gap-class here in the same change, and bump `version`.
+#   - `id` == the gap-class tag, so it lines up with a status.yml `unblock` reference
+#     and a `gap_ref` anchor with no separate taxonomy.
+#   - `since` is the brain version that introduced it. No brain version is cut yet
+#     (RELEASE_MANIFEST.md), so pre-1.0 it is the placeholder "0.x" and `ref` carries
+#     the real provenance; backfill the semver once releases are tagged.
+
+# Bumped whenever the capabilities list changes, so a consumer can tell how current
+# the manifest it validated against was (the published catalog stamps this number).
+version: 1
+
+capabilities:
+  - id: secret-injection
+    since: "0.x"
+    ref: "DECISIONS.md 2026-06-05; APP_MANIFEST.md # D2"
+    summary: >
+      Per-app CSPRNG secret generation. A manifest `secrets: [{name}]` entry makes
+      the brain mint a random value and inject it as MALMO_SECRET_<NAME>.
+
+  - id: oneshot-job-restart
+    since: "0.x"
+    ref: "#92; DECISIONS.md 2026-06-05"
+    summary: >
+      The forced-restart override exempts author-declared terminating one-shot jobs
+      and completion-gate targets, so migrate/init jobs reach their terminal state
+      instead of hanging the install.
+
+  - id: managed-mysql
+    since: "0.x"
+    ref: "#108; SERVICE_PROVISIONING.md # Catalog (v1)"
+    summary: >
+      Managed MySQL (8.0, 8.4) and MariaDB (10.11, 11.4) as Tier-1 services,
+      provisioned like Postgres, injected as MALMO_SERVICE_<NAME>_*.
+
+  - id: managed-redis
+    since: "0.x"
+    ref: "#159; DECISIONS.md 2026-06-13; SERVICE_PROVISIONING.md # Implementation status"
+    summary: >
+      Managed Redis/Valkey as a Tier-1 service (always the BSD-3 Valkey engine;
+      redis:7 normalizes to valkey:8), per-app ACL user, injected as a redis:// DSN.
+
+  - id: service-user
+    since: "0.x"
+    ref: "#147; APP_ISOLATION.md # Runtime identity & data ownership"
+    summary: >
+      A folderless app gets a dedicated, malmo-allocated non-root runtime identity,
+      and every declared relative bind dir is created + chowned to it before compose
+      up. Unblocks images that adopt the runtime user:. (Does NOT cover images that
+      hardcode an internal UID — that is the separate, unshipped userns-remap.)
+
+  - id: smtp-relay
+    since: "0.x"
+    ref: "#122; SERVICE_PROVISIONING.md # BYO outgoing mail"
+    summary: >
+      BYO outgoing mail. A manifest `mail: {optional: true}` app maps the discrete
+      MALMO_MAIL_* fields (or MALMO_MAIL_DSN) so a bound instance delivers and an
+      unbound one keeps a null transport.
+
+  - id: operator-env-config
+    since: "0.x"
+    ref: "#264; APP_MANIFEST.md # D4; docs/progress/manifest-config-block.md"
+    summary: >
+      Per-app operator-supplied configuration. A manifest `config:` block renders a
+      form at install and a Settings editor on the app page, injecting each answer
+      under its own env-var name into the target service's compose override.
