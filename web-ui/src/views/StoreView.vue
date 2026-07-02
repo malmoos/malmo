@@ -21,7 +21,7 @@
 // page heading with an inline search, pill tabs for categories, section headings
 // for the featured/browse rows, a grid list of cards, and empty-state blocks. All
 // colour flows from the olive semantic tokens (style.css).
-import { computed, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { useQuery } from "@tanstack/vue-query";
 import { Search, SearchX, PackageOpen, Sparkles } from "lucide-vue-next";
 import { useAuth } from "../auth";
@@ -54,6 +54,9 @@ watch(query, (q) => {
     searchTerm.value = q.trim();
   }, 200);
 });
+// Cancel a pending debounce if the view unmounts mid-keystroke, so the timer
+// doesn't fire against a torn-down component.
+onUnmounted(() => clearTimeout(debounce));
 
 const mode = computed<"home" | "category" | "search">(() => {
   if (query.value.trim() !== "") return "search";
