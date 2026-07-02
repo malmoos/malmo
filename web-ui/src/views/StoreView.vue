@@ -106,6 +106,7 @@ const filtered = computed(() => {
           <div class="relative w-full sm:w-64">
             <Search
               class="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              aria-hidden="true"
             />
             <input
               v-model="query"
@@ -148,7 +149,7 @@ const filtered = computed(() => {
         v-else-if="apps.length === 0"
         class="rounded-2xl border border-dashed border-border py-16 text-center"
       >
-        <PackageOpen class="mx-auto size-8 text-muted-foreground" />
+        <PackageOpen class="mx-auto size-8 text-muted-foreground" aria-hidden="true" />
         <h3 class="mt-3 text-sm font-semibold text-foreground">No apps in the catalog yet</h3>
         <p class="mt-1 text-sm text-muted-foreground">Check back soon — the catalog is still filling out.</p>
       </div>
@@ -158,7 +159,7 @@ const filtered = computed(() => {
         v-else-if="filtered.length === 0"
         class="rounded-2xl border border-dashed border-border py-16 text-center"
       >
-        <SearchX class="mx-auto size-8 text-muted-foreground" />
+        <SearchX class="mx-auto size-8 text-muted-foreground" aria-hidden="true" />
         <h3 class="mt-3 text-sm font-semibold text-foreground">No apps match your search</h3>
         <p class="mt-1 text-sm text-muted-foreground">Try a different search term or category.</p>
         <Button variant="secondary" size="sm" class="mt-4" @click="clearFilters">Clear filters</Button>

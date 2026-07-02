@@ -252,14 +252,14 @@ const submitLabel = computed(() => (install.isPending.value ? "Installing…" : 
 </script>
 
 <template>
-  <div v-if="isAdmin" class="mx-auto max-w-2xl space-y-6 pt-2">
+  <div v-if="isAdmin" class="mx-auto w-full max-w-2xl space-y-6 pt-2">
     <!-- Page heading -->
     <header class="space-y-2">
       <RouterLink
         to="/store"
         class="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
-        <ArrowLeft class="size-4" /> Store
+        <ArrowLeft class="size-4" aria-hidden="true" /> Store
       </RouterLink>
       <Heading :level="2">Install a custom app</Heading>
       <p class="text-sm text-muted-foreground">
@@ -271,7 +271,7 @@ const submitLabel = computed(() => (install.isPending.value ? "Installing…" : 
     <!-- 1. Compose: paste or upload -->
     <section class="space-y-4 rounded-2xl border border-border bg-card p-5 sm:p-6">
       <div>
-        <h2 class="text-sm font-semibold text-foreground">Compose file</h2>
+        <h3 class="text-sm font-semibold text-foreground">Compose file</h3>
         <p class="mt-1 text-xs text-muted-foreground">Paste your <code>docker-compose.yml</code>, or upload a file.</p>
       </div>
       <textarea
@@ -285,7 +285,7 @@ const submitLabel = computed(() => (install.isPending.value ? "Installing…" : 
       <label
         class="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-sm/7 font-medium text-foreground transition-colors hover:bg-muted"
       >
-        <Upload class="size-4" /> Upload file
+        <Upload class="size-4" aria-hidden="true" /> Upload file
         <input type="file" accept=".yml,.yaml,text/yaml,text/plain" class="sr-only" @change="onFile" />
       </label>
       <!-- 422 synthesize/admission coaching, inline against the offending compose -->
@@ -293,14 +293,14 @@ const submitLabel = computed(() => (install.isPending.value ? "Installing…" : 
         v-if="submitError"
         class="flex gap-2 rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
       >
-        <TriangleAlert class="mt-0.5 size-4 shrink-0" />
+        <TriangleAlert class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
         <span>{{ submitError }}</span>
       </p>
     </section>
 
     <!-- 2. Details: name + main service + port -->
     <section class="space-y-4 rounded-2xl border border-border bg-card p-5 sm:p-6">
-      <h2 class="text-sm font-semibold text-foreground">Details</h2>
+      <h3 class="text-sm font-semibold text-foreground">Details</h3>
 
       <!-- App name + live URL preview -->
       <div class="space-y-1.5">
@@ -347,7 +347,7 @@ const submitLabel = computed(() => (install.isPending.value ? "Installing…" : 
     <!-- 3. Permissions — form toggles/rows, or the Edit-as-YAML escape hatch -->
     <section class="space-y-4 rounded-2xl border border-border bg-card p-5 sm:p-6">
       <div class="flex items-center justify-between">
-        <h2 class="text-sm font-semibold text-foreground">Permissions</h2>
+        <h3 class="text-sm font-semibold text-foreground">Permissions</h3>
         <button
           type="button"
           class="text-xs text-muted-foreground transition-colors hover:text-foreground"
@@ -361,7 +361,7 @@ const submitLabel = computed(() => (install.isPending.value ? "Installing…" : 
         v-if="overlayError"
         class="flex gap-2 rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
       >
-        <TriangleAlert class="mt-0.5 size-4 shrink-0" />
+        <TriangleAlert class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
         <span>{{ overlayError }}</span>
       </p>
 
@@ -447,11 +447,11 @@ const submitLabel = computed(() => (install.isPending.value ? "Installing…" : 
               class="text-muted-foreground hover:text-destructive"
               @click="removeFolder(i)"
             >
-              <Trash2 class="size-4" />
+              <Trash2 class="size-4" aria-hidden="true" />
             </Button>
           </div>
           <Button variant="secondary" size="sm" type="button" @click="addFolder">
-            <Plus class="size-4" /> Add a folder
+            <Plus class="size-4" aria-hidden="true" /> Add a folder
           </Button>
         </div>
 
@@ -480,7 +480,7 @@ const submitLabel = computed(() => (install.isPending.value ? "Installing…" : 
 
     <!-- TOFU / no-auto-update honesty note -->
     <p class="flex gap-2 rounded-xl border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-      <TriangleAlert class="mt-0.5 size-4 shrink-0" />
+      <TriangleAlert class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
       <span>
         malmo pins the <strong>exact image it pulls now</strong> and won't change it underneath you — a custom app
         <strong>does not auto-update</strong>. To move to a newer image, uninstall and paste again.
