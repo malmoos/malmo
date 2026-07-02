@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/malmoos/malmo/internal/manifest"
@@ -35,6 +36,15 @@ const (
 	// httpTimeout bounds a single snapshot or asset fetch. The snapshot is a small
 	// JSON blob and assets are icons/screenshots, so this is generous.
 	httpTimeout = 30 * time.Second
+	// maxSnapshotBytes / maxAssetBytes cap how much a single response body can pull
+	// into memory: the timeout bounds wall-clock, not bytes, so a compromised or
+	// MITM'd control plane must not be able to pressure box memory with an
+	// unbounded body. Both are far above any real payload — the snapshot carries
+	// every app's verbatim manifest + compose (the real one is ~150 KiB for ~20
+	// apps), and assets are icons/screenshots — so a legitimate catalog never
+	// trips them; exceeding is treated as a fetch failure (last-good stands).
+	maxSnapshotBytes = 32 << 20 // 32 MiB
+	maxAssetBytes    = 16 << 20 // 16 MiB
 	// cacheFileName is the last-good snapshot on disk under CacheDir. Byte-for-byte
 	// the /catalog/sync body, so the integrity digest re-verifies over exactly the
 	// bytes the sync tool stamped.
@@ -71,6 +81,17 @@ type remoteSource struct {
 	mu   sync.RWMutex
 	snap *snapshot // nil until the first successful sync or cache load
 	etag string    // last snapshot's ETag (quoted), for a cheap If-None-Match 304
+
+	// started guards startRefresh so a repeat call can't spawn a second sync loop.
+	started atomic.Bool
+
+	// assetLocks collapses concurrent cache-miss fetches of the same asset: a
+	// per-asset mutex serializes the check-fetch-write so N simultaneous requests
+	// for one uncached icon do one fetch, not N. assetLocksMu guards the map; the
+	// per-asset locks guard each asset's fetch. The map is bounded by the catalog's
+	// distinct assets, so it needs no eviction.
+	assetLocksMu sync.Mutex
+	assetLocks   map[string]*sync.Mutex
 }
 
 // snapshot is the immutable, indexed projection of one verified catalog file: the
@@ -108,11 +129,12 @@ func NewRemote(opts RemoteOptions) *Catalog {
 		client = &http.Client{Timeout: httpTimeout}
 	}
 	rs := &remoteSource{
-		baseURL:  strings.TrimRight(opts.BaseURL, "/"),
-		env:      opts.Environment,
-		cacheDir: opts.CacheDir,
-		interval: interval,
-		http:     client,
+		baseURL:    strings.TrimRight(opts.BaseURL, "/"),
+		env:        opts.Environment,
+		cacheDir:   opts.CacheDir,
+		interval:   interval,
+		http:       client,
+		assetLocks: map[string]*sync.Mutex{},
 	}
 	if err := os.MkdirAll(opts.CacheDir, 0o755); err != nil {
 		slog.Error("catalog: create cache dir; last-good cache disabled", "src", opts.CacheDir, "err", err)
@@ -150,8 +172,12 @@ func (r *remoteSource) loadCache() {
 // a freshly provisioned box populates its store promptly) then one per interval.
 // Each attempt is independent and best-effort — a failure keeps the last-good
 // snapshot and the loop retries next tick — so a control plane blip never empties
-// the store.
+// the store. A second call is a no-op (the started guard): one sync loop only, no
+// matter how many times cmd/brain wires it.
 func (r *remoteSource) startRefresh(ctx context.Context) {
+	if !r.started.CompareAndSwap(false, true) {
+		return
+	}
 	go func() {
 		if err := r.syncOnce(ctx); err != nil {
 			slog.Warn("catalog: initial sync failed; serving last-good cache", "err", err)
@@ -201,7 +227,7 @@ func (r *remoteSource) syncOnce(ctx context.Context) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("catalog: fetch snapshot: unexpected status %s", resp.Status)
 	}
-	data, err := io.ReadAll(resp.Body)
+	data, err := readLimited(resp.Body, maxSnapshotBytes)
 	if err != nil {
 		return fmt.Errorf("catalog: read snapshot body: %w", err)
 	}
@@ -398,28 +424,19 @@ func (r *remoteSource) cachedAsset(id, assetFile, cpPath string) (string, error)
 		return "", fmt.Errorf("%w: %q asset %q escapes cache dir", ErrNotFound, id, assetFile)
 	}
 	if _, err := os.Stat(local); err == nil {
-		return local, nil // cache hit
+		return local, nil // fast-path cache hit — no lock
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), httpTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+cpPath, nil)
+	// Serialize concurrent misses for this asset so N simultaneous requests do one
+	// fetch, not N; a different asset (different key) proceeds in parallel.
+	mu := r.assetLock(id + "/" + assetFile)
+	mu.Lock()
+	defer mu.Unlock()
+	if _, err := os.Stat(local); err == nil {
+		return local, nil // another goroutine fetched it while we waited on the lock
+	}
+	data, err := r.fetchAsset(cpPath)
 	if err != nil {
 		return "", err
-	}
-	resp, err := r.http.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("catalog: fetch asset %q: %w", cpPath, err)
-	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-	}()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("catalog: fetch asset %q: unexpected status %s", cpPath, resp.Status)
-	}
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("catalog: read asset %q: %w", cpPath, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
 		return "", fmt.Errorf("catalog: cache asset dir: %w", err)
@@ -428,6 +445,60 @@ func (r *remoteSource) cachedAsset(id, assetFile, cpPath string) (string, error)
 		return "", fmt.Errorf("catalog: cache asset %q: %w", cpPath, err)
 	}
 	return local, nil
+}
+
+// fetchAsset GETs one asset from the control plane, capped at maxAssetBytes.
+func (r *remoteSource) fetchAsset(cpPath string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), httpTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+cpPath, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := r.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: fetch asset %q: %w", cpPath, err)
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("catalog: fetch asset %q: unexpected status %s", cpPath, resp.Status)
+	}
+	data, err := readLimited(resp.Body, maxAssetBytes)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: read asset %q: %w", cpPath, err)
+	}
+	return data, nil
+}
+
+// assetLock returns the per-asset mutex for key, creating it on first use. The map
+// is guarded by assetLocksMu; the returned lock guards that asset's fetch+cache.
+func (r *remoteSource) assetLock(key string) *sync.Mutex {
+	r.assetLocksMu.Lock()
+	defer r.assetLocksMu.Unlock()
+	mu, ok := r.assetLocks[key]
+	if !ok {
+		mu = &sync.Mutex{}
+		r.assetLocks[key] = mu
+	}
+	return mu
+}
+
+// readLimited reads up to max bytes from rd, erroring if the body would exceed it
+// — so an unbounded or hostile response body can't be pulled wholesale into
+// memory (the fetch timeout bounds wall-clock, not bytes). It reads max+1 to
+// detect the overflow.
+func readLimited(rd io.Reader, max int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(rd, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > max {
+		return nil, fmt.Errorf("response exceeds %d bytes", max)
+	}
+	return data, nil
 }
 
 // safeJoin joins rel under base, rejecting any rel that would escape base (a

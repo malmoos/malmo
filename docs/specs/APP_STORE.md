@@ -2,7 +2,9 @@
 
 > How malmo publishes and serves the catalog of installable apps to every box. Companion to `APP_MANIFEST.md` (the contract being published), `APP_LIFECYCLE.md` (what the box does after fetching), `UPDATES.md` (the update flow that consumes catalog version bumps), and `RELEASE_MANIFEST.md` (the sibling doc this one borrows its publishing shape from).
 
-The scope here is the **app catalog**: how apps reach a malmo box, what the box trusts, and what infrastructure we run to publish it. Container images themselves are not hosted by us — they live in their authors' registries (Docker Hub, GHCR, …). What we publish is the **signed metadata** that tells the box which image bytes to trust for each app version.
+The scope here is the **app catalog**: how apps reach a malmo box, what the box trusts, and what infrastructure we run to publish it. Container images themselves are not hosted by us — they live in their authors' registries (Docker Hub, GHCR, …). What we publish is the metadata that tells the box which image bytes to trust for each app version.
+
+> **Superseded — read this first (`DECISIONS.md` 2026-07-02, cloud `specs/CATALOG.md`).** The publish + trust model below (a static, minisign-**signed** `catalog.json` served from a CDN at `store.malmo.network`, with per-app `manifest.yml`/`compose.yml` fetched on demand and hash-chained to a signed root) is **not what shipped.** As built (OS #62 / cloud #62): the catalog is served by the **control plane's dynamic HTTP API** — the box fetches the **whole snapshot in one request** (`GET /catalog/sync`), which already carries every app's verbatim manifest + compose, verifies an **integrity digest** (SHA-256 over the app index) + a schema version, **caches it last-good on disk**, and projects the store locally (offline = last-good browse; a never-synced box shows an empty store). There is **no Ed25519/minisign signature**: the box only ever fetches from the malmo control plane over **TLS**, which authenticates the origin, and the integrity digest catches truncation/corruption — a signature would re-authenticate bytes TLS already covers, for a key-distribution cost and no threat it closes. No catalog is baked into the box image. The sections below are kept for the schema field semantics (`icon_glyph`, `footprint`, `images`, curation/`listed:`), which carry over; treat their signing/CDN/on-demand-fetch mechanics as historical. The live wire shape is cloud `specs/CATALOG.md`; the box consumer is `../progress/catalog-remote-thin-client.md`.
 
 ## What the store is
 
@@ -74,6 +76,8 @@ Top-level fields:
 Anything not in the schema is implicit (per-app file paths follow the URL convention) or out of scope (rollout pacing, telemetry — not in scope for the store).
 
 ## Trust model — what's signed, what's pinned
+
+> **Superseded (`DECISIONS.md` 2026-07-02).** There is no signature in the shipped design — trust is **TLS to the control plane + the snapshot's integrity digest** (see the banner at the top). The minisign/pubkey-rotation mechanics in this section did not ship. The *digest pinning* of image bytes (below) carries over: the resolved `@sha256:…` digests live in each app's `images` block inside the verbatim manifest the box re-parses, and the brain still pulls by digest.
 
 The catalog is **signed with minisign (Ed25519)** by the malmo store key. Brain verifies on every fetch and refuses to act on an unsigned or invalidly-signed catalog.
 

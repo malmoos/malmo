@@ -2,7 +2,7 @@
 
 - **Status:** done (full cutover — no baked catalog in the image)
 - **Date:** 2026-07-02
-- **Specs touched:** `docs/architecture.md` (catalog package row + app-store deferred-list note); `docs/specs/DECISIONS.md` (the unify-both-profiles + no-signing decision); cloud `specs/CATALOG.md` is the contract this consumes.
+- **Specs touched:** `docs/architecture.md` (catalog package row + app-store deferred-list note); `docs/specs/DECISIONS.md` (the unify-both-profiles + no-signing decision); `docs/specs/APP_STORE.md` (superseded banner — the shipped model is the dynamic `/catalog/sync` thin-client fetch with a last-good cache and TLS + integrity digest, not the static minisign-signed CDN it described); `docs/specs/NEXT.md` (publish-mechanism "pinned"/"signed" language corrected). cloud `specs/CATALOG.md` is the contract this consumes.
 
 The OS half of catalog "step 3" (cloud issue `malmoos/cloud#62`): turn the box brain from a disk-backed catalog reader into a thin HTTP client of the control plane's public-read catalog API, with a last-good on-disk cache — and complete the cutover so **no `catalog/` directory ships in the OS image**. The cloud half is already shipped and stable (cloud `docs/progress/catalog-thin-client-contract.md`); this is the coordinated box side. It supersedes `hosted-image-bake-catalog.md`, which baked the catalog into the hosted image as a stopgap.
 
@@ -46,6 +46,18 @@ The full-stack lane installs `whoami` end-to-end **air-gapped** (`restrict=on`),
 - **`304` path** — a matching `If-None-Match` is a no-op that keeps the snapshot.
 
 `internal/api`, `internal/lifecycle`, `internal/hostagent/brainlaunch` (updated for the `CatalogURL`/`CatalogCacheDir` env), and `cmd/brain` suites all green. `gofmt`/`go vet` clean on the touched files; `bash -n` clean on the three edited shell lanes; `mkcatalog` runs and its output verifies against the box's real `wire.go`.
+
+## Review follow-ups (PR #294)
+
+A review found one Block and four Notes; all fixed on this branch:
+
+- **Block — `cmd/malmo` suite broken by the `catalog/` deletion.** `cmd/malmo/check_test.go` / `main_test.go` read `../../catalog/{whoami,files-demo}/manifest.yml`, which this PR deleted (`go build` passed but the suite failed). Recovered the two known-good packages from git into `cmd/malmo/testdata/{whoami,files-demo}/` (local fixtures, decoupled from the QEMU lane) and repointed both tests. `go test ./...` is green now (bar the pre-existing `msteinert/pam` cgo gap).
+- **Note — unbounded `io.ReadAll` on network bodies.** `syncOnce` and the asset fetch now read through `readLimited` (an `io.LimitReader` with an overflow check): `maxSnapshotBytes` = 32 MiB, `maxAssetBytes` = 16 MiB — far above any real payload, so a compromised/MITM'd control plane can't pressure box memory; exceeding is a fetch failure (last-good stands).
+- **Note — concurrent cache-miss double-fetch.** `cachedAsset` gained a per-asset mutex map (`assetLock`), so N simultaneous first-time requests for one asset do one fetch, not N; the fast-path cache hit stays lock-free. Dep-free (`golang.org/x/sync` isn't in `go.mod`).
+- **Note — `StartRefresh` double-call.** `remoteSource.started` (an `atomic.Bool` CAS) makes a repeat `startRefresh` a no-op — one sync loop only.
+- **Note — stale signing docs.** `APP_STORE.md` + `NEXT.md` updated (above).
+
+New tests: `TestRemoteSnapshotSizeCapRejects`, `TestRemoteAssetFetchCollapsesConcurrent` (asserts one fetch under 20 concurrent requests, `-race`), `TestRemoteStartRefreshIsIdempotent`.
 
 ## Known gaps / not verified here
 

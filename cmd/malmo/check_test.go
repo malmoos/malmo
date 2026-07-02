@@ -11,12 +11,12 @@ import (
 // check is exercised with admission.CheckStructure (the daemon-free admission
 // path) so these stay hermetic — same reason admission's own tests use it.
 
-// --- check passes on the real catalog samples ----------------------------
+// --- check passes on representative catalog samples (testdata/) -----------
 
 func TestCheck_RealSamples(t *testing.T) {
 	for _, p := range []string{
-		"../../catalog/whoami/manifest.yml",
-		"../../catalog/files-demo/manifest.yml",
+		"testdata/whoami/manifest.yml",
+		"testdata/files-demo/manifest.yml",
 	} {
 		if err := check(context.Background(), admission.CheckStructure, p); err != nil {
 			t.Errorf("check(%s): want clean, got %v", p, err)

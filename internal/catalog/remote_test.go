@@ -284,6 +284,82 @@ func TestRemoteAssetProxyAndCache(t *testing.T) {
 	}
 }
 
+func TestRemoteSnapshotSizeCapRejects(t *testing.T) {
+	cp := newFakeCP(t, testApps())
+	// Serve a body far over the snapshot cap; parse must never be reached.
+	cp.body = make([]byte, maxSnapshotBytes+1)
+	cp.etag = `"oversize"`
+	srv := cp.server()
+	defer srv.Close()
+
+	r := newRemote(srv.URL, "appliance", t.TempDir())
+	if err := r.syncOnce(context.Background()); err == nil {
+		t.Fatal("oversize snapshot must fail (size cap)")
+	}
+	if l, _ := r.List(); len(l) != 0 {
+		t.Fatal("oversize snapshot must not become the read source")
+	}
+}
+
+func TestRemoteAssetFetchCollapsesConcurrent(t *testing.T) {
+	cp := newFakeCP(t, testApps())
+	srv := cp.server()
+	defer srv.Close()
+
+	r := newRemote(srv.URL, "appliance", t.TempDir())
+	if err := r.syncOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fire many concurrent first-time icon requests: the per-asset lock must
+	// collapse them into a single control-plane fetch.
+	const n = 20
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := r.IconPath("alpha"); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("IconPath: %v", err)
+	}
+	cp.mu.Lock()
+	hits := cp.assetHits
+	cp.mu.Unlock()
+	if hits != 1 {
+		t.Fatalf("asset fetched %d times under %d concurrent requests, want 1", hits, n)
+	}
+}
+
+func TestRemoteStartRefreshIsIdempotent(t *testing.T) {
+	cp := newFakeCP(t, testApps())
+	srv := cp.server()
+	defer srv.Close()
+
+	r := newRemote(srv.URL, "appliance", t.TempDir())
+	// The guard is an atomic CAS, independent of the loop; assert it directly so
+	// the test doesn't race the background goroutine's first sync.
+	if r.started.Load() {
+		t.Fatal("started should be false before startRefresh")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.startRefresh(ctx)
+	if !r.started.Load() {
+		t.Fatal("started must be true after first startRefresh")
+	}
+	// A second call must be a no-op (no second goroutine); CAS already false→true,
+	// so a repeat returns immediately.
+	r.startRefresh(ctx) // must not panic or spawn a second loop
+}
+
 func TestRemote304KeepsSnapshot(t *testing.T) {
 	cp := newFakeCP(t, testApps())
 	srv := cp.server()
