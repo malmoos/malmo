@@ -21,15 +21,17 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
-## 2026-07-02 — Catalog thin-client is wired for hosted only; the appliance stays on the baked directory (cloud #62)
+## 2026-07-02 — The box is a control-plane catalog thin client on every profile; no baked catalog, no signing (cloud #62)
 
-**Previously:** the box's catalog was a single disk-backed reader over a baked `catalog/` directory on every profile; the plan (`APP_STORE.md`) foresaw a signed remote catalog fetch replacing it wholesale.
+**Previously:** the box's catalog was a disk-backed reader over a baked `catalog/` directory, staged into the image on every profile; `MALMO_CATALOG_DIR` pointed the brain at it. The plan (`APP_STORE.md`) foresaw a *signed* remote catalog fetch replacing it.
 
-**Now:** `internal/catalog.Catalog` is a facade over two sources. A **hosted** box is a thin client of the control plane's `GET /catalog/sync` (integrity-digest-verified, last-good on-disk cache, asset proxy). The **appliance** keeps reading its baked directory. `cmd/brain` picks the source by resolved profile.
+**Now:** every box — appliance and hosted alike — is a thin client of the control plane's public-read catalog API. The brain fetches `GET /catalog/sync` over HTTPS, verifies the snapshot's integrity digest + schema version, caches it last-good on disk, and projects the six-method surface locally (`internal/catalog` remote source). No `catalog/` directory is baked into the image; `MALMO_CATALOG_DIR` is retired, replaced by `MALMO_CATALOG_URL` (+ `MALMO_CATALOG_CACHE_DIR`). There is **no Ed25519 signature** — TLS to the control plane plus the integrity digest are the trust story.
 
-**Why:** the obvious thing — replace the disk reader everywhere — would regress the appliance. The appliance ships with no guaranteed internet and installs offline from its baked catalog (`ENVIRONMENT.md`; the offline-install path); pointing its store at the network would make a core surface fail when disconnected. The hosted box is always cloud-connected, so it is where the thin client belongs first. Both sources sit behind the same six-method facade, so `internal/api`/`internal/lifecycle` are agnostic and the disk fallback stays proven while the remote path soaks. Whether the appliance later syncs from the (public-read) control plane or ships a signed offline bundle is left open, not foreclosed.
+**Why:**
+- **Unify both profiles.** An earlier cut of this work kept the appliance on the baked directory (fearing the offline appliance would regress). But the last-good cache *is* the offline story: once a box has synced it browses from cache, and a never-synced box shows an empty store — which is fine, because installing an app needs internet to pull images regardless, and the catalog API is public-read precisely so an appliance with no portal account can use it. There is no profile that has, by construction, no network path to the control plane, so a per-profile split earned nothing but a second code path and a baked artifact to keep in sync.
+- **Drop signing (don't defer it).** The box only ever fetches the catalog from the malmo control plane over TLS; TLS authenticates that origin, and the integrity digest catches truncation/corruption. An Ed25519 signature would re-authenticate bytes TLS already authenticated, and carry a key-distribution contract for no threat it closes. Not needed — removed from the plan, not parked.
 
-**Affected docs:** `docs/architecture.md` (catalog package row + deferred-list note). Also note: this ships **integrity-digest** verification only; Ed25519 **signing** (authenticity) and retiring the baked dir + `MALMO_CATALOG_DIR` are the sequenced follow-ups (progress `catalog-remote-thin-client.md`).
+**Affected docs:** `docs/architecture.md` (catalog package row + the app-store deferred-list note). Progress: `catalog-remote-thin-client.md`.
 
 ---
 

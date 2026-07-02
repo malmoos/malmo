@@ -38,9 +38,9 @@ type catalogFile struct {
 	GeneratedAt   time.Time `json:"generated_at"`
 	StoreRef      string    `json:"store_ref,omitempty"`
 	// IndexSHA256 is the hex SHA-256 over the canonical JSON of Apps; verify
-	// recomputes it. An integrity check (truncation / corruption), not an
-	// authenticity one — Ed25519 signing is a separate future step (this repo's
-	// summary; cloud NEXT.md).
+	// recomputes it. It catches a truncated or corrupted snapshot; authenticity
+	// (that the bytes came from the real control plane) is provided by TLS on the
+	// fetch, so there is no separate signature (owner decision, cloud #62).
 	IndexSHA256 string    `json:"index_sha256"`
 	Apps        []wireApp `json:"apps"`
 }
@@ -100,9 +100,10 @@ func indexDigest(apps []wireApp) (string, error) {
 
 // verify refuses a snapshot the box can't trust: a schema version it can't read,
 // or an index digest that doesn't match the stamped one (a truncated or corrupted
-// fetch, or a tampered cache file). It is an integrity check, not an authenticity
-// one — signing is deferred. Called on every fetched and every cache-loaded
-// snapshot before it is projected, so a bad snapshot never becomes the read source.
+// fetch, or a tampered cache file). It is an integrity check; authenticity comes
+// from TLS on the fetch (no separate signature — cloud #62). Called on every
+// fetched and every cache-loaded snapshot before it is projected, so a bad snapshot
+// never becomes the read source.
 func (f catalogFile) verify() error {
 	if f.SchemaVersion != wireSchemaVersion {
 		return fmt.Errorf("catalog schema version %d, want %d", f.SchemaVersion, wireSchemaVersion)

@@ -1,15 +1,16 @@
 // Package catalog is the box's read model of the app store. It exposes a fixed
 // six-method surface — List, Entry, Detail, IconPath, ScreenshotPath, Load — that
 // internal/api (the box UI's catalog routes) and internal/lifecycle (install) both
-// consume, and hides behind it whether the catalog is read from a baked directory
-// tree or synced from the control plane.
+// consume, and hides behind it whether the catalog is synced from the control
+// plane or read from a local directory tree.
 //
-// Two sources implement that surface (the private source interface): the original
-// disk reader (New, backing the appliance's baked catalog/ and every test), and
-// the remote client (NewRemote), a thin HTTP consumer of the control plane's
-// /catalog/sync snapshot with a last-good on-disk cache (remote.go; cloud
-// specs/CATALOG.md # Consume). The rest of the brain holds a *Catalog and is
-// agnostic to which is wired.
+// In production every box — appliance and hosted alike — uses the remote client
+// (NewRemote): a thin HTTP consumer of the control plane's /catalog/sync snapshot
+// with a last-good on-disk cache (remote.go; cloud specs/CATALOG.md # Consume). No
+// catalog is baked into the image (cloud #62). The original disk reader (New) is
+// retained only as the constructor internal/api and internal/lifecycle tests build
+// a controlled catalog with; it implements the same private source interface, so
+// the rest of the brain holds a *Catalog and is agnostic to which is wired.
 package catalog
 
 import (
@@ -30,8 +31,9 @@ var ErrNotFound = errors.New("catalog: manifest not found")
 
 // source is the read model behind Catalog: the six methods the brain consumes,
 // implemented once per backing (disk / remote). Private because the brain always
-// talks to *Catalog; the facade exists so a remote client can replace the baked
-// directory with no change to internal/api or internal/lifecycle.
+// talks to *Catalog; the facade lets the remote client back production while the
+// disk reader stays available to tests, with no change to internal/api or
+// internal/lifecycle.
 type source interface {
 	List() ([]Entry, error)
 	Entry(id string) (Entry, error)
@@ -46,9 +48,10 @@ type source interface {
 type Catalog struct{ src source }
 
 // New builds a disk-backed catalog rooted at a directory tree of
-// <root>/<manifest_id>/{manifest.yml, <compose_file>}. This is the appliance's
-// baked catalog and the source every test constructs. The remote (hosted) client
-// is NewRemote.
+// <root>/<manifest_id>/{manifest.yml, <compose_file>}. Production no longer uses
+// it (every box is a control-plane thin client — NewRemote); it is retained as the
+// constructor internal/api and internal/lifecycle tests build a controlled catalog
+// with, off a temp directory.
 func New(root string) *Catalog { return &Catalog{src: newDiskSource(root)} }
 
 func (c *Catalog) List() ([]Entry, error)             { return c.src.List() }

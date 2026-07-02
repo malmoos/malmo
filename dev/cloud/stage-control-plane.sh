@@ -119,15 +119,12 @@ EOF
     cp "${REPO_ROOT}/dev/control-plane/compose.yml" "$WIRING/var/lib/malmo/control-plane/"
     cp "${REPO_ROOT}/dev/control-plane/caddy.json"   "$WIRING/var/lib/malmo/control-plane/"
 
-    # Door-1 app-store catalog. The brain installs store apps from MALMO_CATALOG_DIR,
-    # which host-agent-real defaults to <DataDir>/catalog = /var/lib/malmo/catalog
-    # (cmd/host-agent-real/main.go); it rides the brain's /var/lib/malmo bind mount
-    # (read-only — manifests + icons). Without it the store can't load
-    # ("read catalog: open /var/lib/malmo/catalog: no such file or directory").
-    # The real shipping catalog (catalog/) is baked, unlike the test lanes' test-only
-    # whoami catalog. It is data, not apt packages, so the lean package check is
-    # unaffected.
-    cp -r "${REPO_ROOT}/catalog/." "$WIRING/var/lib/malmo/catalog/"
+    # No catalog is baked into the image (cloud #62). The brain syncs the store from
+    # the control plane's public-read catalog API (GET /catalog/sync, MALMO_CATALOG_URL
+    # default the apex) and caches it last-good under /var/lib/malmo/catalog-cache. A
+    # box that has never reached the control plane shows an empty store (the documented,
+    # accepted behavior — installing an app needs internet regardless). This lane
+    # installs no app, so an empty store is fine here.
 
     # First-boot provisioning-seed materializer + its oneshot (C3a cloud-lane, #220).
     # Lands the delivered seed at /var/lib/malmo/seed.json before host-agent launches

@@ -12,11 +12,12 @@ import (
 	"github.com/malmoos/malmo/internal/manifest"
 )
 
-// diskSource reads app manifests from a directory tree baked into the image:
-// <root>/<manifest_id>/{manifest.yml, <compose_file>} (APP_STORE.md). It is the
-// appliance's catalog and the source every test constructs via catalog.New; the
-// hosted box uses the remote client instead (remote.go). The signed-JSON remote
-// catalog is the follow-up that this package now also implements.
+// diskSource reads app manifests from a directory tree:
+// <root>/<manifest_id>/{manifest.yml, <compose_file>} (APP_STORE.md). Production
+// no longer uses it — every box syncs the catalog from the control plane
+// (remote.go) and no catalog is baked into the image (cloud #62) — but it is
+// retained as the backing internal/api and internal/lifecycle tests construct via
+// catalog.New off a temp directory.
 type diskSource struct{ root string }
 
 func newDiskSource(root string) *diskSource { return &diskSource{root: root} }
