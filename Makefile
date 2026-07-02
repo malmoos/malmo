@@ -19,35 +19,41 @@ export MALMO_STATE_DIR := $(STATE_DIR)
 # local control plane to develop the store offline.
 export MALMO_CATALOG_CACHE_DIR := ./.dev/catalog-cache
 
-.PHONY: build host-agent brain host-agent-real host-agent-real-hosted brain-image ui-image control-plane-images build-cloud-image check check-web fmt fmt-check vet test test-all test-nopam test-caddy test-avahi test-netstate test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu test-cloud-qemu run-agent run-brain net caddy caddy-down ui dev stop openapi openapi-check clean check-state-owner help
+.PHONY: build host-agent brain host-agent-real host-agent-real-hosted brain-image ui-image control-plane-images build-cloud-image check check-web fmt fmt-check vet test test-nopam test-caddy test-avahi test-netstate test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu test-cloud-qemu run-agent run-brain net caddy caddy-down ui dev stop openapi openapi-check clean check-state-owner help
 
 # msteinert/pam v2.1.0 uses RTLD_NEXT, a GNU extension that requires
 # _GNU_SOURCE at C compile time. Apply globally; harmless to non-cgo builds.
 export CGO_CFLAGS := -D_GNU_SOURCE
 
 help:
+	@echo "make build       - compile brain + host-agent"
+	@echo "make build-cloud-image - build the self-bootstrapping hosted cloud VM image via mkosi (needs sudo; #203/#242)"
+	@echo "make caddy       - start the dev Caddy reverse proxy (container)"
+	@echo "make caddy-down  - stop the dev Caddy"
 	@echo "make check       - pre-PR gate: gofmt + vet + full test suite (Go). Run before every PR."
 	@echo "make check-web   - pre-PR gate for frontend changes: web-ui typecheck + build"
-	@echo "make openapi     - regenerate api/openapi.{json,yaml} from the brain (no server)"
-	@echo "make fmt         - rewrite Go sources into gofmt-canonical form (autofix)"
-	@echo "make dev         - all three foreground procs in one terminal (recommended)"
-	@echo "make build       - compile brain + host-agent"
-	@echo "make host-agent-real-hosted - build the slim hosted-cloud host-agent (-tags hosted; #204/C1c)"
+	@echo "make clean       - stop apps, remove dev state"
 	@echo "make control-plane-images - build malmo-brain + malmo-ui images and docker-save the control-plane bundle to .dev/"
-	@echo "make build-cloud-image - build the self-bootstrapping hosted cloud VM image via mkosi (needs sudo; #203/#242)"
+	@echo "make dev         - all three foreground procs in one terminal (recommended)"
+	@echo "make fmt         - rewrite Go sources into gofmt-canonical form (autofix)"
+	@echo "make host-agent-real-hosted - build the slim hosted-cloud host-agent (-tags hosted; #204/C1c)"
 	@echo "make net         - create the malmo-ingress docker network"
-	@echo "make caddy       - start the dev Caddy reverse proxy (container)"
+	@echo "make openapi     - regenerate api/openapi.{json,yaml} from the brain (no server)"
 	@echo "make run-agent   - run the fake host-agent (foreground)"
 	@echo "make run-brain   - run the brain (foreground)"
-	@echo "make ui          - run the Vite dev server (web-ui/)"
-	@echo "make caddy-down  - stop the dev Caddy"
-	@echo "make clean       - stop apps, remove dev state"
-	@echo "make test-caddy  - end-to-end Caddy routing test (requires make dev)"
-	@echo "make test-health - end-to-end storage-health pipeline (self-contained, ~3s)"
-	@echo "make test-usermgr-nspawn - run usermgrtest in systemd-nspawn (needs sudo)"
+	@echo "make stop        - stop the native dev stack (brain/host-agent/vite)"
+	@echo "make test        - run the full Go test suite (needs libpam0g-dev)"
+	@echo "make test-avahi  - Avahi DBus publisher integration test (needs avahi-daemon)"
 	@echo "make test-boot-chain-nspawn - boot dist/systemd units in nspawn + assert shape (needs sudo)"
-	@echo "make test-medium-qemu - QEMU+swtpm boot with real kernel + TPM (needs sudo; first run ~5 min)"
+	@echo "make test-caddy  - end-to-end Caddy routing test (requires make dev)"
 	@echo "make test-cloud-qemu - QEMU boot of the hosted cloud image; control plane up (needs sudo; no swtpm/LUKS)"
+	@echo "make test-health - end-to-end storage-health pipeline (self-contained, ~3s)"
+	@echo "make test-medium-qemu - QEMU+swtpm boot with real kernel + TPM (needs sudo; first run ~5 min)"
+	@echo "make test-netstate - NetworkManager LAN-interface integration test"
+	@echo "make test-nopam  - full test suite minus pamverifier (no libpam0g-dev needed)"
+	@echo "make test-usermgr - LinuxUserManager integration test (needs sudo; nspawn lane recommended instead)"
+	@echo "make test-usermgr-nspawn - run usermgrtest in systemd-nspawn (needs sudo)"
+	@echo "make ui          - run the Vite dev server (web-ui/)"
 	@echo ""
 	@echo "One-terminal: make dev   (Caddy started detached; Ctrl-C stops the rest)"
 	@echo "Four terminals: make caddy ; make run-agent ; make run-brain ; make ui"
