@@ -13,6 +13,7 @@ import { ref, computed, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useMutation, useQueryClient } from "@tanstack/vue-query";
 import { SwitchRoot, SwitchThumb } from "reka-ui";
+import { ArrowLeft, Upload, Plus, Trash2, TriangleAlert } from "lucide-vue-next";
 import { useAuth } from "../auth";
 import {
   api,
@@ -28,6 +29,8 @@ import {
   type CustomOverlayParseResult,
 } from "../api";
 import SplitButton from "../components/SplitButton.vue";
+import Heading from "@/components/ui/Heading.vue";
+import Button from "@/components/ui/Button.vue";
 
 const router = useRouter();
 const qc = useQueryClient();
@@ -75,6 +78,12 @@ const submitError = ref<string | null>(null);
 
 const USE_CASE_FOLDERS = ["photos", "documents", "movies", "music", "notes", "downloads"];
 const folderLabel = (f: string) => f.charAt(0).toUpperCase() + f.slice(1);
+
+// Shared field chrome — one source of truth for the form inputs/selects/textarea
+// so every field reads the same (inset olive-background fill on the card, olive
+// focus ring). Small inline controls (folder rows) use a compact variant below.
+const fieldClass =
+  "w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-accent";
 
 const slug = computed(() =>
   name.value
@@ -178,7 +187,7 @@ async function flipToForm() {
     internet.value = p.internet;
     lan.value = p.lan;
     gpu.value = p.gpu;
-    folders.value = p.folders.map((f) => ({ folder: f.folder, mode: f.mode ?? "read", target: f.target ?? "" }));
+    folders.value = (p.folders ?? []).map((f) => ({ folder: f.folder, mode: f.mode ?? "read", target: f.target ?? "" }));
     devices.value = p.devices ?? [];
     editMode.value = "form";
   } catch (err) {
@@ -243,10 +252,16 @@ const submitLabel = computed(() => (install.isPending.value ? "Installing…" : 
 </script>
 
 <template>
-  <div v-if="isAdmin" class="mx-auto max-w-2xl space-y-6 pt-2">
-    <header class="space-y-1">
-      <RouterLink to="/store" class="text-xs text-muted-foreground hover:underline">← Back to Store</RouterLink>
-      <h1 class="text-lg font-semibold">Install a custom container</h1>
+  <div v-if="isAdmin" class="mx-auto w-full max-w-2xl space-y-6 pt-2">
+    <!-- Page heading -->
+    <header class="space-y-2">
+      <RouterLink
+        to="/store"
+        class="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ArrowLeft class="size-4" aria-hidden="true" /> Store
+      </RouterLink>
+      <Heading :level="2">Install a custom app</Heading>
       <p class="text-sm text-muted-foreground">
         Paste a <code>docker-compose.yml</code> to run an app that isn't in the catalog. It installs into the same
         sandbox as a store app.
@@ -254,87 +269,88 @@ const submitLabel = computed(() => (install.isPending.value ? "Installing…" : 
     </header>
 
     <!-- 1. Compose: paste or upload -->
-    <section class="space-y-2">
-      <label class="text-sm font-medium" for="compose">Compose file</label>
+    <section class="space-y-4 rounded-2xl border border-border bg-card p-5 sm:p-6">
+      <div>
+        <h3 class="text-sm font-semibold text-foreground">Compose file</h3>
+        <p class="mt-1 text-xs text-muted-foreground">Paste your <code>docker-compose.yml</code>, or upload a file.</p>
+      </div>
       <textarea
         id="compose"
         v-model="compose"
         rows="10"
         spellcheck="false"
         placeholder="Paste a docker-compose.yml…"
-        class="w-full rounded-lg border border-border px-3 py-2 font-mono text-xs"
+        :class="[fieldClass, 'font-mono text-xs']"
       />
-      <div class="flex items-center gap-2 text-xs text-muted-foreground">
-        <span>or</span>
-        <input type="file" accept=".yml,.yaml,text/yaml,text/plain" class="text-xs" @change="onFile" />
-      </div>
+      <label
+        class="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-sm/7 font-medium text-foreground transition-colors hover:bg-muted"
+      >
+        <Upload class="size-4" aria-hidden="true" /> Upload file
+        <input type="file" accept=".yml,.yaml,text/yaml,text/plain" class="sr-only" @change="onFile" />
+      </label>
       <!-- 422 synthesize/admission coaching, inline against the offending compose -->
       <p
         v-if="submitError"
-        class="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+        class="flex gap-2 rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
       >
-        {{ submitError }}
+        <TriangleAlert class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+        <span>{{ submitError }}</span>
       </p>
     </section>
 
-    <!-- 2. App name + live URL preview -->
-    <section class="space-y-2">
-      <label class="text-sm font-medium" for="name">App name</label>
-      <input
-        id="name"
-        v-model="name"
-        placeholder="My App"
-        class="w-full rounded-lg border border-border px-3 py-2 text-sm"
-      />
-      <p class="text-xs text-muted-foreground">
-        It'll be reachable at <code>{{ slug || "your-app" }}.local</code>
+    <!-- 2. Details: name + main service + port -->
+    <section class="space-y-4 rounded-2xl border border-border bg-card p-5 sm:p-6">
+      <h3 class="text-sm font-semibold text-foreground">Details</h3>
+
+      <!-- App name + live URL preview -->
+      <div class="space-y-1.5">
+        <label class="text-sm font-medium" for="name">App name</label>
+        <input id="name" v-model="name" placeholder="My App" :class="fieldClass" />
+        <p class="text-xs text-muted-foreground">
+          It'll be reachable at <code>{{ slug || "your-app" }}.local</code>
+        </p>
+      </div>
+
+      <!-- Main service — auto when one, required dropdown when several -->
+      <div v-if="services.length > 1" class="space-y-1.5">
+        <label class="text-sm font-medium" for="main-service">Main service</label>
+        <select id="main-service" v-model="mainService" :class="fieldClass" @change="onServiceChange">
+          <option value="" disabled>Choose the service the dashboard opens…</option>
+          <option v-for="s in services" :key="s" :value="s">{{ s }}</option>
+        </select>
+        <p class="text-xs text-muted-foreground">This compose has several services — pick the one users open.</p>
+      </div>
+      <p v-else-if="services.length === 1" class="text-xs text-muted-foreground">
+        Main service: <code>{{ services[0] }}</code> (auto-detected)
       </p>
+
+      <!-- Main port -->
+      <div class="space-y-1.5">
+        <label class="text-sm font-medium" for="main-port">Main port</label>
+        <input
+          id="main-port"
+          v-model.number="mainPort"
+          type="number"
+          min="1"
+          max="65535"
+          placeholder="e.g. 8080"
+          :class="[fieldClass, 'w-40']"
+          @input="portTouched = true"
+        />
+        <p class="text-xs text-muted-foreground">
+          The port your app listens on <em>inside</em> the container — check the image's docs. We prefill it from the
+          compose when we can; always double-check.
+        </p>
+      </div>
     </section>
 
-    <!-- 3. Main service — auto when one, required dropdown when several -->
-    <section v-if="services.length > 1" class="space-y-2">
-      <label class="text-sm font-medium" for="main-service">Main service</label>
-      <select
-        id="main-service"
-        v-model="mainService"
-        class="w-full rounded-lg border border-border px-3 py-2 text-sm"
-        @change="onServiceChange"
-      >
-        <option value="" disabled>Choose the service the dashboard opens…</option>
-        <option v-for="s in services" :key="s" :value="s">{{ s }}</option>
-      </select>
-      <p class="text-xs text-muted-foreground">This compose has several services — pick the one users open.</p>
-    </section>
-    <p v-else-if="services.length === 1" class="text-xs text-muted-foreground">
-      Main service: <code>{{ services[0] }}</code> (auto-detected)
-    </p>
-
-    <!-- 4. Main port -->
-    <section class="space-y-2">
-      <label class="text-sm font-medium" for="main-port">Main port</label>
-      <input
-        id="main-port"
-        v-model.number="mainPort"
-        type="number"
-        min="1"
-        max="65535"
-        placeholder="e.g. 8080"
-        class="w-40 rounded-lg border border-border px-3 py-2 text-sm"
-        @input="portTouched = true"
-      />
-      <p class="text-xs text-muted-foreground">
-        The port your app listens on <em>inside</em> the container — check the image's docs. We prefill it from the
-        compose when we can; always double-check.
-      </p>
-    </section>
-
-    <!-- 5. Permissions — form toggles/rows, or the Edit-as-YAML escape hatch -->
-    <section class="space-y-3 border-t border-border pt-4">
+    <!-- 3. Permissions — form toggles/rows, or the Edit-as-YAML escape hatch -->
+    <section class="space-y-4 rounded-2xl border border-border bg-card p-5 sm:p-6">
       <div class="flex items-center justify-between">
-        <h2 class="text-sm font-medium">Permissions</h2>
+        <h3 class="text-sm font-semibold text-foreground">Permissions</h3>
         <button
           type="button"
-          class="text-xs text-muted-foreground hover:underline"
+          class="text-xs text-muted-foreground transition-colors hover:text-foreground"
           @click="editMode === 'form' ? flipToYaml() : flipToForm()"
         >
           {{ editMode === "form" ? "Edit as YAML" : "Back to form" }}
@@ -343,78 +359,68 @@ const submitLabel = computed(() => (install.isPending.value ? "Installing…" : 
 
       <p
         v-if="overlayError"
-        class="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+        class="flex gap-2 rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
       >
-        {{ overlayError }}
+        <TriangleAlert class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+        <span>{{ overlayError }}</span>
       </p>
 
       <!-- Form view -->
       <template v-if="editMode === 'form'">
-        <!-- Internet -->
-        <div class="flex items-start justify-between gap-4">
-          <div class="min-w-0">
-            <div class="text-sm font-medium">Internet access</div>
-            <div class="text-xs text-muted-foreground">Let this app reach the internet. On by default for custom apps.</div>
-          </div>
-          <SwitchRoot
-            v-model="internet"
-            aria-label="Internet access"
-            class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-border bg-muted outline-none transition-colors data-[state=checked]:border-accent data-[state=checked]:bg-accent"
-          >
-            <SwitchThumb
-              class="pointer-events-none block size-4 translate-x-0.5 rounded-full bg-card shadow transition-transform data-[state=checked]:translate-x-[1.125rem]"
-            />
-          </SwitchRoot>
-        </div>
-
-        <!-- LAN / mDNS -->
-        <div class="flex items-start justify-between gap-4">
-          <div class="min-w-0">
-            <div class="text-sm font-medium">Local network access</div>
-            <div class="text-xs text-muted-foreground">Let this app reach other devices on your LAN. Off by default.</div>
-          </div>
-          <SwitchRoot
-            v-model="lan"
-            aria-label="Local network access"
-            class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-border bg-muted outline-none transition-colors data-[state=checked]:border-accent data-[state=checked]:bg-accent"
-          >
-            <SwitchThumb
-              class="pointer-events-none block size-4 translate-x-0.5 rounded-full bg-card shadow transition-transform data-[state=checked]:translate-x-[1.125rem]"
-            />
-          </SwitchRoot>
-        </div>
-
-        <!-- GPU -->
-        <div class="flex items-start justify-between gap-4">
-          <div class="min-w-0">
-            <div class="text-sm font-medium">GPU access</div>
-            <div class="text-xs text-muted-foreground">
-              Pass the box's GPU through (transcoding, ML). Needs a GPU on this machine.
+        <!-- Access toggles as a bordered list (Tailwind toggle-list idiom). -->
+        <div class="divide-y divide-border overflow-hidden rounded-xl border border-border">
+          <!-- Internet -->
+          <div class="flex items-start justify-between gap-4 p-4">
+            <div class="min-w-0">
+              <div class="text-sm font-medium">Internet access</div>
+              <div class="text-xs text-muted-foreground">Let this app reach the internet. On by default for custom apps.</div>
             </div>
+            <SwitchRoot
+              v-model="internet"
+              aria-label="Internet access"
+              class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-border bg-muted outline-none transition-colors data-[state=checked]:border-accent data-[state=checked]:bg-accent"
+            >
+              <SwitchThumb
+                class="pointer-events-none block size-4 translate-x-0.5 rounded-full bg-card shadow transition-transform data-[state=checked]:translate-x-[1.125rem]"
+              />
+            </SwitchRoot>
           </div>
-          <SwitchRoot
-            v-model="gpu"
-            aria-label="GPU access"
-            class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-border bg-muted outline-none transition-colors data-[state=checked]:border-accent data-[state=checked]:bg-accent"
-          >
-            <SwitchThumb
-              class="pointer-events-none block size-4 translate-x-0.5 rounded-full bg-card shadow transition-transform data-[state=checked]:translate-x-[1.125rem]"
-            />
-          </SwitchRoot>
+
+          <!-- LAN / mDNS -->
+          <div class="flex items-start justify-between gap-4 p-4">
+            <div class="min-w-0">
+              <div class="text-sm font-medium">Local network access</div>
+              <div class="text-xs text-muted-foreground">Let this app reach other devices on your LAN. Off by default.</div>
+            </div>
+            <SwitchRoot
+              v-model="lan"
+              aria-label="Local network access"
+              class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-border bg-muted outline-none transition-colors data-[state=checked]:border-accent data-[state=checked]:bg-accent"
+            >
+              <SwitchThumb
+                class="pointer-events-none block size-4 translate-x-0.5 rounded-full bg-card shadow transition-transform data-[state=checked]:translate-x-[1.125rem]"
+              />
+            </SwitchRoot>
+          </div>
+          <!-- GPU access is intentionally not offered yet — GPU passthrough isn't
+               supported (issue #125, blocked). The `gpu` election stays false; the
+               YAML escape hatch remains the only way to set it for tinkerers. -->
         </div>
 
         <!-- Folder grants -->
-        <div class="space-y-2">
-          <div class="text-sm font-medium">Folder access</div>
-          <div class="text-xs text-muted-foreground">
-            Give the app one of your content folders. <strong>Source</strong> is the folder on your box;
-            <strong>destination</strong> is where the app reads it inside the container (check the image's docs).
+        <div class="space-y-3">
+          <div>
+            <div class="text-sm font-medium">Folder access</div>
+            <div class="mt-1 text-xs text-muted-foreground">
+              Give the app one of your content folders. <strong>Source</strong> is the folder on your box;
+              <strong>destination</strong> is where the app reads it inside the container (check the image's docs).
+            </div>
           </div>
           <div v-for="(f, i) in folders" :key="i" class="flex items-center gap-2">
             <select
               v-model="f.folder"
               aria-label="Source folder"
-              class="rounded-lg border border-border px-2 py-1.5 text-sm"
+              class="rounded-lg border border-border bg-background px-2 py-1.5 text-sm outline-none focus:border-accent"
             >
               <option v-for="uc in USE_CASE_FOLDERS" :key="uc" :value="uc">{{ folderLabel(uc) }}</option>
             </select>
@@ -423,29 +429,36 @@ const submitLabel = computed(() => (install.isPending.value ? "Installing…" : 
               v-model="f.target"
               placeholder="/path/in/container"
               aria-label="Destination path"
-              class="min-w-0 flex-1 rounded-lg border border-border px-2 py-1.5 font-mono text-xs"
+              class="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1.5 font-mono text-xs outline-none focus:border-accent"
             />
-            <select v-model="f.mode" aria-label="Mode" class="rounded-lg border border-border px-2 py-1.5 text-sm">
+            <select
+              v-model="f.mode"
+              aria-label="Mode"
+              class="rounded-lg border border-border bg-background px-2 py-1.5 text-sm outline-none focus:border-accent"
+            >
               <option value="read">read</option>
               <option value="write">write</option>
             </select>
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               type="button"
-              class="rounded-lg border border-border px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted"
               aria-label="Remove folder"
+              class="text-muted-foreground hover:text-destructive"
               @click="removeFolder(i)"
             >
-              ✕
-            </button>
+              <Trash2 class="size-4" aria-hidden="true" />
+            </Button>
           </div>
-          <button
-            type="button"
-            class="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-muted"
-            @click="addFolder"
-          >
-            + Add a folder
-          </button>
+          <Button variant="secondary" size="sm" type="button" @click="addFolder">
+            <Plus class="size-4" aria-hidden="true" /> Add a folder
+          </Button>
         </div>
+
+        <!-- GPU has no form control yet (unsupported, #125) but round-trips through
+             the YAML overlay; surface it read-only so a YAML-set flag isn't silently
+             submitted with no confirmation in the form (mirrors devices below). -->
+        <p v-if="gpu" class="text-xs text-muted-foreground">GPU access (set via YAML): <code>enabled</code></p>
 
         <!-- Devices: no form control (the long tail); shown read-only when set via YAML -->
         <p v-if="devices.length" class="text-xs text-muted-foreground">
@@ -461,7 +474,7 @@ const submitLabel = computed(() => (install.isPending.value ? "Installing…" : 
           rows="10"
           spellcheck="false"
           aria-label="Permissions overlay (YAML)"
-          class="w-full rounded-lg border border-border px-3 py-2 font-mono text-xs"
+          :class="[fieldClass, 'font-mono text-xs']"
         />
         <p class="text-xs text-muted-foreground">
           The manifest overlay malmo wraps around your compose. Edit fields the form doesn't show (like
@@ -471,20 +484,25 @@ const submitLabel = computed(() => (install.isPending.value ? "Installing…" : 
     </section>
 
     <!-- TOFU / no-auto-update honesty note -->
-    <p class="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-      malmo pins the <strong>exact image it pulls now</strong> and won't change it underneath you — a custom app
-      <strong>does not auto-update</strong>. To move to a newer image, uninstall and paste again.
+    <p class="flex gap-2 rounded-xl border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+      <TriangleAlert class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+      <span>
+        malmo pins the <strong>exact image it pulls now</strong> and won't change it underneath you — a custom app
+        <strong>does not auto-update</strong>. To move to a newer image, uninstall and paste again.
+      </span>
     </p>
 
-    <!-- 6. Scope + submit (store split-button convention) -->
-    <div class="flex items-center gap-3 border-t border-border pt-4">
+    <!-- 4. Scope + submit (store split-button convention) -->
+    <div class="flex items-center gap-3">
       <SplitButton
         :label="submitLabel"
         :disabled="!canSubmit"
         :items="scopeItems"
         @click="install.mutate('personal')"
       />
-      <RouterLink to="/store" class="text-sm text-muted-foreground hover:underline">Cancel</RouterLink>
+      <RouterLink to="/store" class="text-sm text-muted-foreground transition-colors hover:text-foreground">
+        Cancel
+      </RouterLink>
     </div>
   </div>
 </template>
