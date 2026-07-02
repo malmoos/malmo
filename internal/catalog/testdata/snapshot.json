@@ -1,0 +1,809 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-02T15:06:02Z",
+  "store_ref": "a033a01a8d41c93ffe93561c18de9235242ba265",
+  "index_sha256": "9adb1642e0923019f564ad0e54c8bd38a5ba349b2f23e0caccdd0d3428bf5576",
+  "apps": [
+    {
+      "id": "actual-budget",
+      "name": "Actual Budget",
+      "version": "26.6.0",
+      "short_description": "Private, local-first envelope budgeting that gives every dollar a job and syncs across your devices.",
+      "long_description": "Actual Budget is a fast, local-first personal finance app built around zero-based (envelope) budgeting: every dollar gets a job, so you always know what your money is for. Your budgets, accounts, and transactions live entirely on your home server — multiple accounts, scheduled and split transactions, rules, and reports — and it stays snappy even with years of history. Encrypted sync keeps phones and laptops current without handing your financial life to a cloud provider. Each instance is protected by its own server password that you set on first launch. Core budgeting is fully offline; optional automatic bank import (via GoCardless or SimpleFIN) is an advanced opt-in that needs internet access and your own API keys.\n",
+      "categories": [
+        "finance",
+        "productivity"
+      ],
+      "author": {
+        "name": "Actual",
+        "url": "https://actualbudget.org"
+      },
+      "license": "MIT",
+      "links": {
+        "homepage": "https://actualbudget.org",
+        "source": "https://github.com/actualbudget/actual",
+        "support": "https://actualbudget.org/docs"
+      },
+      "footprint": {
+        "image_download_bytes": 112909196,
+        "image_disk_bytes": 386638848,
+        "estimated_state": "1M"
+      },
+      "icon_file": "icon.png",
+      "environments": [
+        "appliance",
+        "hosted"
+      ],
+      "manifest": "id: actual-budget\nmanifest_version: 1\nname: Actual Budget\nversion: \"26.6.0\"\ndescription:\n  short: \"Private, local-first envelope budgeting that gives every dollar a job and syncs across your devices.\"\n  long: |\n    Actual Budget is a fast, local-first personal finance app built around zero-based (envelope) budgeting: every dollar gets a job, so you always know what your money is for. Your budgets, accounts, and transactions live entirely on your home server — multiple accounts, scheduled and split transactions, rules, and reports — and it stays snappy even with years of history. Encrypted sync keeps phones and laptops current without handing your financial life to a cloud provider. Each instance is protected by its own server password that you set on first launch. Core budgeting is fully offline; optional automatic bank import (via GoCardless or SimpleFIN) is an advanced opt-in that needs internet access and your own API keys.\nicon: ./icon.png\ncategories: [finance, productivity]\nauthor:\n  name: Actual\n  url: https://actualbudget.org\nlicense: MIT\nlinks:\n  homepage: https://actualbudget.org\n  source: https://github.com/actualbudget/actual\n  support: https://actualbudget.org/docs\n\ncompose_file: compose.yml\nmain_service: actual-server\nmain_port: 5006\npreferred_slugs: [actual, budget]\nhealth_probe: /health\n\n# Folderless app: the actual-server image has no USER directive and no\n# privilege-dropping entrypoint, so it runs as root upstream. service_user\n# gives it a dedicated malmo non-root identity (band [2100,2999]) with data/\n# chowned to it — financial data shouldn't run as the brain's euid.\nservice_user: true\n\nresources:\n  recommended: { memory: 256M, cpu: 0.5 }\n\n# Actual keeps everything it owns — the SQLite budget databases and uploaded\n# files — under /data, with no separable regenerable cache, so the whole data\n# bind is backed up. Budgets are stored in its own database rather than as files\n# in a use-case folder (there is no finance folder in the taxonomy) and it has no\n# external-library option, so it manages its own content (forfeits the\n# files-first-class badge) instead of taking a folder grant.\nstorage:\n  data_volumes: [./data]\n  estimated_size: 1M\n  app_managed_user_content: true\n\n# Core budgeting is fully offline, so no internet/lan grant. Bank sync (GoCardless\n# / SimpleFIN auto-import) is the only internet-dependent feature — an advanced\n# opt-in needing egress + user-supplied API keys — and is left off by default.\npermissions:\n  internet: false\n  lan: false\n\n# Filled by `go run ./cmd/malmo manifest resolve catalog/actual-budget/manifest.yml`.\nimages:\n  actualbudget/actual-server:26.6.0:\n    digest: sha256:74385f8067f401e61f0be9e343c471705c42dfaa195295c40c5b2f15f4dcc9d4\n    download_bytes: 112909196\n    disk_bytes: 386638848\n",
+      "compose": "# Actual Budget keeps all of its state — the SQLite budget databases and uploaded\n# files — under /data. Upstream's compose published 5006 and bound ./actual-data\n# there; malmo drops the host port (the brain routes to main_port) and binds the\n# app state under ./data. The image creates a non-root `actual` user and chowns\n# /data but never issues USER, so it runs as root upstream; under malmo it runs as\n# the elected non-root UID with cap_drop: ALL — a plain Node app needing only write\n# access to /data, which the brain pre-creates and chowns to that UID. Upstream's\n# compose healthcheck shells `node scripts/health-check.js`, which fetches the\n# app's own /health endpoint; malmo probes that same endpoint via the manifest\n# health_probe instead, so no compose healthcheck is needed.\nservices:\n  actual-server:\n    image: actualbudget/actual-server:26.6.0\n    volumes:\n      - ./data:/data\n",
+      "images": {
+        "actualbudget/actual-server:26.6.0": {
+          "digest": "sha256:74385f8067f401e61f0be9e343c471705c42dfaa195295c40c5b2f15f4dcc9d4",
+          "download_bytes": 112909196,
+          "disk_bytes": 386638848
+        }
+      }
+    },
+    {
+      "id": "blinko",
+      "name": "Blinko",
+      "version": "1.8.7",
+      "short_description": "AI-powered card-style notes — capture fleeting thoughts in seconds, find them again by asking in plain language.",
+      "long_description": "Blinko is a quick-capture notebook built around small Markdown cards: open it, jot the thought, done — no folders or filing decisions in the way. Notes can carry attachments, todos, and tags, and everything is searchable; connect your own AI provider key and Blinko's retrieval-augmented search lets you ask questions across everything you've written in natural language. All notes live in your home server's database — nothing is sent anywhere unless you opt into an AI provider. The first account registered after install becomes the administrator, and companion apps for desktop and mobile can sync against your instance.\n",
+      "categories": [
+        "productivity"
+      ],
+      "author": {
+        "name": "Blinko",
+        "url": "https://blinko.space"
+      },
+      "license": "GPL-3.0",
+      "links": {
+        "homepage": "https://blinko.space",
+        "source": "https://github.com/blinkospace/blinko",
+        "support": "https://docs.blinko.space"
+      },
+      "changelog_url": "https://github.com/blinkospace/blinko/releases",
+      "footprint": {
+        "image_download_bytes": 435911817,
+        "image_disk_bytes": 1250560000,
+        "estimated_state": "1M"
+      },
+      "icon_file": "icon.png",
+      "screenshots": [
+        "screenshots/0.png"
+      ],
+      "environments": [
+        "appliance",
+        "hosted"
+      ],
+      "manifest": "id: blinko\nmanifest_version: 1\nname: Blinko\nversion: \"1.8.7\"\ndescription:\n  short: \"AI-powered card-style notes — capture fleeting thoughts in seconds, find them again by asking in plain language.\"\n  long: |\n    Blinko is a quick-capture notebook built around small Markdown cards: open it, jot the thought, done — no folders or filing decisions in the way. Notes can carry attachments, todos, and tags, and everything is searchable; connect your own AI provider key and Blinko's retrieval-augmented search lets you ask questions across everything you've written in natural language. All notes live in your home server's database — nothing is sent anywhere unless you opt into an AI provider. The first account registered after install becomes the administrator, and companion apps for desktop and mobile can sync against your instance.\nicon: ./icon.png\nscreenshots: [./screenshots/01.png]\ncategories: [productivity]\nauthor:\n  name: Blinko\n  url: https://blinko.space\nlicense: GPL-3.0\nlinks:\n  homepage: https://blinko.space\n  source: https://github.com/blinkospace/blinko\n  support: https://docs.blinko.space\nchangelog_url: https://github.com/blinkospace/blinko/releases\n\ncompose_file: compose.yml\nmain_service: blinko\nmain_port: 1111\npreferred_slugs: [blinko, notes]\n\n# Unauthenticated \"/\" serves the app shell (200). First boot applies ~30\n# Prisma migrations plus a seed against the managed Postgres before the\n# server listens, so allow a margin on slow disks.\nhealth_probe:\n  path: /\n  start_period: 120s\n\nresources:\n  recommended: { memory: 512M, cpu: 0.5 }\n\n# Notes, accounts, and settings live in the managed Postgres; ./data is\n# /app/.blinko — uploaded attachments (files/), installed plugins (plugins/),\n# the app's own scheduled pg dumps (pgdump/), and the AI embeddings index\n# (vector/). vector/ is rebuildable on demand and pgdump/ holds copies of\n# data already protected by the managed-service backup path, so both are\n# cache. Measured baseline at first healthy on a clean install is ~0 (four\n# empty directories). Notes are database rows, not files in a use-case\n# folder, and there is no external-library option, so the app manages its\n# own content (forfeits the files-first-class badge).\nstorage:\n  data_volumes: [./data]\n  cache_volumes: [./data/vector, ./data/pgdump]\n  estimated_size: 1M\n  app_managed_user_content: true\n\nservices:\n  database:\n    type: postgres\n    version: \"15\"\n\n# Blinko signs auth tokens with NEXTAUTH_SECRET (the name survives from its\n# earlier Next.js stack). The brain generates it once at install and injects\n# MALMO_SECRET_AUTH; the compose maps it across, stable across restarts so\n# sessions survive.\nsecrets:\n  - name: auth\n\n# internet: only for features the user opts into later — an external AI\n# provider for the RAG search, the plugin marketplace, webhooks. Core note\n# capture needs no outbound access. lan: not needed — the brain routes\n# inbound traffic.\npermissions:\n  internet: true\n  lan: false\n\n# Filled by `go run ./cmd/malmo manifest resolve catalog/blinko/manifest.yml`.\nimages:\n  blinkospace/blinko:1.8.7:\n    digest: sha256:f7c1167f8c86db586599d849539a732929d89adb10977046e7b427813b2a84b4\n    download_bytes: 435911817\n    disk_bytes: 1250560000\n",
+      "compose": "# Blinko adapted for malmo's Tier-3 sandbox (cap_drop: ALL, no-new-privileges,\n# brain-pinned user:). Upstream's compose runs blinko + its own postgres:14 and\n# publishes 1111; malmo drops the host port (the brain routes to main_port),\n# drops the bundled database and declares managed Postgres in the manifest\n# instead, and binds the app's state dir (/app/.blinko) under ./data.\n#\n# Verified live under the sandbox at a pinned non-root identity (uid 2100,\n# cap_drop ALL): Prisma migrations + seed run against the managed-style DSN,\n# the seed creates .blinko/{files,plugins,pgdump,vector} owned by the pinned\n# UID, and the server answers 200 on :1111. No default account is seeded in\n# production — the first registered user becomes the superadmin. Re-verify on\n# version bumps.\nservices:\n  blinko:\n    image: blinkospace/blinko:1.8.7\n    environment:\n      NODE_ENV: production\n      # Auth-token signing secret (the NEXTAUTH_ name survives from Blinko's\n      # earlier Next.js stack). Generated per-instance by the brain (manifest\n      # `secrets: [{name: auth}]`) and injected as MALMO_SECRET_AUTH; stable\n      # across restarts so sessions survive.\n      NEXTAUTH_SECRET: ${MALMO_SECRET_AUTH}\n      DATABASE_URL: ${MALMO_SERVICE_DATABASE_DSN}\n    volumes:\n      - ./data:/app/.blinko\n",
+      "images": {
+        "blinkospace/blinko:1.8.7": {
+          "digest": "sha256:f7c1167f8c86db586599d849539a732929d89adb10977046e7b427813b2a84b4",
+          "download_bytes": 435911817,
+          "disk_bytes": 1250560000
+        }
+      }
+    },
+    {
+      "id": "docuseal",
+      "name": "DocuSeal",
+      "version": "3.0.2",
+      "short_description": "Self-hosted PDF document signing and form filling.",
+      "long_description": "DocuSeal lets you create fillable PDF forms, collect legally-binding e-signatures, and manage the full signing workflow from a single dashboard — without routing documents through a third-party cloud. Build templates with a visual drag-and-drop editor, send signature requests to multiple recipients via email, and download completed PDFs when the workflow is done. Documents and signatures live entirely on your own hardware.\n\nNote: email-based signing is currently limited. Signature-request links point to this app's local network address, so a recipient can only open them from a device on your home network — links sent to people off your network won't resolve until remote access is available. Use DocuSeal on your LAN, or share completed documents another way.\n",
+      "categories": [
+        "productivity",
+        "documents"
+      ],
+      "author": {
+        "name": "DocuSeal LLC",
+        "url": "https://www.docuseal.com"
+      },
+      "license": "AGPL-3.0",
+      "links": {
+        "homepage": "https://www.docuseal.com",
+        "source": "https://github.com/docusealco/docuseal",
+        "support": "https://www.docuseal.com/docs"
+      },
+      "changelog_url": "https://github.com/docusealco/docuseal/releases",
+      "footprint": {
+        "image_download_bytes": 223509551,
+        "image_disk_bytes": 466961236,
+        "estimated_state": "2GB"
+      },
+      "icon_file": "icon.svg",
+      "screenshots": [
+        "screenshots/0.png"
+      ],
+      "environments": [
+        "appliance",
+        "hosted"
+      ],
+      "manifest": "id: docuseal\nmanifest_version: 1\nname: DocuSeal\nversion: \"3.0.2\"\ndescription:\n  short: \"Self-hosted PDF document signing and form filling.\"\n  long: |\n    DocuSeal lets you create fillable PDF forms, collect legally-binding e-signatures, and manage the full signing workflow from a single dashboard — without routing documents through a third-party cloud. Build templates with a visual drag-and-drop editor, send signature requests to multiple recipients via email, and download completed PDFs when the workflow is done. Documents and signatures live entirely on your own hardware.\n\n    Note: email-based signing is currently limited. Signature-request links point to this app's local network address, so a recipient can only open them from a device on your home network — links sent to people off your network won't resolve until remote access is available. Use DocuSeal on your LAN, or share completed documents another way.\nicon: ./icon.svg\nscreenshots: [./screenshots/01.png]\ncategories: [productivity, documents]\nauthor:\n  name: DocuSeal LLC\n  url: https://www.docuseal.com\nlicense: AGPL-3.0\nlinks:\n  homepage: https://www.docuseal.com\n  source: https://github.com/docusealco/docuseal\n  support: https://www.docuseal.com/docs\nchangelog_url: https://github.com/docusealco/docuseal/releases\n\ncompose_file: compose.yml\nmain_service: app\nmain_port: 3000\npreferred_slugs: [docuseal, sign]\n\nhealth_probe:\n  path: /up\n  start_period: 90s\n\nresources:\n  recommended: { memory: 512M, cpu: 1.0 }\n\nstorage:\n  data_volumes: [./data/app]\n  estimated_size: 2GB\n  app_managed_user_content: true\n\nservices:\n  database:\n    type: postgres\n    version: \"16\"\n\npermissions:\n  internet: true\n  lan: false\n\nimages:\n  docuseal/docuseal:3.0.2:\n    digest: sha256:79496b0f121511e72ed9c3ab05eda3f4257b6921eab6b18d6b9121c237a3070c\n    download_bytes: 223509551\n    disk_bytes: 466961236\n",
+      "compose": "services:\n  app:\n    image: docuseal/docuseal:3.0.2\n    volumes:\n      - ./data/app:/data/docuseal\n    environment:\n      DATABASE_URL: ${MALMO_SERVICE_DATABASE_DSN}\n",
+      "images": {
+        "docuseal/docuseal:3.0.2": {
+          "digest": "sha256:79496b0f121511e72ed9c3ab05eda3f4257b6921eab6b18d6b9121c237a3070c",
+          "download_bytes": 223509551,
+          "disk_bytes": 466961236
+        }
+      }
+    },
+    {
+      "id": "files-demo",
+      "name": "Files Demo",
+      "version": "1.10",
+      "short_description": "whoami wired to a use-case folder — proves the folder-enforcement override path.",
+      "icon_glyph": "folder",
+      "footprint": {
+        "image_download_bytes": 2850040,
+        "image_disk_bytes": 6581646
+      },
+      "environments": [
+        "appliance",
+        "hosted"
+      ],
+      "manifest": "id: files-demo\nmanifest_version: 1\nname: Files Demo\nversion: \"1.10\"\ndescription:\n  short: \"whoami wired to a use-case folder — proves the folder-enforcement override path.\"\nicon_glyph: folder\ncompose_file: compose.yml\nmain_service: files-demo\nmain_port: 8080\npreferred_slugs: [files-demo]\n\npermissions:\n  internet: false\n  lan: false\n  # Declares read access to the Documents folder. An install resolves the source\n  # (personal ~/Documents or household /srv/malmo/shared/Documents) and the\n  # override gets user:, a bind mount at /malmo/documents, group_add for a shared\n  # source, and an injected MALMO_FOLDER_DOCUMENTS. whoami ignores the mount; the\n  # app exists to exercise the enforcement path end-to-end (APP_ISOLATION.md #\n  # User content). Listens on 8080 (not 80) so it runs cleanly as a non-root\n  # elected UID under cap_drop: ALL.\n  folders:\n    - folder: documents\n      mode: read\n\n# Catalog-promised image digest (APP_STORE.md # Trust model), shared with the\n# whoami sample since it's the same image.\nimages:\n  traefik/whoami:v1.10.3:\n    digest: sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c\n    download_bytes: 2850040\n    disk_bytes: 6581646\n",
+      "compose": "# Author's compose, held verbatim by malmo. Same traefik/whoami image as the\n# whoami sample, but listening on 8080 so it runs as the elected non-root UID\n# under cap_drop: ALL. The brain injects MALMO_FOLDER_DOCUMENTS (the in-container\n# path of the bound Documents folder); a real files-first-class app would map it\n# to its library path (e.g. PHOTOPRISM_ORIGINALS_PATH). whoami just echoes it.\nservices:\n  files-demo:\n    image: traefik/whoami:v1.10.3\n    command: [\"--port=8080\"]\n    environment:\n      WHOAMI_DOCUMENTS_PATH: ${MALMO_FOLDER_DOCUMENTS}\n",
+      "images": {
+        "traefik/whoami:v1.10.3": {
+          "digest": "sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c",
+          "download_bytes": 2850040,
+          "disk_bytes": 6581646
+        }
+      }
+    },
+    {
+      "id": "gitea",
+      "name": "Gitea",
+      "version": "1.26.2",
+      "short_description": "A lightweight, self-hosted Git service — your repositories, issues, and pull requests on your own hardware.",
+      "long_description": "Gitea gives you the full code-hosting experience at home: Git repositories with issues, pull requests, a wiki, and releases, served by a single small binary that stays fast on modest hardware. Keep personal projects, dotfiles, and household scripts versioned on a machine you own, and bring existing repositories home with the built-in migrator for GitHub, GitLab, and friends. On first visit Gitea shows its install screen with every setting already filled in — just create your administrator account and finish. Cloning and pushing work over HTTP at the app's malmo address; git-over-SSH is disabled because malmo routes web traffic only. Email notifications (password resets, issue mentions) work once an administrator adds an outgoing email account in malmo and binds Gitea to it; until then they are silently dropped, and an admin can still reset any account's password from Gitea's own admin panel.\n",
+      "categories": [
+        "developer-tools"
+      ],
+      "author": {
+        "name": "Gitea",
+        "url": "https://about.gitea.com"
+      },
+      "license": "MIT",
+      "links": {
+        "homepage": "https://about.gitea.com",
+        "source": "https://github.com/go-gitea/gitea",
+        "support": "https://docs.gitea.com"
+      },
+      "footprint": {
+        "image_download_bytes": 65145006,
+        "image_disk_bytes": 163267072,
+        "estimated_state": "5M"
+      },
+      "icon_file": "icon.png",
+      "screenshots": [
+        "screenshots/0.png"
+      ],
+      "environments": [
+        "appliance",
+        "hosted"
+      ],
+      "manifest": "id: gitea\nmanifest_version: 1\nname: Gitea\nversion: \"1.26.2\"\ndescription:\n  short: \"A lightweight, self-hosted Git service — your repositories, issues, and pull requests on your own hardware.\"\n  long: |\n    Gitea gives you the full code-hosting experience at home: Git repositories with issues, pull requests, a wiki, and releases, served by a single small binary that stays fast on modest hardware. Keep personal projects, dotfiles, and household scripts versioned on a machine you own, and bring existing repositories home with the built-in migrator for GitHub, GitLab, and friends. On first visit Gitea shows its install screen with every setting already filled in — just create your administrator account and finish. Cloning and pushing work over HTTP at the app's malmo address; git-over-SSH is disabled because malmo routes web traffic only. Email notifications (password resets, issue mentions) work once an administrator adds an outgoing email account in malmo and binds Gitea to it; until then they are silently dropped, and an admin can still reset any account's password from Gitea's own admin panel.\nicon: ./icon.png\nscreenshots: [./screenshots/01.png]\ncategories: [developer-tools]\nauthor:\n  name: Gitea\n  url: https://about.gitea.com\nlicense: MIT\nlinks:\n  homepage: https://about.gitea.com\n  source: https://github.com/go-gitea/gitea\n  support: https://docs.gitea.com\n\ncompose_file: compose.yml\nmain_service: gitea\nmain_port: 3000\npreferred_slugs: [gitea, git]\n\n# Folderless app: repositories are app-managed content, not use-case-folder\n# files — and a git server shouldn't run as the brain's euid. service_user\n# gives it a dedicated non-root identity with data/ chowned to it; the\n# rootless image is designed for exactly this shape (any UID that owns its\n# dirs works).\nservice_user: true\n\n# /api/healthz is Gitea's own health endpoint (200 + \"status\":\"pass\" once the\n# DB and cache answer). First boot serves the install screen immediately, so\n# 60s comfortably covers the post-install in-place restart too.\nhealth_probe:\n  path: /api/healthz\n  start_period: 60s\n\n# Idle footprint measured ~95MiB; git operations (clone packing, migrations)\n# spike well above it.\nresources:\n  recommended: { memory: 512M, cpu: 1.0 }\n\n# Everything Gitea owns lives under the two binds: ./data/gitea (repositories,\n# LFS objects, attachments, the SQLite database) and ./data/config (app.ini,\n# written by the install screen). No separable regenerable cache — back up the\n# whole data tree. estimated_size measured at first healthy, post-install:\n# 2.3M (an empty Gitea is tiny; repositories grow it).\nstorage:\n  data_volumes: [./data]\n  estimated_size: 5M\n  app_managed_user_content: true\n\n# internet: outbound HTTP for repository migrations and mirrors (bringing\n# repos home from GitHub \u0026 co. is a first-class Gitea feature) and the release\n# update checker. No LAN egress needed.\npermissions:\n  internet: true\n  lan: false\n\n# Gitea sends email (password resets, issue/PR mentions, registration\n# confirmations) when bound to an outgoing-mail provider — compose maps the\n# discrete MALMO_MAIL_* fields onto Gitea's GITEA__mailer__* keys. Unbound,\n# the mailer stays disabled and mail is silently dropped (an admin can still\n# reset passwords from Gitea's own admin panel).\nmail:\n  optional: true\n\n# Filled by `go run ./cmd/malmo manifest resolve catalog/gitea/manifest.yml`.\n\nimages:\n  gitea/gitea:1.26.2-rootless:\n    digest: sha256:c5c21a7705a16f2b2369384a3b7d67c5ed761a818bbb0a55187b5cf98cdc2e68\n    download_bytes: 65145006\n    disk_bytes: 163267072\n",
+      "compose": "# Gitea's rootless image is purpose-built for malmo's sandbox: it starts as a\n# plain non-root process (no s6 setup, no startup chown) and honors whatever\n# runtime UID it's given, so it runs clean under the brain-pinned service\n# identity with cap_drop ALL. Upstream's compose published 3000/2222 and used\n# named volumes; malmo drops the host ports (the brain routes to main_port)\n# and binds the image's two declared volumes — /var/lib/gitea (repositories,\n# LFS, attachments, the SQLite database) and /etc/gitea (app.ini) — under\n# ./data.\n#\n# USER=git: the brain-allocated service UID has no /etc/passwd entry, so\n# Gitea's username lookup falls back to $USER (modules/user/user.go). Without\n# it the post-install settings reload fatals with \"Expect user 'git'\n# (RUN_USER in app.ini) but current user is:\" — this is upstream's intended\n# arbitrary-UID path (the image's own setup script defaults RUN_USER to $USER\n# too, so the two stay consistent).\n#\n# The GITEA__* overrides are re-applied to app.ini on every boot by the\n# image's environment-to-ini, so the two platform-owned settings can't drift:\n# - ROOT_URL: Gitea derives the HTTP clone URLs, redirects, and webhook\n#   targets it displays from this; the brain injects the routed URL.\n# - DISABLE_SSH: git-over-SSH needs a raw TCP port malmo can't route (Caddy\n#   proxies HTTP only and admission drops ports:), so the built-in SSH server\n#   stays off and the UI offers HTTP clone URLs only. Clone and push over\n#   HTTP(S) work fully.\n#\n# Outgoing mail (manifest `mail:` block, #122): bound, the brain injects the\n# discrete MALMO_MAIL_* fields and the GITEA__mailer__* keys map onto them;\n# unbound, the vars are absent and the defaults below keep the mailer off.\n# - ENABLED uses ${MALMO_MAIL_HOST:+true}: docker compose's `:+` form yields\n#   \"true\" only when the host var is set and non-empty (bound), and \"\" when\n#   it's absent (unbound) — Gitea reads an empty ENABLED as false. The boolean\n#   projections (MALMO_MAIL_USE_TLS/_SSL) can't drive this: they're the literal\n#   strings \"true\"/\"false\", always non-empty, so `:+` can't gate on them.\n# - PROTOCOL is left unset on purpose. Gitea infers it from SMTP_PORT\n#   (modules/setting/mailer.go: 25 → smtp, 465 → smtps implicit TLS,\n#   587 → smtp+starttls), and the brain injects the provider's real port, so\n#   the encryption mode follows the port for the three canonical ports without\n#   a conditional malmo can't express in compose interpolation. Note Gitea only\n#   sends credentials over an encrypted link (STARTTLS/TLS) or to localhost, so\n#   a plaintext (port-25) provider won't auth — acceptable, every real provider\n#   is encrypted.\n#   Limitation: a NON-standard port (e.g. 2525, a STARTTLS alt some providers\n#   offer) hits Gitea's inference default, which assumes `smtps` (implicit TLS),\n#   not starttls — so the immediate-TLS handshake fails against a STARTTLS-only\n#   port and mail silently breaks. The injected MALMO_MAIL_ENCRYPTION would\n#   disambiguate, but compose `${}` can't translate its value into Gitea's\n#   PROTOCOL token, so there's no fix here. If a 2525-style provider ever needs\n#   support, pin GITEA__mailer__PROTOCOL explicitly. The standard 587/465/25\n#   ports — what essentially every provider uses — are correct.\nservices:\n  gitea:\n    image: gitea/gitea:1.26.2-rootless\n    restart: unless-stopped\n    environment:\n      USER: git\n      GITEA__server__ROOT_URL: ${MALMO_APP_URL}\n      GITEA__server__DISABLE_SSH: \"true\"\n      GITEA__mailer__ENABLED: \"${MALMO_MAIL_HOST:+true}\"\n      GITEA__mailer__SMTP_ADDR: \"${MALMO_MAIL_HOST:-}\"\n      GITEA__mailer__SMTP_PORT: \"${MALMO_MAIL_PORT:-587}\"\n      GITEA__mailer__USER: \"${MALMO_MAIL_USER:-}\"\n      GITEA__mailer__PASSWD: \"${MALMO_MAIL_PASSWORD:-}\"\n      GITEA__mailer__FROM: \"${MALMO_MAIL_FROM:-}\"\n    volumes:\n      - ./data/gitea:/var/lib/gitea\n      - ./data/config:/etc/gitea\n",
+      "images": {
+        "gitea/gitea:1.26.2-rootless": {
+          "digest": "sha256:c5c21a7705a16f2b2369384a3b7d67c5ed761a818bbb0a55187b5cf98cdc2e68",
+          "download_bytes": 65145006,
+          "disk_bytes": 163267072
+        }
+      }
+    },
+    {
+      "id": "jotty",
+      "name": "Jotty",
+      "version": "1.24.0",
+      "short_description": "Fast, file-based notes and checklists with a Markdown editor.",
+      "long_description": "Jotty (jotty·page) is a lightweight notes and checklist app for your home server. Write in a rich-text or Markdown editor, organize notes into folders, and keep simple task lists and checklists alongside them. Everything is stored as plain files in your own data directory — there is no database to manage — behind a clean, mobile-friendly interface with an installable PWA for your phone, optional per-note PGP encryption, and share links when you want them. Local accounts work out of the box; OIDC single sign-on is available if you run your own identity provider.\n",
+      "categories": [
+        "productivity"
+      ],
+      "author": {
+        "name": "fccview",
+        "url": "https://github.com/fccview"
+      },
+      "license": "AGPL-3.0",
+      "links": {
+        "homepage": "https://jotty.page",
+        "source": "https://github.com/fccview/jotty",
+        "support": "https://github.com/fccview/jotty/tree/main/howto"
+      },
+      "changelog_url": "https://github.com/fccview/jotty/releases",
+      "footprint": {
+        "image_download_bytes": 159782991,
+        "image_disk_bytes": 159800500,
+        "estimated_state": "500MB"
+      },
+      "icon_file": "icon.png",
+      "screenshots": [
+        "screenshots/0.png",
+        "screenshots/1.png",
+        "screenshots/2.png"
+      ],
+      "environments": [
+        "appliance",
+        "hosted"
+      ],
+      "manifest": "id: jotty\nmanifest_version: 1\nname: Jotty\nversion: \"1.24.0\"\ndescription:\n  short: \"Fast, file-based notes and checklists with a Markdown editor.\"\n  long: |\n    Jotty (jotty·page) is a lightweight notes and checklist app for your home server. Write in a rich-text or Markdown editor, organize notes into folders, and keep simple task lists and checklists alongside them. Everything is stored as plain files in your own data directory — there is no database to manage — behind a clean, mobile-friendly interface with an installable PWA for your phone, optional per-note PGP encryption, and share links when you want them. Local accounts work out of the box; OIDC single sign-on is available if you run your own identity provider.\nicon: ./icon.png\nscreenshots: [./screenshots/01.png, ./screenshots/02.png, ./screenshots/03.png]\ncategories: [productivity]\nauthor:\n  name: fccview\n  url: https://github.com/fccview\nlicense: AGPL-3.0\nlinks:\n  homepage: https://jotty.page\n  source: https://github.com/fccview/jotty\n  support: https://github.com/fccview/jotty/tree/main/howto\nchangelog_url: https://github.com/fccview/jotty/releases\n\ncompose_file: compose.yml\nmain_service: jotty\nmain_port: 3000\npreferred_slugs: [jotty, notes]\n\n# /api/health is the app's own endpoint and serves 200 {status:\"healthy\"} without\n# auth. Next.js boots fast, but the first run creates its data subdirs, so allow\n# a small start period.\nhealth_probe:\n  path: /api/health\n  start_period: 45s\n\n# A single Next.js standalone server; modest footprint for a personal notes app.\nresources:\n  recommended: { memory: 512M, cpu: 0.5 }\n\n# Jotty keeps notes, checklists, and accounts as plain files under /app/data and\n# its runtime settings under /app/config — both are backed up. The Next.js build\n# cache (/app/.next/cache) is mounted writable but regenerable, so it is left out\n# of data_volumes. Content lives in Jotty's own store rather than as files in a\n# use-case folder and there is no external-library option, so it manages its own\n# content (forfeits the files-first-class badge) instead of taking a folder grant.\nstorage:\n  data_volumes: [./data, ./config]\n  estimated_size: 500MB\n  app_managed_user_content: true\n\n# A self-contained notes app: no outbound internet (update check disabled in the\n# compose) and no inbound LAN discovery.\npermissions:\n  internet: false\n  lan: false\n\n# Filled by `go run ./cmd/malmo manifest resolve catalog/jotty/manifest.yml`.\nimages:\n  ghcr.io/fccview/jotty:1.24.0:\n    digest: sha256:ddbb42ce61c8558c8178104ab12a99d40fbc8a0ab652b4087b28f03a9d8d011a\n    download_bytes: 159782991\n    disk_bytes: 159800500\n",
+      "compose": "# Adapted from the upstream docker-compose.yml (howto/DOCKER.md). malmo changes:\n#  - Host port mapping (1122:3000) dropped — Caddy routes to the internal port.\n#  - container_name / restart / platform dropped — malmo's override owns naming,\n#    restart policy, and networking.\n#  - entrypoint bypassed and the user pinned to root. The image's\n#    docker-entrypoint.sh su-execs from root down to PUID:PGID, and su-exec calls\n#    setgroups(), which needs CAP_SETGID — stripped by malmo's cap_drop: ALL\n#    (verified: the container exits with \"su-exec: setgroups(0): Operation not\n#    permitted\"). The entrypoint also self-patches its bundled node_modules, which\n#    the image owns as uid 1000 and the capability-stripped container can't write.\n#    So we run the Node server directly as root: malmo pre-creates the instance\n#    ./data dir owned by root, and a folderless app gets no `user:` from malmo's\n#    override (APP_ISOLATION.md # User content), so root is the identity that owns\n#    and can write the data bind. Pinned to 1.24.0 — the startup command is\n#    re-checked on each version bump.\n#  - APP_URL mapped to ${MALMO_APP_URL}: Jotty sits behind Caddy, and its docs note\n#    reverse-proxy logins may need the forced base URL (howto/ENV-VARIABLES.md).\n#  - STOP_CHECK_UPDATES=yes: a notes app needs no network, so the outbound GitHub\n#    update check is disabled (permissions.internet is false).\n# Known limitation: Jotty raises the Server Actions upload-size limit via the\n# bypassed runtime patcher, so it stays at the framework default — see\n# docs/dev/catalog-import-gaps.md (runtime-self-patch — jotty).\nservices:\n  jotty:\n    image: ghcr.io/fccview/jotty:1.24.0\n    user: \"0:0\"\n    entrypoint: [\"node\", \"server.js\"]\n    environment:\n      NODE_ENV: production\n      APP_URL: ${MALMO_APP_URL}\n      STOP_CHECK_UPDATES: \"yes\"\n    volumes:\n      - ./data:/app/data\n      - ./config:/app/config\n      - ./cache:/app/.next/cache\n",
+      "images": {
+        "ghcr.io/fccview/jotty:1.24.0": {
+          "digest": "sha256:ddbb42ce61c8558c8178104ab12a99d40fbc8a0ab652b4087b28f03a9d8d011a",
+          "download_bytes": 159782991,
+          "disk_bytes": 159800500
+        }
+      }
+    },
+    {
+      "id": "jupyter",
+      "name": "Jupyter Notebook",
+      "version": "7.5.7",
+      "short_description": "Interactive Python notebooks in your browser — code, notes, and charts in one document, with the scientific stack preinstalled.",
+      "long_description": "Jupyter Notebook lets you write and run Python in your browser — live code, notes, and charts in one document. It is built on the Jupyter team's scipy image, so the scientific stack (NumPy, pandas, Matplotlib, scikit-learn, and more) is preinstalled and ready to `import`. There is nothing to set up before your first chart.\n\n## First sign-in\n\nOn the login screen, enter the one-time setup token `malmo-setup` and choose a password. That password is how you sign in from now on, and it works straight away.\n\n**Then restart the app once** — open its page in Settings and use Stop, then Start. Your password already works without this; the restart's only job is to switch off the `malmo-setup` setup token, which otherwise stays valid as a second way in until the app is next restarted (any later update or reboot also closes it).\n\nTo change your password later, open a Terminal inside Jupyter, run `jupyter server password`, and restart the app the same way.\n\n## Your notebooks are real files\n\nNotebooks live in your Documents folder, in a subfolder you choose when you install (\"Notebooks\" by default). They are ordinary files on your drive: they stay yours, and they stay put if you uninstall the app.\n\n## Installing extra packages\n\nUse `pip install --user` from a notebook or a terminal. It is the supported path, and it survives restarts and updates. `conda install`, `mamba install`, and a plain `pip install` (without `--user`) will not work here: the app runs as a locked-down user that cannot change the preinstalled environment. The shipped scipy stack plus `pip install --user` covers everyday data work.\n\n## Good to know\n\n- **Install it just for yourself.** Jupyter has no user accounts of its own, so a single household copy would mean everyone shares one password and one terminal into the same Notebooks folder. Install a personal copy per person instead.\n- **No `sudo` or `apt install`** inside the sandbox.\n- **No GPU acceleration** — heavy ML training is out of scope. This is built for interactive, CPU-based data work.\n",
+      "categories": [
+        "productivity",
+        "development"
+      ],
+      "author": {
+        "name": "Project Jupyter",
+        "url": "https://jupyter.org"
+      },
+      "license": "BSD-3-Clause",
+      "links": {
+        "homepage": "https://jupyter.org",
+        "source": "https://github.com/jupyter/notebook",
+        "support": "https://discourse.jupyter.org"
+      },
+      "footprint": {
+        "image_download_bytes": 1267466348,
+        "image_disk_bytes": 3780954624,
+        "estimated_state": "50M"
+      },
+      "icon_file": "icon.png",
+      "screenshots": [
+        "screenshots/0.png"
+      ],
+      "environments": [
+        "appliance",
+        "hosted"
+      ],
+      "manifest": "id: jupyter\nmanifest_version: 1\nname: Jupyter Notebook\nversion: \"7.5.7\"\ndescription:\n  short: \"Interactive Python notebooks in your browser — code, notes, and charts in one document, with the scientific stack preinstalled.\"\n  long: |\n    Jupyter Notebook lets you write and run Python in your browser — live code, notes, and charts in one document. It is built on the Jupyter team's scipy image, so the scientific stack (NumPy, pandas, Matplotlib, scikit-learn, and more) is preinstalled and ready to `import`. There is nothing to set up before your first chart.\n\n    ## First sign-in\n\n    On the login screen, enter the one-time setup token `malmo-setup` and choose a password. That password is how you sign in from now on, and it works straight away.\n\n    **Then restart the app once** — open its page in Settings and use Stop, then Start. Your password already works without this; the restart's only job is to switch off the `malmo-setup` setup token, which otherwise stays valid as a second way in until the app is next restarted (any later update or reboot also closes it).\n\n    To change your password later, open a Terminal inside Jupyter, run `jupyter server password`, and restart the app the same way.\n\n    ## Your notebooks are real files\n\n    Notebooks live in your Documents folder, in a subfolder you choose when you install (\"Notebooks\" by default). They are ordinary files on your drive: they stay yours, and they stay put if you uninstall the app.\n\n    ## Installing extra packages\n\n    Use `pip install --user` from a notebook or a terminal. It is the supported path, and it survives restarts and updates. `conda install`, `mamba install`, and a plain `pip install` (without `--user`) will not work here: the app runs as a locked-down user that cannot change the preinstalled environment. The shipped scipy stack plus `pip install --user` covers everyday data work.\n\n    ## Good to know\n\n    - **Install it just for yourself.** Jupyter has no user accounts of its own, so a single household copy would mean everyone shares one password and one terminal into the same Notebooks folder. Install a personal copy per person instead.\n    - **No `sudo` or `apt install`** inside the sandbox.\n    - **No GPU acceleration** — heavy ML training is out of scope. This is built for interactive, CPU-based data work.\nicon: ./icon.png\nscreenshots: [./screenshots/01.png]\ncategories: [productivity, development]\nauthor:\n  name: Project Jupyter\n  url: https://jupyter.org\nlicense: BSD-3-Clause\nlinks:\n  homepage: https://jupyter.org\n  source: https://github.com/jupyter/notebook\n  support: https://discourse.jupyter.org\n\ncompose_file: compose.yml\nmain_service: jupyter\nmain_port: 8888\npreferred_slugs: [jupyter, notebooks]\n\n# /api answers 200 without auth (JSON version probe); / redirects to the login\n# page, so it is not a usable probe target. First boot on slow disks takes a\n# while to populate the home bind, hence the generous start period.\nhealth_probe:\n  path: /api\n  start_period: 120s\n\n# ~140 MiB idle; real headroom is for kernels — a pandas session eats memory\n# fast, and scipy-notebook is shipped precisely for that workload.\nresources:\n  recommended: { memory: 2G, cpu: 1.0 }\n\n# ./data is the container home (~jovyan): Jupyter config (including the\n# user-set password hash), kernel runtime state, and pip install --user\n# packages. Notebooks themselves live in the Documents grant below, not here.\n# 46 MB measured at first healthy; pip --user installs grow it.\nstorage:\n  data_volumes: [./data]\n  estimated_size: 50M\n\n# Notebooks are first-class user content: the served root is the granted\n# Documents subfolder (\"Notebooks\" by default, installer can override), so\n# every notebook is a regular file under ~/Documents — never buried in app\n# state. internet: true because pip install --user and the Lab extension\n# manager fetch from PyPI.\npermissions:\n  internet: true\n  lan: false\n  folders:\n    - folder: documents\n      mode: write\n      scope: pick-subfolder\n      default: Notebooks\n\n# Filled by `go run ./cmd/malmo manifest resolve catalog/jupyter/manifest.yml`.\nimages:\n  quay.io/jupyter/scipy-notebook:2026-06-08:\n    digest: sha256:7901fffcb245325b08495588a4cb5bc248e6a820c4d8455d73507b1e0c8b529a\n    download_bytes: 1267466348\n    disk_bytes: 3780954624\n",
+      "compose": "# Jupyter Notebook via the official jupyter/docker-stacks scipy image\n# (quay.io/jupyter/*) — the Jupyter team's own prebuilt layers of this same\n# software; scipy-notebook ships the standard data-science stack preinstalled.\n# Date tag 2026-06-08 = notebook 7.5.7 / jupyterlab 4.5.8 / python 3.13.\n#\n# Runs as the bind owner (brain-pinned user:), NOT the image's root-then-su\n# startup path: start.sh's chown/NB_UID dance needs root, which the Tier-3\n# sandbox (cap_drop: ALL, no-new-privileges) forbids. Started non-root, the\n# image skips those permission steps (logged as warnings — expected) and works\n# because the home bind is owner-writable. Verified live: clean start as an\n# arbitrary non-root UID, kernel cell execution over the WebSocket channel\n# through the proxy, notebook files landing in the granted Documents folder.\n#\n# Auth — first-run setup token, self-disabling. Jupyter's login page only\n# offers its \"set a new password\" form to someone who presents a token, and a\n# token fixed in config would stay valid forever alongside the password — a\n# permanent backdoor. So the wrapper below gates the first run on a fixed,\n# documented setup token (malmo-setup); once the user has set a password\n# (Jupyter writes the hash to ~/.jupyter/jupyter_server_config.json in the\n# data bind), every later start passes an empty token, which disables token\n# auth entirely and leaves the user's password as the only way in. The app is\n# never reachable without auth in any state. The token must ride the command\n# line and not a config file: CLI flags are traitlets' highest-precedence\n# source, so this also can't fight the user's password file.\n#\n# The served root is the granted Documents subfolder (MALMO_FOLDER_DOCUMENTS,\n# interpolated at compose-config time), so notebooks are first-class files in\n# ~/Documents; the home bind only carries Jupyter state and pip --user installs.\nservices:\n  jupyter:\n    image: quay.io/jupyter/scipy-notebook:2026-06-08\n    volumes:\n      - ./data:/home/jovyan\n    command:\n      - bash\n      - -c\n      - |\n        token=malmo-setup\n        if grep -qs hashed_password \"$$HOME/.jupyter/jupyter_server_config.json\"; then token=; fi\n        exec start-notebook.py --ServerApp.root_dir=\"${MALMO_FOLDER_DOCUMENTS}\" --IdentityProvider.token=\"$$token\"\n",
+      "images": {
+        "quay.io/jupyter/scipy-notebook:2026-06-08": {
+          "digest": "sha256:7901fffcb245325b08495588a4cb5bc248e6a820c4d8455d73507b1e0c8b529a",
+          "download_bytes": 1267466348,
+          "disk_bytes": 3780954624
+        }
+      }
+    },
+    {
+      "id": "kan",
+      "name": "Kan",
+      "version": "0.5.6",
+      "short_description": "Self-hosted Kanban boards for managing projects and tasks with your team.",
+      "long_description": "Kan is an open-source alternative to Trello — a visual project management board that runs entirely on your own hardware. Organize work into boards, lists, and cards; invite household members to collaborate; track every change with a detailed activity log; and import your existing Trello boards with one click. All project data stays in your home server's database, not a third-party cloud.\n",
+      "categories": [
+        "productivity"
+      ],
+      "author": {
+        "name": "Kan",
+        "url": "https://kan.bn"
+      },
+      "license": "AGPL-3.0",
+      "links": {
+        "homepage": "https://kan.bn",
+        "source": "https://github.com/kanbn/kan",
+        "support": "https://docs.kan.bn"
+      },
+      "footprint": {
+        "image_download_bytes": 143601686,
+        "image_disk_bytes": 418771456
+      },
+      "icon_file": "icon.png",
+      "environments": [
+        "appliance",
+        "hosted"
+      ],
+      "manifest": "id: kan\nmanifest_version: 1\nname: Kan\nversion: \"0.5.6\"\ndescription:\n  short: \"Self-hosted Kanban boards for managing projects and tasks with your team.\"\n  long: |\n    Kan is an open-source alternative to Trello — a visual project management board that runs entirely on your own hardware. Organize work into boards, lists, and cards; invite household members to collaborate; track every change with a detailed activity log; and import your existing Trello boards with one click. All project data stays in your home server's database, not a third-party cloud.\nicon: ./icon.png\ncategories: [productivity]\nauthor:\n  name: Kan\n  url: https://kan.bn\nlicense: AGPL-3.0\nlinks:\n  homepage: https://kan.bn\n  source: https://github.com/kanbn/kan\n  support: https://docs.kan.bn\n\ncompose_file: compose.yml\nmain_service: web\nmain_port: 3000\npreferred_slugs: [kan, kanban]\n\nresources:\n  recommended: { memory: 512M, cpu: 0.5 }\n\nservices:\n  database:\n    type: postgres\n    version: \"15\"\n\n# Better Auth requires a 32+ char random secret to sign auth tokens. The brain\n# generates it once at install and injects it as MALMO_SECRET_AUTH; the compose\n# maps that to BETTER_AUTH_SECRET (SERVICE_PROVISIONING.md # Env-var injection).\nsecrets:\n  - name: auth\n\npermissions:\n  internet: true\n  lan: false\n\nimages:\n  ghcr.io/kanbn/kan-migrate:0.5.6:\n    digest: sha256:a2460e460b70a77ad60a12a8057b2a720cb9e4037a015ea508574887c5bceca1\n    download_bytes: 64075520\n    disk_bytes: 186911744\n  ghcr.io/kanbn/kan:0.5.6:\n    digest: sha256:3509af72635922b8195fc08e052f6257f8a05c50c8afcadc636f78c717667673\n    download_bytes: 79526166\n    disk_bytes: 231859712\n",
+      "compose": "services:\n  migrate:\n    image: ghcr.io/kanbn/kan-migrate:0.5.6\n    restart: \"no\"\n    environment:\n      POSTGRES_URL: ${MALMO_SERVICE_DATABASE_DSN}\n\n  web:\n    image: ghcr.io/kanbn/kan:0.5.6\n    environment:\n      POSTGRES_URL: ${MALMO_SERVICE_DATABASE_DSN}\n      # A 32+ char random string used to sign auth tokens. Generated per-instance\n      # by the brain (manifest `secrets: [{name: auth}]`) and injected as\n      # MALMO_SECRET_AUTH; stable across restarts so sessions survive.\n      BETTER_AUTH_SECRET: ${MALMO_SECRET_AUTH}\n      # The app's own public URL, used for auth redirects. The brain injects the\n      # instance's routed URL as MALMO_APP_URL (e.g. http://kan.local).\n      NEXT_PUBLIC_BASE_URL: ${MALMO_APP_URL}\n      # Required for cookie-based credential login on self-hosted installs.\n      NEXT_PUBLIC_ALLOW_CREDENTIALS: \"true\"\n      # Optional: Redis DSN for rate limiting (in-memory fallback if unset).\n      REDIS_URL: ${REDIS_URL:-}\n      LOG_LEVEL: ${LOG_LEVEL:-info}\n      # Optional: SMTP for email invites and notifications.\n      SMTP_HOST: ${SMTP_HOST:-}\n      SMTP_PORT: ${SMTP_PORT:-465}\n      SMTP_USER: ${SMTP_USER:-}\n      SMTP_PASSWORD: ${SMTP_PASSWORD:-}\n      EMAIL_FROM: ${EMAIL_FROM:-}\n      NEXT_PUBLIC_DISABLE_EMAIL: ${NEXT_PUBLIC_DISABLE_EMAIL:-}\n    depends_on:\n      migrate:\n        condition: service_completed_successfully\n    restart: unless-stopped\n",
+      "images": {
+        "ghcr.io/kanbn/kan-migrate:0.5.6": {
+          "digest": "sha256:a2460e460b70a77ad60a12a8057b2a720cb9e4037a015ea508574887c5bceca1",
+          "download_bytes": 64075520,
+          "disk_bytes": 186911744
+        },
+        "ghcr.io/kanbn/kan:0.5.6": {
+          "digest": "sha256:3509af72635922b8195fc08e052f6257f8a05c50c8afcadc636f78c717667673",
+          "download_bytes": 79526166,
+          "disk_bytes": 231859712
+        }
+      }
+    },
+    {
+      "id": "kimai",
+      "name": "Kimai",
+      "version": "2.59.0",
+      "short_description": "Time-tracking for freelancers and teams — log hours, manage projects, export invoices.",
+      "long_description": "Kimai is a professional time-tracker: log working hours against customers, projects, and activities, then turn them into reports, exports, and invoices. It supports multiple users with roles and team permissions, so a household or a small business can share one instance. malmo provisions and manages the MySQL database Kimai requires automatically — nothing to set up. Sign in with username `admin` and password `admin`, and change that password immediately — it is the same on every fresh install. Features that send email (password resets, scheduled reports) work once an administrator adds an outgoing email account in Settings and connects Kimai to it; everything else works without one.\n",
+      "categories": [
+        "productivity"
+      ],
+      "author": {
+        "name": "Kimai Community",
+        "url": "https://www.kimai.org"
+      },
+      "license": "AGPL-3.0",
+      "links": {
+        "homepage": "https://www.kimai.org",
+        "source": "https://github.com/kimai/kimai",
+        "support": "https://www.kimai.org/documentation/"
+      },
+      "changelog_url": "https://github.com/kimai/kimai/releases",
+      "footprint": {
+        "image_download_bytes": 300086308,
+        "image_disk_bytes": 887843328,
+        "estimated_state": "64MB"
+      },
+      "icon_file": "icon.png",
+      "environments": [
+        "appliance",
+        "hosted"
+      ],
+      "manifest": "id: kimai\nmanifest_version: 1\nname: Kimai\nversion: \"2.59.0\"\ndescription:\n  short: \"Time-tracking for freelancers and teams — log hours, manage projects, export invoices.\"\n  long: |\n    Kimai is a professional time-tracker: log working hours against customers, projects, and activities, then turn them into reports, exports, and invoices. It supports multiple users with roles and team permissions, so a household or a small business can share one instance. malmo provisions and manages the MySQL database Kimai requires automatically — nothing to set up. Sign in with username `admin` and password `admin`, and change that password immediately — it is the same on every fresh install. Features that send email (password resets, scheduled reports) work once an administrator adds an outgoing email account in Settings and connects Kimai to it; everything else works without one.\nicon: ./icon.png\ncategories: [productivity]\nauthor:\n  name: Kimai Community\n  url: https://www.kimai.org\nlicense: AGPL-3.0\nlinks:\n  homepage: https://www.kimai.org\n  source: https://github.com/kimai/kimai\n  support: https://www.kimai.org/documentation/\nchangelog_url: https://github.com/kimai/kimai/releases\n\ncompose_file: compose.yml\nmain_service: kimai\nmain_port: 8001\npreferred_slugs: [kimai, time-tracking]\n\n# Unauthenticated → redirects to locale/login (200 after redirect); any\n# status \u003c 500 counts as healthy. First boot runs ~75 schema migrations plus\n# a Symfony cache warm-up against the managed MySQL, so allow a generous\n# start period.\nhealth_probe:\n  path: /\n  start_period: 180s\n\nresources:\n  recommended: { memory: 1G, cpu: 1.0 }\n\n# ./data is /opt/kimai/var — the app's Symfony state dir: the persisted\n# APP_SECRET (sessions break if it's lost), invoice and export templates,\n# logs, and a prod cache that dominates the measured baseline (~50 MB at\n# first healthy on a clean install). Timesheet data itself lives in the\n# managed database, backed up by the managed-service path, not this bind.\nstorage:\n  data_volumes: [./data]\n  estimated_size: 64MB\n\n# Kimai is MySQL/MariaDB-only (Doctrine + pdo_mysql; no Postgres, no\n# SQLite-prod mode). The brain provisions a per-app database in the shared\n# managed instance and injects MALMO_SERVICE_DATABASE_*.\nservices:\n  database:\n    type: mysql\n    version: \"8.4\"\n\n# Kimai sends email (password resets, scheduled reports) when bound to an\n# outgoing-mail provider — compose maps MALMO_MAIL_DSN/_FROM onto Symfony's\n# MAILER_URL/MAILER_FROM. Unbound, the null transport keeps email off.\nmail:\n  optional: true\n\n# internet: only for features an admin opts into later (outgoing mail via an\n# external provider, the in-app update check); core time-tracking needs no\n# outbound access. lan: not needed — the brain routes inbound traffic.\npermissions:\n  internet: true\n  lan: false\n\nimages:\n  kimai/kimai2:2.59.0:\n    digest: sha256:c955507585f791ac410025095d887bb9fbbba4f497aa3410e6a1b40b5879a93e\n    download_bytes: 300086308\n    disk_bytes: 887843328\n",
+      "compose": "# Kimai adapted for malmo's Tier-3 sandbox (cap_drop: ALL, no-new-privileges,\n# brain-pinned user:). Upstream's documented compose runs kimai + its own\n# mysql container; malmo drops the bundled database and declares a managed\n# MySQL in the manifest instead (#108) — Kimai speaks only the MySQL dialect\n# (no Postgres, no SQLite-prod mode), and a bundled mysql image cannot\n# initialize under the sandbox (see the managed-mysql ledger entries).\n# DATABASE_URL is the injected DSN plus Doctrine's charset/serverVersion\n# params.\n#\n# The stock image entrypoint is kept as-is — verified live under the sandbox\n# at both pinned identities. Its chown calls fail (CAP_CHOWN is dropped) and,\n# started as uid 0, Apache's worker setgid/setuid drop to www-data fails too\n# (AH02156 alerts in the logs) — all of it non-fatal: the entrypoint has no\n# set -e, Apache continues with workers at the pinned identity, and every\n# var write lands in ./data, which the brain owns-and-pins to match. The\n# chown noise on each boot is cosmetic. One observable consequence: the\n# entrypoint's copy of the image's docker monolog config also fails, so\n# Kimai's application log goes to ./data/log/prod.log instead of docker\n# logs (docker logs carry only Apache + entrypoint output). Re-verify on\n# version bumps.\n#\n# ADMINMAIL/ADMINPASS seed the initial super-admin on first boot (Kimai has\n# no setup wizard; this is upstream's documented quickstart mechanism). The\n# credentials are fixed and public (admin/admin) — the app description tells\n# the user to change the password immediately after first login. TRUSTED_PROXIES covers\n# the private ranges Caddy can proxy from, so forwarded Host/proto headers\n# are honored when secure URLs are on.\nservices:\n  kimai:\n    image: kimai/kimai2:2.59.0\n    environment:\n      DATABASE_URL: \"${MALMO_SERVICE_DATABASE_DSN}?charset=utf8mb4\u0026serverVersion=8.4\"\n      # Outgoing mail (manifest `mail:` block): bound, MALMO_MAIL_DSN is a\n      # Symfony-style SMTP URL Kimai consumes directly; unbound, the vars are\n      # absent and the defaults below keep email off via the null transport\n      # (upstream's documented \"no mail\" value) instead of a broken empty DSN.\n      MAILER_URL: \"${MALMO_MAIL_DSN:-null://null}\"\n      MAILER_FROM: \"${MALMO_MAIL_FROM:-kimai@example.com}\"\n      ADMINMAIL: admin@kimai.local\n      ADMINPASS: admin\n      TRUSTED_PROXIES: \"127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16\"\n    volumes:\n      - ./data:/opt/kimai/var\n",
+      "images": {
+        "kimai/kimai2:2.59.0": {
+          "digest": "sha256:c955507585f791ac410025095d887bb9fbbba4f497aa3410e6a1b40b5879a93e",
+          "download_bytes": 300086308,
+          "disk_bytes": 887843328
+        }
+      }
+    },
+    {
+      "id": "listmonk",
+      "name": "Listmonk",
+      "version": "6.1.0",
+      "short_description": "Self-hosted newsletter and mailing list manager.",
+      "long_description": "listmonk is a high-performance newsletter and mailing list manager that runs entirely on your own hardware. Build and segment subscriber lists, design campaigns in a visual editor, send to thousands of recipients, and track opens and clicks — without handing your audience or your content to a third-party email-marketing service. A single fast Go binary backs a modern dashboard, and malmo provisions and manages the PostgreSQL database it needs automatically, so there is nothing to set up. On the first visit you create the super-admin account, then add your SMTP server inside listmonk to start sending.\n\nNote on outgoing email: listmonk does not use malmo's shared Outgoing email settings. It manages its own SMTP servers in its own interface (Settings → SMTP), where you enter your mail provider's host, port, and credentials directly. This is a listmonk design choice — its mail configuration lives only in its own database, not in environment malmo can supply — so the malmo-wide email account you may have set for other apps does not apply here.\n\nNote: listmonk bakes this app's address into every outbound email — unsubscribe, click-tracking, view-in-browser, and archive links. Because that address is your home network's `.local` name, recipients off your network can't open those links until remote access is available. Sending still works; only the links back into listmonk are reachable on your LAN for now.\n",
+      "categories": [
+        "productivity",
+        "marketing"
+      ],
+      "author": {
+        "name": "Kailash Nadh",
+        "url": "https://listmonk.app"
+      },
+      "license": "AGPL-3.0",
+      "links": {
+        "homepage": "https://listmonk.app",
+        "source": "https://github.com/knadh/listmonk",
+        "support": "https://listmonk.app/docs/"
+      },
+      "changelog_url": "https://github.com/knadh/listmonk/releases",
+      "footprint": {
+        "image_download_bytes": 14765837,
+        "image_disk_bytes": 33068032
+      },
+      "icon_file": "icon.svg",
+      "screenshots": [
+        "screenshots/0.png"
+      ],
+      "environments": [
+        "appliance",
+        "hosted"
+      ],
+      "manifest": "id: listmonk\nmanifest_version: 1\nname: Listmonk\nversion: \"6.1.0\"\ndescription:\n  short: \"Self-hosted newsletter and mailing list manager.\"\n  long: |\n    listmonk is a high-performance newsletter and mailing list manager that runs entirely on your own hardware. Build and segment subscriber lists, design campaigns in a visual editor, send to thousands of recipients, and track opens and clicks — without handing your audience or your content to a third-party email-marketing service. A single fast Go binary backs a modern dashboard, and malmo provisions and manages the PostgreSQL database it needs automatically, so there is nothing to set up. On the first visit you create the super-admin account, then add your SMTP server inside listmonk to start sending.\n\n    Note on outgoing email: listmonk does not use malmo's shared Outgoing email settings. It manages its own SMTP servers in its own interface (Settings → SMTP), where you enter your mail provider's host, port, and credentials directly. This is a listmonk design choice — its mail configuration lives only in its own database, not in environment malmo can supply — so the malmo-wide email account you may have set for other apps does not apply here.\n\n    Note: listmonk bakes this app's address into every outbound email — unsubscribe, click-tracking, view-in-browser, and archive links. Because that address is your home network's `.local` name, recipients off your network can't open those links until remote access is available. Sending still works; only the links back into listmonk are reachable on your LAN for now.\nicon: ./icon.svg\nscreenshots: [./screenshots/01.png]\ncategories: [productivity, marketing]\nauthor:\n  name: Kailash Nadh\n  url: https://listmonk.app\nlicense: AGPL-3.0\nlinks:\n  homepage: https://listmonk.app\n  source: https://github.com/knadh/listmonk\n  support: https://listmonk.app/docs/\nchangelog_url: https://github.com/knadh/listmonk/releases\n\ncompose_file: compose.yml\nmain_service: app\nmain_port: 9000\npreferred_slugs: [listmonk, newsletter]\n\n# `/` is listmonk's public subscription page — a clean 200 once the server is\n# up (the JSON /api/health route is session-gated). First boot runs the\n# idempotent schema install + any migrations against the freshly provisioned\n# managed Postgres before the server listens, so allow a modest start period.\nhealth_probe:\n  path: /\n  start_period: 60s\n\nresources:\n  recommended: { memory: 512M, cpu: 1.0 }\n\n# listmonk's subscriber, campaign, and template data lives in the managed\n# Postgres database (backed up by the managed-service path, not attributed\n# here). The only app bind is ./uploads — media an admin uploads to embed in\n# campaigns when Settings -\u003e Media is pointed at the filesystem provider. It\n# has no use-case-folder home, so it is app-managed content (forfeits the\n# files-first-class badge and triggers the install-time warning).\n# estimated_size: the uploads bind is empty at first-healthy (measured on a\n# clean install); growth is admin-uploaded media, which is runtime usage and\n# deliberately not projected here.\nstorage:\n  data_volumes: [./uploads]\n  app_managed_user_content: true\n\n# listmonk is Postgres-only. The brain provisions a per-app database in the\n# shared managed instance and injects MALMO_SERVICE_DATABASE_*, which the\n# compose maps onto listmonk's discrete LISTMONK_db__* connection params.\nservices:\n  database:\n    type: postgres\n    version: \"16\"\n\n# internet: outbound SMTP to the admin's mail provider (campaigns), plus the\n# in-app new-version check and any remote media/links. lan: not needed — the\n# brain routes inbound traffic.\npermissions:\n  internet: true\n  lan: false\n\nimages:\n  listmonk/listmonk:v6.1.0:\n    digest: sha256:179d00d9553c371b6fe88c9b145095d651e275bdd66db46b2e0b79daff316b6f\n    download_bytes: 14765837\n    disk_bytes: 33068032\n",
+      "compose": "# listmonk adapted for malmo's Tier-3 sandbox (cap_drop: ALL,\n# no-new-privileges, brain-pinned user:). Upstream's compose runs listmonk\n# alongside its own postgres:17-alpine and publishes host port 9000; malmo\n# drops the host port (the brain routes to main_port), drops the bundled\n# database and declares managed Postgres in the manifest instead, and keeps\n# the relative ./uploads bind for admin-uploaded campaign media.\n#\n# The command is upstream's verbatim: --install --idempotent installs the\n# schema once against the (empty) managed database on first boot, --upgrade\n# runs migrations on later image bumps, then the server starts. --config ''\n# makes listmonk read configuration from the LISTMONK_* env vars only, so no\n# config-file bind is needed. The pool tuning vars (max_open/max_idle/\n# max_lifetime) are kept because --config '' suppresses config.toml's\n# defaults — they must come from the environment.\n#\n# Entrypoint is rootless-clean: PUID defaults to 0, but under the brain's\n# pinned non-root uid `id -u` is never 0, so su-exec is skipped and the\n# process execs directly as the pinned user; the boot-time `chown -R /listmonk`\n# is guarded by `if !` and only warns when it can't change ownership.\n#\n# SMTP is not wired here: listmonk configures outgoing mail in-app\n# (Settings -\u003e SMTP), persisted in the database, not via env — so malmo's\n# mail injection does not apply.\nservices:\n  app:\n    image: listmonk/listmonk:v6.1.0\n    command: [sh, -c, \"./listmonk --install --idempotent --yes --config '' \u0026\u0026 ./listmonk --upgrade --yes --config '' \u0026\u0026 ./listmonk --config ''\"]\n    environment:\n      LISTMONK_app__address: 0.0.0.0:9000\n      LISTMONK_db__host: ${MALMO_SERVICE_DATABASE_HOST}\n      LISTMONK_db__port: ${MALMO_SERVICE_DATABASE_PORT}\n      LISTMONK_db__user: ${MALMO_SERVICE_DATABASE_USER}\n      LISTMONK_db__password: ${MALMO_SERVICE_DATABASE_PASSWORD}\n      LISTMONK_db__database: ${MALMO_SERVICE_DATABASE_NAME}\n      LISTMONK_db__ssl_mode: disable\n      LISTMONK_db__max_open: 25\n      LISTMONK_db__max_idle: 25\n      LISTMONK_db__max_lifetime: 300s\n      TZ: Etc/UTC\n    volumes:\n      - ./uploads:/listmonk/uploads:rw\n",
+      "images": {
+        "listmonk/listmonk:v6.1.0": {
+          "digest": "sha256:179d00d9553c371b6fe88c9b145095d651e275bdd66db46b2e0b79daff316b6f",
+          "download_bytes": 14765837,
+          "disk_bytes": 33068032
+        }
+      }
+    },
+    {
+      "id": "mealie",
+      "name": "Mealie",
+      "version": "3.19.2",
+      "short_description": "Self-hosted recipe manager with a meal planner and auto-generated shopping lists.",
+      "long_description": "Mealie is a personal recipe keeper, meal planner, and shopping-list builder for your home server. Paste a recipe URL and it scrapes the ingredients and steps into a clean, ad-free page; from there you can scale servings, plan the week on a calendar, and roll that plan into a categorized shopping list. Your recipes, photos, and notes all live in your own database, with a mobile-friendly interface for cooking from your phone in the kitchen and a full REST API to build on.\n",
+      "categories": [
+        "productivity",
+        "food"
+      ],
+      "author": {
+        "name": "Mealie",
+        "url": "https://mealie.io"
+      },
+      "license": "AGPL-3.0",
+      "links": {
+        "homepage": "https://mealie.io",
+        "source": "https://github.com/mealie-recipes/mealie",
+        "support": "https://docs.mealie.io"
+      },
+      "changelog_url": "https://github.com/mealie-recipes/mealie/releases",
+      "footprint": {
+        "image_download_bytes": 432916006,
+        "image_disk_bytes": 1186142237,
+        "estimated_state": "1GB"
+      },
+      "icon_file": "icon.png",
+      "screenshots": [
+        "screenshots/0.png",
+        "screenshots/1.png"
+      ],
+      "environments": [
+        "appliance",
+        "hosted"
+      ],
+      "manifest": "id: mealie\nmanifest_version: 1\nname: Mealie\nversion: \"3.19.2\"\ndescription:\n  short: \"Self-hosted recipe manager with a meal planner and auto-generated shopping lists.\"\n  long: |\n    Mealie is a personal recipe keeper, meal planner, and shopping-list builder for your home server. Paste a recipe URL and it scrapes the ingredients and steps into a clean, ad-free page; from there you can scale servings, plan the week on a calendar, and roll that plan into a categorized shopping list. Your recipes, photos, and notes all live in your own database, with a mobile-friendly interface for cooking from your phone in the kitchen and a full REST API to build on.\nicon: ./icon.png\nscreenshots: [./screenshots/01.png, ./screenshots/02.png]\ncategories: [productivity, food]\nauthor:\n  name: Mealie\n  url: https://mealie.io\nlicense: AGPL-3.0\nlinks:\n  homepage: https://mealie.io\n  source: https://github.com/mealie-recipes/mealie\n  support: https://docs.mealie.io\nchangelog_url: https://github.com/mealie-recipes/mealie/releases\n\ncompose_file: compose.yml\nmain_service: mealie\nmain_port: 9000\npreferred_slugs: [mealie, recipes]\n\n# /api/app/about is the image's own healthcheck endpoint and serves 200 without\n# auth. Mealie runs first-boot migrations, so allow a generous start period.\nhealth_probe:\n  path: /api/app/about\n  start_period: 60s\n\n# Upstream recommends capping memory because Python can pre-allocate aggressively\n# on high-RAM hosts and idle hot otherwise.\nresources:\n  recommended: { memory: 1G, cpu: 1.0 }\n\n# Mealie owns everything it stores — the SQLite database, recipe images, and\n# uploaded assets — under /app/data, with no separable regenerable cache, so the\n# whole data bind is backed up. It keeps recipes in its own database rather than\n# as files in a use-case folder and has no external-library option, so it manages\n# its own content (forfeits the files-first-class badge) instead of taking a\n# folder grant.\nstorage:\n  data_volumes: [./data]\n  estimated_size: 1GB\n  app_managed_user_content: true\n\n# internet: Mealie's headline feature imports recipes by scraping a URL, so it\n# needs outbound internet. No inbound LAN discovery is required.\npermissions:\n  internet: true\n  lan: false\n\n# Filled by `go run ./cmd/malmo manifest resolve catalog/mealie/manifest.yml`.\nimages:\n  ghcr.io/mealie-recipes/mealie:v3.19.2:\n    digest: sha256:f68e959bf66f4f458893ea58facac71690fe6f2ac7a31466b5cecb41b4e99c02\n    download_bytes: 432916006\n    disk_bytes: 1186142237\n",
+      "compose": "# Mealie keeps all of its state — the SQLite database, recipe images, and user\n# uploads — under /app/data. Upstream's compose published 9000 on a host port,\n# used a named volume, and built from source; malmo drops the host port (the\n# brain routes to main_port 9000), binds the app state under ./data, and pulls\n# the published ghcr image. The default DB engine is SQLite, which upstream's own\n# docs call ideal for a single household, so no database service is needed.\n# ALLOW_SIGNUP stays false so accounts are created by the admin rather than via\n# open registration. BASE_URL is wired to the brain-injected MALMO_APP_URL (the\n# instance's routed URL, e.g. http://mealie.local) so Mealie generates correct\n# absolute links. PUID/PGID and the deploy memory limit are dropped: malmo elects\n# the runtime UID (the entrypoint only self-drops privileges when started as root,\n# so it runs directly under the elected non-root user) and caps memory via the\n# manifest's resources block.\nservices:\n  mealie:\n    image: ghcr.io/mealie-recipes/mealie:v3.19.2\n    environment:\n      ALLOW_SIGNUP: \"false\"\n      DB_ENGINE: sqlite\n      BASE_URL: ${MALMO_APP_URL}\n    volumes:\n      - ./data:/app/data\n",
+      "images": {
+        "ghcr.io/mealie-recipes/mealie:v3.19.2": {
+          "digest": "sha256:f68e959bf66f4f458893ea58facac71690fe6f2ac7a31466b5cecb41b4e99c02",
+          "download_bytes": 432916006,
+          "disk_bytes": 1186142237
+        }
+      }
+    },
+    {
+      "id": "memos",
+      "name": "Memos",
+      "version": "0.29.1",
+      "short_description": "A lightweight, self-hosted space for quickly capturing notes and ideas in plain Markdown.",
+      "long_description": "Memos is a fast, privacy-first home for your short-form notes — a personal timeline for ideas, snippets, links, and to-dos, all written in plain Markdown. The interface is built for speed: open it, type, done, with no folders to organize and nothing to sync to a third party. Every note lives in your home server's own database with zero telemetry, and full REST and gRPC APIs make it easy to build on top of. It's a single tiny Go binary, so it stays quick even on modest hardware.\n",
+      "categories": [
+        "productivity"
+      ],
+      "author": {
+        "name": "Memos",
+        "url": "https://www.usememos.com"
+      },
+      "license": "MIT",
+      "links": {
+        "homepage": "https://www.usememos.com",
+        "source": "https://github.com/usememos/memos",
+        "support": "https://www.usememos.com/docs"
+      },
+      "footprint": {
+        "image_download_bytes": 22876218,
+        "image_disk_bytes": 65770496,
+        "estimated_state": "500M"
+      },
+      "icon_file": "icon.png",
+      "screenshots": [
+        "screenshots/0.png"
+      ],
+      "environments": [
+        "appliance",
+        "hosted"
+      ],
+      "manifest": "id: memos\nmanifest_version: 1\nname: Memos\nversion: \"0.29.1\"\ndescription:\n  short: \"A lightweight, self-hosted space for quickly capturing notes and ideas in plain Markdown.\"\n  long: |\n    Memos is a fast, privacy-first home for your short-form notes — a personal timeline for ideas, snippets, links, and to-dos, all written in plain Markdown. The interface is built for speed: open it, type, done, with no folders to organize and nothing to sync to a third party. Every note lives in your home server's own database with zero telemetry, and full REST and gRPC APIs make it easy to build on top of. It's a single tiny Go binary, so it stays quick even on modest hardware.\nicon: ./icon.png\nscreenshots: [./screenshots/01.png]\ncategories: [productivity]\nauthor:\n  name: Memos\n  url: https://www.usememos.com\nlicense: MIT\nlinks:\n  homepage: https://www.usememos.com\n  source: https://github.com/usememos/memos\n  support: https://www.usememos.com/docs\n\ncompose_file: compose.yml\nmain_service: memos\nmain_port: 5230\npreferred_slugs: [memos, notes]\nhealth_probe: /healthz\n\nresources:\n  recommended: { memory: 256M, cpu: 0.5 }\n\n# Memos keeps everything it owns — the SQLite database and uploaded attachments —\n# under /var/opt/memos, with no separable regenerable cache, so the whole data\n# bind is backed up. It stores notes in its own database rather than as files in a\n# use-case folder and has no external-library option, so it manages its own\n# content (forfeits the files-first-class badge) instead of taking a folder grant.\nstorage:\n  data_volumes: [./data]\n  estimated_size: 500M\n  app_managed_user_content: true\n\npermissions:\n  internet: false\n  lan: false\n\n# Filled by `go run ./cmd/malmo manifest resolve catalog/memos/manifest.yml`.\nimages:\n  neosmemo/memos:0.29.1:\n    digest: sha256:3e1253477066eb2aefa91145f7f9038bb931ed88c8a3ee05310a933594cdba7d\n    download_bytes: 22876218\n    disk_bytes: 65770496\n",
+      "compose": "# Memos holds all of its state — the SQLite database and uploaded attachments —\n# under /var/opt/memos. Upstream's compose bound the host's ~/.memos there and\n# published 5230; malmo drops the host port (the brain routes to main_port) and\n# binds the app state under ./data. The default driver is SQLite and the default\n# mode is prod, so no database service or extra env is needed. The image's\n# entrypoint runs the app directly under malmo's elected non-root UID (it only\n# self-drops privileges when started as root), so it needs no added capabilities.\nservices:\n  memos:\n    image: neosmemo/memos:0.29.1\n    volumes:\n      - ./data:/var/opt/memos\n",
+      "images": {
+        "neosmemo/memos:0.29.1": {
+          "digest": "sha256:3e1253477066eb2aefa91145f7f9038bb931ed88c8a3ee05310a933594cdba7d",
+          "download_bytes": 22876218,
+          "disk_bytes": 65770496
+        }
+      }
+    },
+    {
+      "id": "nocodb",
+      "name": "NocoDB",
+      "version": "2026.06.1",
+      "short_description": "Turn your data into collaborative spreadsheets — a self-hosted Airtable alternative.",
+      "long_description": "NocoDB turns a database into a fast, collaborative spreadsheet: organize records across grid, gallery, kanban, calendar, and form views, link tables into relationships, and share or embed views without writing code. It works as a no-code app builder for trackers, CRMs, inventories, content calendars, and project boards your whole household can edit together, and exposes a REST API over everything you build. malmo provisions and manages the Postgres database and Redis cache NocoDB needs automatically — there is nothing to set up.\n\nNote about email: invite, share, and notification links are built from this app's local network address, so they only open from a device on your home network until remote access is available. NocoDB's email features (member invites, notifications) work on your LAN once an administrator adds an outgoing email account in malmo and binds it to this app; everything else works without one.\n",
+      "categories": [
+        "productivity",
+        "database"
+      ],
+      "author": {
+        "name": "NocoDB Inc",
+        "url": "https://nocodb.com"
+      },
+      "license": "Sustainable Use License",
+      "links": {
+        "homepage": "https://nocodb.com",
+        "source": "https://github.com/nocodb/nocodb",
+        "support": "https://docs.nocodb.com"
+      },
+      "changelog_url": "https://github.com/nocodb/nocodb/releases",
+      "footprint": {
+        "image_download_bytes": 218682181,
+        "image_disk_bytes": 813790208,
+        "estimated_state": "20MB"
+      },
+      "icon_file": "icon.png",
+      "screenshots": [
+        "screenshots/0.png",
+        "screenshots/1.png",
+        "screenshots/2.png"
+      ],
+      "environments": [
+        "appliance",
+        "hosted"
+      ],
+      "manifest": "id: nocodb\nmanifest_version: 1\nname: NocoDB\nversion: \"2026.06.1\"\ndescription:\n  short: \"Turn your data into collaborative spreadsheets — a self-hosted Airtable alternative.\"\n  long: |\n    NocoDB turns a database into a fast, collaborative spreadsheet: organize records across grid, gallery, kanban, calendar, and form views, link tables into relationships, and share or embed views without writing code. It works as a no-code app builder for trackers, CRMs, inventories, content calendars, and project boards your whole household can edit together, and exposes a REST API over everything you build. malmo provisions and manages the Postgres database and Redis cache NocoDB needs automatically — there is nothing to set up.\n\n    Note about email: invite, share, and notification links are built from this app's local network address, so they only open from a device on your home network until remote access is available. NocoDB's email features (member invites, notifications) work on your LAN once an administrator adds an outgoing email account in malmo and binds it to this app; everything else works without one.\nicon: ./icon.png\nscreenshots: [./screenshots/01.png, ./screenshots/02.png, ./screenshots/03.png]\ncategories: [productivity, database]\nauthor:\n  name: NocoDB Inc\n  url: https://nocodb.com\n# Source-available, not OSI. NocoDB relicensed from AGPL-3.0 to the\n# Sustainable Use License (effective 2026-01-29): self-host for personal /\n# internal / non-commercial use is permitted (malmo's model); offering it\n# commercially as a hosted service for others is not.\nlicense: Sustainable Use License\nlinks:\n  homepage: https://nocodb.com\n  source: https://github.com/nocodb/nocodb\n  support: https://docs.nocodb.com\nchangelog_url: https://github.com/nocodb/nocodb/releases\n\ncompose_file: compose.yml\nmain_service: nocodb\nmain_port: 8080\npreferred_slugs: [nocodb, tables]\n\n# NocoDB's own readiness endpoint (200 when the API is up). First boot runs\n# schema migrations against the managed Postgres, so allow a generous start\n# period before probing counts against health.\nhealth_probe:\n  path: /api/v1/health\n  start_period: 90s\n\nresources:\n  recommended: { memory: 2G, cpu: 1.0 }\n\n# ./data is /usr/app/data — NocoDB's tool dir, where it stores uploaded\n# attachments. Measured empty (~0) at first healthy: all structured data\n# (bases, tables, rows), tokens, and plugin config live in the managed\n# Postgres database, backed up via the managed-service path, and logs go to\n# stdout — the bind grows only as users upload attachments. NocoDB owns its\n# attachment store internally with no external-library model, so this is\n# app-managed content, not a use-case folder grant.\nstorage:\n  data_volumes: [./data]\n  estimated_size: 20MB\n  app_managed_user_content: true\n\n# Database + cache are malmo-managed. Postgres holds all of NocoDB's metadata\n# and base data; Redis (provisioned as the Valkey engine) backs caching and\n# cross-worker job coordination. The brain injects MALMO_SERVICE_DATABASE_*\n# and MALMO_SERVICE_CACHE_* (a redis:// DSN).\nservices:\n  database:\n    type: postgres\n    version: \"16\"\n  cache:\n    type: redis\n    version: \"7\"\n\n# NocoDB stores NC_AUTH_JWT_SECRET in its nc_meta Postgres table by default,\n# so the signing key survives restarts without injection. We inject it\n# explicitly anyway (MALMO_SECRET_KEY → NC_AUTH_JWT_SECRET) for consistency\n# with the rest of the catalog and so a reinstall produces a deterministic\n# invalidation rather than silently regenerating sessions.\nsecrets:\n  - name: key\n\n# NocoDB sends member invites and notifications by email when bound to an\n# outgoing-mail provider — the compose maps MALMO_MAIL_* onto NC_SMTP_*.\n# Unbound, NocoDB's SMTP plugin stays uninitialized and the app runs.\nmail:\n  optional: true\n\n# internet: NocoDB connects out to external SMTP for mail and to external\n# (cloud) databases when a user adds one as a data source. lan: not needed —\n# the brain routes inbound traffic; connecting to a database on the local\n# network is an opt-in power-user case not granted by default.\npermissions:\n  internet: true\n  lan: false\n\nimages:\n  nocodb/nocodb:2026.06.1:\n    digest: sha256:e5a6ac9cfa59f78b333b491efde4b6cd60bb866b49c76daf92295ef359ef710e\n    download_bytes: 218682181\n    disk_bytes: 813790208\n",
+      "compose": "# NocoDB adapted for malmo's Tier-3 sandbox. The image defaults to root\n# (Config.User is empty) and writes its data dir as root, so it runs cleanly\n# under cap_drop: ALL + no-new-privileges against malmo's root-created ./data\n# bind — no nonroot-data-ownership remap needed (same shape as open-webui).\n# Verified booting, migrating, and serving under the sandbox.\n#\n# Two containers, one image: `nocodb` serves the API/dashboard; `worker` runs\n# background jobs (automations, webhooks, scheduled syncs) with\n# NC_WORKER_CONTAINER set. Both share ./data and the same DB/Redis/mail env;\n# worker waits for nocodb to pass its healthcheck so startup migrations run\n# once, on the main service, before the worker connects.\n#\n# Database + cache are malmo-managed: the brain provisions a per-app Postgres\n# database and a Valkey (Redis-compatible) keyspace and injects\n# MALMO_SERVICE_*. NC_DB takes NocoDB's own xc connection format, built from\n# the discrete Postgres fields — the injected password is base64url and the\n# database name is a sanitized SQL identifier, both safe unescaped in the\n# query string. NC_REDIS_URL takes the injected redis:// DSN verbatim.\nx-nocodb-environment: \u0026nocodb-environment\n  NC_DB: \"pg://${MALMO_SERVICE_DATABASE_HOST}:${MALMO_SERVICE_DATABASE_PORT}?u=${MALMO_SERVICE_DATABASE_USER}\u0026p=${MALMO_SERVICE_DATABASE_PASSWORD}\u0026d=${MALMO_SERVICE_DATABASE_NAME}\"\n  NC_REDIS_URL: ${MALMO_SERVICE_CACHE_DSN}\n  # JWT signing key (manifest `secrets: [{name: key}]`, injected as\n  # MALMO_SECRET_KEY). NocoDB defaults to storing NC_AUTH_JWT_SECRET in its\n  # nc_meta Postgres table, so sessions survive restarts without this; we\n  # inject it explicitly for catalog consistency and so a reinstall produces a\n  # deterministic session invalidation rather than silently regenerating.\n  NC_AUTH_JWT_SECRET: ${MALMO_SECRET_KEY}\n  # Public URL baked into invite/share/webhook links and OAuth redirects. The\n  # brain injects the routed .local URL; those links resolve on the LAN only\n  # until remote access ships (app-url-injection — see manifest long desc).\n  NC_SITE_URL: ${MALMO_APP_URL}\n  # Self-hosted: opt out of upstream usage telemetry (malmo data-ownership\n  # posture, same as open-webui).\n  NC_DISABLE_TELE: \"true\"\n  # Outgoing mail (manifest `mail:` block). NocoDB initializes its SMTP plugin\n  # only when FROM + HOST + PORT are all set, so unbound (the vars are absent)\n  # it simply sends no mail and the app runs; bound, the brain injects the\n  # MALMO_MAIL_* fields. NC_SMTP_SECURE is implicit TLS (smtps/465) vs\n  # STARTTLS — the brain's MALMO_MAIL_USE_SSL projection of the provider's\n  # encryption mode.\n  NC_SMTP_FROM: \"${MALMO_MAIL_FROM:-}\"\n  NC_SMTP_HOST: \"${MALMO_MAIL_HOST:-}\"\n  NC_SMTP_PORT: \"${MALMO_MAIL_PORT:-}\"\n  NC_SMTP_USERNAME: \"${MALMO_MAIL_USER:-}\"\n  NC_SMTP_PASSWORD: \"${MALMO_MAIL_PASSWORD:-}\"\n  NC_SMTP_SECURE: \"${MALMO_MAIL_USE_SSL:-false}\"\n\nservices:\n  nocodb:\n    image: nocodb/nocodb:2026.06.1\n    environment: *nocodb-environment\n    volumes:\n      - ./data:/usr/app/data\n    healthcheck:\n      test: [\"CMD-SHELL\", \"wget -q --tries=1 --spider http://localhost:8080/api/v1/health || exit 1\"]\n      interval: 30s\n      timeout: 5s\n      retries: 5\n      start_period: 30s\n\n  worker:\n    image: nocodb/nocodb:2026.06.1\n    environment:\n      \u003c\u003c: *nocodb-environment\n      NC_WORKER_CONTAINER: \"true\"\n    depends_on:\n      nocodb:\n        condition: service_healthy\n    volumes:\n      - ./data:/usr/app/data\n",
+      "images": {
+        "nocodb/nocodb:2026.06.1": {
+          "digest": "sha256:e5a6ac9cfa59f78b333b491efde4b6cd60bb866b49c76daf92295ef359ef710e",
+          "download_bytes": 218682181,
+          "disk_bytes": 813790208
+        }
+      }
+    },
+    {
+      "id": "open-webui",
+      "name": "Open WebUI",
+      "version": "0.9.6",
+      "short_description": "Self-hosted chat interface for large language models.",
+      "long_description": "Open WebUI is a polished, self-hosted chat interface for large language models — a private alternative to the ChatGPT web app that runs on your own hardware. Chat with models, organize conversations into folders, upload documents for retrieval-augmented answers, and manage multiple household users, all from one dashboard.\n\nNote: this app is the chat front end only — it does not run AI models on this machine yet. You connect it to a model backend of your choice from the in-app Connections settings: an OpenAI-compatible API (OpenAI, OpenRouter, Groq, and others) or an Ollama server running elsewhere on your network. On-device inference needs a dedicated GPU, which malmo does not yet wire through.\n",
+      "categories": [
+        "ai",
+        "productivity"
+      ],
+      "author": {
+        "name": "Open WebUI",
+        "url": "https://openwebui.com"
+      },
+      "license": "Open WebUI License",
+      "links": {
+        "homepage": "https://openwebui.com",
+        "source": "https://github.com/open-webui/open-webui",
+        "support": "https://docs.openwebui.com"
+      },
+      "changelog_url": "https://github.com/open-webui/open-webui/releases",
+      "footprint": {
+        "image_download_bytes": 1709338172,
+        "image_disk_bytes": 4846628352,
+        "estimated_state": "900MB"
+      },
+      "icon_file": "icon.png",
+      "screenshots": [
+        "screenshots/0.png"
+      ],
+      "environments": [
+        "appliance",
+        "hosted"
+      ],
+      "manifest": "id: open-webui\nmanifest_version: 1\nname: Open WebUI\nversion: \"0.9.6\"\ndescription:\n  short: \"Self-hosted chat interface for large language models.\"\n  long: |\n    Open WebUI is a polished, self-hosted chat interface for large language models — a private alternative to the ChatGPT web app that runs on your own hardware. Chat with models, organize conversations into folders, upload documents for retrieval-augmented answers, and manage multiple household users, all from one dashboard.\n\n    Note: this app is the chat front end only — it does not run AI models on this machine yet. You connect it to a model backend of your choice from the in-app Connections settings: an OpenAI-compatible API (OpenAI, OpenRouter, Groq, and others) or an Ollama server running elsewhere on your network. On-device inference needs a dedicated GPU, which malmo does not yet wire through.\nicon: ./icon.png\nscreenshots: [./screenshots/01.png]\ncategories: [ai, productivity]\nauthor:\n  name: Open WebUI\n  url: https://openwebui.com\nlicense: Open WebUI License\nlinks:\n  homepage: https://openwebui.com\n  source: https://github.com/open-webui/open-webui\n  support: https://docs.openwebui.com\nchangelog_url: https://github.com/open-webui/open-webui/releases\n\ncompose_file: compose.yml\nmain_service: open-webui\nmain_port: 8080\npreferred_slugs: [open-webui, chat]\n\nhealth_probe:\n  path: /health\n  start_period: 120s\n\nresources:\n  recommended: { memory: 2G, cpu: 1.0 }\n\nstorage:\n  data_volumes: [./data]\n  # ./data/cache holds re-fetchable artifacts — the RAG embedding model, plus\n  # speech/image generation caches — so it's carved out of backups (regenerable;\n  # APP_MANIFEST.md # Storage). The chats/users SQLite DB, uploaded documents,\n  # and their vector store stay under data_volumes and are backed up.\n  cache_volumes: [./data/cache]\n  # Measured app-state baseline at install (APP_MANIFEST.md # Storage): du of\n  # ./data the moment /health first passes on a clean boot ≈ 890MB — almost all\n  # of it the all-MiniLM-L6-v2 RAG embedding model fetched automatically on first\n  # boot (cache/embedding); the SQLite DB and empty vector store are \u003c1MB. Not a\n  # usage projection: documents the user later uploads grow it past this.\n  estimated_size: 900MB\n  app_managed_user_content: true\n\n# Open WebUI signs session JWTs with WEBUI_SECRET_KEY. The brain generates it\n# once at install and injects MALMO_SECRET_KEY; the compose maps that to\n# WEBUI_SECRET_KEY so the key stays stable across restarts.\nsecrets:\n  - name: key\n\n# internet: reach external OpenAI-compatible model APIs.\n# lan: reach an Ollama / OpenAI-compatible inference server elsewhere on the LAN.\npermissions:\n  internet: true\n  lan: true\n\nimages:\n  ghcr.io/open-webui/open-webui:0.9.6:\n    digest: sha256:90eae5b419e40b4c3dd684582b2c83440b36f9ae2f6532c09639b2ba4ee65158\n    download_bytes: 1709338172\n    disk_bytes: 4846628352\n",
+      "compose": "# Open WebUI adapted for malmo's Tier-3 sandbox (cap_drop: ALL,\n# no-new-privileges). Frontend-only: the bundled `ollama` service from\n# upstream's docker-compose.yaml is dropped because local model inference needs\n# GPU passthrough (malmo #67, blocked) and CPU-only inference is impractical.\n# The user picks a model backend in-app (Settings -\u003e Connections): an external\n# OpenAI-compatible API, or an Ollama running elsewhere on the LAN.\n#\n# - malmo pins `user:` to the identity that owns the ./data bind it creates\n#   (the brain's effective UID: root in production, the dev user in the native\n#   inner loop), so a cap_drop:ALL container — which has no CAP_DAC_OVERRIDE —\n#   can write its SQLite state. Open WebUI honors a non-root runtime user as\n#   long as ./data is writable and WEBUI_SECRET_KEY is injected (below), which\n#   spares the otherwise root-only write to /app/backend/.webui_secret_key.\n# - WEBUI_SECRET_KEY is injected from malmo's per-app secret (MALMO_SECRET_KEY)\n#   so the JWT-signing key is stable across restarts. Otherwise start.sh writes\n#   it to /app/backend/.webui_secret_key (outside ./data), where it regenerates\n#   on every container recreate and invalidates all logged-in sessions.\n# - WEBUI_URL is the routed malmo URL so absolute links resolve correctly.\n# - Telemetry/analytics are disabled to honor malmo's data-ownership posture.\nservices:\n  open-webui:\n    image: ghcr.io/open-webui/open-webui:0.9.6\n    environment:\n      WEBUI_SECRET_KEY: ${MALMO_SECRET_KEY}\n      WEBUI_URL: ${MALMO_APP_URL}\n      ANONYMIZED_TELEMETRY: \"false\"\n      DO_NOT_TRACK: \"true\"\n      SCARF_NO_ANALYTICS: \"true\"\n    volumes:\n      - ./data:/app/backend/data\n",
+      "images": {
+        "ghcr.io/open-webui/open-webui:0.9.6": {
+          "digest": "sha256:90eae5b419e40b4c3dd684582b2c83440b36f9ae2f6532c09639b2ba4ee65158",
+          "download_bytes": 1709338172,
+          "disk_bytes": 4846628352
+        }
+      }
+    },
+    {
+      "id": "paperless-ngx",
+      "name": "Paperless-ngx",
+      "version": "2.20.15",
+      "short_description": "Scan, index, and archive your paper documents — searchable, tagged, and filed away.",
+      "long_description": "Paperless-ngx turns your paper pile into a searchable digital archive. Drop a scan, photo, or PDF into the Scans folder inside your Documents and it is picked up within seconds, OCR'd into searchable text, tagged, and filed — the original file is absorbed into the archive, so the folder stays an inbox, not a copy. Office documents (Word, Excel, PowerPoint and their LibreOffice equivalents) and saved emails (.eml) are supported too, converted and indexed on the way in. Find anything later by full-text search, correspondent, document type, or date. malmo provisions and manages the PostgreSQL database automatically — nothing to set up. Sign in with username `admin` and password `changemeplease`, and change that password immediately — it is the same on every fresh install. OCR supports only five languages — English, German, Italian, Spanish, and French — and no others can be added in this packaging, so documents in other languages are archived but won't be full-text searchable.\n",
+      "categories": [
+        "documents",
+        "productivity"
+      ],
+      "author": {
+        "name": "Paperless-ngx",
+        "url": "https://docs.paperless-ngx.com"
+      },
+      "license": "GPL-3.0",
+      "links": {
+        "homepage": "https://docs.paperless-ngx.com",
+        "source": "https://github.com/paperless-ngx/paperless-ngx",
+        "support": "https://docs.paperless-ngx.com"
+      },
+      "changelog_url": "https://github.com/paperless-ngx/paperless-ngx/releases",
+      "footprint": {
+        "image_download_bytes": 1412042120,
+        "image_disk_bytes": 3639913984,
+        "estimated_state": "1M"
+      },
+      "icon_file": "icon.png",
+      "screenshots": [
+        "screenshots/0.png"
+      ],
+      "environments": [
+        "appliance",
+        "hosted"
+      ],
+      "manifest": "id: paperless-ngx\nmanifest_version: 1\nname: Paperless-ngx\nversion: \"2.20.15\"\ndescription:\n  short: \"Scan, index, and archive your paper documents — searchable, tagged, and filed away.\"\n  long: |\n    Paperless-ngx turns your paper pile into a searchable digital archive. Drop a scan, photo, or PDF into the Scans folder inside your Documents and it is picked up within seconds, OCR'd into searchable text, tagged, and filed — the original file is absorbed into the archive, so the folder stays an inbox, not a copy. Office documents (Word, Excel, PowerPoint and their LibreOffice equivalents) and saved emails (.eml) are supported too, converted and indexed on the way in. Find anything later by full-text search, correspondent, document type, or date. malmo provisions and manages the PostgreSQL database automatically — nothing to set up. Sign in with username `admin` and password `changemeplease`, and change that password immediately — it is the same on every fresh install. OCR supports only five languages — English, German, Italian, Spanish, and French — and no others can be added in this packaging, so documents in other languages are archived but won't be full-text searchable.\nicon: ./icon.png\nscreenshots: [./screenshots/01.png]\ncategories: [documents, productivity]\nauthor:\n  name: Paperless-ngx\n  url: https://docs.paperless-ngx.com\nlicense: GPL-3.0\nlinks:\n  homepage: https://docs.paperless-ngx.com\n  source: https://github.com/paperless-ngx/paperless-ngx\n  support: https://docs.paperless-ngx.com\nchangelog_url: https://github.com/paperless-ngx/paperless-ngx/releases\n\ncompose_file: compose.yml\nmain_service: webserver\nmain_port: 8000\npreferred_slugs: [paperless, paperless-ngx]\n\n# Unauthenticated → 302 to the login page; any status \u003c 500 counts as\n# healthy. First boot runs Django migrations against the managed Postgres\n# plus an index build, so allow a generous start period.\nhealth_probe:\n  path: /\n  start_period: 180s\n\n# OCR (tesseract via celery workers) is the load: parallel consumption spikes\n# CPU and the idle footprint is ~530M for the web service alone. The tika\n# (JVM, ~155M idle) and gotenberg (~25M idle, but Chromium/LibreOffice spike\n# during Office-doc and email conversion) sidecars push the recommendation to\n# 3G so a conversion running alongside OCR has headroom.\nresources:\n  recommended: { memory: 3G, cpu: 2.0 }\n\n# ./data/data is Django state + the search index, ./data/media the archived\n# documents (originals + archive PDFs + thumbnails), ./data/export the\n# document-exporter target. ./data/redis is the broker's queue snapshot —\n# regenerable transient state, excluded from backup via cache_volumes.\n# Consumed documents leave the granted folder and live in media from then\n# on, so the app manages its own content (forfeits the files-first-class\n# badge); the folder grant is the intake path, not the library. Structured\n# data (tags, correspondents, metadata) lives in the managed database,\n# backed up by the managed-service path, not this bind. ~120KB at first\n# healthy; growth tracks the archive.\nstorage:\n  data_volumes: [./data]\n  cache_volumes: [./data/redis]\n  estimated_size: 1M\n  app_managed_user_content: true\n\n# The brain generates this at install and injects it as MALMO_SECRET_KEY;\n# the compose maps it to PAPERLESS_SECRET_KEY (Django session signing).\nsecrets:\n  - name: key\n\n# Paperless-ngx supports Postgres, MariaDB, and SQLite; Postgres is\n# upstream's reference setup. The brain provisions a per-app database in the\n# shared managed instance and injects MALMO_SERVICE_DATABASE_*.\nservices:\n  database:\n    type: postgres\n    version: \"16\"\n\n# Paperless sends email for account password resets and the workflow\n# \"send by email\" action. Bound, the compose maps the discrete MALMO_MAIL_*\n# fields (host/port/user/password/from + the USE_TLS/USE_SSL booleans) onto\n# Django's PAPERLESS_EMAIL_*. Unbound, the vars are absent and the compose\n# defaults leave the mail host empty, so Django simply sends nothing — the\n# pre-binding behavior. (Inbound IMAP mail-rule ingestion is separate and\n# needs only the `internet` permission.)\nmail:\n  optional: true\n\n# internet: only for features an admin opts into later (mail-rule ingestion\n# from an IMAP mailbox, the in-app update check); core consumption and OCR\n# need no outbound access. lan: not needed — the brain routes inbound\n# traffic. The Documents write grant is the consumption inbox: Paperless\n# deletes each original after importing it into the archive.\npermissions:\n  internet: true\n  lan: false\n  folders:\n    - folder: documents\n      mode: write\n      scope: pick-subfolder\n      default: Scans\n\nimages:\n  apache/tika:3.2.3.0:\n    digest: sha256:c0154cb95587cde64be74f35ada1a2bd7892219f3f0ac3c9dc6cab34046b3573\n    download_bytes: 160873494\n    disk_bytes: 360539648\n  ghcr.io/paperless-ngx/paperless-ngx:2.20.15:\n    digest: sha256:6c86cad803970ea782683a8e80e7403444c5bf3cf70de63b4d3c8e87500db92f\n    download_bytes: 506783124\n    disk_bytes: 1447538176\n  gotenberg/gotenberg:8.33:\n    digest: sha256:bddd8ea9d076e2d08b6ddaa6efae6403185202c6dab65a6488ed0a6923d6d8e8\n    download_bytes: 690110861\n    disk_bytes: 1686751744\n  redis:8:\n    digest: sha256:4c7ecf5d14207f5baf8e140ab428a54ae5cf2a0411956f75deb0ef89d3cb4fda\n    download_bytes: 54274641\n    disk_bytes: 145084416\n",
+      "compose": "# Paperless-ngx adapted for malmo's Tier-3 sandbox (cap_drop: ALL,\n# no-new-privileges, brain-pinned user:). Rootless operation is supported\n# upstream (docs \"Rootless\" section): the init scripts detect a non-root uid\n# and skip their privilege remapping. It is mandatory here — the webserver\n# runs as the granted Documents folder owner's identity, never root.\n#\n# tmpfs /run: the image boots via s6-overlay, whose preinit requires /run to\n# be writable and exec-mounted by the runtime uid. Docker's default tmpfs is\n# root-owned 0755 + noexec, which s6 rejects with a fatal (exit 100).\n# mode=1777 takes s6's \"single-uid mapping\" acceptance path (a logged\n# warning, harmless); exec is required or /init crashes after preinit.\n# Re-verify on version bumps.\n#\n# broker: Paperless requires Redis for its Celery task queue. malmo's managed\n# services don't provision redis yet (internal/lifecycle/services.go\n# provisionedKinds is postgres/mysql/mariadb), so it ships as a sandboxed\n# sidecar — a deliberate deviation from issue #140's managed-service note.\n# The database IS managed Postgres, declared in the manifest.\n#\n# The consume directory is the granted Documents subfolder: the brain mounts\n# it at /malmo/documents and injects MALMO_FOLDER_DOCUMENTS, so no bind for\n# it appears here. Consumed originals are deleted from the folder after\n# import (hence the write grant) and archived into ./data/media.\n#\n# PAPERLESS_ADMIN_USER/PASSWORD seed the initial superuser on first boot\n# (upstream's documented mechanism; a no-op once the user exists). The\n# credentials are fixed and public — the app description tells the user to\n# change the password immediately after first login.\n#\n# gotenberg + tika: Paperless natively handles only PDFs and images. To\n# consume Office documents (Word/Excel/PowerPoint + LibreOffice formats) and\n# saved emails (.eml), it hands each file to two stateless sidecars over HTTP:\n# Tika extracts text/metadata, Gotenberg renders the file to a PDF (LibreOffice\n# for Office docs, Chromium for email). Both are stateless — no volumes, no\n# folder/network grants beyond the app network. PAPERLESS_TIKA_ENABLED wires\n# them in. Verified booting and converting under the Tier-3 sandbox.\n#\n# gotenberg HOME=/tmp: Chromium's crashpad handler needs a writable home dir,\n# and the brain-pinned non-root uid has none (its real home is the owner's\n# tree, not mounted here). Pointing HOME at the container's writable /tmp is\n# enough — without it the Chromium route exits and .eml conversion 500s. The\n# rootfs is not read-only, so no tmpfs is required (cf. the webserver's /run).\nservices:\n  webserver:\n    image: ghcr.io/paperless-ngx/paperless-ngx:2.20.15\n    depends_on:\n      - broker\n      - gotenberg\n      - tika\n    tmpfs:\n      - /run:exec,mode=1777\n    environment:\n      PAPERLESS_REDIS: redis://broker:6379\n      PAPERLESS_DBENGINE: postgresql\n      PAPERLESS_DBHOST: ${MALMO_SERVICE_DATABASE_HOST}\n      PAPERLESS_DBPORT: ${MALMO_SERVICE_DATABASE_PORT}\n      PAPERLESS_DBNAME: ${MALMO_SERVICE_DATABASE_NAME}\n      PAPERLESS_DBUSER: ${MALMO_SERVICE_DATABASE_USER}\n      PAPERLESS_DBPASS: ${MALMO_SERVICE_DATABASE_PASSWORD}\n      PAPERLESS_SECRET_KEY: ${MALMO_SECRET_KEY}\n      PAPERLESS_URL: ${MALMO_APP_URL}\n      PAPERLESS_CONSUMPTION_DIR: ${MALMO_FOLDER_DOCUMENTS}\n      PAPERLESS_ADMIN_USER: admin\n      PAPERLESS_ADMIN_PASSWORD: changemeplease\n      PAPERLESS_TIKA_ENABLED: 1\n      PAPERLESS_TIKA_GOTENBERG_ENDPOINT: http://gotenberg:3000\n      PAPERLESS_TIKA_ENDPOINT: http://tika:9998\n      # Outgoing mail (manifest `mail:` block). Bound, the brain injects the\n      # discrete MALMO_MAIL_* fields and Paperless's Django backend consumes\n      # them; the USE_TLS/USE_SSL booleans are the brain's projection of the\n      # provider's encryption mode (STARTTLS vs implicit TLS). Unbound, the\n      # vars are absent and these defaults leave the host empty, so Django\n      # sends nothing instead of erroring — email features stay off until the\n      # admin binds a provider.\n      PAPERLESS_EMAIL_HOST: \"${MALMO_MAIL_HOST:-}\"\n      PAPERLESS_EMAIL_PORT: \"${MALMO_MAIL_PORT:-25}\"\n      PAPERLESS_EMAIL_HOST_USER: \"${MALMO_MAIL_USER:-}\"\n      PAPERLESS_EMAIL_HOST_PASSWORD: \"${MALMO_MAIL_PASSWORD:-}\"\n      PAPERLESS_EMAIL_FROM: \"${MALMO_MAIL_FROM:-}\"\n      PAPERLESS_EMAIL_USE_TLS: \"${MALMO_MAIL_USE_TLS:-false}\"\n      PAPERLESS_EMAIL_USE_SSL: \"${MALMO_MAIL_USE_SSL:-false}\"\n    volumes:\n      - ./data/data:/usr/src/paperless/data\n      - ./data/media:/usr/src/paperless/media\n      - ./data/export:/usr/src/paperless/export\n  broker:\n    image: redis:8\n    volumes:\n      - ./data/redis:/data\n  gotenberg:\n    image: gotenberg/gotenberg:8.33\n    environment:\n      HOME: /tmp\n    # Disable JS and restrict file access — Gotenberg renders untrusted email\n    # HTML, so no tracking pixels or scripts (upstream's recommended flags).\n    command:\n      - gotenberg\n      - --chromium-disable-javascript=true\n      - --chromium-allow-list=file:///tmp/.*\n  tika:\n    image: apache/tika:3.2.3.0\n",
+      "images": {
+        "apache/tika:3.2.3.0": {
+          "digest": "sha256:c0154cb95587cde64be74f35ada1a2bd7892219f3f0ac3c9dc6cab34046b3573",
+          "download_bytes": 160873494,
+          "disk_bytes": 360539648
+        },
+        "ghcr.io/paperless-ngx/paperless-ngx:2.20.15": {
+          "digest": "sha256:6c86cad803970ea782683a8e80e7403444c5bf3cf70de63b4d3c8e87500db92f",
+          "download_bytes": 506783124,
+          "disk_bytes": 1447538176
+        },
+        "gotenberg/gotenberg:8.33": {
+          "digest": "sha256:bddd8ea9d076e2d08b6ddaa6efae6403185202c6dab65a6488ed0a6923d6d8e8",
+          "download_bytes": 690110861,
+          "disk_bytes": 1686751744
+        },
+        "redis:8": {
+          "digest": "sha256:4c7ecf5d14207f5baf8e140ab428a54ae5cf2a0411956f75deb0ef89d3cb4fda",
+          "download_bytes": 54274641,
+          "disk_bytes": 145084416
+        }
+      }
+    },
+    {
+      "id": "postiz",
+      "name": "Postiz",
+      "version": "2.21.10",
+      "short_description": "Schedule and publish social posts across every network from one self-hosted dashboard.",
+      "long_description": "Postiz is an open-source social media scheduler, a self-hosted alternative to Buffer or Hootsuite. Draft a post once, preview how it looks on each network, and schedule it out across many platforms from a single calendar, with an AI assist for copy and images, a team-style approvals flow, and analytics on what landed. Everything runs on your own home server: your drafts, your media, and your connected accounts stay in your database rather than a marketing-SaaS cloud. malmo provisions and manages the PostgreSQL database and Redis cache Postiz needs automatically, and runs its Temporal workflow engine alongside, so there is nothing to wire up. On first visit you create your admin account, then connect networks and start scheduling.\n\nNote on connecting networks: most large platforms (X, LinkedIn, Facebook/Instagram, YouTube, TikTok, Discord, Reddit, Mastodon, …) require you to register your own developer app with them and supply its API keys, which Postiz reads as server configuration. You can paste those keys into this app's configuration form, at install or later under Settings, and the network becomes connectable; leave them blank and that network simply stays disabled. Networks that authenticate with credentials entered directly in Postiz's own interface (such as Bluesky) need no setup at all. A few less common networks (Pinterest, Threads, Slack, and others) aren't on the configuration form yet. Postiz also bakes this app's address into post links, and a few browser conveniences only activate over HTTPS; since that address is your home network's `.local` name, those stay limited to your LAN until remote access ships. The scheduler itself works fully on your network.\n",
+      "categories": [
+        "productivity"
+      ],
+      "author": {
+        "name": "Postiz (Gitroom)",
+        "url": "https://postiz.com"
+      },
+      "license": "AGPL-3.0",
+      "links": {
+        "homepage": "https://postiz.com",
+        "source": "https://github.com/gitroomhq/postiz-app",
+        "support": "https://docs.postiz.com"
+      },
+      "changelog_url": "https://github.com/gitroomhq/postiz-app/releases",
+      "footprint": {
+        "image_download_bytes": 1187053166,
+        "image_disk_bytes": 4899068416,
+        "estimated_state": "220M"
+      },
+      "icon_file": "icon.svg",
+      "screenshots": [
+        "screenshots/0.png",
+        "screenshots/1.png",
+        "screenshots/2.png"
+      ],
+      "environments": [
+        "appliance",
+        "hosted"
+      ],
+      "manifest": "id: postiz\nmanifest_version: 1\nname: Postiz\nversion: \"2.21.10\"\ndescription:\n  short: \"Schedule and publish social posts across every network from one self-hosted dashboard.\"\n  long: |\n    Postiz is an open-source social media scheduler, a self-hosted alternative to Buffer or Hootsuite. Draft a post once, preview how it looks on each network, and schedule it out across many platforms from a single calendar, with an AI assist for copy and images, a team-style approvals flow, and analytics on what landed. Everything runs on your own home server: your drafts, your media, and your connected accounts stay in your database rather than a marketing-SaaS cloud. malmo provisions and manages the PostgreSQL database and Redis cache Postiz needs automatically, and runs its Temporal workflow engine alongside, so there is nothing to wire up. On first visit you create your admin account, then connect networks and start scheduling.\n\n    Note on connecting networks: most large platforms (X, LinkedIn, Facebook/Instagram, YouTube, TikTok, Discord, Reddit, Mastodon, …) require you to register your own developer app with them and supply its API keys, which Postiz reads as server configuration. You can paste those keys into this app's configuration form, at install or later under Settings, and the network becomes connectable; leave them blank and that network simply stays disabled. Networks that authenticate with credentials entered directly in Postiz's own interface (such as Bluesky) need no setup at all. A few less common networks (Pinterest, Threads, Slack, and others) aren't on the configuration form yet. Postiz also bakes this app's address into post links, and a few browser conveniences only activate over HTTPS; since that address is your home network's `.local` name, those stay limited to your LAN until remote access ships. The scheduler itself works fully on your network.\nicon: ./icon.svg\nscreenshots: [./screenshots/01.png, ./screenshots/02.png, ./screenshots/03.png]\ncategories: [productivity]\nauthor:\n  name: Postiz (Gitroom)\n  url: https://postiz.com\nlicense: AGPL-3.0\nlinks:\n  homepage: https://postiz.com\n  source: https://github.com/gitroomhq/postiz-app\n  support: https://docs.postiz.com\nchangelog_url: https://github.com/gitroomhq/postiz-app/releases\n\ncompose_file: compose.yml\nmain_service: postiz\nmain_port: 5000\npreferred_slugs: [postiz, social, scheduler]\n\n# Postiz's nginx serves the dashboard on / (a redirect to the login/onboarding\n# page; any status \u003c 500 counts as healthy). First boot runs Prisma schema push\n# against the managed Postgres and registers Temporal search attributes before\n# the node apps listen, and the image is large (~5.7 GB) so the cold start is\n# slow — allow a generous start period.\nhealth_probe:\n  path: /\n  start_period: 240s\n\n# Upstream's tested floor is a dedicated 2 GB-RAM VM. The single Postiz container\n# runs nginx + the NestJS backend + the Next.js frontend + workers + cron under\n# pm2, and the Temporal dev-server sits alongside; 2.5 GB gives the node stack and\n# Temporal headroom on the low-end hardware malmo targets.\nresources:\n  recommended: { memory: 2560M, cpu: 1.5 }\n\n# ./data/config is Postiz's config plus the pm2 daemon home (HOME=/config);\n# ./data/uploads is the local media store for post attachments\n# (STORAGE_PROVIDER=local); ./data/temporal is the Temporal dev-server's embedded\n# SQLite (workflow state — kept so in-flight schedules survive a restart). Posts,\n# connected accounts, and settings live in the managed Postgres, backed up by the\n# managed-service path, not these binds. Uploads have no use-case-folder home and\n# Postiz offers no external-library path, so it is app-managed content (forfeits\n# the files-first-class badge). estimated_size measured at first-healthy on a\n# clean boot; growth is user-uploaded media — runtime usage, not projected here.\nstorage:\n  data_volumes: [./data/config, ./data/uploads, ./data/temporal]\n  estimated_size: 220M\n  app_managed_user_content: true\n\n# Postiz signs its session JWTs with JWT_SECRET and AES-encrypts every stored\n# credential (OAuth tokens, Bluesky app-passwords, Mastodon tokens) with\n# ENCRYPTION_KEY. Both are generated once at install by the brain and injected as\n# MALMO_SECRET_JWT / MALMO_SECRET_ENCRYPTION_KEY; losing either invalidates\n# sessions or renders stored credentials unreadable.\nsecrets:\n  - name: jwt\n  - name: encryption_key\n\n# User-supplied OAuth credentials for the major social networks. Each is the\n# operator's own developer-app key registered with that platform — malmo can't\n# generate them and the author can't ship them, so they're collected as config\n# fields (APP_MANIFEST.md # D4) and injected verbatim under Postiz's own env-var\n# names (no MALMO_* indirection). All optional: Postiz runs fully without any,\n# and the in-UI-credential networks (Bluesky, Mastodon-via-login) need none, so\n# install is never gated. Networks not listed here (Pinterest, Threads, Slack,\n# GitHub, Dribbble, …) await a follow-up. Client IDs/app IDs are non-secret —\n# they're public in OAuth redirect URLs, so showing them lets the operator\n# confirm what's set; secrets/keys/tokens are masked. Each platform's developer\n# console issues these; the OAuth callback is this app's address + the provider's\n# path. Targets main_service (postiz) by default — no `service:` needed.\nconfig:\n  # X (Twitter)\n  - app_env: X_API_KEY\n    title: \"X (Twitter) API key\"\n    description: \"Consumer API key from your X developer app (developer.x.com). Required to connect X accounts.\"\n  - app_env: X_API_SECRET\n    title: \"X (Twitter) API secret\"\n    description: \"Consumer API secret that pairs with the X API key.\"\n    secret: true\n\n  # Facebook / Instagram\n  - app_env: FACEBOOK_APP_ID\n    title: \"Facebook / Instagram app ID\"\n    description: \"App ID from a Meta for Developers app (developers.facebook.com). Covers both Facebook Pages and Instagram.\"\n  - app_env: FACEBOOK_APP_SECRET\n    title: \"Facebook / Instagram app secret\"\n    description: \"App secret that pairs with the Meta app ID.\"\n    secret: true\n\n  # LinkedIn\n  - app_env: LINKEDIN_CLIENT_ID\n    title: \"LinkedIn client ID\"\n    description: \"Client ID from a LinkedIn developer app (linkedin.com/developers).\"\n  - app_env: LINKEDIN_CLIENT_SECRET\n    title: \"LinkedIn client secret\"\n    description: \"Client secret that pairs with the LinkedIn client ID.\"\n    secret: true\n\n  # YouTube\n  - app_env: YOUTUBE_CLIENT_ID\n    title: \"YouTube client ID\"\n    description: \"OAuth client ID from a Google Cloud project with the YouTube Data API enabled (console.cloud.google.com).\"\n  - app_env: YOUTUBE_CLIENT_SECRET\n    title: \"YouTube client secret\"\n    description: \"OAuth client secret that pairs with the YouTube client ID.\"\n    secret: true\n\n  # TikTok\n  - app_env: TIKTOK_CLIENT_ID\n    title: \"TikTok client key\"\n    description: \"Client key from a TikTok developer app (developers.tiktok.com).\"\n  - app_env: TIKTOK_CLIENT_SECRET\n    title: \"TikTok client secret\"\n    description: \"Client secret that pairs with the TikTok client key.\"\n    secret: true\n\n  # Discord\n  - app_env: DISCORD_CLIENT_ID\n    title: \"Discord client ID\"\n    description: \"Application client ID from the Discord developer portal (discord.com/developers).\"\n  - app_env: DISCORD_CLIENT_SECRET\n    title: \"Discord client secret\"\n    description: \"Client secret that pairs with the Discord client ID.\"\n    secret: true\n  - app_env: DISCORD_BOT_TOKEN_ID\n    title: \"Discord bot token\"\n    description: \"Bot token for the Discord application (the Bot tab of your app).\"\n    secret: true\n\n  # Reddit\n  - app_env: REDDIT_CLIENT_ID\n    title: \"Reddit client ID\"\n    description: \"Client ID from a Reddit 'web app' (reddit.com/prefs/apps).\"\n  - app_env: REDDIT_CLIENT_SECRET\n    title: \"Reddit client secret\"\n    description: \"Client secret that pairs with the Reddit client ID.\"\n    secret: true\n\n  # Mastodon\n  - app_env: MASTODON_URL\n    title: \"Mastodon instance URL\"\n    description: \"Base URL of the Mastodon instance to register the app against. Defaults to mastodon.social.\"\n    default: \"https://mastodon.social\"\n  - app_env: MASTODON_CLIENT_ID\n    title: \"Mastodon client key\"\n    description: \"Client key from your Mastodon app (Preferences → Development on your instance).\"\n  - app_env: MASTODON_CLIENT_SECRET\n    title: \"Mastodon client secret\"\n    description: \"Client secret that pairs with the Mastodon client key.\"\n    secret: true\n\n# Postgres holds all Postiz data (posts, connected accounts, settings); Redis\n# backs the BullMQ queues that drive scheduled publishing. The brain provisions\n# both per-app in its shared managed instances and injects MALMO_SERVICE_DATABASE_*\n# / MALMO_SERVICE_CACHE_*, which the compose maps onto DATABASE_URL / REDIS_URL.\n# `redis: \"7\"` normalizes to the BSD-3 Valkey 8 engine (RESP/ACL-compatible).\nservices:\n  database:\n    type: postgres\n    version: \"16\"\n  cache:\n    type: redis\n    version: \"7\"\n\n# internet: Postiz reaches the social networks' APIs to publish posts and fetch\n# link previews and media. lan: not needed — the brain routes inbound traffic.\npermissions:\n  internet: true\n  lan: false\n\nimages:\n  ghcr.io/gitroomhq/postiz-app:v2.21.10:\n    digest: sha256:1d5a5dc6b896747d1483c01dc2562165bd313ad601b32f6cabb7f7dd08a911a9\n    download_bytes: 1068994948\n    disk_bytes: 4312509952\n  temporalio/temporal:1.7.2:\n    digest: sha256:a715f1978c4d7d9b36fe6ef6e8aa414428f018a35f8e0f2b0c40c3cff9a9e634\n    download_bytes: 118058218\n    disk_bytes: 586558464\n",
+      "compose": "# Postiz adapted for malmo's Tier-3 sandbox (cap_drop: ALL, no-new-privileges,\n# brain-pinned non-root user:). Upstream's compose is the full self-hosted stack\n# (postiz + its own postgres + redis + a heavy Temporal bundle: auto-setup +\n# postgresql + elasticsearch + admin-tools + ui + spotlight) and publishes host\n# port 4007. malmo drops the host port (the brain routes to main_port 5000),\n# moves Postgres and Redis to malmo's managed services (declared in the manifest),\n# and replaces the entire Temporal bundle with one lightweight\n# `temporal server start-dev` container.\n#\n# Two adaptations let the upstream images run under the sandbox. Both are the\n# same class as catalog/paperless-ngx's `tmpfs: - /run` precedent — no capability\n# is restored and nothing the app genuinely needs is stripped:\n#\n# 1. postiz tmpfs. The image runs an in-container nginx as a root-master that\n#    drops to `www`; under the brain-pinned non-root uid (neither root nor `www`)\n#    nginx's compiled-in writable paths are unwritable and it exits 1 with\n#    `mkdir() \"/var/lib/nginx/body\" failed (13: Permission denied)`. A tmpfs over\n#    the three baked nginx runtime dirs (/var/lib/nginx, /run, /var/log/nginx)\n#    gives it writable scratch owned by the runtime uid. PM2 (the node process\n#    manager) writes its daemon state under $HOME, so HOME points at the\n#    uid-owned ./data/config bind. Re-verify the tmpfs set on version bumps —\n#    nginx's compiled paths could shift.\n#\n# 2. temporal USER env. `temporal server start-dev` is a static Go binary whose\n#    OpenTelemetry resource detector calls Go's user.Current(); under a\n#    brain-elected uid with no /etc/passwd entry that errors with\n#    `user: Current requires cgo or $USER set in environment` and the server\n#    crash-loops. Any non-empty USER short-circuits it. Without this line the app\n#    green-installs and then crash-loops on every real host.\n#\n# Temporal is a hard, non-severable dependency (Postiz's backend and orchestrator\n# import it unconditionally and connect at boot); the only knob is\n# TEMPORAL_ADDRESS, which is exactly what lets us point Postiz at the dev-server\n# instead of the upstream bundle. The dev-server persists to SQLite under\n# ./data/temporal, so in-flight scheduled-post workflows survive a restart.\n#\n# Env rewiring (the brain injects the values; the compose maps them to Postiz's\n# own names):\n#   DATABASE_URL     -\u003e ${MALMO_SERVICE_DATABASE_DSN}     (managed Postgres 16)\n#   REDIS_URL        -\u003e ${MALMO_SERVICE_CACHE_DSN}        (managed Valkey 8; redis:// scheme)\n#   JWT_SECRET       -\u003e ${MALMO_SECRET_JWT}               (CSPRNG, generated once at install)\n#   ENCRYPTION_KEY   -\u003e ${MALMO_SECRET_ENCRYPTION_KEY}   (AES key for stored OAuth tokens/passwords)\n#   MAIN_URL / FRONTEND_URL / NEXT_PUBLIC_BACKEND_URL -\u003e ${MALMO_APP_URL}(/api)\n#\n# Social-provider OAuth keys (X, LinkedIn, Facebook, ...) are operator-supplied\n# developer-app credentials. They are declared as `config:` fields in the manifest\n# (APP_MANIFEST.md # D4) and the brain stamps each one into this service's\n# environment override under its own name (X_API_KEY, LINKEDIN_CLIENT_ID, ...), so\n# they are not listed here. All optional — Postiz and the in-UI-credential\n# networks (Bluesky, ...) work without any. See the manifest long description.\nservices:\n  postiz:\n    image: ghcr.io/gitroomhq/postiz-app:v2.21.10\n    depends_on:\n      temporal:\n        condition: service_healthy\n    tmpfs:\n      - /var/lib/nginx:mode=1777\n      - /run:exec,mode=1777\n      - /var/log/nginx:mode=1777\n    environment:\n      MAIN_URL: ${MALMO_APP_URL}\n      FRONTEND_URL: ${MALMO_APP_URL}\n      NEXT_PUBLIC_BACKEND_URL: ${MALMO_APP_URL}/api\n      BACKEND_INTERNAL_URL: http://localhost:3000\n      DATABASE_URL: ${MALMO_SERVICE_DATABASE_DSN}\n      REDIS_URL: ${MALMO_SERVICE_CACHE_DSN}\n      TEMPORAL_ADDRESS: temporal:7233\n      TEMPORAL_NAMESPACE: default\n      JWT_SECRET: ${MALMO_SECRET_JWT}\n      ENCRYPTION_KEY: ${MALMO_SECRET_ENCRYPTION_KEY}\n      IS_GENERAL: \"true\"\n      STORAGE_PROVIDER: local\n      UPLOAD_DIRECTORY: /uploads\n      NEXT_PUBLIC_UPLOAD_DIRECTORY: /uploads\n      HOME: /config\n    volumes:\n      - ./data/config:/config\n      - ./data/uploads:/uploads\n    # nginx comes up immediately but proxies 502 until the pm2-managed backend is\n    # live (first boot also runs Prisma schema push), so gate readiness on GET /\n    # actually returning \u003c 500 — not just the process being up. The image ships\n    # neither curl nor wget, so probe with the bundled node runtime. start_period\n    # suppresses early failures; the first success flips the container healthy.\n    healthcheck:\n      test: [\"CMD\", \"node\", \"-e\", \"require('http').get('http://localhost:5000/',r=\u003eprocess.exit(r.statusCode\u003c500?0:1)).on('error',()=\u003eprocess.exit(1))\"]\n      interval: 10s\n      timeout: 5s\n      retries: 30\n      start_period: 240s\n\n  temporal:\n    image: temporalio/temporal:1.7.2\n    command: [\"server\", \"start-dev\", \"--ip\", \"0.0.0.0\", \"--db-filename\", \"/data/temporal.db\", \"--namespace\", \"default\"]\n    environment:\n      USER: temporal\n    volumes:\n      - ./data/temporal:/data\n    healthcheck:\n      test: [\"CMD\", \"temporal\", \"operator\", \"cluster\", \"health\", \"--address\", \"127.0.0.1:7233\"]\n      interval: 10s\n      timeout: 5s\n      retries: 12\n      start_period: 30s\n",
+      "images": {
+        "ghcr.io/gitroomhq/postiz-app:v2.21.10": {
+          "digest": "sha256:1d5a5dc6b896747d1483c01dc2562165bd313ad601b32f6cabb7f7dd08a911a9",
+          "download_bytes": 1068994948,
+          "disk_bytes": 4312509952
+        },
+        "temporalio/temporal:1.7.2": {
+          "digest": "sha256:a715f1978c4d7d9b36fe6ef6e8aa414428f018a35f8e0f2b0c40c3cff9a9e634",
+          "download_bytes": 118058218,
+          "disk_bytes": 586558464
+        }
+      }
+    },
+    {
+      "id": "twenty",
+      "name": "Twenty",
+      "version": "2.13.2",
+      "short_description": "A self-hosted CRM for contacts, companies, and deals — an open-source Salesforce alternative.",
+      "long_description": "Twenty is an open-source CRM that runs entirely on your own hardware. Track contacts, companies, opportunities, and the activity around every deal in a fast, Notion-like interface, and shape the data model to your own pipeline with custom objects, fields, and views (table, kanban, or board). Household members collaborate in one shared workspace, and every record stays in your home server's database rather than a vendor cloud. malmo provisions and manages the PostgreSQL database and Redis cache Twenty needs automatically, so there is nothing to wire up — on first visit you create the workspace and admin account, then start adding records. Email is optional: to send workspace invitations and notifications, add your own SMTP provider under Settings → Emails.\n\nNote: some features expect a public, HTTPS address. Twenty bakes this app's URL into invitation and notification links, and a few browser conveniences (such as copy-to-clipboard buttons) only activate over HTTPS. Because that address is your home network's `.local` name, those links resolve only on your LAN and the HTTPS-gated conveniences stay off until remote access is available. The CRM itself works fully on your network.\n",
+      "categories": [
+        "productivity"
+      ],
+      "author": {
+        "name": "Twenty",
+        "url": "https://twenty.com"
+      },
+      "license": "AGPL-3.0",
+      "links": {
+        "homepage": "https://twenty.com",
+        "source": "https://github.com/twentyhq/twenty",
+        "support": "https://twenty.com/developers"
+      },
+      "changelog_url": "https://github.com/twentyhq/twenty/releases",
+      "footprint": {
+        "image_download_bytes": 242661907,
+        "image_disk_bytes": 1186902016,
+        "estimated_state": "4MB"
+      },
+      "icon_file": "icon.svg",
+      "screenshots": [
+        "screenshots/0.png",
+        "screenshots/1.png",
+        "screenshots/2.png"
+      ],
+      "environments": [
+        "appliance",
+        "hosted"
+      ],
+      "manifest": "id: twenty\nmanifest_version: 1\nname: Twenty\nversion: \"2.13.2\"\ndescription:\n  short: \"A self-hosted CRM for contacts, companies, and deals — an open-source Salesforce alternative.\"\n  long: |\n    Twenty is an open-source CRM that runs entirely on your own hardware. Track contacts, companies, opportunities, and the activity around every deal in a fast, Notion-like interface, and shape the data model to your own pipeline with custom objects, fields, and views (table, kanban, or board). Household members collaborate in one shared workspace, and every record stays in your home server's database rather than a vendor cloud. malmo provisions and manages the PostgreSQL database and Redis cache Twenty needs automatically, so there is nothing to wire up — on first visit you create the workspace and admin account, then start adding records. Email is optional: to send workspace invitations and notifications, add your own SMTP provider under Settings → Emails.\n\n    Note: some features expect a public, HTTPS address. Twenty bakes this app's URL into invitation and notification links, and a few browser conveniences (such as copy-to-clipboard buttons) only activate over HTTPS. Because that address is your home network's `.local` name, those links resolve only on your LAN and the HTTPS-gated conveniences stay off until remote access is available. The CRM itself works fully on your network.\nicon: ./icon.svg\nscreenshots: [./screenshots/01.png, ./screenshots/02.png, ./screenshots/03.png]\ncategories: [productivity]\nauthor:\n  name: Twenty\n  url: https://twenty.com\nlicense: AGPL-3.0\nlinks:\n  homepage: https://twenty.com\n  source: https://github.com/twentyhq/twenty\n  support: https://twenty.com/developers\nchangelog_url: https://github.com/twentyhq/twenty/releases\n\ncompose_file: compose.yml\nmain_service: server\nmain_port: 3000\npreferred_slugs: [twenty, crm, twenty-crm]\n\n# /healthz is Twenty's cheap liveness route (the upstream compose probes it too).\n# First boot runs the NestJS server's schema migrations against the freshly\n# provisioned managed Postgres before it listens, which on a cold image pull can\n# take a while — allow a generous start period.\nhealth_probe:\n  path: /healthz\n  start_period: 180s\n\n# Twenty's own docs set a 2 GB-RAM floor for the stack; server + worker share it.\nresources:\n  recommended: { memory: 2G, cpu: 1.0 }\n\n# The CRM's records (contacts, companies, opportunities, custom objects) live in\n# the managed Postgres database — backed up by the managed-service path, not\n# attributed here. The only app bind is ./data/local-storage: Twenty's\n# STORAGE_TYPE=local attachment store (files uploaded onto records), shared by\n# the server and worker. It has no use-case-folder home and Twenty offers no\n# external-library path for it, so it is app-managed content — this forfeits the\n# files-first-class badge and triggers the install-time warning.\n# estimated_size: the attachment bind is near-empty at first-healthy (measured on\n# a clean boot); growth is user-uploaded attachments, which is runtime usage and\n# deliberately not projected here.\nstorage:\n  data_volumes: [./data/local-storage]\n  estimated_size: 4MB\n  app_managed_user_content: true\n\n# Postgres holds all CRM data; Redis backs the BullMQ job queue the worker drains\n# and the server's caches. The brain provisions both per-app in its shared managed\n# instances and injects MALMO_SERVICE_DATABASE_* / MALMO_SERVICE_CACHE_*, which the\n# compose maps onto Twenty's PG_DATABASE_URL and REDIS_URL DSNs. `redis: \"7\"`\n# normalizes to the BSD-3 Valkey 8 engine (RESP-compatible).\nservices:\n  database:\n    type: postgres\n    version: \"16\"\n  cache:\n    type: redis\n    version: \"7\"\n\n# Twenty requires ENCRYPTION_KEY — it encrypts every secret stored in the database\n# (OAuth tokens, app variables, TOTP secrets); losing it loses access to them. The\n# brain generates it once at install and injects it as MALMO_SECRET_ENCRYPTION_KEY,\n# stable across restarts so existing data stays decryptable.\nsecrets:\n  - name: encryption_key\n\n# internet: Twenty fetches company favicons/logos and checks for updates over the\n# web. lan: not needed — the brain routes inbound traffic.\npermissions:\n  internet: true\n  lan: false\n\nimages:\n  twentycrm/twenty:v2.13.2:\n    digest: sha256:a2b79b8fd6fd5110617363438220d5aa4db7a8308769000ca8ab469918388307\n    download_bytes: 242661907\n    disk_bytes: 1186902016\n",
+      "compose": "# Twenty adapted for malmo's Tier-3 sandbox (cap_drop: ALL, no-new-privileges,\n# brain-pinned user:). Upstream's compose runs `server` + `worker` alongside a\n# bundled postgres:16 and a redis, and publishes host port 3000. malmo drops the\n# host port (the brain routes to main_port 3000), drops the two bundled\n# datastores and declares managed Postgres + Redis (→ Valkey) in the manifest\n# instead, and converts the shared `server-local-data` named volume to a\n# relative ./data/local-storage bind — Twenty's STORAGE_TYPE=local attachment\n# store, shared read/write by the server and the worker.\n#\n# Env rewiring (the brain injects the values; the compose maps them to Twenty's\n# own names):\n#   PG_DATABASE_URL  -\u003e ${MALMO_SERVICE_DATABASE_DSN}  (managed Postgres 16)\n#   REDIS_URL        -\u003e ${MALMO_SERVICE_CACHE_DSN}      (managed Valkey 8; redis:// scheme)\n#   SERVER_URL       -\u003e ${MALMO_APP_URL}                (http://\u003cslug\u003e.local)\n#   ENCRYPTION_KEY   -\u003e ${MALMO_SECRET_ENCRYPTION_KEY}  (CSPRNG, generated once at install)\n#\n# The server runs DB migrations on boot (DISABLE_DB_MIGRATIONS left unset) and\n# owns cron registration; the worker disables both (they already ran on the\n# server) and drains the BullMQ job queue out of Redis. EMAIL_* and Google/\n# Microsoft OAuth env are intentionally omitted. EMAIL_DRIVER is a boot-validated\n# enum that defaults to `logger` (no-send) when unset, so Twenty boots clean and\n# the admin configures SMTP in-app under Settings -\u003e Emails (persisted to the DB).\n# It can't be auto-wired from malmo's MALMO_MAIL_* provider: gating the enum to \"\"\n# on an unbound box fails config validation at boot (see the PR's Platform gaps).\n# OAuth SSO needs operator-supplied developer-app credentials malmo has no env\n# surface for. Password + magic-link auth and the full CRM work without either.\nservices:\n  server:\n    image: twentycrm/twenty:v2.13.2\n    environment:\n      NODE_PORT: 3000\n      SERVER_URL: ${MALMO_APP_URL}\n      PG_DATABASE_URL: ${MALMO_SERVICE_DATABASE_DSN}\n      REDIS_URL: ${MALMO_SERVICE_CACHE_DSN}\n      ENCRYPTION_KEY: ${MALMO_SECRET_ENCRYPTION_KEY}\n      STORAGE_TYPE: local\n    volumes:\n      - ./data/local-storage:/app/packages/twenty-server/.local-storage:rw\n    healthcheck:\n      test: curl --fail http://localhost:3000/healthz\n      interval: 5s\n      timeout: 5s\n      retries: 20\n      # First boot runs schema migrations before the server listens (~55s on a\n      # warm box, longer on the low-end hardware malmo targets). During the start\n      # period failing probes don't count toward `retries`, so a slow migration\n      # can't wedge the worker's depends_on: service_healthy gate. 150s matches\n      # the manifest's 180s migration bound (250s total window vs 190s at 90s).\n      start_period: 150s\n    restart: unless-stopped\n\n  worker:\n    image: twentycrm/twenty:v2.13.2\n    command: [\"yarn\", \"worker:prod\"]\n    environment:\n      SERVER_URL: ${MALMO_APP_URL}\n      PG_DATABASE_URL: ${MALMO_SERVICE_DATABASE_DSN}\n      REDIS_URL: ${MALMO_SERVICE_CACHE_DSN}\n      ENCRYPTION_KEY: ${MALMO_SECRET_ENCRYPTION_KEY}\n      STORAGE_TYPE: local\n      DISABLE_DB_MIGRATIONS: \"true\" # migrations run on the server\n      DISABLE_CRON_JOBS_REGISTRATION: \"true\" # cron is registered on the server\n    volumes:\n      - ./data/local-storage:/app/packages/twenty-server/.local-storage:rw\n    depends_on:\n      server:\n        condition: service_healthy\n    restart: unless-stopped\n",
+      "images": {
+        "twentycrm/twenty:v2.13.2": {
+          "digest": "sha256:a2b79b8fd6fd5110617363438220d5aa4db7a8308769000ca8ab469918388307",
+          "download_bytes": 242661907,
+          "disk_bytes": 1186902016
+        }
+      }
+    },
+    {
+      "id": "unleash",
+      "name": "Unleash",
+      "version": "8.0.1",
+      "short_description": "Self-hosted feature flags and progressive rollouts for your own apps.",
+      "long_description": "Unleash is an open-source feature management platform that runs entirely on your own hardware. Wrap a risky change in a flag and turn it on or off at runtime without redeploying, target a feature at specific users or segments, roll it out gradually by percentage, and A/B test variants — all from one dashboard. Your own services connect to Unleash with an SDK and ask it which features are on, so flag state lives on your home server instead of a vendor cloud. malmo provisions and manages the PostgreSQL database Unleash needs automatically, so there is nothing to wire up.\n\nLogging in the first time: Unleash starts with a single administrator account, username `admin`. Its initial password is generated uniquely for your install and shown on this app's page in malmo — copy it to sign in, then change it under your account settings. From there you can invite the rest of your household and create projects, environments, and flags.\n\nEmail is optional. Password resets, user invites, and the productivity report are delivered by email; until an administrator adds an outgoing email account in malmo and binds it to this app, those features quietly do nothing while everything else works. Note on links: Unleash builds invite and reset links from this app's local network address, so they only open from a device on your home network until remote access is available. The dashboard and your SDK clients work fully on your LAN today.\n",
+      "categories": [
+        "developer-tools"
+      ],
+      "author": {
+        "name": "Unleash",
+        "url": "https://www.getunleash.io"
+      },
+      "license": "AGPL-3.0",
+      "links": {
+        "homepage": "https://www.getunleash.io",
+        "source": "https://github.com/Unleash/unleash",
+        "support": "https://docs.getunleash.io"
+      },
+      "changelog_url": "https://github.com/Unleash/unleash/releases",
+      "footprint": {
+        "image_download_bytes": 90111658,
+        "image_disk_bytes": 328390144
+      },
+      "icon_file": "icon.svg",
+      "environments": [
+        "appliance",
+        "hosted"
+      ],
+      "manifest": "id: unleash\nmanifest_version: 1\nname: Unleash\nversion: \"8.0.1\"\ndescription:\n  short: \"Self-hosted feature flags and progressive rollouts for your own apps.\"\n  long: |\n    Unleash is an open-source feature management platform that runs entirely on your own hardware. Wrap a risky change in a flag and turn it on or off at runtime without redeploying, target a feature at specific users or segments, roll it out gradually by percentage, and A/B test variants — all from one dashboard. Your own services connect to Unleash with an SDK and ask it which features are on, so flag state lives on your home server instead of a vendor cloud. malmo provisions and manages the PostgreSQL database Unleash needs automatically, so there is nothing to wire up.\n\n    Logging in the first time: Unleash starts with a single administrator account, username `admin`. Its initial password is generated uniquely for your install and shown on this app's page in malmo — copy it to sign in, then change it under your account settings. From there you can invite the rest of your household and create projects, environments, and flags.\n\n    Email is optional. Password resets, user invites, and the productivity report are delivered by email; until an administrator adds an outgoing email account in malmo and binds it to this app, those features quietly do nothing while everything else works. Note on links: Unleash builds invite and reset links from this app's local network address, so they only open from a device on your home network until remote access is available. The dashboard and your SDK clients work fully on your LAN today.\nicon: ./icon.svg\ncategories: [developer-tools]\nauthor:\n  name: Unleash\n  url: https://www.getunleash.io\nlicense: AGPL-3.0\nlinks:\n  homepage: https://www.getunleash.io\n  source: https://github.com/Unleash/unleash\n  support: https://docs.getunleash.io\nchangelog_url: https://github.com/Unleash/unleash/releases\n\ncompose_file: compose.yml\nmain_service: unleash\nmain_port: 4242\npreferred_slugs: [unleash, flags, feature-flags]\n\nhealth_probe:\n  path: /health\n  start_period: 90s\n\n# Unleash stores all feature-flag state in the managed Postgres database\n# (backed up via the managed-service path). No local data binds.\nstorage:\n  data_volumes: []\n  app_managed_user_content: true\n\nresources:\n  recommended: { memory: 1G, cpu: 1.0 }\n\nservices:\n  database:\n    type: postgres\n    version: \"16\"\n\nsecrets:\n  - name: unleash_secret\n  - name: admin_password\n    show: true\n\nmail:\n  optional: true\n\npermissions:\n  internet: true\n  lan: false\n\nimages:\n  unleashorg/unleash-server:8.0.1:\n    digest: sha256:07139700dd09a68b35bac8b4b49456fbb1ec1bfb4cc80c360a1c2877dcbf9510\n    download_bytes: 90111658\n    disk_bytes: 328390144\n",
+      "compose": "services:\n  unleash:\n    image: unleashorg/unleash-server:8.0.1\n    environment:\n      # Managed PostgreSQL (provisioned by malmo)\n      DATABASE_HOST: ${MALMO_SERVICE_DATABASE_HOST}\n      DATABASE_PORT: ${MALMO_SERVICE_DATABASE_PORT}\n      DATABASE_NAME: ${MALMO_SERVICE_DATABASE_NAME}\n      DATABASE_USERNAME: ${MALMO_SERVICE_DATABASE_USER}\n      DATABASE_PASSWORD: ${MALMO_SERVICE_DATABASE_PASSWORD}\n      DATABASE_SSL: \"false\"\n      # Public URL: baked into invite/reset email links and the SDK connection URL\n      UNLEASH_URL: ${MALMO_APP_URL}\n      # Server secret (defaults to the insecure literal \"super-secret\" upstream)\n      UNLEASH_SECRET: ${MALMO_SECRET_UNLEASH_SECRET}\n      # Seed the single admin account on first boot with a generated, owner-visible password\n      UNLEASH_DEFAULT_ADMIN_USERNAME: admin\n      UNLEASH_DEFAULT_ADMIN_PASSWORD: ${MALMO_SECRET_ADMIN_PASSWORD}\n      # No outbound version-check telemetry\n      CHECK_VERSION: \"false\"\n      # Optional outgoing email (no-op until an admin binds a mail provider in malmo)\n      EMAIL_HOST: \"${MALMO_MAIL_HOST:-}\"\n      EMAIL_PORT: \"${MALMO_MAIL_PORT:-587}\"\n      EMAIL_USER: \"${MALMO_MAIL_USER:-}\"\n      EMAIL_PASSWORD: \"${MALMO_MAIL_PASSWORD:-}\"\n      EMAIL_SENDER: \"${MALMO_MAIL_FROM:-}\"\n      EMAIL_SECURE: \"${MALMO_MAIL_USE_SSL:-false}\"\n    healthcheck:\n      test: [\"CMD\", \"wget\", \"--no-verbose\", \"--tries=1\", \"--spider\", \"http://localhost:4242/health\"]\n      interval: 10s\n      timeout: 5s\n      retries: 5\n      start_period: 90s\n",
+      "images": {
+        "unleashorg/unleash-server:8.0.1": {
+          "digest": "sha256:07139700dd09a68b35bac8b4b49456fbb1ec1bfb4cc80c360a1c2877dcbf9510",
+          "download_bytes": 90111658,
+          "disk_bytes": 328390144
+        }
+      }
+    },
+    {
+      "id": "whoami",
+      "name": "Whoami",
+      "version": "1.10",
+      "short_description": "Tiny HTTP server that echoes request info — a routing smoke test.",
+      "icon_glyph": "flask-conical",
+      "footprint": {
+        "image_download_bytes": 2850040,
+        "image_disk_bytes": 6581646
+      },
+      "environments": [
+        "appliance",
+        "hosted"
+      ],
+      "manifest": "id: whoami\nmanifest_version: 1\nname: Whoami\nversion: \"1.10\"\ndescription:\n  short: \"Tiny HTTP server that echoes request info — a routing smoke test.\"\nicon_glyph: flask-conical\ncompose_file: compose.yml\nmain_service: whoami\nmain_port: 80\npreferred_slugs: [whoami, hello]\n\npermissions:\n  internet: false\n  lan: false\n\n# Catalog-promised image digests (APP_STORE.md # Trust model). The brain\n# refuses to install if the registry-resolved digest doesn't match. Hand-\n# curated for the skeleton; signed-JSON catalog + CI resolution land later.\nimages:\n  traefik/whoami:v1.10.3:\n    digest: sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c\n    download_bytes: 2850040\n    disk_bytes: 6581646\n",
+      "compose": "# Author's compose, held verbatim by malmo. traefik/whoami is a ~5MB image\n# that prints the HTTP request it received — ideal for proving the Caddy route\n# reaches the right container.\nservices:\n  whoami:\n    image: traefik/whoami:v1.10.3\n    command: [\"--port=80\"]\n",
+      "images": {
+        "traefik/whoami:v1.10.3": {
+          "digest": "sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c",
+          "download_bytes": 2850040,
+          "disk_bytes": 6581646
+        }
+      }
+    }
+  ]
+}

@@ -21,6 +21,18 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-07-02 — Catalog thin-client is wired for hosted only; the appliance stays on the baked directory (cloud #62)
+
+**Previously:** the box's catalog was a single disk-backed reader over a baked `catalog/` directory on every profile; the plan (`APP_STORE.md`) foresaw a signed remote catalog fetch replacing it wholesale.
+
+**Now:** `internal/catalog.Catalog` is a facade over two sources. A **hosted** box is a thin client of the control plane's `GET /catalog/sync` (integrity-digest-verified, last-good on-disk cache, asset proxy). The **appliance** keeps reading its baked directory. `cmd/brain` picks the source by resolved profile.
+
+**Why:** the obvious thing — replace the disk reader everywhere — would regress the appliance. The appliance ships with no guaranteed internet and installs offline from its baked catalog (`ENVIRONMENT.md`; the offline-install path); pointing its store at the network would make a core surface fail when disconnected. The hosted box is always cloud-connected, so it is where the thin client belongs first. Both sources sit behind the same six-method facade, so `internal/api`/`internal/lifecycle` are agnostic and the disk fallback stays proven while the remote path soaks. Whether the appliance later syncs from the (public-read) control plane or ships a signed offline bundle is left open, not foreclosed.
+
+**Affected docs:** `docs/architecture.md` (catalog package row + deferred-list note). Also note: this ships **integrity-digest** verification only; Ed25519 **signing** (authenticity) and retiring the baked dir + `MALMO_CATALOG_DIR` are the sequenced follow-ups (progress `catalog-remote-thin-client.md`).
+
+---
+
 ## 2026-07-01 — OS dashboard adopts cloud's Oatmeal/olive design system; fonts self-hosted, not CDN (#260)
 
 **Previously:** The dashboard used a bespoke "calm launcher" palette — near-white `#f6f6f7` canvas, a blue `#2b6cb0` accent, system-ui fonts — defined ad hoc in `web-ui/src/style.css`. Cloud, meanwhile, shipped the Tailwind Plus **Oatmeal** kit's olive palette + Inter / Instrument Serif.
