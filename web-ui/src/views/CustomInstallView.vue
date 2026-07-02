@@ -455,6 +455,11 @@ const submitLabel = computed(() => (install.isPending.value ? "Installing…" : 
           </Button>
         </div>
 
+        <!-- GPU has no form control yet (unsupported, #125) but round-trips through
+             the YAML overlay; surface it read-only so a YAML-set flag isn't silently
+             submitted with no confirmation in the form (mirrors devices below). -->
+        <p v-if="gpu" class="text-xs text-muted-foreground">GPU access (set via YAML): <code>enabled</code></p>
+
         <!-- Devices: no form control (the long tail); shown read-only when set via YAML -->
         <p v-if="devices.length" class="text-xs text-muted-foreground">
           Devices (set via YAML): <code>{{ devices.join(", ") }}</code>
