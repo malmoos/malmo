@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -70,6 +71,21 @@ func (a *recordingAdmin) index(method, pathContains string) int {
 		}
 	}
 	return -1
+}
+
+// waitForCall polls the recorder until a call matching method + pathContains is
+// recorded, or the timeout elapses. Phase 2 (the base-subject POST) now runs in
+// a background goroutine, so tests wait for it rather than reading once.
+func waitForCall(t *testing.T, a *recordingAdmin, method, pathContains string, timeout time.Duration) *adminCall {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if c := a.find(method, pathContains); c != nil {
+			return c
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return nil
 }
 
 func TestEnsureDashboardInstallsSplitRoute(t *testing.T) {
@@ -140,6 +156,7 @@ func TestEnsureWildcardTLS(t *testing.T) {
 	defer srv.Close()
 	c := New(srv.URL)
 	c.certReady = alwaysCertReady
+	c.certPollInterval = time.Millisecond
 
 	subjects := []string{"cindy-fox.malmo.network", "*.cindy-fox.malmo.network"}
 	enr := EnrollmentCredentials{Subdomain: "abc-123", Username: "u", Password: "p"}
@@ -174,9 +191,10 @@ func TestEnsureWildcardTLS(t *testing.T) {
 		t.Fatal("expected a PATCH of the server listen array")
 	}
 
-	// Phase 2: the base subject is appended as its own policy, only after the
-	// wildcard's readiness probe reports ready.
-	appendCall := admin.find("POST", "/config/apps/tls/automation/policies")
+	// Phase 2 (async): the base subject is appended as its own policy, only after
+	// the wildcard's readiness probe reports ready. It runs in a background
+	// goroutine now, so wait for it.
+	appendCall := waitForCall(t, admin, "POST", "/config/apps/tls/automation/policies", 2*time.Second)
 	if appendCall == nil {
 		t.Fatal("expected a POST appending the base-subject policy")
 	}
@@ -226,11 +244,10 @@ func TestEnsureWildcardTLSWaitsForWildcardBeforeBase(t *testing.T) {
 	c := New(srv.URL)
 	c.certPollInterval = time.Millisecond
 
-	var probes int
+	var probes atomic.Int64
 	const readyAfter = 3
 	c.certReady = func(context.Context, string) (bool, error) {
-		probes++
-		return probes >= readyAfter, nil
+		return probes.Add(1) >= readyAfter, nil
 	}
 
 	subjects := []string{"cindy-fox.malmo.network", "*.cindy-fox.malmo.network"}
@@ -238,36 +255,46 @@ func TestEnsureWildcardTLSWaitsForWildcardBeforeBase(t *testing.T) {
 	if err := c.EnsureWildcardTLS(context.Background(), subjects, "https://auth.malmo.network", enr); err != nil {
 		t.Fatalf("EnsureWildcardTLS: %v", err)
 	}
-	if probes < readyAfter {
-		t.Errorf("probes = %d, want >= %d (waitForCert should keep polling until ready)", probes, readyAfter)
-	}
-	if admin.find("POST", "/config/apps/tls/automation/policies") == nil {
+	// Phase 2 runs in the background; wait for its base-subject POST, which must
+	// happen only once certReady has finally reported true.
+	if waitForCall(t, admin, "POST", "/config/apps/tls/automation/policies", 2*time.Second) == nil {
 		t.Error("expected the base-subject POST once certReady finally reported true")
+	}
+	if got := probes.Load(); got < readyAfter {
+		t.Errorf("probes = %d, want >= %d (waitForCert should keep polling until ready)", got, readyAfter)
 	}
 }
 
 // TestEnsureWildcardTLSTimesOutIfWildcardNeverIssues asserts the bounded-wait
-// requirement: if the wildcard subject never becomes ready (DNS/ACME stuck),
-// EnsureWildcardTLS returns an error instead of hanging, and, critically,
-// never runs the base-subject phase, since that phase must never start
-// concurrently with an unresolved wildcard order.
+// requirement: phase 1 (config + :443) is applied synchronously so the box
+// comes up, but if the wildcard cert never becomes ready (DNS/ACME stuck) the
+// background base-subject phase gives up after certWaitTimeout without ever
+// running, since that phase must never start concurrently with an unresolved
+// wildcard order.
 func TestEnsureWildcardTLSTimesOutIfWildcardNeverIssues(t *testing.T) {
 	admin := &recordingAdmin{}
 	srv := httptest.NewServer(admin.handler())
 	defer srv.Close()
 	c := New(srv.URL)
 	c.certReady = func(context.Context, string) (bool, error) { return false, nil }
+	c.certPollInterval = time.Millisecond
+	c.certWaitTimeout = 50 * time.Millisecond
 
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
 	subjects := []string{"cindy-fox.malmo.network", "*.cindy-fox.malmo.network"}
 	enr := EnrollmentCredentials{Subdomain: "abc-123", Username: "u", Password: "p"}
-	err := c.EnsureWildcardTLS(ctx, subjects, "https://auth.malmo.network", enr)
-	if err == nil {
-		t.Fatal("want a timeout error when the wildcard cert never becomes ready")
+	// Phase 1 must succeed synchronously (config applied, :443 bound) so the box
+	// comes up regardless of whether a cert is ever obtainable.
+	if err := c.EnsureWildcardTLS(context.Background(), subjects, "https://auth.malmo.network", enr); err != nil {
+		t.Fatalf("EnsureWildcardTLS: %v", err)
 	}
+	if admin.find("PUT", "/config/apps/tls") == nil {
+		t.Error("phase 1 (wildcard PUT) must be applied even when the cert never issues")
+	}
+	// Wait past certWaitTimeout: the background base-subject phase must give up
+	// without ever appending the base policy.
+	time.Sleep(150 * time.Millisecond)
 	if admin.find("POST", "/config/apps/tls/automation/policies") != nil {
-		t.Error("base-subject phase must not run when the wildcard phase never completed")
+		t.Error("base-subject phase must not run when the wildcard cert never issued")
 	}
 }
 
