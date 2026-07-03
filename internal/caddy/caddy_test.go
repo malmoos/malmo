@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -54,36 +53,6 @@ func (a *recordingAdmin) find(method, pathContains string) *adminCall {
 		if c.method == method && strings.Contains(c.path, pathContains) {
 			return &c
 		}
-	}
-	return nil
-}
-
-// index returns the position of the first call matching method + pathContains
-// in call order, or -1 if there is none. Used to assert ordering between two
-// calls (e.g. the phase-1 PUT before the phase-2 POST).
-func (a *recordingAdmin) index(method, pathContains string) int {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for i := range a.calls {
-		c := a.calls[i]
-		if c.method == method && strings.Contains(c.path, pathContains) {
-			return i
-		}
-	}
-	return -1
-}
-
-// waitForCall polls the recorder until a call matching method + pathContains is
-// recorded, or the timeout elapses. Phase 2 (the base-subject POST) now runs in
-// a background goroutine, so tests wait for it rather than reading once.
-func waitForCall(t *testing.T, a *recordingAdmin, method, pathContains string, timeout time.Duration) *adminCall {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if c := a.find(method, pathContains); c != nil {
-			return c
-		}
-		time.Sleep(time.Millisecond)
 	}
 	return nil
 }
@@ -144,19 +113,11 @@ func TestEnsureDashboardInstallsSplitRoute(t *testing.T) {
 	}
 }
 
-// alwaysCertReady stubs Client.certReady so tests never dial a real :443 or
-// wait on real ACME: EnsureWildcardTLS's phase-1-then-phase-2 sequencing is
-// what's under test, not the readiness probe's own network behavior (that
-// would need a real Caddy + ACME to exercise honestly).
-func alwaysCertReady(context.Context, string) (bool, error) { return true, nil }
-
 func TestEnsureWildcardTLS(t *testing.T) {
 	admin := &recordingAdmin{}
 	srv := httptest.NewServer(admin.handler())
 	defer srv.Close()
 	c := New(srv.URL)
-	c.certReady = alwaysCertReady
-	c.certPollInterval = time.Millisecond
 
 	subjects := []string{"cindy-fox.malmo.network", "*.cindy-fox.malmo.network"}
 	enr := EnrollmentCredentials{Subdomain: "abc-123", Username: "u", Password: "p"}
@@ -169,47 +130,41 @@ func TestEnsureWildcardTLS(t *testing.T) {
 		t.Error("expected a DELETE of the tls app before PUT")
 	}
 
-	// Phase 1: the wildcard alone, as the only policy in the initial PUT.
 	put := admin.find("PUT", "/config/apps/tls")
 	if put == nil {
 		t.Fatal("expected a PUT to /config/apps/tls")
 	}
+
+	// The wildcard must be listed in certificates.automate — the whole fix. A
+	// policy alone only says *how* to manage a matching name; without an automate
+	// entry Caddy never places the wildcard order (the live #278 symptom).
+	automate := put.body["certificates"].(map[string]any)["automate"].([]any)
+	if len(automate) != 1 || automate[0] != "*.cindy-fox.malmo.network" {
+		t.Errorf("certificates.automate = %v, want [*.cindy-fox.malmo.network]", automate)
+	}
+
+	// Exactly one automation policy — the wildcard, pinned to the acme-dns issuer.
 	policies := put.body["automation"].(map[string]any)["policies"].([]any)
 	if len(policies) != 1 {
-		t.Fatalf("phase-1 PUT policies = %v, want exactly 1 (wildcard only)", policies)
+		t.Fatalf("policies = %v, want exactly 1 (wildcard only)", policies)
 	}
 	policy := policies[0].(map[string]any)
 	gotSubjects := policy["subjects"].([]any)
 	if len(gotSubjects) != 1 || gotSubjects[0] != "*.cindy-fox.malmo.network" {
-		t.Errorf("phase-1 policy subjects = %v, want [*.cindy-fox.malmo.network]", gotSubjects)
+		t.Errorf("policy subjects = %v, want [*.cindy-fox.malmo.network]", gotSubjects)
 	}
 	assertACMEIssuer(t, policy, "https://auth.malmo.network", "u", "p", "abc-123")
 
-	// The :443 listener is added alongside :80, in phase 1.
-	patch := admin.find("PATCH", "/servers/malmo/listen")
-	if patch == nil {
+	// The :443 listener is added alongside :80.
+	if admin.find("PATCH", "/servers/malmo/listen") == nil {
 		t.Fatal("expected a PATCH of the server listen array")
 	}
 
-	// Phase 2 (async): the base subject is appended as its own policy, only after
-	// the wildcard's readiness probe reports ready. It runs in a background
-	// goroutine now, so wait for it.
-	appendCall := waitForCall(t, admin, "POST", "/config/apps/tls/automation/policies", 2*time.Second)
-	if appendCall == nil {
-		t.Fatal("expected a POST appending the base-subject policy")
-	}
-	baseSubjects := appendCall.body["subjects"].([]any)
-	if len(baseSubjects) != 1 || baseSubjects[0] != "cindy-fox.malmo.network" {
-		t.Errorf("phase-2 policy subjects = %v, want [cindy-fox.malmo.network]", baseSubjects)
-	}
-	assertACMEIssuer(t, appendCall.body, "https://auth.malmo.network", "u", "p", "abc-123")
-
-	// Phase ordering: the wildcard PUT must precede the base POST. The whole
-	// point is that the base subject's order never starts until the
-	// wildcard's has finished.
-	putIdx, postIdx := admin.index("PUT", "/config/apps/tls"), admin.index("POST", "/config/apps/tls/automation/policies")
-	if putIdx < 0 || postIdx < 0 || putIdx > postIdx {
-		t.Errorf("expected the wildcard PUT (call %d) before the base-subject POST (call %d)", putIdx, postIdx)
+	// The base subject is NOT routed through acme-dns: it is served by Caddy's
+	// default issuer (tls-alpn-01/http-01), so no base policy is ever POSTed and
+	// only one acme-dns order (the wildcard's) ever runs.
+	if admin.find("POST", "/config/apps/tls/automation/policies") != nil {
+		t.Error("did not expect a base-subject policy POST (base is served via the default issuer)")
 	}
 }
 
@@ -230,71 +185,6 @@ func assertACMEIssuer(t *testing.T, policy map[string]any, wantEndpoint, wantUse
 	}
 	if provider["username"] != wantUser || provider["password"] != wantPass || provider["subdomain"] != wantSubdomain {
 		t.Errorf("provider creds = %v, want {%s %s %s}", provider, wantSubdomain, wantUser, wantPass)
-	}
-}
-
-// TestEnsureWildcardTLSWaitsForWildcardBeforeBase asserts the concurrency fix
-// directly: while the wildcard's cert isn't ready yet, the base-subject phase
-// must not run at all, even though phase 1 (the wildcard PUT + :443 listener)
-// already has.
-func TestEnsureWildcardTLSWaitsForWildcardBeforeBase(t *testing.T) {
-	admin := &recordingAdmin{}
-	srv := httptest.NewServer(admin.handler())
-	defer srv.Close()
-	c := New(srv.URL)
-	c.certPollInterval = time.Millisecond
-
-	var probes atomic.Int64
-	const readyAfter = 3
-	c.certReady = func(context.Context, string) (bool, error) {
-		return probes.Add(1) >= readyAfter, nil
-	}
-
-	subjects := []string{"cindy-fox.malmo.network", "*.cindy-fox.malmo.network"}
-	enr := EnrollmentCredentials{Subdomain: "abc-123", Username: "u", Password: "p"}
-	if err := c.EnsureWildcardTLS(context.Background(), subjects, "https://auth.malmo.network", enr); err != nil {
-		t.Fatalf("EnsureWildcardTLS: %v", err)
-	}
-	// Phase 2 runs in the background; wait for its base-subject POST, which must
-	// happen only once certReady has finally reported true.
-	if waitForCall(t, admin, "POST", "/config/apps/tls/automation/policies", 2*time.Second) == nil {
-		t.Error("expected the base-subject POST once certReady finally reported true")
-	}
-	if got := probes.Load(); got < readyAfter {
-		t.Errorf("probes = %d, want >= %d (waitForCert should keep polling until ready)", got, readyAfter)
-	}
-}
-
-// TestEnsureWildcardTLSTimesOutIfWildcardNeverIssues asserts the bounded-wait
-// requirement: phase 1 (config + :443) is applied synchronously so the box
-// comes up, but if the wildcard cert never becomes ready (DNS/ACME stuck) the
-// background base-subject phase gives up after certWaitTimeout without ever
-// running, since that phase must never start concurrently with an unresolved
-// wildcard order.
-func TestEnsureWildcardTLSTimesOutIfWildcardNeverIssues(t *testing.T) {
-	admin := &recordingAdmin{}
-	srv := httptest.NewServer(admin.handler())
-	defer srv.Close()
-	c := New(srv.URL)
-	c.certReady = func(context.Context, string) (bool, error) { return false, nil }
-	c.certPollInterval = time.Millisecond
-	c.certWaitTimeout = 50 * time.Millisecond
-
-	subjects := []string{"cindy-fox.malmo.network", "*.cindy-fox.malmo.network"}
-	enr := EnrollmentCredentials{Subdomain: "abc-123", Username: "u", Password: "p"}
-	// Phase 1 must succeed synchronously (config applied, :443 bound) so the box
-	// comes up regardless of whether a cert is ever obtainable.
-	if err := c.EnsureWildcardTLS(context.Background(), subjects, "https://auth.malmo.network", enr); err != nil {
-		t.Fatalf("EnsureWildcardTLS: %v", err)
-	}
-	if admin.find("PUT", "/config/apps/tls") == nil {
-		t.Error("phase 1 (wildcard PUT) must be applied even when the cert never issues")
-	}
-	// Wait past certWaitTimeout: the background base-subject phase must give up
-	// without ever appending the base policy.
-	time.Sleep(150 * time.Millisecond)
-	if admin.find("POST", "/config/apps/tls/automation/policies") != nil {
-		t.Error("base-subject phase must not run when the wildcard cert never issued")
 	}
 }
 
@@ -378,39 +268,6 @@ func TestSplitCertSubjects(t *testing.T) {
 			}
 			if wildcard != tc.wantWildcard || base != tc.wantBase {
 				t.Errorf("splitCertSubjects(%v) = %q, %q; want %q, %q", tc.subjects, wildcard, base, tc.wantWildcard, tc.wantBase)
-			}
-		})
-	}
-}
-
-// TestTLSAddr covers the admin-address-to-:443-address derivation dialCertReady
-// relies on, including the error path for a malformed admin address.
-func TestTLSAddr(t *testing.T) {
-	cases := []struct {
-		name    string
-		admin   string
-		want    string
-		wantErr bool
-	}{
-		{name: "host and port", admin: "http://malmo-caddy:2019", want: "malmo-caddy:443"},
-		{name: "host only", admin: "http://localhost", want: "localhost:443"},
-		{name: "no host", admin: "not-a-url", wantErr: true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			c := New(tc.admin)
-			got, err := c.tlsAddr()
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("tlsAddr() = %q, nil; want an error", got)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("tlsAddr(): %v", err)
-			}
-			if got != tc.want {
-				t.Errorf("tlsAddr() = %q, want %q", got, tc.want)
 			}
 		})
 	}

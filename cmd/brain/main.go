@@ -161,16 +161,14 @@ func main() {
 	if err := cd.EnsureCatchAll(ctx); err != nil {
 		slog.Warn("caddy: ensure catch-all failed; continuing", "err", err)
 	}
-	// Hosted wildcard HTTPS (ENVIRONMENT.md # Networking & discovery): configure
-	// Caddy's acme-dns DNS-01 issuer for the dashboard apex +
-	// "*.<box-id>.malmo.network" and bind :443, always-on (no toggle). Skipped on
-	// appliance and on a hosted box with no complete enrollment. Synchronous and
-	// best-effort: EnsureWildcardTLS applies the config and binds :443 up front
-	// (fast, and needed deterministically before the box is considered up), then
-	// waits for and installs the certs in its own background goroutine, so a slow
-	// or unreachable ACME never blocks startup or delays the dashboard route
-	// installed just before Serve. A transient Caddy config error here does not
-	// stop the brain from serving.
+	// Hosted wildcard HTTPS (ENVIRONMENT.md # Networking & discovery): tell Caddy
+	// to obtain "*.<box-id>.malmo.network" via its acme-dns DNS-01 issuer and bind
+	// :443, always-on (no toggle). Skipped on appliance and on a hosted box with no
+	// complete enrollment. Synchronous, fast, and best-effort: EnsureWildcardTLS
+	// only applies config (the automate entry + policy + :443) — Caddy obtains the
+	// cert on its own schedule afterwards, so a slow or unreachable ACME never
+	// blocks startup or delays the dashboard route installed just before Serve. A
+	// transient Caddy config error here does not stop the brain from serving.
 	if prof == profile.Hosted && enrollment.Complete() {
 		if err := cd.EnsureWildcardTLS(ctx, profile.CertSubjects(boxID), cfg.acmeDNSEndpoint, caddy.EnrollmentCredentials{
 			Subdomain: enrollment.Subdomain,
