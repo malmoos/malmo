@@ -45,6 +45,17 @@ import (
 // degraded-startup stall when Caddy never came up (see the call site).
 const caddyReadyTimeout = 10 * time.Second
 
+// wildcardCertTimeout bounds cd.EnsureWildcardTLS, which now issues the box's
+// two certs one at a time rather than concurrently (internal/caddy.go
+// EnsureWildcardTLS): first the wildcard, then, once Caddy has actually
+// obtained it, the dashboard apex. That's two ACME round-trips end to end
+// instead of one overlapping pair, so this gets its own generous budget rather
+// than sharing what's left of the reconcile-and-routes ctx above: a real ACME
+// order plus DNS-01 propagation can run well past that budget's remainder.
+// Best-effort like the rest of this startup block: a box that never gets a
+// cert within this window logs a warning and keeps serving on :80.
+const wildcardCertTimeout = 3 * time.Minute
+
 func main() {
 	cfg := loadConfig()
 	installLogger(cfg.logLevel, cfg.logFormat)
@@ -162,19 +173,23 @@ func main() {
 		slog.Warn("caddy: ensure catch-all failed; continuing", "err", err)
 	}
 	// Hosted wildcard HTTPS (ENVIRONMENT.md # Networking & discovery): configure
-	// Caddy to obtain the box's Let's Encrypt cert for the dashboard apex +
+	// Caddy to obtain the box's Let's Encrypt certs for the dashboard apex +
 	// "*.<box-id>.malmo.network" via ACME DNS-01 against acme-dns with the seeded
 	// credentials, always-on (no toggle). Skipped on appliance and on a hosted box
 	// with no complete enrollment — best-effort, like the other one-shot route
 	// config: a transient Caddy error here doesn't block the brain from serving.
+	// Its own ctx/budget (wildcardCertTimeout), not the reconcile-and-routes ctx
+	// above; see that constant's doc comment.
 	if prof == profile.Hosted && enrollment.Complete() {
-		if err := cd.EnsureWildcardTLS(ctx, profile.CertSubjects(boxID), cfg.acmeDNSEndpoint, caddy.EnrollmentCredentials{
+		wildcardCtx, wildcardCancel := context.WithTimeout(context.Background(), wildcardCertTimeout)
+		if err := cd.EnsureWildcardTLS(wildcardCtx, profile.CertSubjects(boxID), cfg.acmeDNSEndpoint, caddy.EnrollmentCredentials{
 			Subdomain: enrollment.Subdomain,
 			Username:  enrollment.Username,
 			Password:  enrollment.Password,
 		}); err != nil {
 			slog.Warn("caddy: configure wildcard TLS failed; continuing on HTTP", "err", err)
 		}
+		wildcardCancel()
 	}
 	cancel()
 	// The dashboard host route (which points Caddy's /api leg at this brain) is
