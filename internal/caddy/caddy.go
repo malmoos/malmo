@@ -8,11 +8,15 @@ package caddy
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -24,13 +28,27 @@ const catchAllBody = `<!doctype html><html><head><meta charset="utf-8"><title>40
 type Client struct {
 	admin string
 	http  *http.Client
+	// certReady reports whether Caddy has already obtained and loaded a
+	// certificate whose SANs include wildcardSubject. The real implementation
+	// (dialCertReady) probes the box's own already-listening :443; tests
+	// replace this field with a stub so EnsureWildcardTLS's two-phase
+	// sequencing (wildcard first, then base) can be asserted without a real
+	// Caddy or ACME.
+	certReady func(ctx context.Context, wildcardSubject string) (bool, error)
+	// certPollInterval is how often waitForCert re-probes certReady. Tests
+	// shrink this so a fake certReady that takes a few probes to report ready
+	// doesn't make the test suite slow.
+	certPollInterval time.Duration
 }
 
 func New(adminAddr string) *Client {
-	return &Client{
-		admin: adminAddr,
-		http:  &http.Client{Timeout: 5 * time.Second},
+	c := &Client{
+		admin:            adminAddr,
+		http:             &http.Client{Timeout: 5 * time.Second},
+		certPollInterval: wildcardPollInterval,
 	}
+	c.certReady = c.dialCertReady
+	return c
 }
 
 // routeID is the stable @id we attach to each route so we can delete it later.
@@ -249,14 +267,36 @@ type EnrollmentCredentials struct {
 	Password  string
 }
 
-// EnsureWildcardTLS configures automatic HTTPS for a hosted box: it provisions a
-// single Let's Encrypt cert covering `subjects` (the dashboard apex
-// "<box-id>.malmo.network" + the wildcard "*.<box-id>.malmo.network") via an
-// ACME DNS-01 challenge solved against acme-dns with the box's seeded
-// credentials, and adds the :443 listener so the host-matched routes serve over
-// it. Hosted-only and always-on (ENVIRONMENT.md # Networking & discovery); the
+// EnsureWildcardTLS configures automatic HTTPS for a hosted box: it provisions
+// Let's Encrypt certs covering `subjects` (the dashboard apex
+// "<box-id>.malmo.network" + the wildcard "*.<box-id>.malmo.network") via ACME
+// DNS-01 challenges solved against acme-dns with the box's seeded credentials,
+// and adds the :443 listener so the host-matched routes serve over it.
+// Hosted-only and always-on (ENVIRONMENT.md # Networking & discovery); the
 // appliance path, which has no enrollment and serves plain-HTTP `.local`, never
 // calls this and keeps its :80-only config.
+//
+// Two certs, issued one at a time, not one combined cert. Caddy/certmagic
+// issues one certificate per SAN, so listing both subjects in a single
+// automation policy spawns two independent ACME orders. Both orders solve
+// DNS-01 at the *same* name ("_acme-challenge.<box-id>.malmo.network" is
+// where RFC 8555 puts the wildcard's challenge, and it's also where the base
+// name's challenge lands), against the *same* acme-dns account. acme-dns keeps
+// only the small fixed number of most-recent TXT values for an account, so a
+// third write from either order (a propagation recheck, an authorization
+// retry) can evict the sibling order's still-unvalidated value and fail its
+// validation silently. Running the two orders concurrently is therefore
+// unsafe: this function issues the wildcard subject alone first, waits
+// (bounded) until Caddy has actually obtained a certificate covering it, and
+// only then adds the base subject as its own policy, so its order is never
+// concurrent with the wildcard's. Only one order is ever presenting or
+// cleaning up a DNS-01 record at a time.
+//
+// The tradeoff is latency, not correctness: the two orders that used to race
+// now run back to back, so first-boot cert acquisition takes roughly two ACME
+// round-trips end-to-end instead of overlapping, and the box's ":443 fully
+// ready" point lands correspondingly later. Any startup budget wrapping this
+// call should size for that.
 //
 // The acme-dns provider sets only this box's own `_acme-challenge` TXT, so
 // renewal (~every 60 days) runs box→acme-dns directly with no malmo control-plane
@@ -268,48 +308,177 @@ type EnrollmentCredentials struct {
 // remove-then-put idiom), so a re-run at every boot converges cleanly. The DNS
 // provider's JSON shape is pinned to the caddy-dns/acmedns module compiled into
 // the hosted Caddy image; real issuance is verified end-to-end in the cloud
-// on-ramp (cloud #6 / CL6), not in the inner loop where there is no real ACME.
+// on-ramp (cloud #6 / CL6), not in the inner loop where there is no real ACME:
+// this function is only ever reached on the hosted + enrolled path (its one
+// caller gates on both), so the inner dev loop never runs it or waits on it.
 func (c *Client) EnsureWildcardTLS(ctx context.Context, subjects []string, acmeDNSEndpoint string, enr EnrollmentCredentials) error {
-	tlsApp := map[string]any{
-		"automation": map[string]any{
-			"policies": []any{
-				map[string]any{
-					"subjects": subjects,
-					"issuers": []any{
-						map[string]any{
-							"module": "acme",
-							"challenges": map[string]any{
-								"dns": map[string]any{
-									"provider": map[string]any{
-										"name":       "acmedns",
-										"server_url": acmeDNSEndpoint,
-										"username":   enr.Username,
-										"password":   enr.Password,
-										"subdomain":  enr.Subdomain,
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
+	wildcard, base, err := splitCertSubjects(subjects)
+	if err != nil {
+		return err
 	}
+	issuer := acmeIssuer(acmeDNSEndpoint, enr)
+
 	// Remove-then-put so a re-run replaces the policy cleanly; PUT on a fresh
 	// (deleted) key creates it, matching upsertRoute's idiom. The DELETE is
 	// best-effort — an absent tls app is the first-boot case.
 	_ = c.del(ctx, "/config/apps/tls")
+
+	// Phase 1: the wildcard alone, as the only policy, so its order is the
+	// only one that can write the enrollment account's DNS-01 record.
+	tlsApp := map[string]any{
+		"automation": map[string]any{
+			"policies": []any{certPolicy(wildcard, issuer)},
+		},
+	}
 	if err := c.put(ctx, "/config/apps/tls", tlsApp); err != nil {
-		return fmt.Errorf("caddy: configure wildcard tls: %w", err)
+		return fmt.Errorf("caddy: configure wildcard tls (phase 1: wildcard subject): %w", err)
 	}
 	// Add :443 alongside the existing :80 so the same host-matched routes serve
-	// HTTPS. PATCH replaces the listen array the bootstrap config declared as
-	// [":80"].
+	// HTTPS, and so the phase-1 readiness probe below has something to dial.
+	// PATCH replaces the listen array the bootstrap config declared as [":80"].
 	if err := c.patch(ctx, "/config/apps/http/servers/malmo/listen", []any{":80", ":443"}); err != nil {
 		return fmt.Errorf("caddy: add :443 listener: %w", err)
 	}
-	slog.Info("caddy: wildcard TLS configured", "subjects", subjects)
+	slog.Info("caddy: wildcard tls phase 1 configured, waiting for cert", "subject", wildcard)
+
+	if err := c.waitForCert(ctx, wildcard); err != nil {
+		return fmt.Errorf("caddy: wildcard subject %s not issued before adding base subject: %w", wildcard, err)
+	}
+
+	// Phase 2: the base subject, appended as its own policy only after the
+	// wildcard's order has fully finished (present, validate, clean up), so
+	// the two orders are never concurrent.
+	if err := c.post(ctx, "/config/apps/tls/automation/policies", certPolicy(base, issuer)); err != nil {
+		return fmt.Errorf("caddy: configure wildcard tls (phase 2: base subject): %w", err)
+	}
+	slog.Info("caddy: wildcard tls configured", "wildcard", wildcard, "base", base)
 	return nil
+}
+
+// splitCertSubjects sorts subjects (profile.CertSubjects' [base, wildcard]
+// pair) into its wildcard and base names, independent of input order.
+func splitCertSubjects(subjects []string) (wildcard, base string, err error) {
+	for _, s := range subjects {
+		if strings.HasPrefix(s, "*.") {
+			wildcard = s
+		} else if base == "" {
+			base = s
+		}
+	}
+	if wildcard == "" || base == "" {
+		return "", "", fmt.Errorf("caddy: want exactly one wildcard and one base subject, got %v", subjects)
+	}
+	return wildcard, base, nil
+}
+
+// acmeIssuer builds the acme-dns ACME issuer config shared by both phases'
+// automation policies.
+func acmeIssuer(acmeDNSEndpoint string, enr EnrollmentCredentials) map[string]any {
+	return map[string]any{
+		"module": "acme",
+		"challenges": map[string]any{
+			"dns": map[string]any{
+				"provider": map[string]any{
+					"name":       "acmedns",
+					"server_url": acmeDNSEndpoint,
+					"username":   enr.Username,
+					"password":   enr.Password,
+					"subdomain":  enr.Subdomain,
+				},
+			},
+		},
+	}
+}
+
+// certPolicy builds a single-subject Caddy TLS automation policy. Each phase
+// of EnsureWildcardTLS gets its own policy (rather than one policy listing
+// both subjects) so the two subjects' ACME orders are configured, and so run,
+// separately.
+func certPolicy(subject string, issuer map[string]any) map[string]any {
+	return map[string]any{
+		"subjects": []any{subject},
+		"issuers":  []any{issuer},
+	}
+}
+
+// wildcardPollInterval is how often waitForCert re-probes Caddy while it
+// waits for the phase-1 wildcard order to finish.
+const wildcardPollInterval = 2 * time.Second
+
+// waitForCert blocks until c.certReady reports the certificate covering
+// wildcardSubject has been obtained, or ctx is done, whichever comes first.
+// It is the handoff between EnsureWildcardTLS's two phases: the base
+// subject's order must not start until the wildcard's has completed, so the
+// two never write the enrollment account's DNS-01 record at the same time.
+// Bounded by ctx, so a box whose wildcard order never completes (DNS/ACME
+// misconfigured, network partition) fails this call instead of hanging
+// forever; the caller treats that the same as any other best-effort Caddy
+// config failure.
+func (c *Client) waitForCert(ctx context.Context, wildcardSubject string) error {
+	t := time.NewTicker(c.certPollInterval)
+	defer t.Stop()
+	for {
+		if ready, err := c.certReady(ctx, wildcardSubject); err == nil && ready {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for cert: %w", ctx.Err())
+		case <-t.C:
+		}
+	}
+}
+
+// dialCertReady is certReady's real implementation. It dials the box's own
+// :443 (the same port the box already serves apps on, not a new externally
+// exposed endpoint) with SNI set to a concrete name the wildcard covers, and
+// reports whether the certificate Caddy presents lists wildcardSubject itself
+// among its SANs (i.e., certmagic has already obtained and loaded the
+// wildcard cert, as opposed to some other or no cert yet).
+//
+// Skipping certificate verification is deliberate and does not weaken
+// anything: this dial never sends or trusts data, it only inspects whichever
+// certificate Caddy currently has loaded (which may legitimately not be
+// issued, or not be the wildcard, yet).
+func (c *Client) dialCertReady(ctx context.Context, wildcardSubject string) (bool, error) {
+	addr, err := c.tlsAddr()
+	if err != nil {
+		return false, err
+	}
+	probeSNI := strings.Replace(wildcardSubject, "*", "malmo-cert-probe", 1)
+	d := tls.Dialer{Config: &tls.Config{ServerName: probeSNI, InsecureSkipVerify: true}} //nolint:gosec // inspecting SANs only, see comment above
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		// Most likely "no cert yet" (or nothing listening yet), which is
+		// exactly what we're polling for, not a hard failure.
+		return false, nil
+	}
+	defer conn.Close()
+	certs := conn.(*tls.Conn).ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return false, nil
+	}
+	for _, san := range certs[0].DNSNames {
+		if san == wildcardSubject {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// tlsAddr derives the box's own :443 address from the admin API address:
+// same host, different port (e.g. "malmo-caddy:2019" -> "malmo-caddy:443").
+// Caddy's admin API and its public listener are the same process.
+func (c *Client) tlsAddr() (string, error) {
+	u, err := url.Parse(c.admin)
+	if err != nil {
+		return "", fmt.Errorf("caddy: parse admin address %q: %w", c.admin, err)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return "", fmt.Errorf("caddy: admin address %q has no host", c.admin)
+	}
+	return net.JoinHostPort(host, "443"), nil
 }
 
 func (c *Client) post(ctx context.Context, path string, body any) error {

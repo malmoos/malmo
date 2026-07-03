@@ -21,6 +21,22 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-07-03 — Wildcard + apex certs are issued one at a time, not from one automation policy
+
+**Previously:** `caddy.EnsureWildcardTLS` put a single Caddy TLS automation policy whose `subjects` array listed both of the box's certs ("<box-id>.malmo.network" and "*.<box-id>.malmo.network"), read (including in a prior progress entry) as "a single challenge issues the combined cert."
+
+**Now:** there is no combined cert. Caddy/certmagic issues one certificate per SAN, so listing both subjects in one policy silently started two concurrent ACME orders. Both solve DNS-01 at the same name (RFC 8555 puts the wildcard's challenge at the base label, same as the base name's own), against the same enrollment account, whose DNS-01 TXT store keeps only a small fixed number of recent values per account, so a third write from either order (a retry, a propagation recheck) can evict the sibling order's still-unvalidated value and fail it with no visible error. `EnsureWildcardTLS` now issues the wildcard subject alone, waits (bounded, via a local probe, see below) until Caddy has actually obtained it, then adds the base subject as a second policy, so the two orders are never concurrent.
+
+**Why:**
+- The obvious fix ("just don't put unrelated subjects in one policy") doesn't apply here: both subjects are for the same box's Caddy and were split intentionally (`profile.CertSubjects`'s doc explains why: a wildcard doesn't cover its own bare parent). The actual hazard is concurrency at the shared DNS-01 record, not the grouping.
+- Readiness is checked by dialing the box's own already-listening `:443` with SNI covered by the wildcard and inspecting the returned certificate's SANs, rather than adding any new admin-API surface or externally exposed endpoint. The box already talks to Caddy's admin API for everything else in this package; this stays within "ask Caddy what it's doing," just over the TLS port instead of the admin port.
+- The tradeoff is latency, not correctness: first-boot cert acquisition is now roughly two sequential ACME round-trips instead of two overlapping ones, so anything budgeting the box's "serving HTTPS" readiness needs to size for that (`cmd/brain`'s wait around this call got its own, longer, independent timeout rather than sharing the reconcile-and-routes budget).
+- Not addressed here: whether the same two-order collision can recur at renewal (~60 days out), since Caddy's background renewal maintenance is internal to certmagic and outside this call's control once both certs are configured. Left as an open question rather than assumed-fixed.
+
+**Affected docs:** `internal/caddy/caddy.go` (`EnsureWildcardTLS` doc comment + implementation), `internal/profile/appurl.go` (`CertSubjects` doc comment), `docs/progress/hosted-wildcard-cert.md` (corrected the "combined cert" claim). Progress: `wildcard-cert-serialize-acme-orders.md`.
+
+---
+
 ## 2026-07-02 — The box is a control-plane catalog thin client on every profile; no baked catalog, no signing (cloud #62)
 
 **Previously:** the box's catalog was a disk-backed reader over a baked `catalog/` directory, staged into the image on every profile; `MALMO_CATALOG_DIR` pointed the brain at it. The plan (`APP_STORE.md`) foresaw a *signed* remote catalog fetch replacing it.
