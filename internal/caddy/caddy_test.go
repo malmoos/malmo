@@ -297,3 +297,94 @@ func TestWaitReadyTimesOutWhenAdminDown(t *testing.T) {
 		t.Fatal("want a timeout error when the admin API never answers")
 	}
 }
+
+// TestSplitCertSubjects covers both the happy path (order-independent) and the
+// error path EnsureWildcardTLS relies on to reject a malformed subjects list
+// before configuring anything.
+func TestSplitCertSubjects(t *testing.T) {
+	cases := []struct {
+		name         string
+		subjects     []string
+		wantWildcard string
+		wantBase     string
+		wantErr      bool
+	}{
+		{
+			name:         "base then wildcard",
+			subjects:     []string{"cindy-fox.malmo.network", "*.cindy-fox.malmo.network"},
+			wantWildcard: "*.cindy-fox.malmo.network",
+			wantBase:     "cindy-fox.malmo.network",
+		},
+		{
+			name:         "wildcard then base",
+			subjects:     []string{"*.cindy-fox.malmo.network", "cindy-fox.malmo.network"},
+			wantWildcard: "*.cindy-fox.malmo.network",
+			wantBase:     "cindy-fox.malmo.network",
+		},
+		{
+			name:     "no wildcard",
+			subjects: []string{"cindy-fox.malmo.network"},
+			wantErr:  true,
+		},
+		{
+			name:     "no base",
+			subjects: []string{"*.cindy-fox.malmo.network"},
+			wantErr:  true,
+		},
+		{
+			name:     "empty",
+			subjects: nil,
+			wantErr:  true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wildcard, base, err := splitCertSubjects(tc.subjects)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("splitCertSubjects(%v) = %q, %q, nil; want an error", tc.subjects, wildcard, base)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("splitCertSubjects(%v): %v", tc.subjects, err)
+			}
+			if wildcard != tc.wantWildcard || base != tc.wantBase {
+				t.Errorf("splitCertSubjects(%v) = %q, %q; want %q, %q", tc.subjects, wildcard, base, tc.wantWildcard, tc.wantBase)
+			}
+		})
+	}
+}
+
+// TestTLSAddr covers the admin-address-to-:443-address derivation dialCertReady
+// relies on, including the error path for a malformed admin address.
+func TestTLSAddr(t *testing.T) {
+	cases := []struct {
+		name    string
+		admin   string
+		want    string
+		wantErr bool
+	}{
+		{name: "host and port", admin: "http://malmo-caddy:2019", want: "malmo-caddy:443"},
+		{name: "host only", admin: "http://localhost", want: "localhost:443"},
+		{name: "no host", admin: "not-a-url", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := New(tc.admin)
+			got, err := c.tlsAddr()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("tlsAddr() = %q, nil; want an error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("tlsAddr(): %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("tlsAddr() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

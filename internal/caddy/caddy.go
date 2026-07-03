@@ -414,15 +414,29 @@ const wildcardPollInterval = 2 * time.Second
 // misconfigured, network partition) fails this call instead of hanging
 // forever; the caller treats that the same as any other best-effort Caddy
 // config failure.
+//
+// certReady errors are treated as "not ready yet" (kept retrying, same as
+// dialCertReady's own dial-failure case) rather than failing immediately,
+// since a probe can fail transiently. But the last such error is folded into
+// the timeout error rather than discarded, so a *persistent* probe error
+// (e.g. a malformed admin address) shows up in the log instead of surfacing
+// only as an opaque "context deadline exceeded".
 func (c *Client) waitForCert(ctx context.Context, wildcardSubject string) error {
 	t := time.NewTicker(c.certPollInterval)
 	defer t.Stop()
+	var lastErr error
 	for {
-		if ready, err := c.certReady(ctx, wildcardSubject); err == nil && ready {
+		ready, err := c.certReady(ctx, wildcardSubject)
+		if err != nil {
+			lastErr = err
+		} else if ready {
 			return nil
 		}
 		select {
 		case <-ctx.Done():
+			if lastErr != nil {
+				return fmt.Errorf("waiting for cert: %w (last probe error: %v)", ctx.Err(), lastErr)
+			}
 			return fmt.Errorf("waiting for cert: %w", ctx.Err())
 		case <-t.C:
 		}
