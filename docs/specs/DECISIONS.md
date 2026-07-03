@@ -21,6 +21,21 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-07-04 — The wildcard cert must be named in `certificates.automate`; the apex is served by Caddy's default issuer, not acme-dns
+
+**Previously:** the 2026-07-03 entry below framed the hosted TLS failure as a concurrency bug — two ACME orders (wildcard + apex) racing on the shared `_acme-challenge.<box-id>` acme-dns record — and fixed it by serializing them (`EnsureWildcardTLS` issues the wildcard, waits via a `:443` probe, then adds the apex as a second policy). Both subjects went through acme-dns DNS-01.
+
+**Now:** that was a misdiagnosis. On a real box (`asd-elm`, instrumented via rescue-mode disk logs) the wildcard order was **never placed at all** — zero `*.<box-id>` obtain attempts — so there was no second order to race. A Caddy `automation.policies[]` entry only defines *how* to manage a matching name (the issuer); it does **not** schedule issuance. Caddy obtains a cert only for a name in `apps/tls/certificates/automate` or named by an HTTP route's Host matcher. The wildcard was in neither, so it just sat idle while each installed app's exact host (`<slug>.<box-id>.malmo.network`) forced Caddy to try a per-app cert whose DNS-01 challenge lands at the **undelegated** `_acme-challenge.<slug>.<box-id>` name — failing forever (`could not determine zone` / propagation timeout). The apex succeeded only because it is a real reachable host and Caddy's **default** issuer got it over tls-alpn-01. Fix: `EnsureWildcardTLS` names the wildcard in `certificates.automate` (so Caddy proactively obtains it via the acme-dns policy at the delegated apex `_acme-challenge.<box-id>`); the apex keeps using the default issuer, so **only the wildcard ever touches acme-dns** and there is exactly one order — no race to serialize.
+
+**Why:**
+- Ground truth beat reasoning: the base-works-wildcard-fails symptom looked identical to an eviction race, but the box logs showed the wildcard order never existed. The serialize fix (and its `waitForCert`/`dialCertReady`/`certReady` machinery) was solving a problem that never occurred — `waitForCert` polled for a cert Caddy was never told to obtain, so it timed out on every boot by construction.
+- With the apex on the default issuer (tls-alpn-01/http-01, no acme-dns write), the shared-record contention the 2026-07-03 entry worried about cannot arise — so the serialization is not just unnecessary, it is unreachable. Removed `addBaseSubjectAfterWildcard`, `waitForCert`, `dialCertReady`, `tlsAddr`, and the `certReady` seam.
+- The renewal-race open question from the prior entry is likewise moot: only one name (the wildcard) renews through acme-dns.
+
+**Affected docs:** `internal/caddy/caddy.go` (`EnsureWildcardTLS` rewritten; phase-2 machinery deleted), `internal/profile/appurl.go` (`CertSubjects` doc comment), `cmd/brain/main.go` (call-site comment). Progress: `hosted-wildcard-cert-automate.md`. Supersedes the 2026-07-03 entry below.
+
+---
+
 ## 2026-07-03 — Wildcard + apex certs are issued one at a time, not from one automation policy
 
 **Previously:** `caddy.EnsureWildcardTLS` put a single Caddy TLS automation policy whose `subjects` array listed both of the box's certs ("<box-id>.malmo.network" and "*.<box-id>.malmo.network"), read (including in a prior progress entry) as "a single challenge issues the combined cert."
