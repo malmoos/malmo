@@ -45,15 +45,15 @@ import (
 // degraded-startup stall when Caddy never came up (see the call site).
 const caddyReadyTimeout = 10 * time.Second
 
-// wildcardCertTimeout bounds cd.EnsureWildcardTLS, which now issues the box's
-// two certs one at a time rather than concurrently (internal/caddy.go
-// EnsureWildcardTLS): first the wildcard, then, once Caddy has actually
-// obtained it, the dashboard apex. That's two ACME round-trips end to end
-// instead of one overlapping pair, so this gets its own generous budget rather
-// than sharing what's left of the reconcile-and-routes ctx above: a real ACME
-// order plus DNS-01 propagation can run well past that budget's remainder.
-// Best-effort like the rest of this startup block: a box that never gets a
-// cert within this window logs a warning and keeps serving on :80.
+// wildcardCertTimeout bounds the background cert-acquisition goroutine below.
+// internal/caddy EnsureWildcardTLS issues the box's two certs one at a time
+// (the wildcard first, then the apex once Caddy has actually obtained it), so
+// the call blocks on real ACME plus DNS-01 propagation. It therefore runs
+// detached from the startup path (a box with no reachable ACME must not stall
+// the rest of startup) and gets its own generous budget rather than sharing
+// what's left of the reconcile-and-routes ctx: a real ACME order can run well
+// past that budget's remainder. Best-effort: a box that never gets a cert
+// within this window logs a warning and keeps serving on :80.
 const wildcardCertTimeout = 3 * time.Minute
 
 func main() {
@@ -176,20 +176,28 @@ func main() {
 	// Caddy to obtain the box's Let's Encrypt certs for the dashboard apex +
 	// "*.<box-id>.malmo.network" via ACME DNS-01 against acme-dns with the seeded
 	// credentials, always-on (no toggle). Skipped on appliance and on a hosted box
-	// with no complete enrollment — best-effort, like the other one-shot route
-	// config: a transient Caddy error here doesn't block the brain from serving.
-	// Its own ctx/budget (wildcardCertTimeout), not the reconcile-and-routes ctx
-	// above; see that constant's doc comment.
+	// with no complete enrollment. Best-effort, and run in the BACKGROUND: since
+	// the two certs are now issued one at a time (internal/caddy EnsureWildcardTLS),
+	// this call blocks until the wildcard cert is obtained, up to wildcardCertTimeout.
+	// A box with no reachable ACME (e.g. the QEMU cloud lane) would otherwise stall
+	// the rest of startup, including the dashboard route installed just before Serve,
+	// so the dashboard would 404 until the timeout. Detaching it lets the box serve
+	// its routes immediately (on :80, and on :443 once the cert lands) without
+	// waiting on ACME. Its config calls touch the tls app and the :443 listener,
+	// disjoint from the http routes the rest of startup installs, so they run
+	// concurrently without contending.
 	if prof == profile.Hosted && enrollment.Complete() {
-		wildcardCtx, wildcardCancel := context.WithTimeout(context.Background(), wildcardCertTimeout)
-		if err := cd.EnsureWildcardTLS(wildcardCtx, profile.CertSubjects(boxID), cfg.acmeDNSEndpoint, caddy.EnrollmentCredentials{
-			Subdomain: enrollment.Subdomain,
-			Username:  enrollment.Username,
-			Password:  enrollment.Password,
-		}); err != nil {
-			slog.Warn("caddy: configure wildcard TLS failed; continuing on HTTP", "err", err)
-		}
-		wildcardCancel()
+		go func() {
+			wildcardCtx, wildcardCancel := context.WithTimeout(context.Background(), wildcardCertTimeout)
+			defer wildcardCancel()
+			if err := cd.EnsureWildcardTLS(wildcardCtx, profile.CertSubjects(boxID), cfg.acmeDNSEndpoint, caddy.EnrollmentCredentials{
+				Subdomain: enrollment.Subdomain,
+				Username:  enrollment.Username,
+				Password:  enrollment.Password,
+			}); err != nil {
+				slog.Warn("caddy: configure wildcard TLS failed; continuing on HTTP", "err", err)
+			}
+		}()
 	}
 	cancel()
 	// The dashboard host route (which points Caddy's /api leg at this brain) is
