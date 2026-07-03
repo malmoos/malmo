@@ -206,9 +206,12 @@ run_boot() {
 
     # Wait for the verdict on the serial console. First boot does docker load +
     # brain bootstrap + compose up, so allow a generous window; cloud-assertions.sh
-    # polls the stack up internally.
+    # polls the stack up internally. 480s (not 360): the in-VM assertion widened its
+    # flush-lag-tolerant log waits, so this outer budget must exceed the sum of the
+    # guest's internal polls — otherwise a slow TCG boot times out here as a false
+    # "no verdict" before the guest can emit PASS/FAIL.
     local v=""
-    for _i in $(seq 1 360); do
+    for _i in $(seq 1 480); do
         if grep -q 'MALMO_CLOUD_ASSERTIONS:' "$QEMU_SERIAL" 2>/dev/null; then
             v="$(grep -o 'MALMO_CLOUD_ASSERTIONS:.*' "$QEMU_SERIAL" | tail -1 | tr -d '\r')"
             break
@@ -223,7 +226,7 @@ run_boot() {
     done
     VERDICT="$v"
     if [ -z "$v" ]; then
-        echo "no verdict on the serial console after 360s (phase=${phase}). serial:" >&2
+        echo "no verdict on the serial console after 480s (phase=${phase}). serial:" >&2
         dump_serial
         kill_qemu
         VERDICT="FAIL: no verdict (phase ${phase}, timeout)"

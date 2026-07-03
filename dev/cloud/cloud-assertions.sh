@@ -260,6 +260,27 @@ json_str() { # FILE KEY -> value
     sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" | head -1
 }
 
+# Wait for a line matching a fixed pattern in the brain's container log. The brain
+# writes each milestone to stdout ONCE at startup, but `docker logs` reads the
+# daemon's json-file, which buffers the container's stream before flushing to disk
+# — under a loaded TCG boot that flush can lag the brain's own log timestamp by
+# several seconds. A single-shot (or short) grep therefore loses a genuine race:
+# the line is emitted but not yet readable (a seeded boot's milestone has been seen
+# in the brain log 3s before the check that "failed" to find it). Poll generously.
+# The lag is bounded (seconds), so the default 90s window makes a miss effectively
+# impossible; the happy path breaks on the first read, so the wide window costs no
+# real time. Callers pair this with a deterministic co-signal (serving under the
+# box-id host, :443 bound) that already proves the milestone causally happened —
+# this only pins that the exact code path logged it. Returns 0 on match.
+wait_brain_log() { # pattern [timeout_s]
+    local pat="$1" timeout="${2:-90}" _i
+    for _i in $(seq 1 "$timeout"); do
+        docker logs malmo-brain 2>&1 | grep -qF "$pat" && return 0
+        sleep 1
+    done
+    return 1
+}
+
 # Resolve the Host the brain actually serves the dashboard under for this scenario
 # (see DASH_HOST above). A provisioned box (seeded/frozen) serves at its wildcard apex
 # "<box-id>.malmo.network", not "malmo.local" — so steps 7–9 must probe that host or
@@ -332,21 +353,26 @@ seeded)
 
     # The seed's verification key was ingested: GET /_malmo/sso now runs the verifier
     # and a syntactically-valid-but-unsigned token fails the signature check → 401
-    # (not 503). Proof the key loaded and the verifier is wired on this box.
-    sso="$(http_status '/_malmo/sso?token=ZmFrZQ.ZmFrZXNpZw' "$DASH_HOST" 2>/dev/null || true)"
+    # (not 503). Proof the key loaded and the verifier is wired on this box. Poll:
+    # the route is served (step 8 passed) but the verifier arms a beat behind the
+    # listener, so a single-shot read can catch a transient 503 before the key loads.
+    sso=""
+    for _i in $(seq 1 30); do
+        sso="$(http_status '/_malmo/sso?token=ZmFrZQ.ZmFrZXNpZw' "$DASH_HOST" 2>/dev/null || true)"
+        grep -q ' 401' <<<"$sso" && break
+        sleep 1
+    done
     grep -q ' 401' <<<"$sso" || fail "seeded /_malmo/sso with a bad token: status='$sso' (want 401 — key loaded, signature rejected)"
     echo "cloud-assertions: hosted SSO verifier armed (bad token 401, key loaded from seed; box_id=$box_id)"
 
-    # The synchronous seed ingestion ran before the brain served (the brain logs
-    # it). Poll rather than read once: the brain emits this line during startup
-    # and the bad-token 401 above can win the race to the docker json-log, so a
-    # single-shot grep is flaky (the line is there moments later). Bounded — the
-    # ingest log is first-boot-synchronous, so a few seconds is ample.
-    for _i in $(seq 1 30); do
-        docker logs malmo-brain 2>&1 | grep -q 'provisioning seed ingested' && break
-        sleep 1
-    done
-    docker logs malmo-brain 2>&1 | grep -q 'provisioning seed ingested' || \
+    # The synchronous seed ingestion ran before the brain served — in fact it ran
+    # before steps 7-8 above could pass: the dashboard + /api answered under
+    # DASH_HOST=<box_id>.malmo.network, and the brain only installs that box-id route
+    # AFTER reading the seed and learning its box-id (cmd/brain loadHostedEnvironment).
+    # So the milestone has causally already been logged by now; this confirms the
+    # exact line was emitted. Use the flush-lag-tolerant waiter — a single-shot grep
+    # loses the docker json-log race even though the line is present moments later.
+    wait_brain_log 'provisioning seed ingested' || \
         fail "brain did not log 'provisioning seed ingested' on the seeded boot"
     echo "cloud-assertions: seed ingested (box_id=$box_id persisted)"
 
@@ -360,17 +386,14 @@ seeded)
     # cert), and the air-gapped lane never exercised it before — the prior seed carried
     # no enrollment, so EnsureWildcardTLS was skipped.
 
-    # (a) The brain configured wildcard TLS. Poll: the success log line is emitted once
-    # during startup and a single-shot grep can lose the race to the docker json-log.
-    for _i in $(seq 1 30); do
-        docker logs malmo-brain 2>&1 | grep -q 'caddy: wildcard TLS configured' && break
-        sleep 1
-    done
-    docker logs malmo-brain 2>&1 | grep -q 'caddy: wildcard TLS configured' || \
-        fail "brain did not configure wildcard TLS on the seeded boot (#278 — EnsureWildcardTLS not reached/applied)"
-    echo "cloud-assertions: wildcard TLS configured (acme-dns DNS-01 issuer + :443 set for *.$box_id.malmo.network)"
+    # Two proofs the brain APPLIED the wildcard-TLS config. Order matters: assert the
+    # deterministic socket signal FIRST, then the log line. EnsureWildcardTLS binds
+    # :443 as part of phase 1 and logs "caddy: wildcard TLS configured" in the same
+    # synchronous call, so once :443 is listening the milestone has already been
+    # emitted — the log grep is then a same-call confirmation the daemon has had ample
+    # time to flush, not a race we start cold.
 
-    # (b) The :443 listener actually bound. A plain TCP connect to Caddy's HTTPS port
+    # (a) The :443 listener actually bound. A plain TCP connect to Caddy's HTTPS port
     # succeeds even with no cert (the TLS handshake would fail, but the socket is
     # listening) — the ":443 never binds" symptom from #278, asserted positively. Poll:
     # the listener is patched in a beat after the config PUT.
@@ -381,6 +404,13 @@ seeded)
     done
     [ -n "$bound" ] || fail "Caddy :443 listener not bound on the seeded boot (#278 — :443 never came up)"
     echo "cloud-assertions: Caddy :443 listener bound"
+
+    # (b) The brain logged the wildcard-TLS milestone. Flush-lag-tolerant waiter: the
+    # line is emitted once during the (now-proven-complete) phase-1 call, and a
+    # single-shot grep can still lose the race to the docker json-log flush.
+    wait_brain_log 'caddy: wildcard TLS configured' || \
+        fail "brain did not configure wildcard TLS on the seeded boot (#278 — EnsureWildcardTLS not reached/applied)"
+    echo "cloud-assertions: wildcard TLS configured (acme-dns DNS-01 issuer + :443 set for *.$box_id.malmo.network)"
     ;;
 frozen:*)
     expect="${MODE#frozen:}"
