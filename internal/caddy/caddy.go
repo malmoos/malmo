@@ -39,6 +39,11 @@ type Client struct {
 	// shrink this so a fake certReady that takes a few probes to report ready
 	// doesn't make the test suite slow.
 	certPollInterval time.Duration
+	// certWaitTimeout bounds the background wait for the wildcard cert in
+	// addBaseSubjectAfterWildcard, on its own budget independent of the caller's
+	// startup context. Tests shrink it so the base-subject phase gives up
+	// quickly when the fake never reports the cert ready.
+	certWaitTimeout time.Duration
 }
 
 func New(adminAddr string) *Client {
@@ -46,10 +51,17 @@ func New(adminAddr string) *Client {
 		admin:            adminAddr,
 		http:             &http.Client{Timeout: 5 * time.Second},
 		certPollInterval: wildcardPollInterval,
+		certWaitTimeout:  wildcardCertWait,
 	}
 	c.certReady = c.dialCertReady
 	return c
 }
+
+// wildcardCertWait bounds the background wait for the wildcard cert (New sets
+// Client.certWaitTimeout to it). Generous: a real ACME order plus DNS-01
+// propagation can take a while, and it runs off the startup path so a long
+// wait costs nothing.
+const wildcardCertWait = 3 * time.Minute
 
 // routeID is the stable @id we attach to each route so we can delete it later.
 func routeID(instanceID string) string { return "malmo-app-" + instanceID }
@@ -339,20 +351,44 @@ func (c *Client) EnsureWildcardTLS(ctx context.Context, subjects []string, acmeD
 	if err := c.patch(ctx, "/config/apps/http/servers/malmo/listen", []any{":80", ":443"}); err != nil {
 		return fmt.Errorf("caddy: add :443 listener: %w", err)
 	}
-	slog.Info("caddy: wildcard tls phase 1 configured, waiting for cert", "subject", wildcard)
+	// Phase 1 is now applied: the acme-dns DNS-01 issuer is configured and :443
+	// is bound. That is the "wildcard TLS configured" milestone a seeded boot
+	// waits on. Actual issuance is asynchronous and may never happen offline, so
+	// this must not wait on a cert. Emit the milestone here, synchronously,
+	// before returning, so the box's config is deterministically in place.
+	slog.Info("caddy: wildcard TLS configured", "wildcard", wildcard)
 
-	if err := c.waitForCert(ctx, wildcard); err != nil {
-		return fmt.Errorf("caddy: wildcard subject %s not issued before adding base subject: %w", wildcard, err)
-	}
-
-	// Phase 2: the base subject, appended as its own policy only after the
-	// wildcard's order has fully finished (present, validate, clean up), so
-	// the two orders are never concurrent.
-	if err := c.post(ctx, "/config/apps/tls/automation/policies", certPolicy(base, issuer)); err != nil {
-		return fmt.Errorf("caddy: configure wildcard tls (phase 2: base subject): %w", err)
-	}
-	slog.Info("caddy: wildcard tls configured", "wildcard", wildcard, "base", base)
+	// Phase 2 runs in the background: wait until Caddy has actually obtained the
+	// wildcard cert, then add the base (apex) subject as its own policy, so the
+	// two ACME orders never run concurrently (the race this change fixes).
+	// Detached so cert acquisition never blocks the caller's startup, and so the
+	// synchronous phase-1 config above lands regardless of whether a cert is ever
+	// obtainable (an offline box configures TLS and binds :443, it just gets no
+	// cert).
+	go c.addBaseSubjectAfterWildcard(wildcard, base, issuer)
 	return nil
+}
+
+// addBaseSubjectAfterWildcard waits for Caddy to obtain the wildcard cert, then
+// appends the base (apex) subject as its own automation policy, so its ACME
+// order starts only after the wildcard's has finished (present, validate, clean
+// up) and the two never write the enrollment account's DNS-01 record at once.
+// It runs on its own certWaitTimeout-bounded background context, not the
+// caller's startup one: a box with no reachable ACME simply times out here and
+// the base subject is never added, which is fine since it has no cert to serve.
+// Best-effort, so failures are logged, not surfaced.
+func (c *Client) addBaseSubjectAfterWildcard(wildcard, base string, issuer map[string]any) {
+	ctx, cancel := context.WithTimeout(context.Background(), c.certWaitTimeout)
+	defer cancel()
+	if err := c.waitForCert(ctx, wildcard); err != nil {
+		slog.Warn("caddy: wildcard cert not obtained; base subject not added", "wildcard", wildcard, "err", err)
+		return
+	}
+	if err := c.post(ctx, "/config/apps/tls/automation/policies", certPolicy(base, issuer)); err != nil {
+		slog.Warn("caddy: add base subject policy failed", "base", base, "err", err)
+		return
+	}
+	slog.Info("caddy: base subject cert added", "wildcard", wildcard, "base", base)
 }
 
 // splitCertSubjects sorts subjects (profile.CertSubjects' [base, wildcard]
