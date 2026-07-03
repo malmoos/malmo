@@ -16,10 +16,16 @@
 #   - When a catalog-import-gaps.md entry flips to `implemented`/`resolved`, add its
 #     gap-class here in the same change, and bump `version`.
 #   - `id` == the gap-class tag, so it lines up with a status.yml `unblock` reference
-#     and a `gap_ref` anchor with no separate taxonomy.
-#   - `since` is the brain version that introduced it. No brain version is cut yet
-#     (RELEASE_MANIFEST.md), so pre-1.0 it is the placeholder "0.x" and `ref` carries
-#     the real provenance; backfill the semver once releases are tagged.
+#     and a `gap_ref` anchor with no separate taxonomy. Exception: a *partially*
+#     closed gap-class coins a distinct sub-capability id for the shipped facet only
+#     (never the broader unclosed gap-class) — the ledger entry that names the
+#     shipped facet must say which id it maps to, so the two vocabularies stay
+#     bridgeable (CAPABILITIES.md # The append-only discipline).
+#   - `since` is the brain version that introduced it — always a quoted string
+#     (`"1.2.0"`, not `1.2.0`) so YAML doesn't parse it as a float/int. No brain
+#     version is cut yet (RELEASE_MANIFEST.md), so pre-1.0 it is the placeholder
+#     "0.x" and `ref` carries the real provenance; backfill the semver once
+#     releases are tagged.
 
 # Bumped whenever the capabilities list changes, so a consumer can tell how current
 # the manifest it validated against was (the published catalog stamps this number).
@@ -57,12 +63,16 @@ capabilities:
 
   - id: service-user
     since: "0.x"
-    ref: "#147; APP_ISOLATION.md # Runtime identity & data ownership"
+    ref: "#116; #147; DECISIONS.md 2026-06-10; APP_ISOLATION.md # Runtime identity & data ownership"
     summary: >
-      A folderless app gets a dedicated, malmo-allocated non-root runtime identity,
-      and every declared relative bind dir is created + chowned to it before compose
-      up. Unblocks images that adopt the runtime user:. (Does NOT cover images that
-      hardcode an internal UID — that is the separate, unshipped userns-remap.)
+      Sub-capability of the nonroot-data-ownership gap-class (ledger:
+      `nonroot-data-ownership — poznote`, planned-partial for that app specifically,
+      but the mechanism itself shipped). A folderless app can opt into a dedicated,
+      malmo-allocated non-root runtime identity (#116), and every declared relative
+      bind dir is created + chowned to it before compose up (#147, generalized
+      beyond the single ./data dir). Unblocks images that adopt the runtime user:.
+      (Does NOT cover images that hardcode an internal UID — that is the separate,
+      unshipped userns-remap.)
 
   - id: smtp-relay
     since: "0.x"

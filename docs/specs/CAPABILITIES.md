@@ -13,7 +13,7 @@ This manifest makes the connection mechanical. It is a versioned list of the cap
 `../dev/capabilities.yml`: a top-level `version` and a list of `capabilities`, each with:
 
 - **`id`** — the capability. **The id is the gap-class tag** from `catalog-import-gaps.md`, reused verbatim (`operator-env-config`, `managed-mysql`, `service-user`, …). Reusing the gap-class means the manifest, the ledger, and a curation record's blocker reference all speak one vocabulary with no separate taxonomy to keep in sync.
-- **`since`** — the brain version that introduced it. No brain version is cut yet (`RELEASE_MANIFEST.md`), so pre-1.0 this is the placeholder `"0.x"` and `ref` carries the real provenance; backfill the semver once releases are tagged.
+- **`since`** — the brain version that introduced it, always a quoted string (`"1.2.0"`, not `1.2.0`) — an unquoted value parses as a YAML float or integer, not a string. No brain version is cut yet (`RELEASE_MANIFEST.md`), so pre-1.0 this is the placeholder `"0.x"` and `ref` carries the real provenance; backfill the semver once releases are tagged.
 - **`ref`** — the PR / `DECISIONS.md` date / spec section that shipped it, for traceability.
 - **`summary`** — one line on what the capability is.
 
@@ -24,6 +24,8 @@ This manifest makes the connection mechanical. It is a versioned list of the cap
 A shipped capability does not un-ship. **Append; never remove or renumber an id.** When a `catalog-import-gaps.md` entry flips to `implemented` or `resolved`, add its gap-class to `capabilities.yml` in the same change and bump `version`. That single edit is what fires the re-screen signal for every app waiting on the gap — so it is not optional bookkeeping, it is the mechanism.
 
 One nuance the ledger already carries: a gap-class can be *partially* closed. `nonroot-data-ownership` shipped `service-user` (an app that adopts the runtime `user:` is unblocked) but the hardcoded-internal-UID facet still waits on the separate, unshipped `userns-remap`. List only the capability that actually shipped (`service-user`), under its own id — never the broader unclosed gap-class. A curation record waiting on the unshipped facet references the unshipped id (`userns-remap`), so it correctly stays blocked.
+
+A partial closure's id is, by definition, **not** the gap-class tag verbatim — it is coined for the shipped facet. That breaks the single-vocabulary guarantee unless the bridge is written down: the `catalog-import-gaps.md` entry that names the shipped facet must state which `capabilities.yml` id it maps to (e.g. the `nonroot-data-ownership — poznote` entry names `service-user` as the mechanism malmo now ships). Without that bridge, someone starting from the ledger's gap-class tag has no way to find the narrower id in the manifest. Coining a sub-capability id with no ledger cross-reference is a doc bug, not a valid partial closure.
 
 ## Who consumes it
 
