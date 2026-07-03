@@ -353,8 +353,8 @@ func splitCertSubjects(subjects []string) (wildcard, base string, err error) {
 	return wildcard, base, nil
 }
 
-// acmeIssuer builds the acme-dns ACME issuer config shared by both phases'
-// automation policies.
+// acmeIssuer builds the acme-dns ACME issuer config for the wildcard's
+// automation policy.
 func acmeIssuer(acmeDNSEndpoint string, enr EnrollmentCredentials) map[string]any {
 	return map[string]any{
 		"module": "acme",
