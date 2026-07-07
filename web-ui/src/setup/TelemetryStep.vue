@@ -6,6 +6,7 @@
 import { ref } from "vue";
 import { setTelemetryConsent } from "../auth";
 import type { ApiError } from "../api";
+import Button from "@/components/ui/Button.vue";
 
 const emit = defineEmits<{ done: [] }>();
 
@@ -55,9 +56,9 @@ async function submit() {
         any time in Settings → Privacy.
       </p>
     </div>
-    <button type="submit" :disabled="submitting">
+    <Button type="submit" :disabled="submitting" class="mt-2">
       {{ submitting ? "Saving…" : "Continue" }}
-    </button>
+    </Button>
     <p v-if="error" class="error">{{ error }}</p>
   </form>
 </template>

@@ -129,15 +129,49 @@ func TestEnsureWildcardTLS(t *testing.T) {
 	if admin.find("DELETE", "/config/apps/tls") == nil {
 		t.Error("expected a DELETE of the tls app before PUT")
 	}
+
 	put := admin.find("PUT", "/config/apps/tls")
 	if put == nil {
 		t.Fatal("expected a PUT to /config/apps/tls")
 	}
-	policy := put.body["automation"].(map[string]any)["policies"].([]any)[0].(map[string]any)
-	gotSubjects := policy["subjects"].([]any)
-	if len(gotSubjects) != 2 || gotSubjects[0] != subjects[0] || gotSubjects[1] != subjects[1] {
-		t.Errorf("policy subjects = %v, want %v", gotSubjects, subjects)
+
+	// The wildcard must be listed in certificates.automate — the whole fix. A
+	// policy alone only says *how* to manage a matching name; without an automate
+	// entry Caddy never places the wildcard order (the live #278 symptom).
+	automate := put.body["certificates"].(map[string]any)["automate"].([]any)
+	if len(automate) != 1 || automate[0] != "*.cindy-fox.malmo.network" {
+		t.Errorf("certificates.automate = %v, want [*.cindy-fox.malmo.network]", automate)
 	}
+
+	// Exactly one automation policy — the wildcard, pinned to the acme-dns issuer.
+	policies := put.body["automation"].(map[string]any)["policies"].([]any)
+	if len(policies) != 1 {
+		t.Fatalf("policies = %v, want exactly 1 (wildcard only)", policies)
+	}
+	policy := policies[0].(map[string]any)
+	gotSubjects := policy["subjects"].([]any)
+	if len(gotSubjects) != 1 || gotSubjects[0] != "*.cindy-fox.malmo.network" {
+		t.Errorf("policy subjects = %v, want [*.cindy-fox.malmo.network]", gotSubjects)
+	}
+	assertACMEIssuer(t, policy, "https://auth.malmo.network", "u", "p", "abc-123")
+
+	// The :443 listener is added alongside :80.
+	if admin.find("PATCH", "/servers/malmo/listen") == nil {
+		t.Fatal("expected a PATCH of the server listen array")
+	}
+
+	// The base subject is NOT routed through acme-dns: it is served by Caddy's
+	// default issuer (tls-alpn-01/http-01), so no base policy is ever POSTed and
+	// only one acme-dns order (the wildcard's) ever runs.
+	if admin.find("POST", "/config/apps/tls/automation/policies") != nil {
+		t.Error("did not expect a base-subject policy POST (base is served via the default issuer)")
+	}
+}
+
+// assertACMEIssuer checks the shared acme-dns issuer shape embedded in a
+// single-subject policy body.
+func assertACMEIssuer(t *testing.T, policy map[string]any, wantEndpoint, wantUser, wantPass, wantSubdomain string) {
+	t.Helper()
 	issuer := policy["issuers"].([]any)[0].(map[string]any)
 	if issuer["module"] != "acme" {
 		t.Errorf("issuer module = %v, want acme", issuer["module"])
@@ -146,17 +180,11 @@ func TestEnsureWildcardTLS(t *testing.T) {
 	if provider["name"] != "acmedns" {
 		t.Errorf("dns provider = %v, want acmedns", provider["name"])
 	}
-	if provider["server_url"] != "https://auth.malmo.network" {
-		t.Errorf("provider server_url = %v", provider["server_url"])
+	if provider["server_url"] != wantEndpoint {
+		t.Errorf("provider server_url = %v, want %s", provider["server_url"], wantEndpoint)
 	}
-	if provider["username"] != "u" || provider["password"] != "p" || provider["subdomain"] != "abc-123" {
-		t.Errorf("provider creds = %v, want {abc-123 u p}", provider)
-	}
-
-	// The :443 listener is added alongside :80.
-	patch := admin.find("PATCH", "/servers/malmo/listen")
-	if patch == nil {
-		t.Fatal("expected a PATCH of the server listen array")
+	if provider["username"] != wantUser || provider["password"] != wantPass || provider["subdomain"] != wantSubdomain {
+		t.Errorf("provider creds = %v, want {%s %s %s}", provider, wantSubdomain, wantUser, wantPass)
 	}
 }
 
@@ -184,5 +212,63 @@ func TestWaitReadyTimesOutWhenAdminDown(t *testing.T) {
 	defer cancel()
 	if err := c.WaitReady(ctx); err == nil {
 		t.Fatal("want a timeout error when the admin API never answers")
+	}
+}
+
+// TestSplitCertSubjects covers both the happy path (order-independent) and the
+// error path EnsureWildcardTLS relies on to reject a malformed subjects list
+// before configuring anything.
+func TestSplitCertSubjects(t *testing.T) {
+	cases := []struct {
+		name         string
+		subjects     []string
+		wantWildcard string
+		wantBase     string
+		wantErr      bool
+	}{
+		{
+			name:         "base then wildcard",
+			subjects:     []string{"cindy-fox.malmo.network", "*.cindy-fox.malmo.network"},
+			wantWildcard: "*.cindy-fox.malmo.network",
+			wantBase:     "cindy-fox.malmo.network",
+		},
+		{
+			name:         "wildcard then base",
+			subjects:     []string{"*.cindy-fox.malmo.network", "cindy-fox.malmo.network"},
+			wantWildcard: "*.cindy-fox.malmo.network",
+			wantBase:     "cindy-fox.malmo.network",
+		},
+		{
+			name:     "no wildcard",
+			subjects: []string{"cindy-fox.malmo.network"},
+			wantErr:  true,
+		},
+		{
+			name:     "no base",
+			subjects: []string{"*.cindy-fox.malmo.network"},
+			wantErr:  true,
+		},
+		{
+			name:     "empty",
+			subjects: nil,
+			wantErr:  true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wildcard, base, err := splitCertSubjects(tc.subjects)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("splitCertSubjects(%v) = %q, %q, nil; want an error", tc.subjects, wildcard, base)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("splitCertSubjects(%v): %v", tc.subjects, err)
+			}
+			if wildcard != tc.wantWildcard || base != tc.wantBase {
+				t.Errorf("splitCertSubjects(%v) = %q, %q; want %q, %q", tc.subjects, wildcard, base, tc.wantWildcard, tc.wantBase)
+			}
+		})
 	}
 }

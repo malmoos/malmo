@@ -32,7 +32,7 @@ SOCK="$WORK/agent.sock"
 HEALTH_FILE="$WORK/storage.json"
 FIXTURE_ROOT="$WORK/fixture"        # MALMO_VERIFY_ROOT
 STATE_DIR="$WORK/state"
-CATALOG_DIR="$WORK/catalog"
+CATALOG_CACHE_DIR="$WORK/catalog-cache"
 COOKIE_JAR="$WORK/cookies"
 BRAIN_LOG="$WORK/brain.log"
 AGENT_LOG="$WORK/agent.log"
@@ -43,7 +43,7 @@ TEST_USER="healthtest"
 TEST_PASS="healthtest-pw"
 
 mkdir -p "$FIXTURE_ROOT/etc/malmo" "$FIXTURE_ROOT/srv/malmo" "$FIXTURE_ROOT/var/lib/malmo" \
-         "$STATE_DIR" "$CATALOG_DIR"
+         "$STATE_DIR" "$CATALOG_CACHE_DIR"
 
 # --- cleanup -------------------------------------------------------------
 
@@ -137,7 +137,8 @@ wait_for "host-agent socket" test -S "$SOCK"
 step "launching brain (MALMO_HEALTH_POLL=500ms)"
 MALMO_LISTEN=":${BRAIN_PORT}" \
 MALMO_STATE_DIR="$STATE_DIR" \
-MALMO_CATALOG_DIR="$CATALOG_DIR" \
+MALMO_CATALOG_URL="http://127.0.0.1:1" \
+MALMO_CATALOG_CACHE_DIR="$CATALOG_CACHE_DIR" \
 MALMO_AGENT_SOCK="$SOCK" \
 MALMO_HEALTH_POLL="500ms" \
 MALMO_CADDY_ADMIN="http://127.0.0.1:1" \

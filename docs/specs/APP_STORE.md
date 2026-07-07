@@ -2,7 +2,9 @@
 
 > How malmo publishes and serves the catalog of installable apps to every box. Companion to `APP_MANIFEST.md` (the contract being published), `APP_LIFECYCLE.md` (what the box does after fetching), `UPDATES.md` (the update flow that consumes catalog version bumps), and `RELEASE_MANIFEST.md` (the sibling doc this one borrows its publishing shape from).
 
-The scope here is the **app catalog**: how apps reach a malmo box, what the box trusts, and what infrastructure we run to publish it. Container images themselves are not hosted by us — they live in their authors' registries (Docker Hub, GHCR, …). What we publish is the **signed metadata** that tells the box which image bytes to trust for each app version.
+The scope here is the **app catalog**: how apps reach a malmo box, what the box trusts, and what infrastructure we run to publish it. Container images themselves are not hosted by us — they live in their authors' registries (Docker Hub, GHCR, …). What we publish is the metadata that tells the box which image bytes to trust for each app version.
+
+> **Superseded — read this first (`DECISIONS.md` 2026-07-02, cloud `specs/CATALOG.md`).** The publish + trust model below (a static, minisign-**signed** `catalog.json` served from a CDN at `store.malmo.network`, with per-app `manifest.yml`/`compose.yml` fetched on demand and hash-chained to a signed root) is **not what shipped.** As built (OS #62 / cloud #62): the catalog is served by the **control plane's dynamic HTTP API** — the box fetches the **whole snapshot in one request** (`GET /catalog/sync`), which already carries every app's verbatim manifest + compose, verifies an **integrity digest** (SHA-256 over the app index) + a schema version, **caches it last-good on disk**, and projects the store locally (offline = last-good browse; a never-synced box shows an empty store). There is **no Ed25519/minisign signature**: the box only ever fetches from the malmo control plane over **TLS**, which authenticates the origin, and the integrity digest catches truncation/corruption — a signature would re-authenticate bytes TLS already covers, for a key-distribution cost and no threat it closes. No catalog is baked into the box image. The sections below are kept for the schema field semantics (`icon_glyph`, `footprint`, `images`, curation/`listed:`), which carry over; treat their signing/CDN/on-demand-fetch mechanics as historical. The live wire shape is cloud `specs/CATALOG.md`; the box consumer is `../progress/catalog-remote-thin-client.md`.
 
 ## What the store is
 
@@ -74,6 +76,8 @@ Top-level fields:
 Anything not in the schema is implicit (per-app file paths follow the URL convention) or out of scope (rollout pacing, telemetry — not in scope for the store).
 
 ## Trust model — what's signed, what's pinned
+
+> **Superseded (`DECISIONS.md` 2026-07-02).** There is no signature in the shipped design — trust is **TLS to the control plane + the snapshot's integrity digest** (see the banner at the top). The minisign/pubkey-rotation mechanics in this section did not ship. The *digest pinning* of image bytes (below) carries over: the resolved `@sha256:…` digests live in each app's `images` block inside the verbatim manifest the box re-parses, and the brain still pulls by digest.
 
 The catalog is **signed with minisign (Ed25519)** by the malmo store key. Brain verifies on every fetch and refuses to act on an unsigned or invalidly-signed catalog.
 
@@ -190,36 +194,34 @@ Browse UI groups by category regardless of file shape — the grouping is a UI c
 
 ## Failure modes
 
-- **Box can't reach `store.malmo.network`:** brain keeps the last-known catalog cached at `/var/lib/malmo/store-cache/catalog.json` (with its signature). Browse view shows cached entries with a "last updated X ago" notice. Installs of cached apps still work as long as upstream image registries are reachable. Updates pause until the catalog refresh succeeds.
-- **Signature verification fails:** brain logs and ignores the fetched catalog. Previous valid catalog stays in effect. Persistent signature failure surfaces as a dashboard warning after 24 hours.
-- **Manifest or compose hash mismatch at install time:** install refuses. The catalog promised specific bytes; if the per-app fetch doesn't match, something is wrong (CDN corruption, tampered file). User sees an error; brain logs the mismatch.
+- **Box can't reach the control plane:** the brain serves the last-good snapshot it cached at `/var/lib/malmo/catalog-cache/catalog.json` — browse shows the cached entries, and installs of cached apps still work as long as upstream image registries are reachable. A box that has *never* synced shows an empty store. The background sync retries; nothing else is blocked.
+- **Snapshot fails its integrity digest (or schema check):** the brain rejects it — a truncated/corrupted fetch, or a tampered cache file, never becomes the read source. The previous last-good snapshot stays in effect. (Authenticity of the bytes is TLS's job; the digest catches corruption — see the Trust-model banner.)
 - **Image pull fails at install time:** standard install failure, surfaced per `APP_LIFECYCLE.md` # install transaction.
 - **Image digest changes upstream between catalog publish and box pull:** the box pulls by digest, so the upstream's new bytes don't affect it. The box installs the bytes the catalog promised. If the digest was *deleted* from the upstream registry (rare — most registries keep digests addressable), the install fails with a registry-side error.
 
 ## What we run
 
-For v1, end-to-end:
+As shipped (cloud #62; the live wire shape is cloud `specs/CATALOG.md`), end-to-end:
 
-1. **Git repo `malmo/store`** (free on GitHub).
-2. **CI on the repo** — schema lint, admission check, image-pullability check, digest resolution, catalog regeneration. GitHub Actions is sufficient.
-3. **CDN at `store.malmo.network`** — same provider class as `releases.malmo.network`. Cloudflare R2 / Pages, or whatever the release-manifest CDN ends up on. The two CDNs can share infra; they don't have to.
-4. **One signing keypair** for the store catalog — offline, hardware-token-protected. Separate from the release-manifest key.
-5. **Store pubkey baked into the brain image** at brain build time.
+1. **Store git repo** (cloud-side) — the authoring source of truth: one directory per app with its `manifest.yml` + `compose.yml` + assets.
+2. **CI on the repo** — schema lint, admission check, image-pullability check, digest resolution, and snapshot regeneration (`catalog.json` + assets, stamped with the integrity digest).
+3. **The control plane's catalog API** — `GET /catalog/sync` (the whole snapshot in one response) plus the per-app asset routes, served **over TLS** on the malmo apex. This is a real backend service (part of the malmo cloud control plane), not a static CDN: the box is a thin HTTP client of it.
 
-No application server. No backend service. Static files, signed, served from a CDN. The publish flow is git-driven; the verification flow is offline + bake-into-binary. Costs are dominated by CDN egress, which at v1 scale is rounding error.
+Trust is **TLS to the control plane + the snapshot's sha256 integrity digest** — there is no signing keypair and no pubkey baked into the brain image. The publish flow is git-driven (a store PR regenerates the snapshot the API serves); the box-side flow is fetch-verify-cache.
 
 ## Locked decisions
 
-- **Catalog is a static signed JSON file** (`store.malmo.network/catalog.json`) served from a CDN, backed by a git repo. Mirrors `RELEASE_MANIFEST.md` in shape.
-- **Signed with minisign (Ed25519).** Store key is **separate from the release-manifest key**. Verifier accepts a **list of pubkeys** for forward-compatible rotation.
-- **Authors declare image versions; CI resolves digests into the catalog.** Brain pulls by digest. The signed catalog is the binding from version to specific bytes — tag mutation on upstream registries can't ship malicious code to malmo boxes.
-- **Per-app manifest and compose files are bound to the catalog by content hash**, not individually signed. One signed root, hash-chained leaves.
-- **Verification happens in the brain** (not host-agent). Brain owns app lifecycle; the store pubkey ships with the brain image.
+_(Updated for the shipped design — `DECISIONS.md` 2026-07-02, cloud #62. The earlier signed-static-CDN calls are superseded; the digest-pinning and don't-host-images calls carry over.)_
+
+- **The catalog is served by the control plane's HTTP API,** not a static CDN file. The box fetches the whole snapshot in one request (`GET /catalog/sync`) — which already carries every app's verbatim `manifest.yml` + `compose.yml` — and is a **thin client with a last-good on-disk cache**. Offline ⇒ last-good browse; never-synced ⇒ empty store.
+- **No signing.** Trust is **TLS to the control plane** (authenticates the origin) **+ a sha256 integrity digest** over the app index, schema-versioned (catches truncation/corruption). A signature would re-authenticate bytes TLS already covers, for a key-distribution cost and no threat it closes.
+- **Authors declare image versions; CI resolves digests into the published catalog.** The brain pulls by digest — the resolved `@sha256:…` lives in each app's `images:` block inside the verbatim manifest the box re-parses. Tag mutation on upstream registries can't ship malicious code to a box.
+- **The manifest + compose travel inside the snapshot,** verified by the single index digest — there are no separately-fetched, per-app hash-chained files.
+- **Verification happens in the brain** (not host-agent). The brain owns app lifecycle and re-parses each manifest with its own `manifest.Parse`, staying the sole enforcer of the manifest contract.
 - **We don't host container images.** Authors publish to their own registries. The box's local image cache delivers the "app keeps working if the developer disappears" property. Image mirroring is deferred.
-- **v1 catalog is hand-curated by malmo.** Every manifest is malmo-authored and malmo-signed. Third-party authorship (PRs against `malmo/store`) lands later; per-store keys land later still.
-- **Data model supports multiple catalogs from day one** (catalog id, URL, pubkey list). v1 ships UI for one catalog only.
-- **Single `catalog.json` file in v1.** Sharding is additive when the file crosses ~1 MB or fetch latency becomes user-visible.
-- **Promotion is a PR against `malmo/store`** with regenerated catalog + signature. CI validates schema, admission rules, image reachability, hashes, signature. Merge to `main` is the publish action.
+- **v1 catalog is hand-curated by malmo.** Every manifest is malmo-authored. Third-party authorship (PRs against the store) lands later.
+- **No baked catalog in the box image.** Every box — appliance and hosted — is a control-plane thin client (`DECISIONS.md` 2026-07-02).
+- **Promotion is a PR against the store repo** with a regenerated snapshot. CI validates schema, admission rules, image reachability, and digests; merge is the publish action (the control plane then serves the new snapshot).
 
 ## Open questions
 

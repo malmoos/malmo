@@ -88,7 +88,8 @@ func testConfig() Config {
 		ProxyContainerName: "malmo-docker-proxy",
 		ControlPlaneDir:    "/var/lib/malmo/control-plane",
 		UIUpstream:         "malmo-ui:80",
-		CatalogDir:         "/var/lib/malmo/catalog",
+		CatalogURL:         "https://malmo.network",
+		CatalogCacheDir:    "/var/lib/malmo/catalog-cache",
 	}
 }
 
@@ -165,10 +166,13 @@ func TestLaunchRunSpec(t *testing.T) {
 	if v := envVal(s.Env, "MALMO_DASHBOARD_UI_UPSTREAM"); v != "malmo-ui:80" {
 		t.Errorf("MALMO_DASHBOARD_UI_UPSTREAM = %q, want malmo-ui:80", v)
 	}
-	// The Door-1 catalog the brain installs from — under DataDir, so it rides the
-	// data-dir mount (no separate Mount entry).
-	if v := envVal(s.Env, "MALMO_CATALOG_DIR"); v != "/var/lib/malmo/catalog" {
-		t.Errorf("MALMO_CATALOG_DIR = %q, want /var/lib/malmo/catalog", v)
+	// The control-plane catalog origin + last-good cache dir. The cache is under
+	// DataDir, so it rides the data-dir mount (no separate Mount entry).
+	if v := envVal(s.Env, "MALMO_CATALOG_URL"); v != "https://malmo.network" {
+		t.Errorf("MALMO_CATALOG_URL = %q, want https://malmo.network", v)
+	}
+	if v := envVal(s.Env, "MALMO_CATALOG_CACHE_DIR"); v != "/var/lib/malmo/catalog-cache" {
+		t.Errorf("MALMO_CATALOG_CACHE_DIR = %q, want /var/lib/malmo/catalog-cache", v)
 	}
 	// OfflineInstall defaults off → the brain gets no MALMO_OFFLINE_INSTALL.
 	if v := envVal(s.Env, "MALMO_OFFLINE_INSTALL"); v != "" {
@@ -211,13 +215,15 @@ func TestLaunchRunSpecProfileMarkerMount(t *testing.T) {
 	}
 }
 
-// On a baked, air-gapped box the brain is launched in offline-install mode; an
-// unset catalog dir leaves MALMO_CATALOG_DIR off rather than pointing at "".
+// On a baked, air-gapped box the brain is launched in offline-install mode; unset
+// catalog vars leave MALMO_CATALOG_URL / MALMO_CATALOG_CACHE_DIR off rather than
+// pointing at "" (the brain then falls back to its own defaults).
 func TestLaunchRunSpecOfflineAndNoCatalog(t *testing.T) {
 	f := newFake()
 	cfg := testConfig()
 	cfg.OfflineInstall = true
-	cfg.CatalogDir = ""
+	cfg.CatalogURL = ""
+	cfg.CatalogCacheDir = ""
 	if err := Launch(context.Background(), f, cfg); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -225,8 +231,11 @@ func TestLaunchRunSpecOfflineAndNoCatalog(t *testing.T) {
 	if v := envVal(s.Env, "MALMO_OFFLINE_INSTALL"); v != "true" {
 		t.Errorf("MALMO_OFFLINE_INSTALL = %q, want true", v)
 	}
-	if v := envVal(s.Env, "MALMO_CATALOG_DIR"); v != "" {
-		t.Errorf("MALMO_CATALOG_DIR = %q, want unset when CatalogDir is empty", v)
+	if v := envVal(s.Env, "MALMO_CATALOG_URL"); v != "" {
+		t.Errorf("MALMO_CATALOG_URL = %q, want unset when CatalogURL is empty", v)
+	}
+	if v := envVal(s.Env, "MALMO_CATALOG_CACHE_DIR"); v != "" {
+		t.Errorf("MALMO_CATALOG_CACHE_DIR = %q, want unset when CatalogCacheDir is empty", v)
 	}
 }
 

@@ -19,7 +19,7 @@ const emit = defineEmits<{ click: [] }>();
     <button
       type="button"
       :disabled="disabled"
-      class="relative inline-flex items-center rounded-l-lg border border-border bg-card px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+      class="relative inline-flex cursor-pointer items-center rounded-l-lg bg-accent px-3 py-1.5 text-sm font-medium text-accent-foreground transition-colors hover:bg-olive-800 disabled:cursor-not-allowed disabled:opacity-50"
       :class="items?.length ? '' : 'rounded-r-lg'"
       @click="emit('click')"
     >
@@ -30,7 +30,7 @@ const emit = defineEmits<{ click: [] }>();
     <DropdownMenuRoot v-if="items?.length">
       <DropdownMenuTrigger
         :disabled="disabled"
-        class="relative -ml-px inline-flex items-center rounded-r-lg border border-border bg-card px-2 py-1.5 text-muted-foreground hover:bg-muted disabled:opacity-50 focus:z-10"
+        class="relative inline-flex cursor-pointer items-center rounded-r-lg border-l border-accent-foreground/20 bg-accent px-2 py-1.5 text-accent-foreground transition-colors hover:bg-olive-800 disabled:cursor-not-allowed disabled:opacity-50 focus:z-10"
         aria-label="More install options"
       >
         <ChevronDown class="size-4" aria-hidden="true" />

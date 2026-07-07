@@ -184,10 +184,20 @@ export function useInstall(manifestId: Ref<string>) {
   // navigation, so a background install for the previous app would mark the
   // new page as installing; pendingRequest (set before mutate, cleared by the
   // manifestId watch) scopes it to this app.
+  //
+  // It also covers the case where an instance row already exists in the
+  // "installing" state: the brain creates the row and emits app.state_changed
+  // (state="installing") at the very start of the job, long before the app is
+  // up (internal/lifecycle/lifecycle.go). That SSE refetches ["apps"], so the
+  // instance appears while the job is still running — and on a mid-install page
+  // reload there's no local mutation at all. Without this the button would flip
+  // to "Open" ~1s in, pointing at an app that isn't running yet.
   const installing = computed(
     () =>
       installingId.value === manifestId.value ||
-      (install.isPending.value && pendingRequest.value?.manifest_id === manifestId.value),
+      (install.isPending.value && pendingRequest.value?.manifest_id === manifestId.value) ||
+      householdInstance.value?.state === "installing" ||
+      ownPersonalInstance.value?.state === "installing",
   );
 
   return {

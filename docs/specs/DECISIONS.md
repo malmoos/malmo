@@ -21,6 +21,68 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-07-04 — The wildcard cert must be named in `certificates.automate`; the apex is served by Caddy's default issuer, not acme-dns
+
+**Previously:** the 2026-07-03 entry below framed the hosted TLS failure as a concurrency bug — two ACME orders (wildcard + apex) racing on the shared `_acme-challenge.<box-id>` acme-dns record — and fixed it by serializing them (`EnsureWildcardTLS` issues the wildcard, waits via a `:443` probe, then adds the apex as a second policy). Both subjects went through acme-dns DNS-01.
+
+**Now:** that was a misdiagnosis. On a real box (`asd-elm`, instrumented via rescue-mode disk logs) the wildcard order was **never placed at all** — zero `*.<box-id>` obtain attempts — so there was no second order to race. A Caddy `automation.policies[]` entry only defines *how* to manage a matching name (the issuer); it does **not** schedule issuance. Caddy obtains a cert only for a name in `apps/tls/certificates/automate` or named by an HTTP route's Host matcher. The wildcard was in neither, so it just sat idle while each installed app's exact host (`<slug>.<box-id>.malmo.network`) forced Caddy to try a per-app cert whose DNS-01 challenge lands at the **undelegated** `_acme-challenge.<slug>.<box-id>` name — failing forever (`could not determine zone` / propagation timeout). The apex succeeded only because it is a real reachable host and Caddy's **default** issuer got it over tls-alpn-01. Fix: `EnsureWildcardTLS` names the wildcard in `certificates.automate` (so Caddy proactively obtains it via the acme-dns policy at the delegated apex `_acme-challenge.<box-id>`); the apex keeps using the default issuer, so **only the wildcard ever touches acme-dns** and there is exactly one order — no race to serialize.
+
+**Why:**
+- Ground truth beat reasoning: the base-works-wildcard-fails symptom looked identical to an eviction race, but the box logs showed the wildcard order never existed. The serialize fix (and its `waitForCert`/`dialCertReady`/`certReady` machinery) was solving a problem that never occurred — `waitForCert` polled for a cert Caddy was never told to obtain, so it timed out on every boot by construction.
+- With the apex on the default issuer (tls-alpn-01/http-01, no acme-dns write), the shared-record contention the 2026-07-03 entry worried about cannot arise — so the serialization is not just unnecessary, it is unreachable. Removed `addBaseSubjectAfterWildcard`, `waitForCert`, `dialCertReady`, `tlsAddr`, and the `certReady` seam.
+- The renewal-race open question from the prior entry is likewise moot: only one name (the wildcard) renews through acme-dns.
+
+**Affected docs:** `internal/caddy/caddy.go` (`EnsureWildcardTLS` rewritten; phase-2 machinery deleted), `internal/profile/appurl.go` (`CertSubjects` doc comment), `cmd/brain/main.go` (call-site comment). Progress: `hosted-wildcard-cert-automate.md`. Supersedes the 2026-07-03 entry below.
+
+---
+
+## 2026-07-03 — Wildcard + apex certs are issued one at a time, not from one automation policy
+
+**Previously:** `caddy.EnsureWildcardTLS` put a single Caddy TLS automation policy whose `subjects` array listed both of the box's certs ("<box-id>.malmo.network" and "*.<box-id>.malmo.network"), read (including in a prior progress entry) as "a single challenge issues the combined cert."
+
+**Now:** there is no combined cert. Caddy/certmagic issues one certificate per SAN, so listing both subjects in one policy silently started two concurrent ACME orders. Both solve DNS-01 at the same name (RFC 8555 puts the wildcard's challenge at the base label, same as the base name's own), against the same enrollment account, whose DNS-01 TXT store keeps only a small fixed number of recent values per account, so a third write from either order (a retry, a propagation recheck) can evict the sibling order's still-unvalidated value and fail it with no visible error. `EnsureWildcardTLS` now issues the wildcard subject alone, waits (bounded, via a local probe, see below) until Caddy has actually obtained it, then adds the base subject as a second policy, so the two orders are never concurrent.
+
+**Why:**
+- The obvious fix ("just don't put unrelated subjects in one policy") doesn't apply here: both subjects are for the same box's Caddy and were split intentionally (`profile.CertSubjects`'s doc explains why: a wildcard doesn't cover its own bare parent). The actual hazard is concurrency at the shared DNS-01 record, not the grouping.
+- Readiness is checked by dialing the box's own already-listening `:443` with SNI covered by the wildcard and inspecting the returned certificate's SANs, rather than adding any new admin-API surface or externally exposed endpoint. The box already talks to Caddy's admin API for everything else in this package; this stays within "ask Caddy what it's doing," just over the TLS port instead of the admin port.
+- The tradeoff is latency, not correctness: first-boot cert acquisition is now roughly two sequential ACME round-trips instead of two overlapping ones, so anything budgeting the box's "serving HTTPS" readiness needs to size for that (`cmd/brain`'s wait around this call got its own, longer, independent timeout rather than sharing the reconcile-and-routes budget).
+- Not addressed here: whether the same two-order collision can recur at renewal (~60 days out), since Caddy's background renewal maintenance is internal to certmagic and outside this call's control once both certs are configured. Left as an open question rather than assumed-fixed.
+
+**Affected docs:** `internal/caddy/caddy.go` (`EnsureWildcardTLS` doc comment + implementation), `internal/profile/appurl.go` (`CertSubjects` doc comment), `docs/progress/hosted-wildcard-cert.md` (corrected the "combined cert" claim). Progress: `wildcard-cert-serialize-acme-orders.md`.
+
+---
+
+## 2026-07-02 — The box is a control-plane catalog thin client on every profile; no baked catalog, no signing (cloud #62)
+
+**Previously:** the box's catalog was a disk-backed reader over a baked `catalog/` directory, staged into the image on every profile; `MALMO_CATALOG_DIR` pointed the brain at it. The plan (`APP_STORE.md`) foresaw a *signed* remote catalog fetch replacing it.
+
+**Now:** every box — appliance and hosted alike — is a thin client of the control plane's public-read catalog API. The brain fetches `GET /catalog/sync` over HTTPS, verifies the snapshot's integrity digest + schema version, caches it last-good on disk, and projects the six-method surface locally (`internal/catalog` remote source). No `catalog/` directory is baked into the image; `MALMO_CATALOG_DIR` is retired, replaced by `MALMO_CATALOG_URL` (+ `MALMO_CATALOG_CACHE_DIR`). There is **no Ed25519 signature** — TLS to the control plane plus the integrity digest are the trust story.
+
+**Why:**
+- **Unify both profiles.** An earlier cut of this work kept the appliance on the baked directory (fearing the offline appliance would regress). But the last-good cache *is* the offline story: once a box has synced it browses from cache, and a never-synced box shows an empty store — which is fine, because installing an app needs internet to pull images regardless, and the catalog API is public-read precisely so an appliance with no portal account can use it. There is no profile that has, by construction, no network path to the control plane, so a per-profile split earned nothing but a second code path and a baked artifact to keep in sync.
+- **Drop signing (don't defer it).** The box only ever fetches the catalog from the malmo control plane over TLS; TLS authenticates that origin, and the integrity digest catches truncation/corruption. An Ed25519 signature would re-authenticate bytes TLS already authenticated, and carry a key-distribution contract for no threat it closes. Not needed — removed from the plan, not parked.
+
+**Affected docs:** `docs/architecture.md` (catalog package row + the app-store deferred-list note); `docs/specs/APP_STORE.md` (superseded banners + rewritten Failure modes / What we run / Locked decisions sections); `docs/specs/NEXT.md` (publish-mechanism language); `docs/specs/APP_MANIFEST.md`, `APP_ISOLATION.md`, `APP_LIFECYCLE.md` ("signed catalog" → "published catalog"); `docs/dev/running-locally.md` (env-var list), `docs/dev/authoring-apps-with-an-agent.md` + `.github/ISSUE_TEMPLATE/catalog-app.md` (removed-`catalog/` notices). Progress: `catalog-remote-thin-client.md`.
+
+---
+
+## 2026-07-01 — OS dashboard adopts cloud's Oatmeal/olive design system; fonts self-hosted, not CDN (#260)
+
+**Previously:** The dashboard used a bespoke "calm launcher" palette — near-white `#f6f6f7` canvas, a blue `#2b6cb0` accent, system-ui fonts — defined ad hoc in `web-ui/src/style.css`. Cloud, meanwhile, shipped the Tailwind Plus **Oatmeal** kit's olive palette + Inter / Instrument Serif.
+
+**Now:** Both malmo surfaces share **one design system**. The OS dashboard's `@theme` block carries the same `--color-olive-50…950` OKLCH ramp and the same two fonts as cloud, lifted verbatim from cloud's `internal/web/tailwind/input.css`. The app's existing shadcn-vue semantic tokens (`background`, `foreground`, `accent`, …) are **repointed onto olive values** rather than rewritten at ~1,000 call sites, so the whole UI recolors from a single file. The accent is monochrome dark olive (no separate accent hue — matching cloud's `bg-olive-950` CTAs). `destructive`/`success` stay semantic red/green (olive is monochrome; cloud keeps red for errors too).
+
+**Divergence — fonts are self-hosted, not loaded from the Google Fonts CDN** (unlike cloud and the Oatmeal README). The dashboard is served over `.local` **HTTP on a LAN that may be offline**; a CDN `<link>` yields broken/unstyled fonts on an air-gapped box. Inter + Instrument Serif ship as bundled `woff2` (`web-ui/src/assets/fonts/`) with their SIL OFL 1.1 notices included.
+
+**Why:**
+- Visual consistency between the two malmo surfaces is worth more than palette independence, and Oatmeal is a mature, coherent system we already own the license for.
+- The semantic-remap strategy (vs. find-and-replace to literal `bg-olive-*`) avoids ~1,000 edits across 38 files and keeps a clean dark-mode-by-token-swap path. Class names are never literally shared with cloud anyway (OS is Vue, cloud is Go templates), so literal olive classes would buy nothing.
+- Self-hosting is a hard requirement of the offline-LAN deployment model, not a preference. Licensing allows it: this copies only palette *values* and font *choices* (config, not Oatmeal component source), inside the Tailwind Plus End-Product allowance; Inter and Instrument Serif are both SIL OFL 1.1.
+
+**Affected docs:** `WEB_UI.md` # Styling, `docs/progress/oatmeal-theme.md`, `docs/dev/web-ui.md`.
+
+---
+
 ## 2026-06-26 — User-supplied app config injected under the app's own var name, no `MALMO_*` indirection (#264)
 
 **Previously:** malmo had no surface for a value only the user can supply — a third-party API token, an external connection string, a provider selector. The catalog coined this the `operator-env-config` gap (`docs/dev/catalog-import-gaps.md`) and it became the single largest class of rejected/degraded apps (browser-use, hayhooks, dub, betterbox, cube, beeper-bridge-manager, valour, formbricks integrations, …): "no install-form field, no post-install editor, and SSH is rescue-only." Every other injected value rides the `MALMO_*` family (`MALMO_SERVICE_*`, `MALMO_SECRET_*`, `MALMO_FOLDER_*`, `MALMO_MAIL_*`) — a brain-owned stable name the app's compose maps to whatever it expects.

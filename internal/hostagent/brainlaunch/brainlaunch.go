@@ -133,12 +133,17 @@ type Config struct {
 	// Empty leaves compose on stock caddy:2-alpine — the appliance, which does no
 	// ACME — so the var is only emitted when set.
 	CaddyImage string
-	// CatalogDir is the Door-1 catalog the brain installs apps from, passed as
-	// MALMO_CATALOG_DIR. It must live under DataDir (the default does) so it is
-	// already visible in the brain via the DataDir bind mount — the brain only
-	// reads it (manifests, icons), so no separate mount is needed. Empty leaves
-	// the brain on its own default (./catalog), which is empty in a container.
-	CatalogDir string
+	// CatalogURL is the control-plane catalog origin the brain syncs the Door-1
+	// catalog from (GET /catalog/sync), passed as MALMO_CATALOG_URL. Empty leaves
+	// the brain on its own default (the public control plane). The air-gapped test
+	// lane points it at an inert address and relies on the pre-seeded last-good
+	// cache (CatalogCacheDir).
+	CatalogURL string
+	// CatalogCacheDir is where the brain writes/reads the last-good catalog
+	// snapshot + proxied assets, passed as MALMO_CATALOG_CACHE_DIR. It must live
+	// under DataDir (the default does) so it rides the brain's DataDir bind mount
+	// and survives a restart. Empty leaves the brain on its own default.
+	CatalogCacheDir string
 	// OfflineInstall sets MALMO_OFFLINE_INSTALL on the brain — trust the
 	// catalog-promised digest of a locally-loaded image when its pull fails
 	// (APP_LIFECYCLE.md # image digest pinning). Set on a baked, registry-less
@@ -326,11 +331,15 @@ func runSpec(cfg Config) RunSpec {
 		{Key: "MALMO_CONTROL_PLANE_DIR", Value: cfg.ControlPlaneDir},
 		{Key: "MALMO_DASHBOARD_UI_UPSTREAM", Value: cfg.UIUpstream},
 	}
-	// The Door-1 catalog (under DataDir, already mounted — see Config.CatalogDir).
-	// Set only when configured so an unset CatalogDir leaves the brain on its own
-	// default rather than pointing it at an empty "".
-	if cfg.CatalogDir != "" {
-		env = append(env, EnvVar{Key: "MALMO_CATALOG_DIR", Value: cfg.CatalogDir})
+	// Control-plane catalog origin + last-good cache dir (the cache is under
+	// DataDir, already mounted — see Config.CatalogCacheDir). Each is emitted only
+	// when set so an unset value leaves the brain on its own default rather than
+	// pointing it at an empty "".
+	if cfg.CatalogURL != "" {
+		env = append(env, EnvVar{Key: "MALMO_CATALOG_URL", Value: cfg.CatalogURL})
+	}
+	if cfg.CatalogCacheDir != "" {
+		env = append(env, EnvVar{Key: "MALMO_CATALOG_CACHE_DIR", Value: cfg.CatalogCacheDir})
 	}
 	// The hosted Caddy image (caddy-dns/acmedns build). Emit only when set so an
 	// unset CaddyImage leaves the control-plane compose on its stock-caddy default

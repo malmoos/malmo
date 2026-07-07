@@ -196,8 +196,8 @@ Everything dev-generated is under `.dev/` (git-ignored):
 ```
 
 Override defaults with env vars: `MALMO_LISTEN`, `MALMO_STATE_DIR`,
-`MALMO_CATALOG_DIR`, `MALMO_AGENT_SOCK`, `MALMO_CADDY_ADMIN`,
-`MALMO_CADDY_LISTEN`.
+`MALMO_CATALOG_URL`, `MALMO_CATALOG_CACHE_DIR`, `MALMO_CATALOG_REFRESH`,
+`MALMO_AGENT_SOCK`, `MALMO_CADDY_ADMIN`, `MALMO_CADDY_LISTEN`.
 
 **Why `fake-shadow.json` exists.** The password lives on the host-agent side, never in the brain (`AUTH.md` # Password storage — the brain calls `verify_password` on every login). The *real* host-agent persists it in `/etc/shadow`; the *fake* one used by `make dev` would otherwise keep it in an in-memory map that dies with the process. Because the brain's SQLite persists the user **and** session rows across a restart, that asymmetry produced a confusing bug: restart the stack, clear cookies, log in again, and the password was rejected even though the account still existed (the session cookie had masked it — a kept cookie skips the password re-check). Backing the fake maps with `fake-shadow.json` under `MALMO_STATE_DIR` makes dev accounts survive a restart, matching the real agent. Set `MALMO_STATE_DIR` and the fake agent picks it up automatically (the dev stack exports it); leave it unset and the fake stays purely in-memory.
 

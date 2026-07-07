@@ -10,7 +10,7 @@ For how to *run* it (Vite dev server, Node version, CI), see [`running-locally.m
 
 ## Stack, as built
 
-Vue 3 (Composition API, `<script setup>` only) + Vite 5 + TypeScript `strict` (with `noUncheckedIndexedAccess`). Server state through `@tanstack/vue-query` v5; routing through Vue Router 4 (history mode); styling through Tailwind CSS 4 (CSS-config via `@theme`, no `tailwind.config.js`). Icons via `lucide-vue-next`. `reka-ui` + the `cn()` helper (`clsx` + `tailwind-merge`) are present as the shadcn-vue scaffolding so components can be added via the shadcn CLI later — but no shadcn components have been copied in yet; views use plain elements with Tailwind classes and the design tokens in `style.css`.
+Vue 3 (Composition API, `<script setup>` only) + Vite 5 + TypeScript `strict` (with `noUncheckedIndexedAccess`). Server state through `@tanstack/vue-query` v5; routing through Vue Router 4 (history mode); styling through Tailwind CSS 4 (CSS-config via `@theme`, no `tailwind.config.js`). Icons via `lucide-vue-next`. `reka-ui` + the `cn()` helper (`clsx` + `tailwind-merge`) are present as the shadcn-vue scaffolding so components can be added via the shadcn CLI later. The first owned components live in `components/ui/` — `Button.vue` (the pill idiom, `primary`/`secondary`/`ghost` variants) and `Heading.vue` (the `font-display` display idiom) — hand-written from the Oatmeal Tailwind patterns (not the shadcn CLI, not Oatmeal's `.tsx` source; #261) and consuming the olive tokens via `cn()`. Prefer `<Button>` / `<Heading>` over ad-hoc `<button>` / heading markup for the pill + display idioms; other surfaces still use plain elements with Tailwind classes and the design tokens in `style.css`.
 
 `main.ts` is the whole bootstrap: `createApp(App)` with Pinia, the router, and `VueQueryPlugin`. That's it — twelve lines.
 
@@ -116,7 +116,7 @@ When an app has no raster icon (`icon_url`), both the card and the detail header
 
 ## Styling
 
-`style.css` is the Tailwind 4 entry: `@import "tailwindcss"` then an `@theme` block of design tokens named to the **shadcn-vue CSS-variable convention** (`--color-background`, `--color-card`, `--color-accent`, …) so shadcn components added later inherit the palette automatically. Light theme only for now (dark-mode trigger is deferred). Use these semantic token classes (`bg-background`, `text-muted-foreground`, `border-border`) rather than raw hex so the eventual dark theme is a token swap.
+`style.css` is the Tailwind 4 entry: `@import "tailwindcss"` then an `@theme` block of design tokens named to the **shadcn-vue CSS-variable convention** (`--color-background`, `--color-card`, `--color-accent`, …) so shadcn components added later inherit the palette automatically. The block **is** the Oatmeal design system shared with cloud — the `--color-olive-50…950` OKLCH ramp + Inter / Instrument Serif — and the semantic tokens are repointed onto olive values, so the whole app recolors from this one file (`WEB_UI.md` # Styling; `DECISIONS.md` 2026-07-01). Light theme only for now (dark-mode trigger is deferred). Use the semantic token classes (`bg-background`, `text-muted-foreground`, `border-border`) rather than raw hex so the eventual dark theme is a token swap. Fonts are **self-hosted** in `src/assets/fonts/` (with OFL notices) and declared via `@font-face` in `src/assets/fonts/fonts.css`, imported from `main.ts` — kept out of `style.css` because Tailwind's Lightning CSS transform drops the first `@font-face` in the `@import "tailwindcss"` entry.
 
 ## OpenAPI codegen workflow
 

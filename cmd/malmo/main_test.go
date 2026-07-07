@@ -8,12 +8,15 @@ import (
 	"testing"
 )
 
-// --- lint against the real catalog samples (Done-when: both exit 0) -------
+// --- lint against representative catalog samples (both must exit 0) -------
+// testdata/whoami (minimal) + testdata/files-demo (a use-case-folder grant) are
+// kept here as local fixtures: the shipping catalog moved to the control plane
+// (cloud #62), so the box repo no longer bakes a catalog/ tree to point at.
 
 func TestLint_RealSamples(t *testing.T) {
 	for _, p := range []string{
-		"../../catalog/whoami/manifest.yml",
-		"../../catalog/files-demo/manifest.yml",
+		"testdata/whoami/manifest.yml",
+		"testdata/files-demo/manifest.yml",
 	} {
 		if err := lint(p); err != nil {
 			t.Errorf("lint(%s): want clean, got %v", p, err)

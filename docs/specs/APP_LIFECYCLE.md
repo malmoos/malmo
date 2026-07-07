@@ -155,7 +155,7 @@ Managed-service variables (`MALMO_SERVICE_*`) and per-instance secrets (`MALMO_S
 
 All app installs end up running against a `compose.override.yml` that pins every image as `image: name@sha256:...`. From the second `up` onward, the compose is byte-deterministic.
 
-**For store (Door-1) apps, the digest comes from the signed catalog** (`APP_STORE.md` # Trust model — catalog's `images` map). The brain refuses to install if the locally-resolved digest after `docker pull` doesn't match the catalog's promise — that's the binding from "the malmo store promised this version" to specific bytes.
+**For store (Door-1) apps, the digest comes from the published catalog** (`APP_STORE.md` # Trust model — catalog's `images` map). The brain refuses to install if the locally-resolved digest after `docker pull` doesn't match the catalog's promise — that's the binding from "the malmo store promised this version" to specific bytes.
 
 **For custom (Door-2) apps, the brain falls back to TOFU**: pull, resolve the digest via `docker inspect`, write it into the override. No external authority to compare against; the user pasted the compose themselves.
 

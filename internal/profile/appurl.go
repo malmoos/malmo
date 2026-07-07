@@ -31,14 +31,17 @@ func HostedDashboardHost(boxID string) string {
 	return boxID + "." + NetworkApex
 }
 
-// CertSubjects returns the names the box's single Let's Encrypt cert must cover:
-// the apex "<box-id>.malmo.network" (the dashboard host) and the wildcard
+// CertSubjects returns the names the box's Let's Encrypt certs must cover: the
+// apex "<box-id>.malmo.network" (the dashboard host) and the wildcard
 // "*.<box-id>.malmo.network" (every per-app host). The apex is deliberately
 // listed separately — a "*.<box-id>" wildcard covers "<slug>.<box-id>" but not
 // the bare "<box-id>" parent, so the dashboard would be uncovered without it.
-// Both names share one "_acme-challenge.<box-id>" DNS-01 record (the cloud sets
-// an A record for each and a single CNAME to acme-dns — cloud CL4), so one
-// challenge issues the combined cert (ENVIRONMENT.md # Networking & discovery).
+// These are two certs, obtained by different paths: caddy.EnsureWildcardTLS
+// drives the wildcard through acme-dns DNS-01 (the only challenge a wildcard can
+// use), while the apex — a real, publicly-reachable host on :443 — is obtained by
+// Caddy's default issuer over tls-alpn-01/http-01 as soon as the dashboard route
+// names it, so only the wildcard ever touches acme-dns (ENVIRONMENT.md
+// # Networking & discovery).
 func CertSubjects(boxID string) []string {
 	return []string{
 		HostedDashboardHost(boxID),

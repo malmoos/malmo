@@ -1,0 +1,53 @@
+name: Suggest an app for the catalog
+description: Suggest an app you'd like to see in the malmo catalog
+title: "[Catalog] Add "
+labels: ["catalog"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an app! Fill in what you know and we'll take it from there — the malmo team reviews every suggestion and handles adapting, testing, and publishing the app. You don't need to do anything else; we'll keep this issue updated as it moves along.
+  - type: input
+    id: app
+    attributes:
+      label: App
+      description: The app's name.
+      placeholder: e.g. Mealie
+    validations:
+      required: true
+  - type: input
+    id: repo
+    attributes:
+      label: Repo / project
+      description: Upstream GitHub URL or the project homepage.
+      placeholder: https://github.com/owner/repo
+    validations:
+      required: true
+  - type: input
+    id: docs
+    attributes:
+      label: Docs
+      description: Link to its documentation, if handy.
+    validations:
+      required: false
+  - type: textarea
+    id: what
+    attributes:
+      label: What does it do?
+      description: A sentence or two.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why would you like it on malmo?
+      description: Optional — your use case helps us prioritize.
+    validations:
+      required: false
+  - type: checkboxes
+    id: dedupe
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched [existing suggestions](https://github.com/malmoos/malmo/issues?q=is%3Aissue+label%3Acatalog) and there isn't already one open for this app (if there is, I'll 👍 it instead).
+          required: false

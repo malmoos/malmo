@@ -7,6 +7,8 @@ import { RouterLink } from "vue-router";
 import { useQuery } from "@tanstack/vue-query";
 import { api, type ApiError } from "./api";
 import { login } from "./auth";
+import Button from "@/components/ui/Button.vue";
+import Heading from "@/components/ui/Heading.vue";
 
 interface PickerUser { id: string; username: string; }
 
@@ -57,7 +59,7 @@ function glyphColor(username: string): string {
 
 <template>
   <main class="auth">
-    <h1>malmo</h1>
+    <Heading :level="1" class="mb-8 text-center">malmo</Heading>
 
     <!-- User picker -->
     <div v-if="!selected" class="card">
@@ -97,9 +99,9 @@ function glyphColor(username: string): string {
           autofocus
         />
       </label>
-      <button type="submit" :disabled="submitting">
+      <Button type="submit" :disabled="submitting" class="mt-2">
         {{ submitting ? "Signing in…" : "Sign in" }}
-      </button>
+      </Button>
       <p v-if="error" class="error">{{ error }}</p>
       <RouterLink to="/recover" class="forgot">Forgot password?</RouterLink>
     </form>
@@ -107,15 +109,17 @@ function glyphColor(username: string): string {
 </template>
 
 <style>
-/* Login-specific styles (auth base styles live in style.css). */
-.auth .user-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
-.auth .user-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0.75rem; border-radius: 8px; cursor: pointer; }
-.auth .user-item:hover { background: #f4f4f6; }
-.auth .glyph { width: 2rem; height: 2rem; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.95rem; font-weight: 600; color: #fff; flex-shrink: 0; }
-.auth .name { font-size: 0.95rem; }
+/* Login-specific styles (auth base styles live in style.css). Colors come from
+   the olive semantic tokens; the per-user glyph hue is intentional identity
+   accent (AUTH.md user-list pattern), set inline from Login.vue. */
+.auth .user-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.auth .user-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0.75rem; border-radius: 9999px; cursor: pointer; }
+.auth .user-item:hover { background: var(--color-muted); }
+.auth .glyph { width: 2rem; height: 2rem; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.95rem; font-weight: 600; color: var(--color-olive-50); flex-shrink: 0; }
+.auth .name { font-size: 0.95rem; color: var(--color-foreground); }
 .auth .selected-user { display: flex; align-items: center; gap: 0.75rem; padding: 0.25rem 0; }
-.auth .back { align-self: flex-start; background: none; border: none; color: #666; font-size: 0.85rem; cursor: pointer; padding: 0; margin-bottom: 0.25rem; }
-.auth .back:hover { color: #222; }
-.auth .forgot { align-self: center; color: #666; font-size: 0.85rem; text-decoration: none; margin-top: 0.25rem; }
-.auth .forgot:hover { color: #222; }
+.auth .back { align-self: flex-start; background: none; border: none; color: var(--color-muted-foreground); font-size: 0.85rem; cursor: pointer; padding: 0; margin-bottom: 0.25rem; }
+.auth .back:hover { color: var(--color-foreground); }
+.auth .forgot { align-self: center; color: var(--color-muted-foreground); font-size: 0.85rem; text-decoration: none; margin-top: 0.25rem; }
+.auth .forgot:hover { color: var(--color-foreground); }
 </style>

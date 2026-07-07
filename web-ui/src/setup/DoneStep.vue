@@ -6,6 +6,7 @@
 import { ref } from "vue";
 import { completeFirstRun } from "../auth";
 import type { ApiError } from "../api";
+import Button from "@/components/ui/Button.vue";
 
 const submitting = ref(false);
 const error = ref("");
@@ -29,9 +30,9 @@ async function finish() {
       Your box is ready. Next you'll land on the dashboard, where you can
       install apps and invite the people you share the box with.
     </p>
-    <button type="submit" :disabled="submitting">
+    <Button type="submit" :disabled="submitting" class="mt-2">
       {{ submitting ? "Finishing…" : "Go to dashboard" }}
-    </button>
+    </Button>
     <p v-if="error" class="error">{{ error }}</p>
   </form>
 </template>

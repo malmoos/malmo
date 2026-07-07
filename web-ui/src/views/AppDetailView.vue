@@ -155,10 +155,15 @@ const hasLinks = computed(
           </p>
         </div>
 
-        <!-- Install / Open affordance — same state machine as the old Store row. -->
+        <!-- Install / Open affordance — same state machine as the old Store row.
+             "Open" only appears once the instance is past "installing": the brain
+             emits app.state_changed (state="installing") at the very start of the
+             job, so the row shows up in ["apps"] ~1s in — long before the app is
+             actually up. Gating Open on state keeps the button in its "Installing…"
+             phase for the whole job instead of flipping to a dead Open link. -->
         <div class="flex shrink-0 items-center gap-2">
           <a
-            v-if="householdInstance"
+            v-if="householdInstance && householdInstance.state !== 'installing'"
             :href="householdInstance.url"
             target="_blank"
             rel="noopener"
@@ -167,7 +172,7 @@ const hasLinks = computed(
             Open shared app
           </a>
           <a
-            v-else-if="ownPersonalInstance"
+            v-else-if="ownPersonalInstance && ownPersonalInstance.state !== 'installing'"
             :href="ownPersonalInstance.url"
             target="_blank"
             rel="noopener"
@@ -176,9 +181,13 @@ const hasLinks = computed(
             Open
           </a>
 
-          <!-- Install button: shown when no own instance exists, or alongside
-               "Open shared app" so the caller can still install their own copy. -->
-          <HealthGated v-if="!ownPersonalInstance" blocks="apps">
+          <!-- Install button: shown when the caller has no own instance yet, or
+               while their own copy is still installing, or alongside "Open shared
+               app" so the caller can still install their own copy. -->
+          <HealthGated
+            v-if="!ownPersonalInstance || ownPersonalInstance.state === 'installing'"
+            blocks="apps"
+          >
             <SplitButton
               :label="installing ? installPhaseLabel : 'Install'"
               :loading="installing"
@@ -297,16 +306,16 @@ const hasLinks = computed(
 .markdown-body :deep(ul) { list-style: disc; }
 .markdown-body :deep(ol) { list-style: decimal; }
 .markdown-body :deep(li) { margin: 0.25rem 0; }
-.markdown-body :deep(a) { color: var(--accent, #2563eb); text-decoration: underline; }
+.markdown-body :deep(a) { color: var(--color-accent); text-decoration: underline; }
 .markdown-body :deep(code) {
   font-family: ui-monospace, monospace;
   font-size: 0.85em;
-  background: var(--muted, #f1f3f5);
+  background: var(--color-muted);
   padding: 0.1em 0.3em;
   border-radius: 0.25rem;
 }
 .markdown-body :deep(pre) {
-  background: var(--muted, #f1f3f5);
+  background: var(--color-muted);
   padding: 0.75rem;
   border-radius: 0.5rem;
   overflow-x: auto;

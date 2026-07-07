@@ -1,0 +1,66 @@
+name: Implementation task
+description: A self-contained slice of implementation work for the parallel-work board
+body:
+  - type: dropdown
+    id: size
+    attributes:
+      label: Size
+      options:
+        - S
+        - M
+        - L
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - backend
+        - frontend
+        - tooling
+    validations:
+      required: true
+  - type: input
+    id: depends_on
+    attributes:
+      label: Depends on
+      description: Blocking issues/PRs, or "none".
+      value: none
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences — what this slice does and why it is worth carving off.
+    validations:
+      required: true
+  - type: input
+    id: spec
+    attributes:
+      label: Spec / source of truth
+      description: The docs/specs/*.md (and section) that owns this; read it end-to-end before starting. "None" only for pure tooling.
+    validations:
+      required: true
+  - type: textarea
+    id: do
+    attributes:
+      label: Do
+      description: The concrete steps; name files where you can.
+    validations:
+      required: true
+  - type: textarea
+    id: touch
+    attributes:
+      label: Touch
+      description: The files/dirs this should be confined to.
+    validations:
+      required: false
+  - type: textarea
+    id: done_when
+    attributes:
+      label: Done when
+      description: A crisp, observable acceptance condition.
+    validations:
+      required: true

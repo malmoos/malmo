@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -249,14 +250,38 @@ type EnrollmentCredentials struct {
 	Password  string
 }
 
-// EnsureWildcardTLS configures automatic HTTPS for a hosted box: it provisions a
-// single Let's Encrypt cert covering `subjects` (the dashboard apex
-// "<box-id>.malmo.network" + the wildcard "*.<box-id>.malmo.network") via an
-// ACME DNS-01 challenge solved against acme-dns with the box's seeded
-// credentials, and adds the :443 listener so the host-matched routes serve over
-// it. Hosted-only and always-on (ENVIRONMENT.md # Networking & discovery); the
-// appliance path, which has no enrollment and serves plain-HTTP `.local`, never
-// calls this and keeps its :80-only config.
+// EnsureWildcardTLS configures automatic HTTPS for a hosted box: it tells Caddy
+// to obtain the wildcard cert "*.<box-id>.malmo.network" via an ACME DNS-01
+// challenge solved against acme-dns with the box's seeded credentials, and adds
+// the :443 listener so the host-matched app routes serve over it. Hosted-only
+// and always-on (ENVIRONMENT.md # Networking & discovery); the appliance path,
+// which has no enrollment and serves plain-HTTP `.local`, never calls this and
+// keeps its :80-only config.
+//
+// The wildcard must be PROACTIVELY obtained, and doing so takes two config keys,
+// not one. In Caddy an automation policy only says *how* to manage a matching
+// name (which issuer) — it does not by itself schedule issuance. Caddy obtains a
+// cert only for a name that is either in `certificates.automate` or named by an
+// HTTP route's Host matcher. So this sets BOTH: `certificates.automate` lists the
+// wildcard (WHAT to obtain) and an automation policy pins that subject to the
+// acme-dns DNS-01 issuer (HOW — DNS-01 is the only challenge a wildcard can use).
+//
+// Without the automate entry the wildcard order is never placed: the policy sits
+// idle until an app route for "<slug>.<box-id>.malmo.network" forces Caddy to try
+// a cert for that *exact* name, whose DNS-01 challenge lands at
+// "_acme-challenge.<slug>.<box-id>.malmo.network" — a name that is NOT delegated
+// to acme-dns (only the apex "_acme-challenge.<box-id>.malmo.network" is), so the
+// challenge can never be answered and every app fails TLS. That was the live #278
+// symptom. Once the wildcard cert exists Caddy serves every "<slug>.<box-id>"
+// from it and never attempts per-app issuance.
+//
+// The base name "<box-id>.malmo.network" (the dashboard apex) is deliberately NOT
+// routed through acme-dns: it is a real, publicly-reachable host on :443, so
+// Caddy's default issuer obtains it over tls-alpn-01/http-01 the moment the
+// dashboard route names it — no DNS-01, no acme-dns account write. That leaves
+// exactly one acme-dns order (the wildcard's), so there is no order-vs-order
+// contention on the box's shared "_acme-challenge.<box-id>" TXT store — the race
+// the earlier serialize-the-two-orders change tried to manage cannot occur.
 //
 // The acme-dns provider sets only this box's own `_acme-challenge` TXT, so
 // renewal (~every 60 days) runs box→acme-dns directly with no malmo control-plane
@@ -265,51 +290,95 @@ type EnrollmentCredentials struct {
 // seeded payload.
 //
 // Idempotent: it removes any prior tls app config and re-puts (the file's
-// remove-then-put idiom), so a re-run at every boot converges cleanly. The DNS
-// provider's JSON shape is pinned to the caddy-dns/acmedns module compiled into
-// the hosted Caddy image; real issuance is verified end-to-end in the cloud
-// on-ramp (cloud #6 / CL6), not in the inner loop where there is no real ACME.
+// remove-then-put idiom), so a re-run at every boot converges cleanly. Synchronous
+// and fast — it only applies config; Caddy obtains the cert on its own schedule
+// afterwards. The DNS provider's JSON shape is pinned to the caddy-dns/acmedns
+// module compiled into the hosted Caddy image; real issuance is verified on a real
+// hosted box (air-gapped CI never reaches ACME). This function is only ever reached
+// on the hosted + enrolled path (its one caller gates on both).
 func (c *Client) EnsureWildcardTLS(ctx context.Context, subjects []string, acmeDNSEndpoint string, enr EnrollmentCredentials) error {
-	tlsApp := map[string]any{
-		"automation": map[string]any{
-			"policies": []any{
-				map[string]any{
-					"subjects": subjects,
-					"issuers": []any{
-						map[string]any{
-							"module": "acme",
-							"challenges": map[string]any{
-								"dns": map[string]any{
-									"provider": map[string]any{
-										"name":       "acmedns",
-										"server_url": acmeDNSEndpoint,
-										"username":   enr.Username,
-										"password":   enr.Password,
-										"subdomain":  enr.Subdomain,
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
+	// base is validated (the profile must declare both) but not configured here:
+	// it is served by Caddy's default issuer, so only the wildcard needs acme-dns.
+	wildcard, _, err := splitCertSubjects(subjects)
+	if err != nil {
+		return err
 	}
-	// Remove-then-put so a re-run replaces the policy cleanly; PUT on a fresh
+	issuer := acmeIssuer(acmeDNSEndpoint, enr)
+
+	// Remove-then-put so a re-run replaces the tls app cleanly; PUT on a fresh
 	// (deleted) key creates it, matching upsertRoute's idiom. The DELETE is
 	// best-effort — an absent tls app is the first-boot case.
 	_ = c.del(ctx, "/config/apps/tls")
+
+	// certificates.automate makes Caddy proactively OBTAIN the wildcard; the
+	// automation policy pins that subject to the acme-dns DNS-01 issuer. Both are
+	// required — a policy without an automate entry never places the order.
+	tlsApp := map[string]any{
+		"certificates": map[string]any{
+			"automate": []any{wildcard},
+		},
+		"automation": map[string]any{
+			"policies": []any{certPolicy(wildcard, issuer)},
+		},
+	}
 	if err := c.put(ctx, "/config/apps/tls", tlsApp); err != nil {
 		return fmt.Errorf("caddy: configure wildcard tls: %w", err)
 	}
 	// Add :443 alongside the existing :80 so the same host-matched routes serve
-	// HTTPS. PATCH replaces the listen array the bootstrap config declared as
-	// [":80"].
+	// HTTPS. PATCH replaces the listen array the bootstrap config declared as [":80"].
 	if err := c.patch(ctx, "/config/apps/http/servers/malmo/listen", []any{":80", ":443"}); err != nil {
 		return fmt.Errorf("caddy: add :443 listener: %w", err)
 	}
-	slog.Info("caddy: wildcard TLS configured", "subjects", subjects)
+	// Config applied and :443 bound; Caddy now obtains the wildcard in the
+	// background on its own schedule (retrying until acme-dns/ACME succeed). This
+	// is the "wildcard TLS configured" milestone; issuance is asynchronous and may
+	// never complete offline, so we deliberately never wait on a cert here.
+	slog.Info("caddy: wildcard TLS configured", "wildcard", wildcard)
 	return nil
+}
+
+// splitCertSubjects sorts subjects (profile.CertSubjects' [base, wildcard]
+// pair) into its wildcard and base names, independent of input order.
+func splitCertSubjects(subjects []string) (wildcard, base string, err error) {
+	for _, s := range subjects {
+		if strings.HasPrefix(s, "*.") {
+			wildcard = s
+		} else if base == "" {
+			base = s
+		}
+	}
+	if wildcard == "" || base == "" {
+		return "", "", fmt.Errorf("caddy: want exactly one wildcard and one base subject, got %v", subjects)
+	}
+	return wildcard, base, nil
+}
+
+// acmeIssuer builds the acme-dns ACME issuer config for the wildcard's
+// automation policy.
+func acmeIssuer(acmeDNSEndpoint string, enr EnrollmentCredentials) map[string]any {
+	return map[string]any{
+		"module": "acme",
+		"challenges": map[string]any{
+			"dns": map[string]any{
+				"provider": map[string]any{
+					"name":       "acmedns",
+					"server_url": acmeDNSEndpoint,
+					"username":   enr.Username,
+					"password":   enr.Password,
+					"subdomain":  enr.Subdomain,
+				},
+			},
+		},
+	}
+}
+
+// certPolicy builds a single-subject Caddy TLS automation policy pinning the
+// subject to the given (acme-dns) issuer.
+func certPolicy(subject string, issuer map[string]any) map[string]any {
+	return map[string]any{
+		"subjects": []any{subject},
+		"issuers":  []any{issuer},
+	}
 }
 
 func (c *Client) post(ctx context.Context, path string, body any) error {
