@@ -968,6 +968,11 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 	if upErr != nil {
 		return m.startFailed(ctx, inst, host, man.Name, fmt.Errorf("compose up: %w\n%s", upErr, out))
 	}
+	// This ComposeUp applied whatever the override/.env currently hold, so it
+	// also satisfies any recreate owed by a prior failed config/mail edit (#268)
+	// — clear the marker rather than leaving it for reconcile to redundantly
+	// retry against an already-converged container.
+	m.clearPendingRecreate(inst)
 	if err := m.waitHealthy(ctx, id, man.MainService, m.healthWait); err != nil {
 		return m.startFailed(ctx, inst, host, man.Name, fmt.Errorf("%s did not become healthy: %w", man.Name, err))
 	}

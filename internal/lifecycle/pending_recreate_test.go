@@ -162,6 +162,45 @@ func TestReconcileClearsPendingWhenBringingUpDriftedInstance(t *testing.T) {
 	}
 }
 
+func TestStartClearsPendingRecreate(t *testing.T) {
+	e := newTestEnv(t)
+	inst := installConfigApp(t, e) // running
+
+	// Strand the running container on stale env via a failed edit, then let it
+	// stop normally — the marker is independent of state and survives a Stop.
+	e.docker.composeUpErr = errors.New("compose up exploded")
+	editConfig(t, e, inst.ID)
+	if !pendingRecreate(t, e, inst.ID) {
+		t.Fatalf("seed: instance must be pending-recreate")
+	}
+	e.docker.composeUpErr = nil
+	if err := e.m.Stop(context.Background(), inst.ID); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+
+	// Start applies the committed override/.env via its own ComposeUp, which
+	// satisfies the owed recreate just as well as reconcile's would — it must
+	// clear the marker itself instead of leaving it for the next reconcile pass
+	// to redundantly retry against an already-converged container.
+	if err := e.m.Start(context.Background(), inst.ID); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if pendingRecreate(t, e, inst.ID) {
+		t.Fatalf("a successful Start must clear the pending-recreate marker")
+	}
+
+	// No churn: reconcile must not recreate an instance that Start already
+	// converged.
+	e.docker.psManaged = map[string]bool{inst.ID: true}
+	e.docker.calls = nil
+	if err := e.m.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if methodsContainArg(e.docker.Calls(), "ComposeUp", "malmo-"+inst.ID) {
+		t.Fatalf("reconcile must not recreate an instance Start already converged: %v", e.docker.methods())
+	}
+}
+
 // A clean install never sets the marker, and an unrelated reconcile pass does
 // not invent one — the recovery path stays inert until an edit actually fails.
 func TestPendingNotSetOnHealthyPath(t *testing.T) {
