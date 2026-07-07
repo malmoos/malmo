@@ -93,12 +93,11 @@ func (m *Manager) configEnvByService(id string, man *manifest.Manifest) (map[str
 // up on its next Start. Brain commits first (same posture as RebindMail): the
 // store and override hold the desired state before the recreate, so the host is
 // reconstructible from them. If the recreate fails the job reports failure but
-// the override already holds the desired config, so a container that fell over
-// (or a later brain restart) is brought back up against it by the reconcile
-// pass; a container that is still running with the old env keeps it until the
-// user retries the edit — reconcile re-creates a running container only on
-// resource-limit drift, not config drift. The caller (API) validates the values
-// against the manifest before this runs.
+// the override already holds the desired config and the instance is marked
+// pending-recreate, so the reconcile pass brings the container to the new env —
+// whether it fell over (the no-containers path) or kept running on stale env
+// (the already-up path retries the recreate while the marker is set, #268). The
+// caller (API) validates the values against the manifest before this runs.
 func (m *Manager) SetConfig(ctx context.Context, id string, cfg []store.InstanceConfig) error {
 	defer m.lockInstance(id)()
 	inst, err := m.store.Get(id)
@@ -120,10 +119,8 @@ func (m *Manager) SetConfig(ctx context.Context, id string, cfg []store.Instance
 			"instance_id", id, "name", inst.Name)
 		return nil
 	}
-	upCtx, cancel := context.WithTimeout(ctx, m.healthWait)
-	defer cancel()
-	if out, err := m.docker.ComposeUp(upCtx, m.instanceDir(id), "malmo-"+id); err != nil {
-		return fmt.Errorf("compose up: %w\n%s", err, out)
+	if err := m.recreateRunning(ctx, inst); err != nil {
+		return err
 	}
 	slog.Info("app config updated", "instance_id", id, "name", inst.Name)
 	return nil

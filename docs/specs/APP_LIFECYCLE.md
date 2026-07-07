@@ -59,6 +59,7 @@ The brain does **not** run a k8s-style reconciler loop. Each user action is a se
 
 On brain startup, a reconciliation pass walks SQLite, lists containers with `malmo.managed=true`, and fixes drift:
 - `state=running` but no containers: `docker compose up -d`.
+- `state=running` with containers up but the instance is flagged *pending-recreate* (a config/mail edit committed the override/.env, then its `compose up` failed): `docker compose up -d` to apply the committed env, then clear the flag (#268). The brain sets the flag at the failed edit (brain-commits-first), so a container left running on stale env converges on the next startup pass instead of waiting for the user to retry.
 - `state=stopped` but containers running: `docker compose stop`.
 - Orphan containers (labeled but no SQLite row, e.g. crash mid-install): tear them down.
 
