@@ -51,6 +51,8 @@ The inner/outer boundary is also the **cross-platform / Linux-only** boundary. T
 - `make test-nopam` — full suite minus the PAM package, for when you don't have `libpam0g-dev` (i.e. off Linux).
 - `make clean` — stop dev Caddy, remove malmo containers/networks, wipe `.dev/state`.
 
+**Building the hosted cloud image is a CI job — don't build it locally.** `make build-cloud-image` / `make test-cloud-qemu` need root + `/dev/kvm` + mkosi and take ~40+ min; a local mkosi build is fragile and easy to get wrong (a broken build is what once produced a phantom "`:443` doesn't bind" hunt). Instead trigger the **`CI / Cloud image`** GitHub Action: `gh workflow run "CI / Cloud image" --ref <branch> -f publish=false` builds the image and runs the QEMU boot-proof (`unseeded seeded` boots) **without** publishing anything. Only `publish=true` (the default) uploads the image to the provider — a deliberate act, not a test. See [`docs/dev/hosted-boot-proof.md`](docs/dev/hosted-boot-proof.md) for reading the result and debugging a red boot.
+
 **Prerequisites for the inner loop:** Docker + `docker compose`, Node 20+, Go 1.23+, host port `:80` free (dev Caddy binds it so `<slug>.local` works portless), and `avahi-daemon` running on Linux (so `.local` names resolve under `make dev`). The full Go test suite additionally needs `libpam0g-dev` on Linux; see `docs/dev/running-locally.md`.
 
 **Start every piece of work from a fresh branch off latest `main`:** `git checkout main && git pull && git checkout -b <branch>`. Never commit straight to `main`.
