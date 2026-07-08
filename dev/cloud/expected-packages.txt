@@ -87,6 +87,7 @@ libdebconfclient0
 libedit2
 libelf1t64
 libexpat1
+libfdisk1
 libgcc-s1
 libgmp10
 libgssapi-krb5-2
@@ -154,6 +155,7 @@ systemd
 systemd-boot
 systemd-boot-efi
 systemd-boot-tools
+systemd-repart
 systemd-sysv
 sysvinit-utils
 tar

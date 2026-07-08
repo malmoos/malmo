@@ -109,6 +109,16 @@ enable_unit /etc/systemd/system/malmo-seed.service malmo-seed.service
 # are committed static files under mkosi.extra/ (etc/malmo/metadata-firewall.nft).
 enable_unit /etc/systemd/system/malmo-metadata-firewall.service malmo-metadata-firewall.service
 
+# Grow the root partition + ext4 to fill the provider disk on boot (systemd-repart
+# against /usr/lib/repart.d/50-malmo-grow-root.conf). The image bakes a fixed 8 GiB
+# root (mkosi.repart/) so the shipped raw stays small; a provider VM's disk is much
+# larger, and without this the box would run on 8 GiB — docker image storage + the
+# brain's SQLite store share the volume, so one app install could fill it and 500
+# login. Ordered Before=docker/host-agent (in the unit) so the disk is full before
+# anything writes to it. Static unit under mkosi.extra/; systemd-repart ships in the
+# systemd-repart package (added to the lean set in mkosi.conf). ENVIRONMENT.md # Storage.
+enable_unit /etc/systemd/system/malmo-grow-root.service malmo-grow-root.service
+
 # malmo primary group (GID 3000, FIRST_RUN.md # Identity) — new users are created
 # with `useradd --gid malmo`; the brain's /setup needs it present. malmo-app /
 # malmo-shared (2000/2001, APP_ISOLATION.md # Runtime identity) are the well-known

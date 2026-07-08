@@ -1,0 +1,36 @@
+# Hosted cloud image — grow the root partition + filesystem to fill the provider
+# disk on boot. Runs systemd-repart against the definition in
+# /usr/lib/repart.d/50-malmo-grow-root.conf, which extends the baked 8 GiB root to
+# the whole disk and online-grows the ext4. Without this a provisioned box keeps
+# the image's 8 GiB root on a much larger provider disk; docker image storage and
+# the brain's SQLite store share that volume, so a single catalog-app install can
+# fill it, and once full the brain's first store write (the SSO replay-nonce) fails
+# and login 500s — the box looks offline though it is up. ENVIRONMENT.md # Storage.
+#
+# Ordered Before=docker.service and host-agent.service so the disk is already full
+# before docker pulls any image layer and before host-agent launches the brain, the
+# two things that write to the shared volume. ConditionVirtualization=!container so
+# it is a no-op inside a container (no disk to repartition). The QEMU boot-proof
+# disk is fixed-size with no spare space, so the grow is a harmless no-op there; the
+# real full-disk growth is exercised on a live provider box (the cloud on-ramp).
+#
+# Enabled by dev/cloud/mkosi.postinst.chroot (a .wants symlink) for both the lean
+# production image and the boot-proof test lane that Include=..'s it.
+[Unit]
+Description=malmo — grow the root partition and filesystem to fill the provider disk
+Documentation=man:systemd-repart.service(8)
+Documentation=https://github.com/malmoos/malmo/blob/main/docs/specs/ENVIRONMENT.md
+ConditionVirtualization=!container
+Before=docker.service host-agent.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/systemd-repart --dry-run=no
+# 76 = no root block device found; 77 = no GPT partition table. On a boot where
+# there is simply nothing to grow, systemd-repart still succeeds (exit 0); these
+# codes only cover the "no disk to act on" cases, which are not a failure here.
+SuccessExitStatus=76 77
+
+[Install]
+WantedBy=multi-user.target
