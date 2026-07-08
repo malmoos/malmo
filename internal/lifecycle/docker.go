@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/malmoos/malmo/internal/caddy"
 	"github.com/malmoos/malmo/internal/protocol"
 )
 
@@ -95,10 +96,12 @@ type ManagedContainer struct {
 // `repo@sha256:…` strings the local image is known under.
 type RepoDigests []string
 
-// CaddyDriver is the slice of caddy.Client that lifecycle uses.
+// CaddyDriver is the slice of caddy.Client that lifecycle uses. AddRoute takes a
+// caddy.RouteConfig (a concrete value type the provider exports) so lifecycle can
+// pass the resolved forward-auth + Cookie-strip policy it builds (#306).
 type CaddyDriver interface {
 	EnsureServer(ctx context.Context) error
-	AddRoute(ctx context.Context, instanceID, host, upstream string) error
+	AddRoute(ctx context.Context, cfg caddy.RouteConfig) error
 	AddSplashRoute(ctx context.Context, instanceID, host, appName, state string) error
 	RemoveRoute(ctx context.Context, instanceID string) error
 }

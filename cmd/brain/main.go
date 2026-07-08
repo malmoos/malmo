@@ -120,6 +120,10 @@ func main() {
 	// gates the hosted-only resource-limit CPU cap (#211). Appliance leaves the
 	// box-id empty and the lifecycle keeps its .local/mDNS path.
 	life.SetEnvironment(prof, boxID)
+	// The box Caddy dials this same brain upstream for the hosted per-app
+	// forward_auth verify subrequest (#306) that it dials for the dashboard's
+	// /api + /_malmo legs; wire it from the one config value.
+	life.SetBrainUpstream(cfg.dashboardBrainUpstream)
 
 	// Production: the brain owns the control-plane stack (Caddy + malmo-ui) and
 	// brings it up from the compose staged by host-agent before it configures any

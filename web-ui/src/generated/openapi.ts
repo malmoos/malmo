@@ -126,6 +126,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/apps/{id}/exposure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set an app's access mode — restricted (owner-only) or public (hosted; owner or admin) */
+        put: operations["set-app-exposure"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/apps/{id}/mail-binding": {
         parameters: {
             query?: never;
@@ -1214,6 +1231,7 @@ export interface components {
              * @example https://example.com/schemas/InstanceDTO.json
              */
             readonly $schema?: string;
+            exposure: string;
             icon_glyph?: string;
             icon_url?: string;
             id: string;
@@ -1489,6 +1507,16 @@ export interface components {
              */
             readonly $schema?: string;
             password: string;
+        };
+        "Set-app-exposureRequest": {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/Set-app-exposureRequest.json
+             */
+            readonly $schema?: string;
+            /** @enum {string} */
+            exposure: "restricted" | "public";
         };
         "Set-app-mail-bindingRequest": {
             /**
@@ -1941,6 +1969,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "set-app-exposure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Set-app-exposureRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstanceDTO"];
                 };
             };
             /** @description Error */

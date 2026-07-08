@@ -48,3 +48,10 @@ func CertSubjects(boxID string) []string {
 		"*." + boxID + "." + NetworkApex,
 	}
 }
+
+// ForwardAuthVerifyPath is the brain's internal endpoint the box Caddy's per-app
+// forward_auth handler calls on every request to a restricted app: #305 serves it
+// (internal/api), #306 wires Caddy to it (internal/lifecycle builds the route).
+// One canonical string so the API route registration and the lifecycle route
+// builder — which live in packages that can't import each other — can't drift.
+const ForwardAuthVerifyPath = "/_malmo/forward-auth/verify"

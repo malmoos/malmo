@@ -21,6 +21,21 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-07-08 — Hosted apps default to owner-only, and every hosted app route strips the whole `Cookie` header (#306)
+
+**Previously:** the hosted profile was "public-by-default, auth-gated" with per-app "public vs require a malmo session" controls **deferred** (`ENVIRONMENT.md` # Deferred), and the eventual flip of the default to owner-only was to be **gated on the mechanism being proven end-to-end** (the #308 e2e), per the #305 progress note. The cookie strip in front of a restricted app was specified narrowly as "so the app never receives the forward-auth cookie."
+
+**Now:** #306 lands the box-side mechanism (per-instance exposure state, the central `forward_auth` + Cookie-strip route builder, the toggle endpoint) **and flips the hosted default to `restricted` in the same change**, rather than waiting for #308. Two shape calls that diverge from the issue's literal text:
+
+- **Whole-`Cookie`-header strip on *every* hosted app route** — both `restricted` and `public`, not just restricted. The forward-auth cookie is `Domain=<box-id>.malmo.network`, so the browser sends it to *every* `<slug>.<box-id>` subdomain, including public apps; stripping only restricted routes would still leak it to a public app that could replay it against the owner's restricted apps. Stripping the whole header (not just the one cookie) is the simplest form that satisfies the "no app upstream ever receives a cookie" invariant the issue asks to make load-bearing.
+- **Flip the default now, don't gate on #308.** The mechanism (#305 verify + #306 route) is complete and unit-tested (route shape, strip invariant, appliance-unchanged); #308 becomes the e2e *proof* of an already-shipped default rather than the gate that unlocks it.
+
+**Why:** a per-app gate that leaks its own bearer token to a sibling app is not a gate; making the strip universal closes that at the one central builder the spec already calls the safety boundary. Flipping now keeps the "secure by default" posture (a new hosted app is owner-only until the owner opts it public) instead of shipping the machinery dormant. **Tradeoff, stated plainly:** the whole-header strip means a hosted app never receives *any* browser cookie, so an app that keeps its own cookie-based session/CSRF state won't see it in `restricted` *or* `public` mode; the box identity (injected `X-Malmo-User` headers) is the session for owner-only apps, and per-cookie surgical stripping is the follow-up if a real app needs its own cookies. Appliance is untouched — no exposure concept, no `forward_auth`, byte-for-byte the same plain reverse_proxy.
+
+**Affected docs:** `ENVIRONMENT.md` # Public-by-default (Per-app owner-only access rewritten; # Deferred bullet narrowed to multi-user). Progress: `hosted-forward-auth-route.md`. Code: `internal/store` (`exposure` column), `internal/caddy` (`RouteConfig`/`ForwardAuthConfig` + `AddRoute` rebuild), `internal/lifecycle` (`buildRouteConfig`/`defaultExposure`/`SetExposure`), `internal/api` (`PUT /apps/{id}/exposure`).
+
+---
+
 ## 2026-07-04 — The wildcard cert must be named in `certificates.automate`; the apex is served by Caddy's default issuer, not acme-dns
 
 **Previously:** the 2026-07-03 entry below framed the hosted TLS failure as a concurrency bug — two ACME orders (wildcard + apex) racing on the shared `_acme-challenge.<box-id>` acme-dns record — and fixed it by serializing them (`EnsureWildcardTLS` issues the wildcard, waits via a `:443` probe, then adds the apex as a second policy). Both subjects went through acme-dns DNS-01.

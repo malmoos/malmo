@@ -79,12 +79,12 @@ are stated below.
 | Package | Owns | Imported by |
 |---|---|---|
 | `api` | HTTP handlers (huma), auth middleware, request/response shapes. The only package that knows about HTTP. | `cmd/brain` |
-| `lifecycle` | The install transaction: door-1 (catalog) and door-2 (paste-a-compose), digest pinning, reconcile pass, health-wait, Caddy timing, uninstall. Defines `DockerDriver` consumer-side. | `api`, `cmd/brain` |
+| `lifecycle` | The install transaction: door-1 (catalog) and door-2 (paste-a-compose), digest pinning, reconcile pass, health-wait, Caddy timing, uninstall. Owns the **one central route builder** (`buildRouteConfig`) that resolves each app's `caddy.RouteConfig` from profile + per-instance `exposure` (hosted owner-only default, `SetExposure` toggle, #306). Defines `DockerDriver` consumer-side. | `api`, `cmd/brain` |
 | `store` | SQLite schema + queries. Sole persistence boundary. `ErrNotFound` is the only typed error. | `api`, `lifecycle`, `auth`, `audit`, `cmd/brain` |
 | `catalog` | Door-1 source behind a fixed six-method facade. Production (every profile) uses the control-plane thin client (`NewRemote`, `MALMO_CATALOG_URL`): fetches `GET /catalog/sync`, integrity-digest-verifies, last-good on-disk cache, proxies+caches assets. The disk reader (`New`) is retained only as a test constructor; no catalog is baked into the image. | `lifecycle`, `api`, `cmd/brain` |
 | `manifest` | `manifest.yml` schema (parse + validate), and the synthesizer that wraps a pasted compose into a door-2 manifest. | `catalog`, `lifecycle`, `api` |
 | `admission` | The single compose admission policy applied to both doors (image pinning rules, forbidden constructs, etc.). | `lifecycle` |
-| `caddy` | Client for Caddy's admin API. Site-block JSON generation lives here, plus the hosted wildcard-TLS automation policy (`EnsureWildcardTLS`: ACME DNS-01 via the `acmedns` provider for `*.<box-id>.malmo.network`). | `lifecycle`, `cmd/brain` |
+| `caddy` | Client for Caddy's admin API. Site-block JSON generation lives here (per-app route via `AddRoute(RouteConfig)` — optional hosted `forward_auth` gate + `Cookie`-header strip, #306), plus the hosted wildcard-TLS automation policy (`EnsureWildcardTLS`: ACME DNS-01 via the `acmedns` provider for `*.<box-id>.malmo.network`). Profile-agnostic: the strip/gate policy is resolved by the caller. | `lifecycle`, `cmd/brain` |
 | `profile` | The environment-profile marker (`appliance`\|`hosted`) + the first-boot seed reader, and the hosted URL-shape helpers (`HostedAppHost`/`HostedAppURL`/`HostedDashboardHost`/`CertSubjects` — the single place `<slug>.<box-id>.malmo.network` is named). Leaf package. | `api`, `lifecycle`, `cmd/brain` |
 | `hostclient` | Brain-side client for `host-agent`. Mirrors the routes in `protocol`. | `lifecycle`, `api`, `auth`, `cmd/brain` |
 | `protocol` | Wire types shared with `cmd/host-agent`. Source of truth for the host protocol. | `hostclient`, `cmd/host-agent` |
