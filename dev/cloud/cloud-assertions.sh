@@ -343,11 +343,20 @@ grep -qE ' (200|401)' <<<"$api" || fail "/api not routed to the brain through Ca
 
 # /setup is disabled on every hosted boot (the owner uses SSO): 403, never the
 # appliance's open empty-box 200/409. Proof the profile marker reached the container.
+# Break only on a definitive brain answer (403, or the appliance-mode 409/200 we
+# want to catch below) — NOT on a 502/503. Those are Caddy's "no ready upstream for
+# /api" during the first second after the stack comes up (the brain's listener /
+# dashboard route land a beat behind the container), a transient this poll must ride
+# through exactly as the /api/v1/me poll above does. Breaking on a transient 503 was
+# a latent race: the box is correct (the brain returns 403 once its upstream is
+# ready), but a probe that caught the startup window failed the proof. A genuinely
+# stuck /setup still fails — the loop exhausts its 30s window holding the last 503,
+# and the 403 assertion below rejects it.
 setup=""
 for _i in $(seq 1 30); do
     setup="$(http_post_status /api/v1/setup "$DASH_HOST" \
         '{"username":"probe","password":"probe-pw-once"}' 2>/dev/null || true)"
-    grep -qE ' (403|503|409|200)' <<<"$setup" && break
+    grep -qE ' (403|409|200)' <<<"$setup" && break
     sleep 1
 done
 grep -q ' 403' <<<"$setup" || fail "hosted /setup not disabled: status='$setup' (want 403; an appliance-mode brain would 409/200 — profile marker not reaching the container?)"
