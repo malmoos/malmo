@@ -16,6 +16,17 @@
 #
 # Enabled by dev/cloud/mkosi.postinst.chroot (a .wants symlink) for both the lean
 # production image and the boot-proof test lane that Include=..'s it.
+#
+# NB: the stock systemd-repart.service (shipped by the systemd-repart package, and
+# statically enabled by it) already runs the very same /usr/lib/repart.d/*.conf at
+# boot, so the grow effectively runs twice. That is harmless — systemd-repart is
+# idempotent; a second pass on an already-grown disk is a no-op. This custom unit
+# exists purely to add the docker.service / host-agent.service ordering and the
+# hard fail-closed gate (Requires= drop-ins on those two units), which the stock
+# unit cannot express. Consolidating onto a stock-unit drop-in (dropping this
+# ExecStart and only contributing the ordering/gating) is a deliberate deferral,
+# pending a live re-test of the growth path — the current mechanism is the one that
+# was verified on a real provider box, so it is kept intact for now.
 [Unit]
 Description=malmo — grow the root partition and filesystem to fill the provider disk
 Documentation=man:systemd-repart.service(8)
