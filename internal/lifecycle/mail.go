@@ -64,9 +64,9 @@ func mailDSN(p store.MailProvider) string {
 // read only at container create — so the change takes effect immediately; a
 // stopped instance picks it up on its next Start (same op). Brain commits
 // first: if the recreate fails the binding and .env already hold the desired
-// state, so a container that fell over (or a later brain restart) is brought
-// back up against it by the reconcile pass; a container still running with the
-// old binding keeps it until the user retries.
+// state and the instance is marked pending-recreate, so the reconcile pass
+// brings the container to the new binding — whether it fell over or kept running
+// on stale env (the already-up path retries while the marker is set, #268).
 func (m *Manager) RebindMail(ctx context.Context, id, providerID string) error {
 	defer m.lockInstance(id)()
 	inst, err := m.store.Get(id)
@@ -99,10 +99,8 @@ func (m *Manager) RebindMail(ctx context.Context, id, providerID string) error {
 			"instance_id", id, "name", inst.Name)
 		return nil
 	}
-	upCtx, cancel := context.WithTimeout(ctx, m.healthWait)
-	defer cancel()
-	if out, err := m.docker.ComposeUp(upCtx, m.instanceDir(id), "malmo-"+id); err != nil {
-		return fmt.Errorf("compose up: %w\n%s", err, out)
+	if err := m.recreateRunning(ctx, inst); err != nil {
+		return err
 	}
 	slog.Info("app mail binding updated", "instance_id", id, "name", inst.Name)
 	return nil
