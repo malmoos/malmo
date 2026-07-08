@@ -112,6 +112,12 @@ export type AppSecret = Schemas["AppSecretDTO"];
 // needs the literal union.
 export type Scope = "household" | "personal";
 
+// Exposure is the per-app access mode (#306, hosted only). Like Scope, it's a
+// UI-side literal union: the brain serves InstanceDTO.exposure as a free string,
+// but the toggle only ever sets/compares these two values. "restricted" is the
+// box-login-gated owner-only default; "public" is anonymous.
+export type Exposure = "restricted" | "public";
+
 // --- Door-2 hand-maintained types (not in the OpenAPI spec) -----------------
 // These types back the custom-container install endpoints which bypass huma
 // and are therefore not generated. See DASHBOARD.md # Door-2.
