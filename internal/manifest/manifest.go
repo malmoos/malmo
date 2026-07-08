@@ -423,6 +423,31 @@ type ServiceDep struct {
 // every app must still install and run unbound (validateMail rejects false).
 type Mail struct {
 	Optional bool `yaml:"optional"`
+
+	// Env auto-wires app-owned mail env vars whose valid values are an enum the
+	// app boot-validates, where a compose `${MALMO_MAIL_*:+…}` gate can't remap
+	// one token set onto another (#302). Each key is the app's own env-var name;
+	// the brain resolves the mapped token for the box's current mail state and
+	// stamps it into the .env directly — no MALMO_ indirection, the same as a
+	// config field. Emitted in both bound and unbound states (unbound uses the
+	// none/unbound tokens), so an enum-driver app is present-and-valid on a box
+	// with no provider registered. Absent ⇒ only the MALMO_MAIL_* family is
+	// injected. See APP_MANIFEST.md # D3, SERVICE_PROVISIONING.md # BYO outgoing mail.
+	Env map[string]MailEnvMap `yaml:"env,omitempty"`
+}
+
+// MailEnvMap projects one malmo mail-state domain onto an app's own token set
+// (APP_MANIFEST.md # D3). From names the source domain and Map gives the app's
+// token for each value in it:
+//
+//	encryption — the bound provider's mode: none | starttls | tls (unbound ⇒ none)
+//	bound      — whether any provider is bound: bound | unbound
+//
+// Map must cover its domain exactly (every value, none extra) so resolution
+// never hits an undeclared token in any mail state (validateMail enforces it).
+type MailEnvMap struct {
+	From string            `yaml:"from"`
+	Map  map[string]string `yaml:"map"`
 }
 
 // ConfigField is one user-supplied configuration field (APP_MANIFEST.md # D4).
@@ -684,16 +709,69 @@ func (m *Manifest) validateServices() error {
 	return nil
 }
 
+// Mail-state domain names a MailEnvMap.From may take (APP_MANIFEST.md # D3).
+const (
+	MailFromEncryption = "encryption"
+	MailFromBound      = "bound"
+)
+
+// Values of the synthetic `bound` domain (whether a provider is bound).
+const (
+	MailBound   = "bound"
+	MailUnbound = "unbound"
+)
+
+// mailEnvDomains maps each MailEnvMap.From to the exact token set its Map must
+// cover (APP_MANIFEST.md # D3). The encryption domain values mirror
+// store.MailEncryption* (none|starttls|tls); kept as literals here so the
+// manifest layer stays free of a store dependency, and lifecycle resolution
+// bridges the two (a lifecycle test guards the alignment).
+var mailEnvDomains = map[string][]string{
+	MailFromEncryption: {"none", "starttls", "tls"},
+	MailFromBound:      {MailBound, MailUnbound},
+}
+
 // validateMail checks the optional outgoing-mail block (APP_MANIFEST.md # D).
 // Absent ⇒ no-op. v1 supports only `optional: true`: an app that cannot run
 // unbound would have to fail install on every box with no provider registered,
-// so required mail is rejected until a real consumer needs it.
+// so required mail is rejected until a real consumer needs it. Each mail.env
+// entry (#302) is validated like a config app_env — the token lands in the .env
+// under the app's own name, so it must be a bare uppercase identifier that can't
+// clobber the MALMO_ family or a loader var — plus its map must cover the From
+// domain exactly, so resolution never hits an undeclared token.
 func (m *Manifest) validateMail() error {
 	if m.Mail == nil {
 		return nil
 	}
 	if !m.Mail.Optional {
 		return fmt.Errorf("mail: v1 supports only optional mail (set `optional: true`; apps must run unbound)")
+	}
+	for name, em := range m.Mail.Env {
+		if !configEnvName.MatchString(name) {
+			return fmt.Errorf("mail.env: name %q must be an uppercase env-var name (e.g. EMAIL_DRIVER)", name)
+		}
+		if strings.HasPrefix(name, "MALMO_") {
+			return fmt.Errorf("mail.env: name %q may not use the reserved MALMO_ prefix", name)
+		}
+		if reservedConfigEnv[name] {
+			return fmt.Errorf("mail.env: name %q is a reserved runtime variable and may not be set", name)
+		}
+		domain, ok := mailEnvDomains[em.From]
+		if !ok {
+			return fmt.Errorf("mail.env[%s]: unknown from %q (allowed: encryption, bound)", name, em.From)
+		}
+		if len(em.Map) != len(domain) {
+			return fmt.Errorf("mail.env[%s]: map must cover exactly the %s domain %v", name, em.From, domain)
+		}
+		for _, v := range domain {
+			token, ok := em.Map[v]
+			if !ok {
+				return fmt.Errorf("mail.env[%s]: map is missing key %q for domain %s", name, v, em.From)
+			}
+			if token == "" {
+				return fmt.Errorf("mail.env[%s]: map[%s] token must not be empty", name, v)
+			}
+		}
 	}
 	return nil
 }

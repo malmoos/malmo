@@ -15,9 +15,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/malmoos/malmo/internal/manifest"
 	"github.com/malmoos/malmo/internal/store"
 )
 
@@ -39,6 +41,43 @@ func mailEnvLines(p store.MailProvider) []string {
 		"MALMO_MAIL_USE_SSL=" + strconv.FormatBool(p.Encryption == store.MailEncryptionTLS),
 		"MALMO_MAIL_DSN=" + mailDSN(p),
 	}
+}
+
+// mailAppEnvLines resolves each manifest-declared mail.env var to its token for
+// the box's current mail state and renders it as `APP_VAR=token` (#302). Unlike
+// the MALMO_MAIL_* family — injected only when bound — these are emitted in both
+// states, so an app whose mail switch is a boot-validated enum is present and
+// valid even unbound (bound == nil): `encryption` reads none, `bound` reads
+// unbound. Keys are sorted so a rewrite produces a byte-stable .env. Validation
+// guarantees every declared map covers its domain, so the lookup can't miss.
+func mailAppEnvLines(mail *manifest.Mail, bound *store.MailProvider) []string {
+	if mail == nil || len(mail.Env) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(mail.Env))
+	for name := range mail.Env {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	lines := make([]string, 0, len(names))
+	for _, name := range names {
+		em := mail.Env[name]
+		var domainValue string
+		switch em.From {
+		case manifest.MailFromEncryption:
+			domainValue = store.MailEncryptionNone // unbound ⇒ no encryption
+			if bound != nil {
+				domainValue = bound.Encryption
+			}
+		case manifest.MailFromBound:
+			domainValue = manifest.MailUnbound
+			if bound != nil {
+				domainValue = manifest.MailBound
+			}
+		}
+		lines = append(lines, name+"="+em.Map[domainValue])
+	}
+	return lines
 }
 
 // mailDSN renders a provider as a Symfony-style SMTP URL
@@ -90,7 +129,7 @@ func (m *Manager) RebindMail(ctx context.Context, id, providerID string) error {
 	} else if err := m.store.SetInstanceMailBinding(id, providerID); err != nil {
 		return fmt.Errorf("bind mail provider: %w", err)
 	}
-	if err := m.rewriteEnvMail(id); err != nil {
+	if err := m.rewriteEnvMail(id, man.Mail); err != nil {
 		return fmt.Errorf("rewrite env: %w", err)
 	}
 
@@ -106,30 +145,47 @@ func (m *Manager) RebindMail(ctx context.Context, id, providerID string) error {
 	return nil
 }
 
-// rewriteEnvMail re-stamps only the MALMO_MAIL_* lines of an instance's .env
-// from the current binding, leaving every other line byte-identical — unlike a
-// full writeEnv it needs no install-time isolation state, and a stable secret
-// can't be re-rolled by accident.
-func (m *Manager) rewriteEnvMail(id string) error {
+// rewriteEnvMail re-stamps only the mail-owned lines of an instance's .env from
+// the current binding — the MALMO_MAIL_* family plus any manifest-declared
+// mail.env vars (#302) — leaving every other line byte-identical, so unlike a
+// full writeEnv it needs no install-time isolation state and a stable secret
+// can't be re-rolled by accident. The declared vars are stamped under the app's
+// own names, so they're stripped by name (not the MALMO_MAIL_ prefix) and
+// re-resolved for the new state — including unbound, which the MALMO_MAIL_*
+// family drops but the declared enum vars keep (with their unbound tokens).
+func (m *Manager) rewriteEnvMail(id string, mail *manifest.Mail) error {
 	path := filepath.Join(m.instanceDir(id), ".env")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
+	declared := map[string]bool{}
+	if mail != nil {
+		for name := range mail.Env {
+			declared[name] = true
+		}
+	}
 	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
 	kept := lines[:0]
 	for _, l := range lines {
-		if !strings.HasPrefix(l, "MALMO_MAIL_") {
-			kept = append(kept, l)
+		if strings.HasPrefix(l, "MALMO_MAIL_") {
+			continue
 		}
+		if name, _, ok := strings.Cut(l, "="); ok && declared[name] {
+			continue
+		}
+		kept = append(kept, l)
 	}
 	mp, err := m.store.GetInstanceMailProvider(id)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return err
 	}
+	var bound *store.MailProvider
 	if err == nil {
+		bound = &mp
 		kept = append(kept, mailEnvLines(mp)...)
 	}
+	kept = append(kept, mailAppEnvLines(mail, bound)...)
 	env := strings.Join(append(kept, ""), "\n")
 	return os.WriteFile(path, []byte(env), 0o644)
 }

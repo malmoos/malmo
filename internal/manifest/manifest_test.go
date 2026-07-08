@@ -159,6 +159,83 @@ main_port: 8001
 	}
 }
 
+func TestParseMailEnvMap(t *testing.T) {
+	src := []byte(`
+id: twenty
+manifest_version: 1
+name: Twenty
+version: "1.0"
+compose_file: compose.yml
+main_service: app
+main_port: 3000
+mail:
+  optional: true
+  env:
+    EMAIL_DRIVER:
+      from: bound
+      map: { bound: smtp, unbound: logger }
+    SMTP_SECURITY:
+      from: encryption
+      map: { none: "off", starttls: starttls, tls: force_tls }
+`)
+	m, err := Parse(src)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := m.Mail.Env["EMAIL_DRIVER"]; got.From != MailFromBound || got.Map[MailBound] != "smtp" || got.Map[MailUnbound] != "logger" {
+		t.Fatalf("EMAIL_DRIVER map not parsed: %+v", got)
+	}
+	if got := m.Mail.Env["SMTP_SECURITY"]; got.From != MailFromEncryption || got.Map["tls"] != "force_tls" || got.Map["none"] != "off" {
+		t.Fatalf("SMTP_SECURITY map not parsed: %+v", got)
+	}
+}
+
+func TestValidateMailEnvRejects(t *testing.T) {
+	cases := map[string]string{
+		"unknown from": `    EMAIL_DRIVER:
+      from: mystery
+      map: { bound: smtp, unbound: logger }`,
+		"incomplete encryption domain": `    SMTP_SECURITY:
+      from: encryption
+      map: { none: "off", tls: force_tls }`,
+		"extra key": `    EMAIL_DRIVER:
+      from: bound
+      map: { bound: smtp, unbound: logger, other: x }`,
+		"misspelled key (right count)": `    EMAIL_DRIVER:
+      from: bound
+      map: { bound: smtp, notunbound: logger }`,
+		"empty token": `    EMAIL_DRIVER:
+      from: bound
+      map: { bound: smtp, unbound: "" }`,
+		"malmo-prefixed name": `    MALMO_MAIL_HOST:
+      from: bound
+      map: { bound: smtp, unbound: logger }`,
+		"lowercase name": `    email_driver:
+      from: bound
+      map: { bound: smtp, unbound: logger }`,
+		"reserved runtime name": `    PATH:
+      from: bound
+      map: { bound: smtp, unbound: logger }`,
+	}
+	for name, env := range cases {
+		src := []byte(`
+id: app
+manifest_version: 1
+name: App
+version: "1.0"
+compose_file: compose.yml
+main_service: app
+main_port: 8080
+mail:
+  optional: true
+  env:
+` + env + "\n")
+		if _, err := Parse(src); err == nil {
+			t.Errorf("%s: parse must reject the mail.env map", name)
+		}
+	}
+}
+
 func TestParseSecretsNormalizesBytes(t *testing.T) {
 	src := []byte(`
 id: kan
