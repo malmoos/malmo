@@ -256,6 +256,22 @@ environment:
   MAILER_FROM: "${MALMO_MAIL_FROM:-kimai@example.com}"
 ```
 
+**Enum-style config a compose gate can't reach (`mail.env`).** Some apps take a mail setting as a *boot-validated enum* rather than a boolean or free string — twenty's `EMAIL_DRIVER` (`logger` | `smtp`, rejects empty) or vaultwarden's `SMTP_SECURITY` (`off` | `starttls` | `force_tls`, whose tokens differ from malmo's `none`/`starttls`/`tls`). Compose `environment:` interpolation can only substitute, default (`:-`), or test-presence (`:+`); it cannot *remap* one enum's tokens onto another's, and the established `${MALMO_MAIL_HOST:+…}` gate expands to the empty string on an unbound box, which boot-rejects the enum. So the manifest declares the mapping and the brain resolves the final token in Go, stamping it into the `.env` under the app's own name — no `MALMO_` indirection, the same direct-stamp convention `config:` uses (# D4):
+
+```yaml
+mail:
+  optional: true
+  env:
+    EMAIL_DRIVER:                                    # twenty — is a provider bound?
+      from: bound                                    # domain: bound | unbound
+      map: { bound: smtp, unbound: logger }
+    SMTP_SECURITY:                                   # vaultwarden — the provider's mode
+      from: encryption                               # domain: none | starttls | tls (unbound ⇒ none)
+      map: { none: "off", starttls: starttls, tls: force_tls }
+```
+
+Each entry's `from` names a mail-state domain — `bound` (whether any provider is bound) or `encryption` (the bound provider's mode, treated as `none` when unbound) — and `map` must cover that domain exactly (every value, none extra), so resolution never hits an undeclared token. The var name is validated like a config `app_env` (uppercase identifier, never the `MALMO_` prefix or a loader/runtime var). **Unlike the rest of `MALMO_MAIL_*`, these vars are stamped in *both* states:** unbound resolves the `unbound`/`none` tokens, so the enum is always present and valid and the app never boot-rejects on an empty value. The app's compose passes the resolved value straight through (`EMAIL_DRIVER: ${EMAIL_DRIVER}`) — no remap, because the brain already did it.
+
 v1 admits only `optional: true` — an app that *can't* run unbound (`optional: false` or a bare `mail: {}`) is rejected at parse, because a box with no registered providers couldn't install it. Required-mail semantics (blocking install until a provider is picked) is a possible later loosening; declare-and-degrade is the v1 contract.
 
 ### D4. User-supplied configuration

@@ -8,10 +8,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/malmoos/malmo/internal/manifest"
 	"github.com/malmoos/malmo/internal/store"
 )
 
@@ -35,6 +37,32 @@ const mailCompose = `
 services:
   app:
     image: traefik/whoami:v1.10.3
+`
+
+// mailEnumManifest declares mail.env maps for both domains (#302): a `bound`
+// enum (twenty's EMAIL_DRIVER) and an `encryption` enum (vaultwarden's
+// SMTP_SECURITY). `off` is quoted so YAML keeps it a string, not a boolean.
+const mailEnumManifest = `
+id: mailenumapp
+manifest_version: 1
+name: Mail Enum App
+version: "1.0"
+compose_file: compose.yml
+main_service: app
+main_port: 8080
+preferred_slugs: [mailenumapp]
+permissions:
+  internet: true
+  lan: false
+mail:
+  optional: true
+  env:
+    EMAIL_DRIVER:
+      from: bound
+      map: { bound: smtp, unbound: logger }
+    SMTP_SECURITY:
+      from: encryption
+      map: { none: "off", starttls: starttls, tls: force_tls }
 `
 
 func testProvider() store.MailProvider {
@@ -192,6 +220,127 @@ func countCalls(calls []call, method string) int {
 		}
 	}
 	return n
+}
+
+func installEnumMailApp(t *testing.T, e *testEnv, providerID string) (store.Instance, string) {
+	t.Helper()
+	e.writeCatalogApp(t, "mailenumapp", mailCompose, mailEnumManifest)
+	e.docker.digests[testImage] = testDigest
+	inst, err := e.m.Install(context.Background(), "mailenumapp",
+		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, providerID, nil, nil)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	env, err := os.ReadFile(filepath.Join(e.stateDir, "instances", inst.ID, ".env"))
+	if err != nil {
+		t.Fatalf("read env: %v", err)
+	}
+	return inst, string(env)
+}
+
+// A mail.env-declaring app installed unbound gets the declared enum vars stamped
+// with their none/unbound tokens (so it boots valid), and no MALMO_MAIL_* (#302).
+func TestInstallUnboundStampsEnumMailVars(t *testing.T) {
+	e := newTestEnv(t)
+	_, env := installEnumMailApp(t, e, "")
+	if strings.Contains(env, "MALMO_MAIL_") {
+		t.Fatalf("unbound install must inject no MALMO_MAIL_ vars, got:\n%s", env)
+	}
+	for k, v := range map[string]string{"EMAIL_DRIVER": "logger", "SMTP_SECURITY": "off"} {
+		if got := envValue(env, k); got != v {
+			t.Errorf("unbound %s = %q, want %q", k, got, v)
+		}
+	}
+}
+
+// Bound, the declared enum vars resolve their mapped tokens and coexist with the
+// MALMO_MAIL_* family.
+func TestInstallBoundStampsEnumMailVars(t *testing.T) {
+	e := newTestEnv(t)
+	if err := e.store.CreateMailProvider(testProvider()); err != nil { // tls
+		t.Fatalf("create provider: %v", err)
+	}
+	_, env := installEnumMailApp(t, e, "mp_test")
+	for k, v := range map[string]string{"EMAIL_DRIVER": "smtp", "SMTP_SECURITY": "force_tls"} {
+		if got := envValue(env, k); got != v {
+			t.Errorf("bound %s = %q, want %q", k, got, v)
+		}
+	}
+	if got := envValue(env, "MALMO_MAIL_HOST"); got != "smtp.fastmail.com" {
+		t.Errorf("MALMO_MAIL_HOST = %q, want smtp.fastmail.com", got)
+	}
+}
+
+// A rebind re-stamps the declared enum vars for the new state — including the
+// unbind, where MALMO_MAIL_* is stripped but the enum vars flip to their unbound
+// tokens and stay present (a bare strip would boot-reject twenty's driver) — with
+// no duplicate lines left behind.
+func TestRebindReStampsEnumMailVars(t *testing.T) {
+	e := newTestEnv(t)
+	if err := e.store.CreateMailProvider(testProvider()); err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	inst, _ := installEnumMailApp(t, e, "mp_test")
+	envPath := filepath.Join(e.stateDir, "instances", inst.ID, ".env")
+
+	if err := e.m.RebindMail(context.Background(), inst.ID, ""); err != nil {
+		t.Fatalf("unbind: %v", err)
+	}
+	raw, _ := os.ReadFile(envPath)
+	if strings.Contains(string(raw), "MALMO_MAIL_") {
+		t.Fatalf("unbind must strip MALMO_MAIL_ vars, got:\n%s", raw)
+	}
+	for k, v := range map[string]string{"EMAIL_DRIVER": "logger", "SMTP_SECURITY": "off"} {
+		if got := envValue(string(raw), k); got != v {
+			t.Errorf("unbound %s = %q, want %q", k, got, v)
+		}
+		if n := strings.Count(string(raw), k+"="); n != 1 {
+			t.Fatalf("%s stamped %d times after unbind, want 1:\n%s", k, n, raw)
+		}
+	}
+
+	if err := e.m.RebindMail(context.Background(), inst.ID, "mp_test"); err != nil {
+		t.Fatalf("rebind: %v", err)
+	}
+	raw, _ = os.ReadFile(envPath)
+	for k, v := range map[string]string{"EMAIL_DRIVER": "smtp", "SMTP_SECURITY": "force_tls"} {
+		if got := envValue(string(raw), k); got != v {
+			t.Errorf("rebound %s = %q, want %q", k, got, v)
+		}
+		if n := strings.Count(string(raw), k+"="); n != 1 {
+			t.Fatalf("%s stamped %d times after rebind, want 1:\n%s", k, n, raw)
+		}
+	}
+}
+
+// mailAppEnvLines resolves each domain and each encryption mode. The encryption
+// cases also guard manifest's literal domain values against store.MailEncryption*
+// drift, since the two vocabularies are only bridged at resolution time.
+func TestMailAppEnvLinesResolvesDomains(t *testing.T) {
+	mail := &manifest.Mail{
+		Optional: true,
+		Env: map[string]manifest.MailEnvMap{
+			"EMAIL_DRIVER":  {From: manifest.MailFromBound, Map: map[string]string{"bound": "smtp", "unbound": "logger"}},
+			"SMTP_SECURITY": {From: manifest.MailFromEncryption, Map: map[string]string{"none": "off", "starttls": "starttls", "tls": "force_tls"}},
+		},
+	}
+	if got, want := mailAppEnvLines(mail, nil), []string{"EMAIL_DRIVER=logger", "SMTP_SECURITY=off"}; !slices.Equal(got, want) {
+		t.Fatalf("unbound = %v, want %v (sorted by name)", got, want)
+	}
+	for enc, sec := range map[string]string{
+		store.MailEncryptionNone:     "off",
+		store.MailEncryptionSTARTTLS: "starttls",
+		store.MailEncryptionTLS:      "force_tls",
+	} {
+		p := testProvider()
+		p.Encryption = enc
+		if got, want := mailAppEnvLines(mail, &p), []string{"EMAIL_DRIVER=smtp", "SMTP_SECURITY=" + sec}; !slices.Equal(got, want) {
+			t.Errorf("encryption %s: got %v, want %v", enc, got, want)
+		}
+	}
+	if lines := mailAppEnvLines(&manifest.Mail{Optional: true}, nil); lines != nil {
+		t.Errorf("empty mail.env must yield no lines, got %v", lines)
+	}
 }
 
 func TestMailDSN(t *testing.T) {
