@@ -20,6 +20,15 @@ import (
 // CookieName is the dashboard's session cookie. AUTH.md # Sessions.
 const CookieName = "malmo_session"
 
+// ForwardAuthCookieName is the hosted per-app forward-auth cookie (issue #305).
+// Unlike CookieName it is Domain-scoped to the box apex so the browser sends it
+// to app subdomains, where the box Caddy validates it against the brain before
+// proxying (the standard forward_auth shape). It is a strictly lower-privilege
+// credential: it proves a valid box session exists, but its value is a distinct
+// random token stored in a distinct column, so replaying it as CookieName never
+// resolves to a dashboard session. Hosted-only; the appliance never mints one.
+const ForwardAuthCookieName = "malmo_forward_auth"
+
 // tokenBytes is the entropy of one session token. 32 bytes = 256 bits;
 // base64url-encoded that's 43 chars. Server-side validated, so length here
 // is for collision resistance, not guess resistance.
@@ -54,6 +63,11 @@ type SessionStore interface {
 	DeleteSession(token string) error
 	SetElevatedUntil(token string, until time.Time) error
 	GetUser(id string) (store.User, error)
+	// Forward-auth (hosted, #305): stamp a session with its forward-auth token
+	// and resolve a session back from it. The reverse lookup backs the per-app
+	// verify endpoint.
+	SetSessionForwardAuthToken(sessionToken, faToken string) error
+	GetSessionByForwardAuthToken(faToken string) (store.Session, error)
 }
 
 // Identity is the authenticated principal attached to a request context by
@@ -82,6 +96,13 @@ type Manager struct {
 	// the brain listens on plain HTTP and Secure would make the browser drop
 	// the cookie.
 	SecureCookies bool
+	// ForwardAuthDomain is the Domain attribute stamped on the hosted
+	// forward-auth cookie (issue #305): the box apex "<box-id>.malmo.network",
+	// so the browser sends the cookie to every app subdomain
+	// "<slug>.<box-id>.malmo.network" as well as the dashboard host. Empty on
+	// appliance (and any box with no box-id), which disables minting — the
+	// appliance never issues a forward-auth cookie.
+	ForwardAuthDomain string
 }
 
 func NewManager(s SessionStore) *Manager {
@@ -126,14 +147,45 @@ func (m *Manager) Validate(token string) (Identity, error) {
 	if err != nil {
 		return Identity{}, err
 	}
+	return m.resolveSession(sess, true)
+}
 
-	// Enforce session lifetime (AUTH.md # Lifetime).
+// ValidateForwardAuth resolves the hosted forward-auth token (issue #305) to an
+// Identity, running the same lifetime + user checks as Validate against the
+// session the token belongs to. Unlike Validate it does NOT bump last_seen_at:
+// the box Caddy calls the verify endpoint on a per-request forward_auth
+// subrequest — potentially once per asset — so touching the row there would be
+// write amplification for no benefit. The dashboard session stays the liveness
+// authority; app traffic rides its rolling window rather than extending it.
+// Owner-only policy (v1) is enforced by the caller — this layer only proves the
+// session behind the token is live.
+func (m *Manager) ValidateForwardAuth(faToken string) (Identity, error) {
+	if faToken == "" {
+		return Identity{}, ErrInvalidSession
+	}
+	sess, err := m.store.GetSessionByForwardAuthToken(faToken)
+	if errors.Is(err, store.ErrNotFound) {
+		return Identity{}, ErrInvalidSession
+	}
+	if err != nil {
+		return Identity{}, err
+	}
+	return m.resolveSession(sess, false)
+}
+
+// resolveSession enforces session lifetime (AUTH.md # Lifetime) and resolves the
+// user for a session already fetched — by session token (Validate) or by
+// forward-auth token (ValidateForwardAuth). touch controls the last_seen_at
+// bump: the dashboard path keeps the rolling idle window alive, the forward-auth
+// path deliberately does not. An expired session is deleted and rejected either
+// way; a session whose user has vanished is rejected defensively.
+func (m *Manager) resolveSession(sess store.Session, touch bool) (Identity, error) {
 	now := m.Clock()
 	idleExpiry := sess.LastSeenAt.Add(SessionIdleWindow)
 	hardExpiry := sess.ExpiresAt
 	if now.After(idleExpiry) || (!hardExpiry.IsZero() && now.After(hardExpiry)) {
 		// Session is expired — delete it and reject.
-		_ = m.store.DeleteSession(token)
+		_ = m.store.DeleteSession(sess.Token)
 		return Identity{}, ErrInvalidSession
 	}
 
@@ -144,10 +196,12 @@ func (m *Manager) Validate(token string) (Identity, error) {
 	if err != nil {
 		return Identity{}, err
 	}
-	if err := m.store.TouchSession(token, now); err != nil {
-		return Identity{}, err
+	if touch {
+		if err := m.store.TouchSession(sess.Token, now); err != nil {
+			return Identity{}, err
+		}
+		sess.LastSeenAt = now
 	}
-	sess.LastSeenAt = now
 	elevated := !sess.ElevatedUntil.IsZero() && now.Before(sess.ElevatedUntil)
 	return Identity{User: user, Session: sess, elevated: elevated}, nil
 }
@@ -185,10 +239,63 @@ func (m *Manager) ClearCookie() *http.Cookie {
 	return c
 }
 
+// IssueForwardAuth mints a fresh forward-auth token for an existing session
+// (issue #305), persists it on the session row so its lifetime is the session's,
+// and returns the Domain-scoped cookie the caller sets alongside the dashboard
+// session cookie. Hosted-only: the caller gates on profile == Hosted, and the
+// cookie is meaningless without ForwardAuthDomain set.
+func (m *Manager) IssueForwardAuth(sessionToken string) (*http.Cookie, error) {
+	faToken, err := newToken()
+	if err != nil {
+		return nil, err
+	}
+	if err := m.store.SetSessionForwardAuthToken(sessionToken, faToken); err != nil {
+		return nil, err
+	}
+	return m.ForwardAuthCookie(faToken), nil
+}
+
+// ForwardAuthCookie returns the http.Cookie carrying a forward-auth token to the
+// browser. Same hardening as the session cookie (HttpOnly, SameSite=Lax, Secure
+// per SecureCookies) but with Domain set to ForwardAuthDomain so it is sent to
+// every app subdomain under the box apex — the deliberate difference from the
+// host-only session cookie.
+func (m *Manager) ForwardAuthCookie(faToken string) *http.Cookie {
+	return &http.Cookie{
+		Name:     ForwardAuthCookieName,
+		Value:    faToken,
+		Path:     "/",
+		Domain:   m.ForwardAuthDomain,
+		HttpOnly: true,
+		Secure:   m.SecureCookies,
+		SameSite: http.SameSiteLaxMode,
+	}
+}
+
+// ClearForwardAuthCookie returns a cookie that tells the browser to drop the
+// forward-auth cookie on logout. It carries the same Domain as the issued cookie
+// so the browser matches and expires the right one.
+func (m *Manager) ClearForwardAuthCookie() *http.Cookie {
+	c := m.ForwardAuthCookie("")
+	c.MaxAge = -1
+	return c
+}
+
 // TokenFromRequest extracts the session token from the request's cookie. ""
 // when no cookie is set — callers treat that as "no session", not an error.
 func TokenFromRequest(r *http.Request) string {
 	c, err := r.Cookie(CookieName)
+	if err != nil {
+		return ""
+	}
+	return c.Value
+}
+
+// ForwardAuthTokenFromRequest extracts the forward-auth token from the request's
+// cookie (issue #305). "" when absent — the verify endpoint treats that as "no
+// forward-auth session", i.e. 401, not an error.
+func ForwardAuthTokenFromRequest(r *http.Request) string {
+	c, err := r.Cookie(ForwardAuthCookieName)
 	if err != nil {
 		return ""
 	}

@@ -95,6 +95,13 @@ func (s *Server) SetEnvironment(prof profile.Profile, boxID string, assertionKey
 	s.profile = prof
 	s.boxID = boxID
 	s.assertionKey = assertionKey
+	// On hosted, scope the forward-auth cookie to the box apex so the browser
+	// carries it to every app subdomain (issue #305). Appliance leaves it empty,
+	// which disables minting — no forward-auth cookie is ever issued there, and the
+	// appliance login/logout paths stay byte-for-byte unchanged.
+	if prof == profile.Hosted && boxID != "" {
+		s.auth.ForwardAuthDomain = profile.HostedDashboardHost(boxID)
+	}
 }
 
 // OpenAPI document identity. Shared by Handler (live serving) and
@@ -133,6 +140,16 @@ func (s *Server) Handler() http.Handler {
 	// and outside the OpenAPI surface (sso.go; cloud specs/AUTH_AND_ACCESS.md #
 	// Portal-to-box SSO). Public (the assertion is the credential).
 	mux.HandleFunc("GET /_malmo/sso", s.ssoLanding)
+
+	// Hosted per-app forward-auth verify (issue #305; wired into per-app Caddy
+	// routes by #306). The box Caddy's forward_auth handler calls this per request
+	// to a restricted app, carrying the app request's forward-auth cookie; the
+	// brain answers 200 + identity headers for the box owner, 401 otherwise. Raw
+	// and outside the OpenAPI surface — a proxy-internal probe, not a client API —
+	// and public to the middleware (the cookie is the credential), hosted-gated in
+	// the handler. Registered method-agnostic so it answers whatever verb
+	// forward_auth sends.
+	mux.HandleFunc(forwardAuthVerifyPath, s.forwardAuthVerify)
 
 	return withCORS(s.authMiddleware(s.rateLimit(mux)))
 }

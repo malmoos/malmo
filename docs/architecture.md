@@ -88,7 +88,7 @@ are stated below.
 | `profile` | The environment-profile marker (`appliance`\|`hosted`) + the first-boot seed reader, and the hosted URL-shape helpers (`HostedAppHost`/`HostedAppURL`/`HostedDashboardHost`/`CertSubjects` — the single place `<slug>.<box-id>.malmo.network` is named). Leaf package. | `api`, `lifecycle`, `cmd/brain` |
 | `hostclient` | Brain-side client for `host-agent`. Mirrors the routes in `protocol`. | `lifecycle`, `api`, `auth`, `cmd/brain` |
 | `protocol` | Wire types shared with `cmd/host-agent`. Source of truth for the host protocol. | `hostclient`, `cmd/host-agent` |
-| `auth` | First-admin bootstrap, password verification (delegates to host-agent), opaque cookie sessions. No password hashes on the brain side. | `api`, `cmd/brain` |
+| `auth` | First-admin bootstrap, password verification (delegates to host-agent), opaque cookie sessions, plus the hosted per-app forward-auth credential (a second, lower-privilege `Domain`-scoped cookie on the session row that the box Caddy's `forward_auth` verifies against the brain, #305). No password hashes on the brain side. | `api`, `cmd/brain` |
 | `assertion` | Verifies the portal's short-lived Ed25519 ownership assertion for the hosted portal-to-box SSO handshake (`Verify`: signature + expiry; box-id/issuer/replay are the handler's policy). Minimal signed token, not a JWT. Mirrors the cloud signer's wire format. Leaf package. | `api` |
 | `audit` | Append-only `audit_events` table writes. Every elevation-class mutation calls `audit.Record` on success **and** failure. | `api` |
 | `events` | In-memory pub-sub bus for SSE. Lifecycle stages publish; the SSE handler subscribes. | `lifecycle`, `api`, `cmd/brain` |

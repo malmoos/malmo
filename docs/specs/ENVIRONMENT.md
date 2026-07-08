@@ -122,6 +122,15 @@ The appliance is **closed by default**: no app or service is publicly exposed, a
 
 Per-app "expose to anonymous users vs require a malmo session in front" controls are a later refinement (# Deferred). v1 is "the endpoint exists and is auth-gated."
 
+### Per-app owner-only access — forward-auth via the box identity
+
+The "require a malmo session in front" half of that refinement is being built as a `forward_auth` step in the box's Caddy in front of each restricted app, backed by the box's own PAM identity (never a central or federated account). Two cookies keep it safe, and the split is load-bearing:
+
+- The **dashboard session** (`malmo_session`, `AUTH.md` # Sessions) stays **host-only** on the dashboard host `<box-id>.malmo.network`, so a third-party app subdomain can never receive it and replay it as an admin session.
+- A separate, **domain-wide, lower-privilege forward-auth cookie** (`malmo_forward_auth`, `Domain=<box-id>.malmo.network`) is what the browser sends to app subdomains `<slug>.<box-id>.malmo.network`. Its value is a distinct random token stored in a distinct column, so it proves "a valid box session exists" but never resolves as a dashboard session — even if it leaked it grants app access, not dashboard control. Caddy validates it against the brain and (once the route builder lands) **strips it before the app upstream** so the app never sees it. This is the standard oauth2-proxy / Authelia forward-auth shape.
+
+The brain side of this — the verify endpoint the box Caddy calls (`GET /_malmo/forward-auth/verify`), and minting/clearing the forward-auth cookie on every hosted session-establishment path (login, the portal-to-box SSO exchange, logout) — is built (#305). Identity scope is **owner-only** in v1: only the box owner's session validates; box users the owner may later create are an additive step. All of it is behind the `hosted` profile gate — a `Domain=<box-id>.malmo.network` cookie is meaningless on the appliance's `.local` / mesh names, so the appliance login path and its same-origin Tier-2 auth model are byte-for-byte unchanged. The per-app exposure state, the Caddy route wiring + cookie strip, the dashboard Only-me / Public toggle, and the flip of the hosted default from public-by-default to owner-only (gated on the mechanism being proven end-to-end) are the remaining slices of epic #304 (#306/#307/#308).
+
 ## Storage (hosted)
 
 - **Virtual block volumes, not physical disks.** The "OS drive / data drive" user-facing model (`STORAGE.md`) collapses: there is one (or a small number of) cloud block volume(s), not removable physical media. The user-visible storage vocabulary stays minimal, but the physical-disk framing is gone.

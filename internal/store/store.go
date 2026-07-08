@@ -237,6 +237,7 @@ func (s *Store) migrate() error {
 			last_seen_at   INTEGER NOT NULL,
 			expires_at     INTEGER NOT NULL DEFAULT 0,
 			elevated_until INTEGER NOT NULL DEFAULT 0,
+			fa_token       TEXT NOT NULL DEFAULT '',
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		);
 		CREATE TABLE IF NOT EXISTS audit_events (
@@ -365,6 +366,7 @@ func (s *Store) migrate() error {
 	}{
 		{"sessions", "expires_at", "ALTER TABLE sessions ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0"},
 		{"sessions", "elevated_until", "ALTER TABLE sessions ADD COLUMN elevated_until INTEGER NOT NULL DEFAULT 0"},
+		{"sessions", "fa_token", "ALTER TABLE sessions ADD COLUMN fa_token TEXT NOT NULL DEFAULT ''"},
 		{"instances", "owner_user_id", "ALTER TABLE instances ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT ''"},
 		{"instances", "scope", "ALTER TABLE instances ADD COLUMN scope TEXT NOT NULL DEFAULT 'household'"},
 		{"instances", "service_uid", "ALTER TABLE instances ADD COLUMN service_uid INTEGER NOT NULL DEFAULT 0"},
@@ -380,6 +382,18 @@ func (s *Store) migrate() error {
 				return err
 			}
 		}
+	}
+
+	// Index the hosted forward-auth token (issue #305) for its per-request reverse
+	// lookup (GetSessionByForwardAuthToken, called by the box Caddy's forward_auth
+	// on every restricted-app request). Partial on fa_token != '' so it stays tiny —
+	// only hosted rows carry a token; every appliance / pre-mint row has the ''
+	// default and is excluded. Created after the ALTER loop so the column exists on
+	// a migrated DB too.
+	if _, err := s.db.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_sessions_fa_token ON sessions(fa_token) WHERE fa_token != ''`,
+	); err != nil {
+		return err
 	}
 
 	// Backfill expires_at = created_at + 90 days for rows that have the default 0.
@@ -1081,6 +1095,45 @@ func (s *Store) GetSession(token string) (Session, error) {
 	}
 	if err != nil {
 		return Session{}, fmt.Errorf("scan session: %w", err)
+	}
+	sess.CreatedAt = time.Unix(created, 0)
+	sess.LastSeenAt = time.Unix(lastSeen, 0)
+	sess.ExpiresAt = time.Unix(expiresAt, 0)
+	sess.ElevatedUntil = time.Unix(elevatedUntil, 0)
+	return sess, nil
+}
+
+// SetSessionForwardAuthToken stamps a session with its hosted forward-auth token
+// (issue #305). The token is a second, lower-privilege credential the browser
+// carries to app subdomains via a Domain-scoped cookie; storing it on the session
+// row ties its lifetime to the session (logout / expiry drop it) and keeps it in a
+// distinct column so it can never resolve as a dashboard session token. Hosted-only
+// in practice — the appliance never mints one.
+func (s *Store) SetSessionForwardAuthToken(sessionToken, faToken string) error {
+	_, err := s.db.Exec(
+		`UPDATE sessions SET fa_token=? WHERE token=?`, faToken, sessionToken)
+	return err
+}
+
+// GetSessionByForwardAuthToken resolves a session from its forward-auth token, the
+// reverse lookup the hosted forward-auth verify endpoint runs per request (#305).
+// An empty faToken is rejected up front so it can never match the empty-string
+// default that every non-hosted (and pre-mint) session row carries.
+func (s *Store) GetSessionByForwardAuthToken(faToken string) (Session, error) {
+	if faToken == "" {
+		return Session{}, ErrNotFound
+	}
+	var sess Session
+	var created, lastSeen, expiresAt, elevatedUntil int64
+	err := s.db.QueryRow(
+		`SELECT token, user_id, created_at, last_seen_at, expires_at, elevated_until
+		 FROM sessions WHERE fa_token=?`, faToken,
+	).Scan(&sess.Token, &sess.UserID, &created, &lastSeen, &expiresAt, &elevatedUntil)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Session{}, ErrNotFound
+	}
+	if err != nil {
+		return Session{}, fmt.Errorf("scan session by fa_token: %w", err)
 	}
 	sess.CreatedAt = time.Unix(created, 0)
 	sess.LastSeenAt = time.Unix(lastSeen, 0)

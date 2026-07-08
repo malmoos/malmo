@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/malmoos/malmo/internal/auth"
+	"github.com/malmoos/malmo/internal/profile"
 )
 
 // Request-rate throttling (BRAIN_UI_PROTOCOL.md # Rate limiting & abuse). Two
@@ -132,7 +133,15 @@ func newRateLimiter(now func() time.Time) *rateLimiter {
 // governed by the per-session stream cap, not the request-rate bucket.
 func (s *Server) rateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isStreaming(r) {
+		if isStreaming(r) || (s.profile == profile.Hosted && r.URL.Path == forwardAuthVerifyPath) {
+			// The forward-auth verify endpoint (#305) is a proxy-internal probe the
+			// box Caddy calls on every request to a restricted app, so it fires at
+			// per-asset frequency — the per-IP allowlist bucket (30/min) would throttle
+			// legitimate app traffic. Its own validation (invalid cookie ⇒ 401) is the
+			// abuse control, and a 256-bit forward-auth token isn't guessable, so there
+			// is nothing for a rate limit to defend here. Scoped to hosted: on the
+			// appliance the handler always 404s, so it keeps the normal per-IP throttle
+			// rather than widening the unthrottled surface for no benefit.
 			next.ServeHTTP(w, r)
 			return
 		}
