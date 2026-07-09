@@ -36,11 +36,20 @@ import (
 
 	"github.com/malmoos/malmo/internal/hostagent"
 	"github.com/malmoos/malmo/internal/hostagent/brainlaunch"
+	"github.com/malmoos/malmo/internal/hostagent/filemgr"
 	"github.com/malmoos/malmo/internal/profile"
 	"github.com/malmoos/malmo/internal/protocol"
 )
 
 func main() {
+	// File-worker mode: the file manager re-execs this binary as a child dropped
+	// to the requesting user's UID to run one filesystem op (filemgr.RunWorker,
+	// FILES.md # Execution). It must short-circuit before any normal startup — the
+	// child only performs the op against stdin/stdout and exits.
+	if len(os.Args) > 1 && os.Args[1] == filemgr.WorkerArg {
+		os.Exit(filemgr.RunWorker())
+	}
+
 	sockPath := os.Getenv("MALMO_AGENT_SOCK")
 	if sockPath == "" {
 		sockPath = protocol.SocketPath

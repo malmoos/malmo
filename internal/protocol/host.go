@@ -367,6 +367,56 @@ type JournalLine struct {
 	Lost   bool   `json:"lost,omitempty"`
 }
 
+// FileEntry is one directory entry returned by POST /v1/files/list (and the
+// dashboard-facing /api/v1/files/list). Dir marks a directory; SizeBytes is the
+// file size in bytes (0 for directories); Mtime is RFC3339; Hidden is true for
+// dotfiles — a Finder-style convenience the UI toggles, not a security boundary
+// (the UID drop is the boundary, FILES.md # Scope). See BRAIN_HOST_PROTOCOL.md
+// # Files endpoints.
+type FileEntry struct {
+	Name      string `json:"name"`
+	Dir       bool   `json:"dir"`
+	SizeBytes int64  `json:"size_bytes"`
+	Mtime     string `json:"mtime"`
+	Hidden    bool   `json:"hidden"`
+}
+
+// FileLocation names a file or directory by logical root and a relative path
+// within it. Root is "home" (the user's /home/<user>/) or "shared"
+// (/srv/malmo/shared/); Path is relative to that root. It is the shape of the
+// from/to objects on move/copy (FilesTransferRequest). host-agent resolves the
+// root to an absolute base and re-validates path containment before acting.
+type FileLocation struct {
+	Root string `json:"root"`
+	Path string `json:"path"`
+}
+
+// FilesPathRequest is the shared body of POST /v1/files/{list,mkdir,delete}.
+// User is the requesting account (host-agent drops to this user's UID for the
+// op); Root is "home" | "shared"; Path is relative to the root. There is no
+// "act as a different user" parameter — the brain always passes the session
+// owner (FILES.md # Authorization).
+type FilesPathRequest struct {
+	User string `json:"user"`
+	Root string `json:"root"`
+	Path string `json:"path"`
+}
+
+// FilesListResponse is the 200 body of POST /v1/files/list.
+type FilesListResponse struct {
+	Entries []FileEntry `json:"entries"`
+}
+
+// FilesTransferRequest is the body of POST /v1/files/{move,copy}. A move or copy
+// may cross roots (home → shared is a real cross-tree operation), which
+// host-agent performs as the user's UID — so it only succeeds where the user
+// has write access on both ends (the malmo-shared group grants the shared side).
+type FilesTransferRequest struct {
+	User string       `json:"user"`
+	From FileLocation `json:"from"`
+	To   FileLocation `json:"to"`
+}
+
 // Error is the JSON error body shape on non-2xx responses.
 type Error struct {
 	Code    string `json:"code"`

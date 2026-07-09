@@ -19,6 +19,7 @@ import (
 	"github.com/malmoos/malmo/internal/auth"
 	"github.com/malmoos/malmo/internal/catalog"
 	"github.com/malmoos/malmo/internal/events"
+	"github.com/malmoos/malmo/internal/hostagent"
 	"github.com/malmoos/malmo/internal/hostclient"
 	"github.com/malmoos/malmo/internal/lifecycle"
 	"github.com/malmoos/malmo/internal/protocol"
@@ -62,6 +63,11 @@ type harness struct {
 	// this dir *after* construction and the live server picks them up — no need
 	// to swap the catalog on the already-listening server.
 	catalogDir string
+	// fileHome / fileShared are the temp dirs the harness's file-manager agent
+	// serves for root=home / root=shared, so file API tests seed fixtures and
+	// assert on-disk results.
+	fileHome   string
+	fileShared string
 }
 
 // srvServer exposes the underlying *Server for tests that exercise handler
@@ -156,6 +162,19 @@ func newHarness(t *testing.T, opts ...func(*Server)) *harness {
 			},
 		})
 	})
+	// File-manager routes are served by a real hostagent.Agent wired with a
+	// FakeFileManager over temp dirs, mounted under /v1/files/ — so the file API
+	// tests exercise the actual host-agent handlers + fileops over the socket,
+	// not a bespoke mock. The two dirs are exposed on the harness so tests can
+	// seed fixtures and assert on-disk results.
+	fileHome := t.TempDir()
+	fileShared := t.TempDir()
+	fileAgent := hostagent.New(nil, hostagent.NewFakePublisher(""))
+	fileAgent.Files = hostagent.NewFakeFileManager(fileHome, fileShared)
+	fileMux := http.NewServeMux()
+	fileAgent.Mount(fileMux)
+	mux.Handle("/v1/files/", fileMux)
+
 	hostHTTP := &http.Server{Handler: mux}
 	go func() { _ = hostHTTP.Serve(ln) }()
 	t.Cleanup(func() { _ = hostHTTP.Close() })
@@ -189,7 +208,7 @@ func newHarness(t *testing.T, opts ...func(*Server)) *harness {
 	t.Cleanup(ts.Close)
 
 	jar, _ := newJar()
-	return &harness{srv: ts, jar: jar, t: t, pwds: pwds, pmu: &pmu, st: st, deleteCalls: &deleteCalls, tzCalls: &tzCalls, apiSrv: srv, catalogDir: catDir}
+	return &harness{srv: ts, jar: jar, t: t, pwds: pwds, pmu: &pmu, st: st, deleteCalls: &deleteCalls, tzCalls: &tzCalls, apiSrv: srv, catalogDir: catDir, fileHome: fileHome, fileShared: fileShared}
 }
 
 func (h *harness) do(method, path string, body any) *http.Response {
