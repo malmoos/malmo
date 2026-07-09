@@ -34,7 +34,7 @@
 # boot, so the partition grow effectively runs twice. That is harmless —
 # systemd-repart is idempotent; a second pass on an already-grown disk is a no-op.
 # This custom unit's ExecStart is redundant with the stock unit for that reason;
-# it is kept so the ordering/gating and the ExecStartPost growfs call live in one
+# it is kept so the ordering/gating and the conditional growfs call live in one
 # place. Consolidating onto a stock-unit drop-in that only contributes the
 # ordering/gating (and the growfs step) is a possible later cleanup, not required now.
 [Unit]
@@ -48,15 +48,27 @@ Before=docker.service host-agent.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/systemd-repart --dry-run=no
 # 76 = no root block device found; 77 = no GPT partition table. On a boot where
 # there is simply nothing to grow, systemd-repart still succeeds (exit 0); these
 # codes only cover the "no disk to act on" cases, which are not a failure here.
-SuccessExitStatus=76 77
-# Grows the ext4 mounted at / to the partition's current size (idempotent — a
-# no-op once the filesystem already matches the partition). Same binary and
-# invocation systemd-growfs-root.service would use if it ran.
-ExecStartPost=/usr/lib/systemd/systemd-growfs /
+#
+# growfs only runs when repart exited 0 (an actual GPT root partition was found
+# and acted on) — NOT via a separate ExecStartPost. systemd runs ExecStartPost
+# regardless of *which* accepted exit status ExecStart returned, and ExecStartPost
+# has no visibility into that status (no $EXIT_STATUS — that's ExecStopPost-only),
+# so an unconditional ExecStartPost=systemd-growfs would also run on the 76/77
+# "nothing to grow" cases, have nothing valid to grow, and fail the unit — turning
+# a harmless no-op into a hard boot failure via the Requires= drop-ins on
+# docker.service/host-agent.service (docs/progress/hosted-grow-root-disk.md).
+# Passing 76/77 straight through as success (without calling growfs) keeps
+# that invariant.
+ExecStart=/bin/sh -c '\
+    /usr/bin/systemd-repart --dry-run=no; rc=$?; \
+    case "$rc" in \
+        0) /usr/lib/systemd/systemd-growfs / ;; \
+        76|77) exit 0 ;; \
+        *) exit "$rc" ;; \
+    esac'
 
 [Install]
 WantedBy=multi-user.target
