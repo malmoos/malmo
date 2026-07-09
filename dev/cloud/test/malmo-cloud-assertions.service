@@ -17,9 +17,14 @@ Wants=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# The scenario directive (un-seeded | seeded | frozen:<box-id>) the harness sets
-# per boot over SMBIOS; absent ⇒ the script defaults to the un-seeded 503 check.
+# The scenario directive (un-seeded | seeded | frozen:<box-id> | access) the harness
+# sets per boot over SMBIOS; absent ⇒ the script defaults to the un-seeded 503 check.
 ImportCredential=malmo.assert
+# The access boot (#308) additionally delivers a portal-signed owner assertion here,
+# which cloud-assertions.sh replays at GET /_malmo/sso to establish an owner session.
+# Absent on every other boot — an unimported credential is simply not present, so
+# this is a no-op for the un-seeded/seeded/frozen scenarios.
+ImportCredential=malmo.sso_token
 # The script polls the control plane up (docker load + brain bootstrap + compose
 # up race this unit) and can run for minutes; the default 90s start timeout would
 # kill it mid-poll before it writes a verdict. No timeout — the QEMU harness owns
