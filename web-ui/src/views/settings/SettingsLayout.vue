@@ -80,7 +80,7 @@ const flatItems = computed(() => visibleGroups.value.flatMap((g) => g.items));
     </nav>
 
     <!-- Desktop: bordered nav panel with grouped sections. -->
-    <nav class="hidden shrink-0 flex-col gap-5 rounded-xl border border-border bg-card p-3 md:flex md:w-64">
+    <nav class="hidden shrink-0 flex-col gap-5 rounded-2xl border border-border bg-card p-3 md:flex md:w-64">
       <div v-for="group in visibleGroups" :key="group.label">
         <div class="px-3 pb-1 text-xs font-semibold text-muted-foreground">{{ group.label }}</div>
         <ul class="space-y-1">

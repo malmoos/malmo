@@ -16,6 +16,7 @@ import { useAuth } from "../auth";
 import { useHealth } from "../useHealth";
 import { relativeTime } from "../utils";
 import AppTile from "../components/AppTile.vue";
+import Heading from "@/components/ui/Heading.vue";
 
 const { currentUser, singleUserMode } = useAuth();
 
@@ -42,13 +43,13 @@ const empty = computed(() => household.value.length === 0 && yours.value.length 
     <!-- Active health issues (HEALTH.md # Display, the inline issues list). The
          degraded-mode banner links here; shows the full active set, warnings
          included. Admin-only (the query is gated), so members never see it. -->
-    <section v-if="activeIssues.length" id="health-issues" class="space-y-3">
-      <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">System health</h2>
+    <section v-if="activeIssues.length" id="health-issues" class="space-y-4">
+      <Heading :level="2">System health</Heading>
       <ul class="space-y-2">
         <li
           v-for="i in activeIssues"
           :key="`${i.id} ${i.instance_key ?? ''}`"
-          class="flex items-start gap-3 rounded-xl border border-border bg-card px-4 py-3"
+          class="flex items-start gap-3 rounded-2xl border border-border bg-card p-5"
         >
           <span class="health-dot" :data-sev="i.severity" aria-hidden="true"></span>
           <div class="min-w-0 flex-1">
@@ -82,15 +83,15 @@ const empty = computed(() => household.value.length === 0 && yours.value.length 
     </div>
 
     <template v-else>
-      <section v-if="household.length" class="space-y-3">
-        <h2 v-if="!singleUserMode" class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Household</h2>
+      <section v-if="household.length" class="space-y-4">
+        <Heading v-if="!singleUserMode" :level="2">Household</Heading>
         <div class="grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-4 lg:grid-cols-6">
           <AppTile v-for="a in household" :key="a.id" :instance="a" />
         </div>
       </section>
 
-      <section v-if="yours.length" class="space-y-3">
-        <h2 v-if="!singleUserMode" class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Yours</h2>
+      <section v-if="yours.length" class="space-y-4">
+        <Heading v-if="!singleUserMode" :level="2">Yours</Heading>
         <div class="grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-4 lg:grid-cols-6">
           <AppTile v-for="a in yours" :key="a.id" :instance="a" />
         </div>

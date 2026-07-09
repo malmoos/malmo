@@ -12,6 +12,7 @@ import { RouterLink } from "vue-router";
 import { api, type Instance } from "@/api";
 import { useAuth } from "@/auth";
 import { ChevronRight } from "lucide-vue-next";
+import Heading from "@/components/ui/Heading.vue";
 
 const { singleUserMode } = useAuth();
 
@@ -22,8 +23,8 @@ const apps = useQuery({
 </script>
 
 <template>
-  <section class="space-y-3">
-    <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Installed apps</h2>
+  <section class="space-y-4">
+    <Heading :level="2">Installed apps</Heading>
     <p v-if="apps.isLoading.value" class="text-sm text-muted-foreground">Loading…</p>
     <p
       v-else-if="(apps.data.value?.apps.length ?? 0) === 0"
@@ -35,7 +36,7 @@ const apps = useQuery({
       <li v-for="a in apps.data.value!.apps" :key="a.id">
         <RouterLink
           :to="`/settings/apps/${a.id}`"
-          class="flex items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 hover:bg-muted"
+          class="flex items-center justify-between gap-3 rounded-2xl border border-border bg-card p-5 hover:bg-muted"
         >
           <div class="flex items-baseline gap-2">
             <strong class="text-sm">{{ a.name }}</strong>

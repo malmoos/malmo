@@ -4,12 +4,13 @@
 // genuinely known (product identity + project link) rather than fabricating
 // system facts. When the brain exposes a build/version + box-name surface, this
 // section grows to show it.
+import Heading from "@/components/ui/Heading.vue";
 </script>
 
 <template>
-  <section class="space-y-3">
-    <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">About</h2>
-    <div class="space-y-2 rounded-xl border border-border bg-card px-4 py-4">
+  <section class="space-y-4">
+    <Heading :level="2">About</Heading>
+    <div class="space-y-2 rounded-2xl border border-border bg-card p-5">
       <div class="text-base font-medium">malmo</div>
       <p class="text-sm text-muted-foreground">
         A home-server OS for people who want to own their data — not become sysadmins.

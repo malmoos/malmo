@@ -16,6 +16,7 @@ import { SwitchRoot, SwitchThumb } from "reka-ui";
 import { api, waitForJob, type Instance, type CatalogDetail, type Job, type MailProviderOption, type AppSecrets, type AppSecret, type AppConfig, type AppConfigField } from "@/api";
 import { useAuth } from "@/auth";
 import AppLogs from "@/components/AppLogs.vue";
+import Heading from "@/components/ui/Heading.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -261,7 +262,7 @@ const saveConfig = useMutation({
         </div>
 
         <div class="min-w-0 flex-1">
-          <h1 class="text-xl font-semibold">{{ app.name }}</h1>
+          <Heading :level="2">{{ app.name }}</Heading>
           <p v-if="detail?.short_description" class="mt-0.5 text-sm text-muted-foreground">
             {{ detail.short_description }}
           </p>
@@ -340,9 +341,9 @@ const saveConfig = useMutation({
       </p>
 
       <!-- Outgoing email — provider binding for mail-capable apps. -->
-      <section v-if="app.mail_supported && canControl" class="space-y-2">
-        <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Outgoing email</h2>
-        <div class="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card px-4 py-3">
+      <section v-if="app.mail_supported && canControl" class="space-y-3">
+        <Heading :level="3">Outgoing email</Heading>
+        <div class="flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-card p-5">
           <div class="min-w-0 flex-1">
             <div class="text-sm font-medium">Send email as</div>
             <div class="text-xs text-muted-foreground">
@@ -372,8 +373,8 @@ const saveConfig = useMutation({
       <p v-if="secretsQuery.isError.value" class="text-sm text-destructive">
         Couldn't load secrets: {{ (secretsQuery.error.value as Error)?.message }}
       </p>
-      <section v-if="canControl && secrets.length" class="space-y-2">
-        <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Setup secrets</h2>
+      <section v-if="canControl && secrets.length" class="space-y-3">
+        <Heading :level="3">Setup secrets</Heading>
         <p class="text-xs text-muted-foreground">
           Use these to finish signing in to {{ app.name }} the first time. Keep them private.
         </p>
@@ -381,7 +382,7 @@ const saveConfig = useMutation({
           <li
             v-for="s in secrets"
             :key="s.name"
-            class="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card px-4 py-3"
+            class="flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-card p-5"
           >
             <div class="min-w-0 flex-1">
               <div class="text-xs font-medium text-muted-foreground">{{ s.name }}</div>
@@ -414,14 +415,14 @@ const saveConfig = useMutation({
       <p v-if="configQuery.isError.value" class="text-sm text-destructive">
         Couldn't load settings: {{ (configQuery.error.value as Error)?.message }}
       </p>
-      <section v-if="canControl && configFields.length" class="space-y-2">
-        <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Settings</h2>
+      <section v-if="canControl && configFields.length" class="space-y-3">
+        <Heading :level="3">Settings</Heading>
         <p class="text-xs text-muted-foreground">Changing these restarts {{ app.name }} briefly.</p>
         <div class="space-y-2">
           <div
             v-for="f in configFields"
             :key="f.app_env"
-            class="space-y-2 rounded-xl border border-border bg-card px-4 py-3"
+            class="space-y-2 rounded-2xl border border-border bg-card p-5"
           >
             <div>
               <div class="text-sm font-medium">
@@ -521,7 +522,7 @@ const saveConfig = useMutation({
       >
         <button
           type="button"
-          class="flex w-full shrink-0 items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 text-sm hover:bg-muted"
+          class="flex w-full shrink-0 items-center justify-between gap-3 rounded-2xl border border-border bg-card p-5 text-sm hover:bg-muted"
           :aria-expanded="logsOpen"
           @click="logsOpen = !logsOpen"
         >

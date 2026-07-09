@@ -11,6 +11,7 @@ import { computed } from "vue";
 import { useQuery, useInfiniteQuery } from "@tanstack/vue-query";
 import { api, type AuditEvent, type User } from "@/api";
 import { useAuth } from "@/auth";
+import Heading from "@/components/ui/Heading.vue";
 
 const { currentUser } = useAuth();
 const isAdmin = computed(() => currentUser.value?.role === "admin");
@@ -144,10 +145,8 @@ function exportJson() {
 
 <template>
   <div class="space-y-6">
-    <div class="flex items-center justify-between gap-2">
-      <p class="text-sm text-muted-foreground">
-        {{ isAdmin ? "Everything that happened on this box." : "Your account activity." }}
-      </p>
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <Heading :level="2">Activity</Heading>
       <div class="flex gap-2">
         <button
           class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
@@ -165,12 +164,15 @@ function exportJson() {
         </button>
       </div>
     </div>
+    <p class="text-sm text-muted-foreground">
+      {{ isAdmin ? "Everything that happened on this box." : "Your account activity." }}
+    </p>
 
     <p v-if="audit.isLoading.value" class="text-sm text-muted-foreground">Loading…</p>
     <p v-else-if="audit.isError.value" class="text-sm text-destructive">Couldn't load activity.</p>
     <p v-else-if="events.length === 0" class="text-sm text-muted-foreground">No activity yet.</p>
 
-    <div v-else class="overflow-x-auto rounded-xl border border-border bg-card">
+    <div v-else class="overflow-x-auto rounded-2xl border border-border bg-card">
       <table class="w-full text-sm">
         <thead>
           <tr class="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
