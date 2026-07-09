@@ -15,6 +15,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/vue-query";
 import { api, ApiError, type User } from "@/api";
 import { withElevation } from "@/elevate";
 import { useAuth } from "@/auth";
+import Heading from "@/components/ui/Heading.vue";
 
 const router = useRouter();
 const qc = useQueryClient();
@@ -137,9 +138,9 @@ const doResetPassword = useMutation({
 <template>
   <div class="space-y-6">
     <!-- Create user form -->
-    <section class="space-y-3">
-      <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Add user</h2>
-      <div class="rounded-xl border border-border bg-card px-4 py-3 space-y-3">
+    <section class="space-y-4">
+      <Heading :level="2">Add user</Heading>
+      <div class="rounded-2xl border border-border bg-card p-5 space-y-3">
         <div class="flex flex-wrap gap-2">
           <input
             v-model="newUsername"
@@ -176,14 +177,14 @@ const doResetPassword = useMutation({
     </section>
 
     <!-- User list -->
-    <section class="space-y-3">
-      <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">People</h2>
+    <section class="space-y-4">
+      <Heading :level="2">People</Heading>
       <p v-if="users.isLoading.value" class="text-sm text-muted-foreground">Loading…</p>
       <ul v-else class="space-y-2">
         <li
           v-for="u in (users.data.value?.users ?? [])"
           :key="u.id"
-          class="rounded-xl border border-border bg-card px-4 py-3 space-y-3"
+          class="rounded-2xl border border-border bg-card p-5 space-y-3"
         >
           <!-- Main row -->
           <div class="flex flex-wrap items-center gap-2">

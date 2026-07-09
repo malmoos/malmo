@@ -6,6 +6,7 @@
 import { computed } from "vue";
 import { SwitchRoot, SwitchThumb } from "reka-ui";
 import { useNotificationMutes } from "@/useNotificationMutes";
+import Heading from "@/components/ui/Heading.vue";
 
 const { mutes, setMuted } = useNotificationMutes();
 const mutedSet = computed(() => new Set(mutes.data.value?.muted ?? []));
@@ -25,15 +26,15 @@ const notificationCategories = [
 </script>
 
 <template>
-  <section class="space-y-3">
-    <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Notifications</h2>
+  <section class="space-y-4">
+    <Heading :level="2">Notifications</Heading>
     <p class="text-sm text-muted-foreground">Choose which kinds of notifications reach you. Turn a kind off to stop it from showing in your bell.</p>
     <p v-if="mutes.isLoading.value" class="text-sm text-muted-foreground">Loading…</p>
     <ul v-else class="space-y-2">
       <li
         v-for="c in notificationCategories"
         :key="c.id"
-        class="flex items-center justify-between gap-4 rounded-xl border border-border bg-card px-4 py-3"
+        class="flex items-center justify-between gap-4 rounded-2xl border border-border bg-card p-5"
       >
         <div class="min-w-0">
           <div class="text-sm font-medium">{{ c.label }}</div>

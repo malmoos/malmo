@@ -12,6 +12,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/vue-query";
 import { api, ApiError, type MailProvider } from "@/api";
 import { withElevation } from "@/elevate";
 import { useAuth } from "@/auth";
+import Heading from "@/components/ui/Heading.vue";
 
 const router = useRouter();
 const qc = useQueryClient();
@@ -154,12 +155,12 @@ const sendTest = useMutation({
 <template>
   <div class="space-y-6">
     <!-- Add provider form -->
-    <section class="space-y-3">
-      <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Outgoing email</h2>
+    <section class="space-y-4">
+      <Heading :level="2">Outgoing email</Heading>
       <p class="text-sm text-muted-foreground">
         Add an email account your apps can send from — password resets, reminders, invites. Apps choose an account when you install them.
       </p>
-      <div class="rounded-xl border border-border bg-card px-4 py-3 space-y-3">
+      <div class="rounded-2xl border border-border bg-card p-5 space-y-3">
         <div class="grid gap-2 sm:grid-cols-2">
           <input
             v-model="newForm.label"
@@ -225,8 +226,8 @@ const sendTest = useMutation({
     </section>
 
     <!-- Provider list -->
-    <section class="space-y-3">
-      <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Email accounts</h2>
+    <section class="space-y-4">
+      <Heading :level="2">Email accounts</Heading>
       <p v-if="providers.isLoading.value" class="text-sm text-muted-foreground">Loading…</p>
       <p
         v-else-if="(providers.data.value?.providers ?? []).length === 0"
@@ -238,7 +239,7 @@ const sendTest = useMutation({
         <li
           v-for="p in (providers.data.value?.providers ?? [])"
           :key="p.id"
-          class="rounded-xl border border-border bg-card px-4 py-3 space-y-3"
+          class="rounded-2xl border border-border bg-card p-5 space-y-3"
         >
           <!-- Main row -->
           <div class="flex flex-wrap items-center gap-2">

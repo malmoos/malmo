@@ -11,6 +11,7 @@
 import { ref } from "vue";
 import { api, type ApiError } from "@/api";
 import { changeMyPassword, useAuth } from "@/auth";
+import Heading from "@/components/ui/Heading.vue";
 
 const { currentUser } = useAuth();
 
@@ -41,9 +42,9 @@ function cancelPwChange() {
 </script>
 
 <template>
-  <section class="space-y-3">
-    <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Account</h2>
-    <div class="space-y-3 rounded-xl border border-border bg-card px-4 py-3">
+  <section class="space-y-4">
+    <Heading :level="2">Account</Heading>
+    <div class="space-y-3 rounded-2xl border border-border bg-card p-5">
       <div class="flex items-center justify-between gap-4">
         <div class="min-w-0">
           <div class="text-sm font-medium">{{ currentUser?.username }}</div>
