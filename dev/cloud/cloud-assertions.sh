@@ -140,20 +140,25 @@ for u in docker.service systemd-networkd.service host-agent.service malmo-load-i
 done
 
 # --- 1b. root grown to fill the provider disk. malmo-grow-root.service runs
-# systemd-repart at boot to extend the baked 8 GiB root partition + ext4 to the
-# whole disk (issue: a hosted box left on 8 GiB has docker image storage + the
-# brain's SQLite store sharing that volume, so one app install fills it and 500s
-# login). This QEMU boot-proof disk is fixed-size with no spare space, so the grow
-# is a no-op here — but the unit must still complete cleanly, which proves
-# systemd-repart is present in the lean image and the unit is wired. Real full-disk
-# growth is verified on a live provider box (the cloud on-ramp), not this lane.
+# systemd-repart at boot to extend the baked 8 GiB root partition to the whole
+# disk, then runs systemd-growfs directly to grow the ext4 inside it (issue: a
+# hosted box left on 8 GiB has docker image storage + the brain's SQLite store
+# sharing that volume, so one app install fills it and 500s login). This QEMU
+# boot-proof disk is fixed-size with no spare space, so both steps are a no-op
+# here — but the unit must still complete cleanly, which proves systemd-repart
+# and systemd-growfs are present in the lean image and the unit is wired. Real
+# full-disk growth (partition AND filesystem) can only be proven on a live
+# provider box (the cloud on-ramp), not this lane — a prior version of this unit
+# passed this exact boot-proof while only growing the partition and leaving the
+# filesystem at 8 GiB, because the growfs step was missing.
 command -v systemd-repart >/dev/null 2>&1 || fail "systemd-repart missing from the lean image — malmo-grow-root cannot grow the root disk"
+[ -x /usr/lib/systemd/systemd-growfs ] || fail "systemd-growfs missing from the lean image — malmo-grow-root cannot grow the root filesystem"
 grow_state="$(systemctl is-active malmo-grow-root.service 2>&1 || true)"
 # Assert the unit actually completed (active, held by RemainAfterExit) — not merely
 # "not failed". An inactive/unknown state means the .wants symlink was dropped or the
 # unit was skipped, i.e. the grow never ran; that must fail the proof, not pass it.
 [ "$grow_state" = active ] || fail "malmo-grow-root.service did not complete successfully (state=$grow_state): $(journalctl -u malmo-grow-root.service -b --no-pager 2>/dev/null | tail -10)"
-echo "cloud-assertions: root-grow unit ok (state=$grow_state; systemd-repart present — live full-disk growth verified on a provider box)"
+echo "cloud-assertions: root-grow unit ok (state=$grow_state; systemd-repart + systemd-growfs present and wired — this lane cannot prove real growth, only that both steps ran)"
 
 # --- 2. PSI is live (BUILD.md # 1 — psi=1 on the cmdline). Without it the
 # ram-pressure health detector silently reads zeros; a boot test must catch that.
