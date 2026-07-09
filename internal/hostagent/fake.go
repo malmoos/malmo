@@ -3,9 +3,12 @@ package hostagent
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"sync"
 	"time"
 
+	"github.com/malmoos/malmo/internal/hostagent/fileops"
 	"github.com/malmoos/malmo/internal/hostagent/netstate"
 	"github.com/malmoos/malmo/internal/protocol"
 	"golang.org/x/crypto/bcrypt"
@@ -345,6 +348,112 @@ func NewFakeLogSource(interval time.Duration) *FakeLogSource {
 		interval = time.Second
 	}
 	return &FakeLogSource{interval: interval}
+}
+
+// FakeFileManager implements FileManager in-process with no UID drop: the
+// dev/test operator runs the ops directly. The dev brain and this agent are the
+// same unprivileged operator, so file ownership is already correct — the same
+// reasoning devIdentity uses for resolve-home. Root "home" maps to HomeBase and
+// "shared" to SharedBase, both ensured to exist on first use so listing an
+// empty shared tree returns [] rather than a 404. cmd/host-agent wires the
+// operator's real home + a dev shared dir; tests point both at temp dirs.
+//
+// The user argument is ignored — dev is single-operator, so every user resolves
+// to the same bases. The real filemgr.LinuxFileManager is where per-user UID
+// resolution and privilege drop live.
+type FakeFileManager struct {
+	HomeBase   string
+	SharedBase string
+}
+
+// NewFakeFileManager returns a FakeFileManager serving home from homeBase and
+// shared from sharedBase.
+func NewFakeFileManager(homeBase, sharedBase string) *FakeFileManager {
+	return &FakeFileManager{HomeBase: homeBase, SharedBase: sharedBase}
+}
+
+func (f *FakeFileManager) resolve(root, path string) (string, error) {
+	var base string
+	switch root {
+	case "home":
+		base = f.HomeBase
+	case "shared":
+		base = f.SharedBase
+	default:
+		return "", fileops.ErrInvalidPath
+	}
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		return "", err
+	}
+	return fileops.Resolve(base, path)
+}
+
+func (f *FakeFileManager) List(_, root, path string) ([]protocol.FileEntry, error) {
+	abs, err := f.resolve(root, path)
+	if err != nil {
+		return nil, err
+	}
+	return fileops.List(abs)
+}
+
+func (f *FakeFileManager) Mkdir(_, root, path string) error {
+	abs, err := f.resolve(root, path)
+	if err != nil {
+		return err
+	}
+	return fileops.Mkdir(abs)
+}
+
+func (f *FakeFileManager) Delete(_, root, path string) error {
+	abs, err := f.resolve(root, path)
+	if err != nil {
+		return err
+	}
+	return fileops.Delete(abs)
+}
+
+func (f *FakeFileManager) Move(_ string, from, to protocol.FileLocation) error {
+	fromAbs, toAbs, err := f.resolvePair(from, to)
+	if err != nil {
+		return err
+	}
+	return fileops.Move(fromAbs, toAbs)
+}
+
+func (f *FakeFileManager) Copy(_ string, from, to protocol.FileLocation) error {
+	fromAbs, toAbs, err := f.resolvePair(from, to)
+	if err != nil {
+		return err
+	}
+	return fileops.Copy(fromAbs, toAbs)
+}
+
+func (f *FakeFileManager) resolvePair(from, to protocol.FileLocation) (string, string, error) {
+	fromAbs, err := f.resolve(from.Root, from.Path)
+	if err != nil {
+		return "", "", err
+	}
+	toAbs, err := f.resolve(to.Root, to.Path)
+	if err != nil {
+		return "", "", err
+	}
+	return fromAbs, toAbs, nil
+}
+
+func (f *FakeFileManager) Open(_, root, path string) (io.ReadCloser, error) {
+	abs, err := f.resolve(root, path)
+	if err != nil {
+		return nil, err
+	}
+	return fileops.Open(abs)
+}
+
+func (f *FakeFileManager) Save(_, root, path string, body io.Reader) error {
+	abs, err := f.resolve(root, path)
+	if err != nil {
+		return err
+	}
+	return fileops.Save(abs, body)
 }
 
 func (f *FakeLogSource) Follow(ctx context.Context, container string) (<-chan protocol.JournalLine, error) {

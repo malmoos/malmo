@@ -120,6 +120,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/system/live", s.systemLive)
 	mux.HandleFunc("GET /api/v1/apps/{id}/log", s.appLog)
 
+	// File-manager content transfer is a streamed octet-stream body, not JSON —
+	// the deliberate ">5s = job" exception (FILES.md # Transfers). Registered raw
+	// so the brain pipes bytes to/from host-agent without buffering; stays out of
+	// the OpenAPI surface (the metadata ops in registerFiles carry the typed
+	// contract). Already exempt from the request-rate bucket (ratelimit.go).
+	mux.HandleFunc("GET /api/v1/files/content", s.filesDownload)
+	mux.HandleFunc("PUT /api/v1/files/content", s.filesUpload)
+
 	// Catalog assets (icon/screenshots) serve raw image bytes, not JSON, so they
 	// bypass huma and stay out of the OpenAPI surface — the store loads them
 	// directly in <img> tags (APP_STORE.md # Catalog schema).
@@ -156,6 +164,7 @@ func (s *Server) registerAll(api huma.API) {
 	s.registerFirstRun(api)
 	s.registerAppSecrets(api)
 	s.registerAppConfig(api)
+	s.registerFiles(api)
 }
 
 // OpenAPIDocument builds the brain's full REST surface against a throwaway mux

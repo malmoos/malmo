@@ -103,6 +103,12 @@ export type SystemStorage = Schemas["SystemStorageDTO"];
 export type DiskSpace = Schemas["DiskSpaceDTO"];
 export type AppSecrets = Schemas["AppSecretsDTO"];
 export type AppSecret = Schemas["AppSecretDTO"];
+// File manager (FILES.md). FileEntry is one directory entry; FileLocation names
+// a file/dir by logical root ("home" | "shared") + relative path, the shape of
+// the move/copy from/to. Content transfer (download/upload) is a raw streamed
+// body outside huma, so it has no generated type — see useFiles.ts.
+export type FileEntry = Schemas["FileEntry"];
+export type FileLocation = Schemas["FileLocation"];
 
 // Scope is a UI-side literal union, intentionally NOT generated. The brain
 // serves scope (like severity / status / state) as a free string — the huma

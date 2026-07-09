@@ -3,9 +3,12 @@
 package main
 
 import (
+	"log/slog"
+
 	"github.com/malmoos/malmo/internal/hostagent"
 	"github.com/malmoos/malmo/internal/hostagent/clockhealth"
 	"github.com/malmoos/malmo/internal/hostagent/diskusage"
+	"github.com/malmoos/malmo/internal/hostagent/filemgr"
 	"github.com/malmoos/malmo/internal/hostagent/healthsource"
 	"github.com/malmoos/malmo/internal/hostagent/journalsource"
 	"github.com/malmoos/malmo/internal/hostagent/pamverifier"
@@ -65,6 +68,16 @@ func buildAgent() (*hostagent.Agent, func()) {
 	a.DiskSpace = du
 	a.Reboot = rebootrequired.New()
 	a.System = procsource.New()
+	// The in-dashboard file manager runs each op in a child re-exec'd as the
+	// requesting user's UID (filemgr, FILES.md # Execution). A hosted box has a
+	// /home and shared tree too, so it's wired here as well. New only fails if the
+	// executable path can't be resolved; log and leave Files nil rather than fail
+	// to boot the agent.
+	if fm, err := filemgr.New(); err != nil {
+		slog.Warn("file manager unavailable", "err", err)
+	} else {
+		a.Files = fm
+	}
 
 	return a, func() {}
 }

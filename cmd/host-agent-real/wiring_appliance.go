@@ -10,6 +10,7 @@ import (
 	"github.com/malmoos/malmo/internal/hostagent/avahipublisher"
 	"github.com/malmoos/malmo/internal/hostagent/clockhealth"
 	"github.com/malmoos/malmo/internal/hostagent/diskusage"
+	"github.com/malmoos/malmo/internal/hostagent/filemgr"
 	"github.com/malmoos/malmo/internal/hostagent/healthsource"
 	"github.com/malmoos/malmo/internal/hostagent/journalsource"
 	"github.com/malmoos/malmo/internal/hostagent/netstate"
@@ -71,6 +72,15 @@ func buildAgent() (*hostagent.Agent, func()) {
 	a.Reboot = rebootrequired.New()
 	a.System = procsource.New()
 	a.Net = prov
+	// The in-dashboard file manager runs each op in a child re-exec'd as the
+	// requesting user's UID (filemgr, FILES.md # Execution). New only fails if the
+	// executable path can't be resolved; log and leave Files nil (file routes then
+	// 501) rather than refuse to boot the whole agent over it.
+	if fm, err := filemgr.New(); err != nil {
+		slog.Warn("file manager unavailable", "err", err)
+	} else {
+		a.Files = fm
+	}
 
 	// Align avahi-daemon with the current LAN set once at startup, then keep
 	// it aligned from the NetworkManager watcher. Startup failure is non-fatal:

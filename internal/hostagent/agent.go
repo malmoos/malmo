@@ -337,6 +337,14 @@ type Agent struct {
 	// over DBus) vs FakeNetState. When nil, interfaces reports empty — "not
 	// measured", matching the other nil-able reporters.
 	Net NetState
+
+	// Files, when non-nil, backs the /v1/files/* family (the in-dashboard file
+	// manager, FILES.md). Swapped per binary: FakeFileManager (in-process as the
+	// dev operator) for cmd/host-agent + tests vs filemgr.LinuxFileManager (a
+	// child re-exec'd as the requesting user's UID/GID, so POSIX 0750/02770 is
+	// the kernel-enforced backstop) for cmd/host-agent-real. When nil, every
+	// /v1/files/* route returns 501. Interface + handlers live in files.go.
+	Files FileManager
 }
 
 // SystemSampler is a consumer-side interface for the raw system-resources
@@ -382,6 +390,13 @@ func (a *Agent) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/identity/well-known", a.wellKnownIdentity)
 	mux.HandleFunc("POST /v1/identity/app-service", a.allocateAppService)
 	mux.HandleFunc("POST /v1/identity/app-service/release", a.releaseAppService)
+	mux.HandleFunc("POST /v1/files/list", a.filesList)
+	mux.HandleFunc("POST /v1/files/mkdir", a.filesMkdir)
+	mux.HandleFunc("POST /v1/files/move", a.filesMove)
+	mux.HandleFunc("POST /v1/files/copy", a.filesCopy)
+	mux.HandleFunc("POST /v1/files/delete", a.filesDelete)
+	mux.HandleFunc("GET /v1/files/content", a.filesDownload)
+	mux.HandleFunc("PUT /v1/files/content", a.filesUpload)
 }
 
 func (a *Agent) publish(w http.ResponseWriter, r *http.Request) {

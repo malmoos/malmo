@@ -126,6 +126,21 @@ func main() {
 	// keeps GET /v1/discovery/state's interfaces field stable regardless of
 	// the dev box's real network.
 	a.Net = hostagent.NewFakeNetState(netstate.LANInterface{Name: "eth0", Index: 2, IPv4: "192.168.1.20"})
+	// Back the /v1/files/* family (the in-dashboard file manager) with in-process
+	// ops as the dev operator — no UID drop, since the dev brain and this agent
+	// are the same unprivileged operator (mirroring resolve-home). "home" is the
+	// operator's own home; "shared" is a dev stand-in for /srv/malmo/shared, under
+	// MALMO_STATE_DIR when set (so make clean wipes it) else ~/.malmo-shared.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		slog.Error("host-agent (fake) resolve home dir", "err", err)
+		os.Exit(1)
+	}
+	sharedBase := filepath.Join(home, ".malmo-shared")
+	if dir := os.Getenv("MALMO_STATE_DIR"); dir != "" {
+		sharedBase = filepath.Join(dir, "shared")
+	}
+	a.Files = hostagent.NewFakeFileManager(home, sharedBase)
 
 	mux := http.NewServeMux()
 	a.Mount(mux)
