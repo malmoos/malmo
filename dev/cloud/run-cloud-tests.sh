@@ -12,7 +12,8 @@
 # Three sequential UEFI boots over ONE persisted qcow2 overlay (so the brain's
 # box-id + first admin carry boot→boot), then a fourth legacy-BIOS smoke boot on
 # its own overlay (#277), one virtio NIC with restrict=on (air-gapped — the seed
-# arrives over SMBIOS, never the network), serial-log capture per boot. The in-VM self-check (cloud-assertions.sh, run by malmo-cloud-assertions.
+# arrives over SMBIOS, never the network), serial-log capture per boot. The in-VM
+# self-check (cloud-assertions.sh, run by malmo-cloud-assertions.
 # service) reads which scenario to assert from a `malmo.assert` SMBIOS credential,
 # writes its verdict to the serial console, and powers the box off cleanly on PASS
 # (no SSH in hosted — ENVIRONMENT.md # Access & files). This driver greps the verdict:
