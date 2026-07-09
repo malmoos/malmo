@@ -2,7 +2,7 @@
 
 - **Status:** done
 - **Date:** 2026-07-08
-- **Specs touched:** none (implementation-only fix; `ENVIRONMENT.md` # Storage's description of the behavior is unchanged and still accurate)
+- **Specs touched:** `ENVIRONMENT.md` (# Storage — corrected to describe the filesystem grow as an explicit second step, not an inherent part of the `systemd-repart` call)
 
 Corrects [hosted-grow-root-disk.md](hosted-grow-root-disk.md)'s "verified on a real provider box" claim. A live acceptance run on a freshly built image found the **partition** grew to the full disk (`systemd-repart` extended it 8 GiB → 75.8 GiB and set the GPT `GROWFS` attribute bit, confirmed in the journal) but the **ext4 filesystem inside it stayed at exactly 8 GiB** — `dumpe2fs` on the mounted root showed the original block count untouched. The box still runs on the baked 8 GiB in practice; the disk-full/500 failure mode this was meant to close was not actually closed.
 
@@ -22,10 +22,13 @@ Found by rebooting the (still-running) probe box into Hetzner rescue mode and in
 
 ## Known gaps & deviations
 
-- **Still not exercised in CI.** As before, the QEMU boot-proof disk has no spare space, so neither the partition grow nor the filesystem grow is a real test there — both steps still only prove "ran without failing." Real growth remains a live-box acceptance step.
+- **Still not exercised in CI.** As before, the QEMU boot-proof disk has no spare space, so neither the partition grow nor the filesystem grow is a real test there — both steps still only prove "ran without failing." Real growth is proven by the live acceptance run below instead, not this lane.
 - **Double `systemd-repart` execution, unchanged from the prior entry.** The stock `systemd-repart.service` still runs the same repart definition statically; still harmless, still deferred.
+
+## Live acceptance
+
+Re-ran the real-provider-box acceptance this entry's opening paragraph called for, with the fixed image: a freshly built image (this branch, `systemd-growfs` gated on `systemd-repart`'s own exit code per the review fix above) was provisioned onto a real box through the hosted on-ramp. The box reached HTTPS on both its base name and its wildcard, and `GET /api/v1/system/storage` reported its root volume at **79.99 GB total / 78.21 GB free** — the provider disk's real size, not the baked 8 GiB (nor the 8.35 GB the pre-fix image reported). Confirms the `ExecStartPost` → merged-`ExecStart` fix grows the filesystem on real hardware, not just under the local exit-code simulation used to verify the unit's logic during review. Box torn down cleanly after the check.
 
 ## What's next
 
-- Re-run the live acceptance on a real provider box with this fix and confirm `GET /api/v1/system/storage` (or equivalent) reports the full disk, not 8 GiB.
 - The consolidation-onto-a-stock-unit-drop-in idea from the prior entry is still deferred; if picked up, it needs to carry this conditional `growfs` call forward too, not just the ordering/gating.
