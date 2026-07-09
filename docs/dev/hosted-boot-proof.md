@@ -18,13 +18,14 @@ Net: a provisioned box logs both milestones, binds `:443`, and serves every `<sl
 
 ## The boot-proof lane
 
-`dev/cloud/run-cloud-tests.sh` (`make test-cloud-qemu`) boots the real production image under QEMU, **air-gapped** (`restrict=on` — the seed arrives over SMBIOS, never the network), and greps a serial-console verdict written by `dev/cloud/cloud-assertions.sh`. Three scenarios over one persisted overlay:
+`dev/cloud/run-cloud-tests.sh` (`make test-cloud-qemu`) boots the real production image under QEMU, **air-gapped** (`restrict=on` — the seed arrives over SMBIOS, never the network), and greps a serial-console verdict written by `dev/cloud/cloud-assertions.sh`. Three UEFI scenarios over one persisted overlay, plus a fourth legacy-BIOS boot on its own overlay:
 
 | Scenario | What it asserts (box-facing) |
 |----------|------------------------------|
 | `unseeded` | No seed → `GET /_malmo/sso` ⇒ 503 (gate armed, closed); `POST /setup` ⇒ 403 (disabled on hosted — the owner bootstraps via SSO, not a secret). |
 | `seeded` | Seed with a **complete** enrollment → brain logs `provisioning seed ingested`; a bad token on `/_malmo/sso` ⇒ 401 (verifier armed); **`:443` binds** and the brain logs `caddy: wildcard TLS configured`. |
 | `frozen` | A *different* seed re-delivered on a later boot is ignored; the box still serves under the original box-id and does **not** re-ingest. |
+| `bios` | The **same image booted under legacy BIOS** (SeaBIOS — QEMU's default firmware, no OVMF pflash) instead of UEFI → the control plane comes up and the SSO gate is armed. Proves the dual-firmware image (systemd-boot UEFI + GRUB BIOS, `ENVIRONMENT.md` # Boot) boots where a UEFI-only image hung on Hetzner CX/Intel (#277). Runs on its own fresh overlay, so it's independent of the provisioning sequence above. |
 
 **Air-gapped means config-apply, not a real cert.** The lane cannot reach acme-dns or Let's Encrypt, so the `seeded` scenario proves the brain *applies* the issuer + binds `:443`, not that a cert was obtained. Real DNS-01 issuance + a live `*.<box-id>` cert are verified on a real provider box on a real network — deliberately outside this lane (the whole "config that looks right but never issues" class is invisible air-gapped; the `certificates.automate` unit test in `internal/caddy/caddy_test.go` is the closest static guard).
 
@@ -43,8 +44,8 @@ A **broken image build** presents as several of these at once (e.g. `:443` refus
 
 ## How to run it
 
-- **CI (preferred — no local root/KVM, no image push):** `gh workflow run "CI / Cloud image" --ref <branch> -f publish=false`. Builds the image, then runs the `unseeded seeded` boots under QEMU. `publish=true` (the default) additionally uploads the built image to the provider — only do that deliberately. Runtime ~40–120 min.
-- **Local:** `sudo make test-cloud-qemu` (needs root + `/dev/kvm`). Scope boots with `MALMO_CLOUD_BOOTS="seeded"` to reproduce the wildcard path alone, or the default `"unseeded seeded frozen"` for the full run.
+- **CI (preferred — no local root/KVM, no image push):** `gh workflow run "CI / Cloud image" --ref <branch> -f publish=false`. Builds the image, then runs the `unseeded seeded bios` boots under QEMU (the `bios` boot re-boots under legacy BIOS, #277). `publish=true` (the default) additionally uploads the built image to the provider — only do that deliberately. Runtime ~40–120 min.
+- **Local:** `sudo make test-cloud-qemu` (needs root + `/dev/kvm`). Scope boots with `MALMO_CLOUD_BOOTS="seeded"` to reproduce the wildcard path alone, `"bios"` to reproduce the legacy-BIOS boot alone, or the default `"unseeded seeded frozen bios"` for the full run.
 
 ## Related history (frozen snapshots — background, not the current view)
 

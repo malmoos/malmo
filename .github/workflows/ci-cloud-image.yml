@@ -116,15 +116,18 @@ jobs:
       #    brain that rejects the live seed fails here -> nothing is published. The
       #    test image reuses the control-plane bundle built in step 1, so it
       #    exercises the same brain that ships.
-      # Scope to unseeded + seeded: those guard the regression this gate exists
-      # for — the built image's brain accepting the current seed schema. The
+      # Scope to unseeded + seeded + bios: unseeded+seeded guard the regression
+      # this gate exists for (the built image's brain accepting the current seed
+      # schema); bios (#277) re-boots the same image under legacy BIOS (SeaBIOS)
+      # and must pass before publish — a box landed on a Hetzner CX (Intel) type
+      # is unbootable otherwise, and the OVMF-only lane can't catch it. The
       # frozen-identity boot is orthogonal (it checks a re-delivered seed is
       # ignored on a later boot) and has shown a flaky false "re-ingested"
       # verdict whose root cause is still open, so it is left to the full local
       # run (MALMO_CLOUD_BOOTS default = all) rather than blocking publish.
-      - name: Seeded-boot test (brain accepts the current seed schema)
+      - name: Seeded-boot test (brain accepts the current seed schema; boots BIOS + UEFI)
         env:
-          MALMO_CLOUD_BOOTS: "unseeded seeded"
+          MALMO_CLOUD_BOOTS: "unseeded seeded bios"
         run: make test-cloud-qemu
 
       # ---- publish to Hetzner (only when requested) --------------------------

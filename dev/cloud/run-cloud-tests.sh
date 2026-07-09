@@ -10,9 +10,10 @@
 # the seed delivery + wizard the medium lane has no analogue for.
 #
 # Three sequential UEFI boots over ONE persisted qcow2 overlay (so the brain's
-# box-id + first admin carry boot→boot), one virtio NIC with restrict=on (air-
-# gapped — the seed arrives over SMBIOS, never the network), serial-log capture per
-# boot. The in-VM self-check (cloud-assertions.sh, run by malmo-cloud-assertions.
+# box-id + first admin carry boot→boot), then a fourth legacy-BIOS smoke boot on
+# its own overlay (#277), one virtio NIC with restrict=on (air-gapped — the seed
+# arrives over SMBIOS, never the network), serial-log capture per boot. The in-VM
+# self-check (cloud-assertions.sh, run by malmo-cloud-assertions.
 # service) reads which scenario to assert from a `malmo.assert` SMBIOS credential,
 # writes its verdict to the serial console, and powers the box off cleanly on PASS
 # (no SSH in hosted — ENVIRONMENT.md # Access & files). This driver greps the verdict:
@@ -27,6 +28,9 @@
 #   boot 3  frozen      a DIFFERENT seed B delivered, same overlay → the brain ignores
 #                       it (identity frozen in SQLite); the dashboard + /api still serve
 #                       under box_id A and the brain does not re-ingest
+#   boot 4  bios        the SAME image re-booted under legacy BIOS (SeaBIOS, no OVMF)
+#                       on its own overlay → proves the dual-firmware image (grub BIOS
+#                       + systemd-boot UEFI) boots where a UEFI-only one hung (#277)
 #
 # The positive SSO path (a valid portal assertion → owner auto-create → box session →
 # first-run wizard) needs the portal's private signing key, so it is the joint cloud
@@ -59,7 +63,7 @@ VERDICT=""
 BOX_ID_A=cindy-fox
 BOX_ID_B=rusty-hawk
 
-# Which boots to run, space-separated (unseeded seeded frozen). Default: all.
+# Which boots to run, space-separated (unseeded seeded frozen bios). Default: all.
 # A subset lets a caller run only the boots it needs — notably the cloud-image
 # publish gate, which runs "unseeded seeded" to prove the built image's brain
 # accepts the current seed schema (the regression that gate exists for) and
@@ -68,8 +72,11 @@ BOX_ID_B=rusty-hawk
 # flaky false "re-ingested" verdict in CI whose root cause is still open — so
 # it is kept in the default full run (where it can be triaged) but out of the
 # publish gate. Order still holds: frozen reuses the overlay seeded leaves
-# behind, so run seeded whenever frozen runs.
-BOOTS="${MALMO_CLOUD_BOOTS:-unseeded seeded frozen}"
+# behind, so run seeded whenever frozen runs. The `bios` boot (#277) is the odd
+# one out: it re-boots the image under legacy BIOS (SeaBIOS) instead of UEFI on its
+# OWN fresh overlay, so it has no ordering dependency and the publish gate includes
+# it directly (see ci-cloud-image.yml).
+BOOTS="${MALMO_CLOUD_BOOTS:-unseeded seeded frozen bios}"
 should_run() { case " $BOOTS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 # QEMU writes serial logs as root (this script runs under sudo). Resolve the
@@ -182,6 +189,7 @@ run_boot() {
     QEMU_PID=""
     VERDICT=""
 
+    local firmware="${FIRMWARE:-uefi}"
     local qemu_args=(
         -machine "q35,accel=${ACCEL}"
         -cpu "$([ "$ACCEL" = kvm ] && echo host || echo max)"
@@ -191,16 +199,26 @@ run_boot() {
         -serial "file:${QEMU_SERIAL}"
         -monitor none
         -drive "file=${OVERLAY},if=virtio,format=qcow2"
-        -drive "if=pflash,format=raw,readonly=on,file=${OVMF_CODE}"
+    )
+    # UEFI attaches OVMF; BIOS (#277) attaches nothing so QEMU uses its built-in
+    # SeaBIOS — the legacy-BIOS firmware a Hetzner CX (Intel) VM presents, under
+    # which a UEFI-only image hangs at "Booting from Hard Disk". This is what
+    # exercises the grub BIOS boot path; the OVMF-only lane could never catch #277.
+    if [ "$firmware" = uefi ]; then
+        qemu_args+=( -drive "if=pflash,format=raw,readonly=on,file=${OVMF_CODE}" )
+    fi
+    qemu_args+=(
         -netdev "user,id=n0,restrict=on"
         -device "virtio-net-pci,netdev=n0,mac=52:54:00:c1:0d:01"
         -smbios "type=11,value=io.systemd.credential:malmo.assert=${mode}"
         "$@"
         -no-reboot
     )
-    [ -n "$OVMF_VARS" ] && qemu_args+=( -drive "if=pflash,format=raw,file=${OVMF_VARS}" )
+    if [ "$firmware" = uefi ] && [ -n "$OVMF_VARS" ]; then
+        qemu_args+=( -drive "if=pflash,format=raw,file=${OVMF_VARS}" )
+    fi
 
-    echo "=== boot phase=${phase} mode=${mode} (accel=${ACCEL}, air-gapped) ==="
+    echo "=== boot phase=${phase} mode=${mode} firmware=${firmware} (accel=${ACCEL}, air-gapped) ==="
     qemu-system-x86_64 "${qemu_args[@]}" &
     QEMU_PID=$!
 
@@ -288,6 +306,27 @@ if ! run_boot "frozen" "frozen:${BOX_ID_A}" -smbios "type=11,value=$(seed_cred "
     exit 1
 fi
 echo "boot 3 OK — frozen identity held across reboot (re-delivered seed B ignored, box_id still ${BOX_ID_A})"
+fi
+
+# --- 7. boot 4: legacy-BIOS smoke (#277). The three boots above all run under UEFI
+# (OVMF). This one boots the SAME image under QEMU's built-in SeaBIOS — the legacy-
+# BIOS firmware a Hetzner CX (Intel) VM presents, where a UEFI-only image hangs at
+# "Booting from Hard Disk" and never reaches userspace. It proves the image's grub
+# BIOS boot path (BiosBootloader=grub + the BIOS Boot Partition) actually boots to
+# a running control plane. It reuses the un-seeded assertion (control plane up, SSO
+# gate armed) as the "did it boot and come up" proof — the firmware path is what's
+# under test here, not provisioning — on its OWN fresh overlay so it can run
+# independently of (and never perturb) the UEFI provisioning sequence above.
+if should_run bios; then
+BIOS_OVERLAY="${RUN_DIR}/overlay-bios.qcow2"
+qemu-img create -f qcow2 -b "$QCOW2" -F qcow2 "$BIOS_OVERLAY" >/dev/null
+OVERLAY="$BIOS_OVERLAY"
+FIRMWARE=bios
+if ! run_boot "bios" "unseeded"; then
+    echo "cloud BIOS boot proof: ${VERDICT}" >&2
+    exit 1
+fi
+echo "boot 4 OK — image boots under legacy BIOS (SeaBIOS), control plane up"
 fi
 
 echo "cloud end-to-end: PASS (boots: ${BOOTS})"
