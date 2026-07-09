@@ -9,7 +9,7 @@ A reusable agent prompt that turns an upstream `docker-compose.yml` (or a GitHub
 0. **Work from a Catalog app issue.** Authoring starts from an issue filed with the **Catalog app** template (`.github/ISSUE_TEMPLATE/catalog-app.md`) — the template's duplicate-check is where you confirm the app isn't already requested or previously rejected, so don't repeat that search here. Read the issue first: if it's a re-attempt after a closed/rejected one, understand why the earlier try was closed before starting. (No issue yet? File one from the template before authoring — don't free-form it.)
 1. Open a fresh agent session **inside the malmo repo** (the prompt reads on-disk sources — it does not rely on its own text being correct).
 2. Paste the prompt block below, then append the **inputs**: the app name, a pasted compose **or** a GitHub repo URL, and optionally a docs URL.
-3. Let it work, then **read its report and re-run `manifest check` yourself** before committing. The agent's job ends at a passing `manifest check` (schema + admission in one); the PR (`Closes #<N>`, progress entry if it's a slice) is yours.
+3. Let it work. The agent's job ends at an **open PR**: it branches, commits, and files the PR itself (`Closes #<N>`), because opening the PR is part of importing an app, not a hand-off. Review it like any other PR — read the report and re-run `manifest check` yourself rather than taking the agent's word.
 
 One app per run. For a batch, run it once per app and review each `catalog/<id>/` pair on its own.
 
@@ -112,6 +112,6 @@ DO NOT: honor `ports:`; use named volumes; emit absolute host binds; set `versio
 
 - Eyeball both files against `catalog/files-demo/` (the closest worked example that exercises a folder grant) and the PhotoPrism sample in `APP_MANIFEST.md`.
 - Re-run `manifest check` yourself — don't take the agent's word. (Then `manifest resolve` to fill digests, if it didn't error out.)
-- One PR per app (or a small, clearly-scoped batch), each `Closes #<N>` per the [contributing guide](contributing.md). Catalog additions are not implementation slices, so they don't need a `docs/progress/` entry — but if an app surfaces a spec gap or a new admission edge case, fix the spec in the same PR.
+- One PR per app (or a small, clearly-scoped batch), each `Closes #<N>` per the [contributing guide](contributing.md) — **the authoring agent opens it**, on a `catalog/<id>` branch, as the last step of the run. Catalog additions are not implementation slices, so they don't need a `docs/progress/` entry — but if an app surfaces a spec gap or a new admission edge case, fix the spec in the same PR.
 - **Triage any new platform gaps.** If the PR description has a **Platform gaps** section, read it: a gap that now recurs across apps, or any `blocks-start` gap, is a candidate to promote into [`../specs/NEXT.md`](../specs/NEXT.md) (deduped and shaped) and the catalog-curation conversation. The PR is capture; NEXT.md is the decision — keep that boundary.
 - **Confirm the status row.** Check the app's row in [`catalog-status.md`](catalog-status.md) matches reality — and that any `Blocked`/`Rejected` app actually carries `listed: false` (the roster's verdict and the store's behavior must agree).
