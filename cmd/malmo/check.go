@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/malmoos/malmo/internal/manifest"
 )
@@ -45,6 +46,37 @@ func check(ctx context.Context, admit composeChecker, manifestPath string) error
 	}
 	if err := admit(ctx, composeData); err != nil {
 		return err // admission.Error messages already name the offending service + field
+	}
+	return checkImagesResolved(man)
+}
+
+// imageDigest matches a well-formed `sha256:<64 lowercase hex>` reference —
+// the shape `resolve` always writes.
+var imageDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// checkImagesResolved catches a manifest whose `images:` entries were never
+// run through `malmo manifest resolve` — a hand-written placeholder digest
+// (or one left over from a copy-paste) is a syntactically valid ImageRef, so
+// nothing else in `check` (schema lint, admission) would ever flag it, and
+// `check` deliberately never hits the registry itself (that's `resolve`'s
+// job, run separately). A resolved image's compressed/uncompressed layer sum
+// is never zero, so requiring both sizes to be positive whenever an entry is
+// present is a cheap, fully offline tripwire for "resolve was skipped."
+//
+// This is deliberately stricter than `internal/manifest.Parse`, which still
+// accepts the legacy digest-only scalar form (`image:tag: sha256:…`, no
+// sizes) as a valid pre-resolve authoring draft. `check` is the author's
+// last gate before opening a PR, and `docs/curation-workflow.md` always runs
+// `resolve` before `check` — by the time `check` runs, every entry should
+// carry real sizes, scalar shorthand included.
+func checkImagesResolved(man *manifest.Manifest) error {
+	for ref, img := range man.Images {
+		if !imageDigest.MatchString(img.Digest) {
+			return fmt.Errorf("images %q: digest %q is not a well-formed sha256 digest — run `malmo manifest resolve`", ref, img.Digest)
+		}
+		if img.DownloadBytes <= 0 || img.DiskBytes <= 0 {
+			return fmt.Errorf("images %q: download_bytes/disk_bytes are not resolved (zero or unset) — run `malmo manifest resolve`", ref)
+		}
 	}
 	return nil
 }

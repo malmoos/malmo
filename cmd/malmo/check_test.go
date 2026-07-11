@@ -87,3 +87,50 @@ func TestCheck_RejectsOnSchema(t *testing.T) {
 		t.Fatalf("bad slug: want a schema error naming kebab-case, got %v", err)
 	}
 }
+
+// --- check rejects an unresolved/placeholder images: entry -----------------
+// Regression: an author-written placeholder digest with zero sizes (e.g.
+// copy-pasted before running `malmo manifest resolve`) is a syntactically
+// valid ImageRef and would otherwise sail through both lint and admission
+// undetected (nextcloud import, store #33).
+
+func TestCheck_RejectsUnresolvedImages(t *testing.T) {
+	withImages := validManifest + `
+images:
+  nginx:1.0:
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    download_bytes: 0
+    disk_bytes: 0
+`
+	err := check(context.Background(), admission.CheckStructure, writeApp(t, withImages, validCompose))
+	if err == nil || !strings.Contains(err.Error(), "not resolved") {
+		t.Fatalf("want an unresolved-images error, got %v", err)
+	}
+}
+
+func TestCheck_RejectsMalformedDigest(t *testing.T) {
+	withImages := validManifest + `
+images:
+  nginx:1.0:
+    digest: sha256:not-a-real-digest
+    download_bytes: 100
+    disk_bytes: 200
+`
+	err := check(context.Background(), admission.CheckStructure, writeApp(t, withImages, validCompose))
+	if err == nil || !strings.Contains(err.Error(), "well-formed sha256 digest") {
+		t.Fatalf("want a malformed-digest error, got %v", err)
+	}
+}
+
+func TestCheck_AcceptsResolvedImages(t *testing.T) {
+	withImages := validManifest + `
+images:
+  nginx:1.0:
+    digest: sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c
+    download_bytes: 2850040
+    disk_bytes: 6581646
+`
+	if err := check(context.Background(), admission.CheckStructure, writeApp(t, withImages, validCompose)); err != nil {
+		t.Fatalf("want clean, got %v", err)
+	}
+}
