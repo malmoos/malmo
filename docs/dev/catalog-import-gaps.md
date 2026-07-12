@@ -33,10 +33,14 @@ Unlike `docs/progress/` entries (frozen ADR snapshots), this file is **mutable b
   - `degraded` — a real feature is broken (OAuth, email links), but the app runs and core use works.
   - `blocks-start` — the app will not boot until a human sets something the platform should have supplied. This is also a **curation** signal (`NEXT.md` # Store catalog curation policy): a `blocks-start` app may not be shippable as-is.
 - **Status** — where the gap stands. New entries start `open`; only a human moves them on (always with the pointer that justifies the move):
-  - `open` — captured, not yet triaged. This is the worklist (`grep "Status: open"`).
+  - `open` — the mechanism is still missing. This is the worklist (`grep "Status: open"`).
   - `planned (<NEXT.md anchor / issue #>)` — promoted; the design topic or issue is the link. The shape is decided *there*, not here.
   - `implemented (<spec section / commit / PR>)` — the mechanism shipped. Leave the entry in place — it's now the record of which apps to revisit and re-import against the new mechanism.
-  - `won't-do (<reason>)` — decided against for v1. The reason (or a `DECISIONS.md` pointer) lives on the line.
+  - `won't-do (<reason>)` — **we decided never to build the mechanism.** Not "the app shipped anyway" — see below. The reason (or a `DECISIONS.md` pointer) lives on the line.
+
+  **`Status:` tracks the *mechanism*, not the app.** This trips people up, so state it plainly: an entry stays `open` for as long as malmo lacks the mechanism, *no matter what the importing app did about it*. An app that shipped `full` by dropping the feature that needed the gap has not closed the gap — it routed around it, and the next app to need that feature will hit the same wall. The app's side of the story is recorded separately, in the store's `status.yml` (`state:`, and a `by-design` limitation); this ledger's job is to remember that malmo still can't do the thing. `won't-do` is reserved for a *platform* decision not to build the mechanism at all — never inferred from an app shipping around it.
+
+  The **Severity** field, not `Status`, is what says how much the app suffered: `cosmetic` already means "app fully usable." A `cosmetic`/`open` entry is a perfectly normal and common state — a real missing mechanism whose absence cost this particular app very little.
 
 ---
 
