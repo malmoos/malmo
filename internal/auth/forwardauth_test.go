@@ -3,8 +3,11 @@ package auth
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/malmoos/malmo/internal/store"
 )
 
 // Hosted forward-auth token + cookie (issue #305). These exercise the second,
@@ -47,11 +50,89 @@ func TestIssueForwardAuthPersistsAndValidates(t *testing.T) {
 
 func TestValidateForwardAuthRejectsUnknownAndEmpty(t *testing.T) {
 	m, _, _, _ := fixture(t)
-	if _, err := m.ValidateForwardAuth("never-minted"); err != ErrInvalidSession {
+	// A well-formed but never-minted token: rejected (and it does hit the store —
+	// that's the only way to know it doesn't exist).
+	if _, err := m.ValidateForwardAuth(strings.Repeat("a", tokenLen)); err != ErrInvalidSession {
 		t.Fatalf("unknown token = %v, want ErrInvalidSession", err)
 	}
 	if _, err := m.ValidateForwardAuth(""); err != ErrInvalidSession {
 		t.Fatalf("empty token = %v, want ErrInvalidSession", err)
+	}
+}
+
+// countingStore wraps a real store and counts the forward-auth reverse lookups —
+// the only DB round-trip on the verify hot path.
+type countingStore struct {
+	SessionStore
+	faLookups int
+}
+
+func (c *countingStore) GetSessionByForwardAuthToken(faToken string) (store.Session, error) {
+	c.faLookups++
+	return c.SessionStore.GetSessionByForwardAuthToken(faToken)
+}
+
+// The load-bearing DoS property (#305 review): a cookie that cannot be a token we
+// minted must be rejected on a string scan, never on a DB round-trip. The verify
+// endpoint is public and internet-reachable on hosted, and the brain serializes
+// every query through one SQLite connection, so an anonymous garbage-cookie flood
+// that reached the store would stall the whole brain, not just this endpoint.
+func TestValidateForwardAuthMalformedNeverTouchesStore(t *testing.T) {
+	m, s, u, _ := fixture(t)
+	cs := &countingStore{SessionStore: s}
+	m = NewManager(cs)
+	m.ForwardAuthDomain = testFADomain
+	sess, err := m.Issue(u.ID)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	cookie, err := m.IssueForwardAuth(sess.Token)
+	if err != nil {
+		t.Fatalf("IssueForwardAuth: %v", err)
+	}
+	cs.faLookups = 0
+
+	for _, bad := range []string{
+		"",                                    // no cookie
+		"not-a-real-token",                    // too short
+		strings.Repeat("a", tokenLen-1),       // one char short
+		strings.Repeat("a", tokenLen+1),       // one char long
+		strings.Repeat("a", 4096),             // an oversized junk cookie
+		strings.Repeat("a", tokenLen-1) + "+", // right length, wrong alphabet (std base64)
+		strings.Repeat("a", tokenLen-1) + "/",
+		strings.Repeat("a", tokenLen-1) + "=", // padded base64
+		strings.Repeat("a", tokenLen-1) + "'", // a SQL-ish byte
+	} {
+		if _, err := m.ValidateForwardAuth(bad); err != ErrInvalidSession {
+			t.Fatalf("ValidateForwardAuth(%q) = %v, want ErrInvalidSession", bad, err)
+		}
+	}
+	if cs.faLookups != 0 {
+		t.Fatalf("malformed forward-auth tokens hit the store %d times; want 0", cs.faLookups)
+	}
+
+	// The real token still resolves — the shape gate rejects impossible tokens, not
+	// legitimate ones.
+	if _, err := m.ValidateForwardAuth(cookie.Value); err != nil {
+		t.Fatalf("ValidateForwardAuth(minted) = %v; want success", err)
+	}
+	if cs.faLookups != 1 {
+		t.Fatalf("well-formed token store lookups = %d; want 1", cs.faLookups)
+	}
+}
+
+func TestWellFormedToken(t *testing.T) {
+	minted, err := newToken()
+	if err != nil {
+		t.Fatalf("newToken: %v", err)
+	}
+	if !WellFormedToken(minted) {
+		t.Fatalf("a freshly minted token (%q) must be well-formed", minted)
+	}
+	for _, bad := range []string{"", "short", strings.Repeat("a", tokenLen+1), strings.Repeat("!", tokenLen)} {
+		if WellFormedToken(bad) {
+			t.Fatalf("WellFormedToken(%q) = true; want false", bad)
+		}
 	}
 }
 

@@ -160,7 +160,14 @@ func (m *Manager) Validate(token string) (Identity, error) {
 // Owner-only policy (v1) is enforced by the caller — this layer only proves the
 // session behind the token is live.
 func (m *Manager) ValidateForwardAuth(faToken string) (Identity, error) {
-	if faToken == "" {
+	// Shape-check before the store. The verify endpoint is a public, internet-
+	// reachable path on a hosted box and the brain serializes every query through
+	// a single SQLite connection (store.Open: SetMaxOpenConns(1)), so a token that
+	// cannot possibly be one we minted must be rejected without a DB round-trip —
+	// otherwise anonymous garbage-cookie traffic queues in front of every other
+	// brain query (login, dashboard, installs), turning an endpoint-local flood
+	// into a whole-brain stall. Only a well-formed token reaches the reverse lookup.
+	if !WellFormedToken(faToken) {
 		return Identity{}, ErrInvalidSession
 	}
 	sess, err := m.store.GetSessionByForwardAuthToken(faToken)
@@ -322,4 +329,29 @@ func newToken() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// tokenLen is the length of a newToken() value: 32 bytes, raw-base64url-encoded.
+const tokenLen = (tokenBytes*8 + 5) / 6 // 43
+
+// WellFormedToken reports whether s could have been produced by newToken — the
+// exact length and alphabet of a raw-base64url 256-bit token. It says nothing
+// about whether the token exists; it is a pure syntax gate that lets a caller
+// reject impossible credentials without touching the store. That matters on the
+// hosted forward-auth verify path, which is public, internet-reachable, and
+// called by Caddy per app asset, in front of a store with a single SQLite
+// connection: a garbage cookie must cost a string scan, not a DB round-trip.
+func WellFormedToken(s string) bool {
+	if len(s) != tokenLen {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }

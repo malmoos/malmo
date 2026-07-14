@@ -164,22 +164,75 @@ func TestForwardAuthToken_CannotUpgradeToDashboardSession(t *testing.T) {
 	}
 }
 
-// The verify endpoint is exempt from the per-IP request-rate bucket: Caddy calls
-// it per app request, so it must not throttle. Well past the 30/min/IP allowlist
-// budget, none of the calls may 429.
-func TestForwardAuthVerify_NotRateLimited(t *testing.T) {
-	h, _, _ := ssoOwnerBox(t)
+// verifyOverHTTP drives the verify endpoint through the full middleware chain
+// (auth middleware + rate limiter), which is where the exemption lives. cookie ==
+// "" sends no forward-auth cookie at all.
+func (h *harness) verifyOverHTTP(t *testing.T, cookie string) int {
+	t.Helper()
+	req, _ := http.NewRequest("GET", h.srv.URL+forwardAuthVerifyPath, nil)
+	if cookie != "" {
+		req.AddCookie(&http.Cookie{Name: auth.ForwardAuthCookieName, Value: cookie})
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
+// A request carrying a well-formed forward-auth token is exempt from the per-IP
+// bucket: the box Caddy calls verify on a forward_auth subrequest for every asset
+// of a restricted app, so throttling it at 30/min/IP would throttle legitimate app
+// traffic. Well past the allowlist budget, none of these may 429.
+func TestForwardAuthVerify_ValidTokenNotRateLimited(t *testing.T) {
+	h, faToken, _ := ssoOwnerBox(t)
 	for i := 0; i < ipRateBurst+10; i++ {
-		req, _ := http.NewRequest("GET", h.srv.URL+forwardAuthVerifyPath, nil)
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("verify call %d: %v", i, err)
+		if code := h.verifyOverHTTP(t, faToken); code == http.StatusTooManyRequests {
+			t.Fatalf("verify call %d with a valid token was rate-limited (429); the gated path must be exempt", i)
+		} else if code != http.StatusOK {
+			t.Fatalf("verify call %d = %d; want 200", i, code)
 		}
-		code := resp.StatusCode
-		resp.Body.Close()
+	}
+}
+
+// The property that matters (and that the old blanket exemption did not have): an
+// anonymous flood of garbage cookies is BOUNDED, and never reaches the store. The
+// brain serializes every query through one SQLite connection, so unthrottled
+// anonymous DB load on this public path would stall the whole brain, not just this
+// endpoint. Malformed tokens are rejected by the shape gate (no store lookup) and
+// stay on the normal per-IP bucket, so the flood 429s once the budget is spent.
+func TestForwardAuthVerify_GarbageCookieFloodIsThrottled(t *testing.T) {
+	h, _, _ := ssoOwnerBox(t)
+	throttled := false
+	for i := 0; i < ipRateBurst+10; i++ {
+		code := h.verifyOverHTTP(t, "garbage-not-a-token")
 		if code == http.StatusTooManyRequests {
-			t.Fatalf("verify call %d was rate-limited (429); the endpoint must be exempt", i)
+			throttled = true
+			break
 		}
+		if code != http.StatusUnauthorized {
+			t.Fatalf("verify call %d with a garbage cookie = %d; want 401 (or 429)", i, code)
+		}
+	}
+	if !throttled {
+		t.Fatalf("a garbage-cookie flood of %d requests was never rate-limited; the exemption must not cover malformed credentials", ipRateBurst+10)
+	}
+}
+
+// Same for a request with no forward-auth cookie at all — it is not app traffic,
+// so it draws from the normal per-IP bucket.
+func TestForwardAuthVerify_NoCookieFloodIsThrottled(t *testing.T) {
+	h, _, _ := ssoOwnerBox(t)
+	throttled := false
+	for i := 0; i < ipRateBurst+10; i++ {
+		if h.verifyOverHTTP(t, "") == http.StatusTooManyRequests {
+			throttled = true
+			break
+		}
+	}
+	if !throttled {
+		t.Fatal("a no-cookie flood was never rate-limited")
 	}
 }
 
