@@ -80,6 +80,11 @@ export type CatalogDetail = Schemas["Detail"];
 export type CatalogHome = Schemas["Home"];
 export type CatalogCategory = Schemas["Category"];
 export type Instance = Schemas["InstanceDTO"];
+// Exposure is the per-app access mode (#306, hosted only): "restricted" is the
+// box-login-gated owner-only default, "public" is anonymous. Unlike Scope below,
+// the brain DOES declare this one as an enum, so the generated schema carries the
+// literal union — derive from it rather than re-typing the values here.
+export type Exposure = Instance["exposure"];
 export type Notification = Schemas["NotificationDTO"];
 export type AuditEvent = Schemas["AuditEventDTO"];
 // HealthIssue mirrors health.Issue (HEALTH.md # Issue shape) — the degraded-mode
@@ -111,12 +116,6 @@ export type AppSecret = Schemas["AppSecretDTO"];
 // two real values, and InstallDialog indexes FolderSources by scope, which
 // needs the literal union.
 export type Scope = "household" | "personal";
-
-// Exposure is the per-app access mode (#306, hosted only). Like Scope, it's a
-// UI-side literal union: the brain serves InstanceDTO.exposure as a free string,
-// but the toggle only ever sets/compares these two values. "restricted" is the
-// box-login-gated owner-only default; "public" is anonymous.
-export type Exposure = "restricted" | "public";
 
 // --- Door-2 hand-maintained types (not in the OpenAPI spec) -----------------
 // These types back the custom-container install endpoints which bypass huma

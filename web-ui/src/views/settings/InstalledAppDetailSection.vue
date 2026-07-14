@@ -106,7 +106,7 @@ const busy = computed(
 // (the endpoint 404s on the appliance, which has no public app subdomains) and to
 // canControl (owner-or-admin, the same gate the brain re-checks). The PUT echoes
 // the updated instance — invalidate refreshes the detail + list without a job.
-const exposure = computed<Exposure>(() => (app.value?.exposure === "restricted" ? "restricted" : "public"));
+const exposure = computed<Exposure>(() => app.value?.exposure ?? "public");
 const exposureOptions: { value: Exposure; label: string }[] = [
   { value: "restricted", label: "Only me" },
   { value: "public", label: "Public" },

@@ -16,7 +16,7 @@ Third slice of the hosted per-app access-restriction epic (#304), closing **#307
 
 ### Types (`web-ui/src/api.ts`)
 
-- `export type Exposure = "restricted" | "public"` — a UI-side literal union mirroring the existing `Scope` precedent (the brain serves `InstanceDTO.exposure` as a free string; the toggle only ever sets/compares these two values).
+- `export type Exposure = Instance["exposure"]` — derived from the generated schema, not hand-narrowed. #306 declares the huma enum on `InstanceDTO.exposure`, so `openapi-typescript` emits the literal union directly and the two values live in exactly one place. (This is *not* the `Scope` situation: `scope` is still a free string in the huma struct, which is why its UI-side union is hand-written.)
 
 ## Known gaps & deviations
 
