@@ -22,6 +22,7 @@ Third slice of the hosted per-app access-restriction epic (#304), closing **#307
 
 - **No optimistic update.** The echoed DTO is discarded in favor of an `invalidate()` refetch, matching every other mutation in this view (stop/start/mail/config). One extra GET per toggle; not an N+1 (a single settle refetch). Could `setQueryData` off the echoed body later if the flash is noticed, but consistency won here.
 - **Owner-only, single-user.** Inherited from #305/#306: "Only me" is the box *owner*. Restricting to a subset of box users the owner creates is the epic's additive follow-up (`ENVIRONMENT.md` # Deferred).
+- **No SSE event on an exposure change.** `PUT /apps/{id}/exposure` emits no event, and `useEvents.ts` listens for none, so a second open tab won't reflect a toggle until its next refetch. Consistent with the other app-mutation endpoints (mail rebind, config save), which are equally event-less — a pre-existing convention, not a regression this slice introduces.
 - **Store-page vs installed-page.** The toggle lives on the installed-instance detail page (`InstalledAppDetailSection.vue`), not the pre-install store page (`AppDetailView.vue`, `/store/:id`) — exposure is per-instance state that exists only after install.
 
 ## What's next

@@ -369,14 +369,15 @@ const saveConfig = useMutation({
                 : "Only you can open it — visitors sign in to your box first." }}
             </div>
           </div>
-          <div class="inline-flex shrink-0 rounded-lg border border-border p-0.5 text-sm">
+          <div role="group" aria-label="Access mode" class="inline-flex shrink-0 rounded-lg border border-border p-0.5 text-sm">
             <button
               v-for="opt in exposureOptions"
               :key="opt.value"
               type="button"
               class="rounded-md px-3 py-1 transition-colors"
               :class="exposure === opt.value ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground'"
-              :disabled="setExposure.isPending.value || busy"
+              :aria-pressed="exposure === opt.value"
+              :disabled="setExposure.isPending.value || busy || opt.value === exposure"
               @click="setExposure.mutate(opt.value)"
             >
               {{ opt.label }}
