@@ -173,6 +173,7 @@ func (s *Server) registerAll(api huma.API) {
 	s.registerFirstRun(api)
 	s.registerAppSecrets(api)
 	s.registerAppConfig(api)
+	s.registerAppExposure(api)
 }
 
 // OpenAPIDocument builds the brain's full REST surface against a throwaway mux
@@ -301,8 +302,13 @@ type InstanceDTO struct {
 	OwnerUserID   string `json:"owner_user_id"`
 	OwnerUsername string `json:"owner_username"`
 	Scope         string `json:"scope"`
-	IconURL       string `json:"icon_url,omitempty"`
-	IconGlyph     string `json:"icon_glyph,omitempty"`
+	// Exposure is the per-app access gate (#306): "restricted" (owner-only, behind
+	// the box forward-auth) or "public" (anonymous). Meaningful on hosted, where
+	// the dashboard shows the Only-me / Public toggle (#307); always "public" on
+	// the appliance, which has no public app subdomains.
+	Exposure  string `json:"exposure" enum:"restricted,public"`
+	IconURL   string `json:"icon_url,omitempty"`
+	IconGlyph string `json:"icon_glyph,omitempty"`
 	// Mail fields are detail-page enrichments set only by getApp (list
 	// responses omit them): MailSupported reports the manifest's mail block,
 	// MailProviderID the current binding ("" ⇒ unbound). They drive the
@@ -332,6 +338,7 @@ func (s *Server) toDTO(i store.Instance, ownerUsername string, e *catalog.Entry)
 		ID: i.ID, ManifestID: i.ManifestID, Name: i.Name, Slug: i.Slug,
 		Version: i.Version, State: i.State, URL: url,
 		OwnerUserID: i.OwnerUserID, OwnerUsername: ownerUsername, Scope: i.Scope,
+		Exposure: i.Exposure,
 	}
 	if e != nil {
 		dto.IconURL = e.IconURL

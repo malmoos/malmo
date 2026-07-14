@@ -168,6 +168,143 @@ func TestEnsureWildcardTLS(t *testing.T) {
 	}
 }
 
+// routeHandle PUTs a RouteConfig and returns the route's decoded "handle" array.
+func routeHandle(t *testing.T, cfg RouteConfig) []any {
+	t.Helper()
+	admin := &recordingAdmin{}
+	srv := httptest.NewServer(admin.handler())
+	defer srv.Close()
+	if err := New(srv.URL).AddRoute(context.Background(), cfg); err != nil {
+		t.Fatalf("AddRoute: %v", err)
+	}
+	put := admin.find("PUT", "/routes/0")
+	if put == nil {
+		t.Fatal("expected a PUT to routes/0 for the app route")
+	}
+	return put.body["handle"].([]any)
+}
+
+// Appliance / no-policy: the emitted route is the plain reverse_proxy, byte for
+// byte — no headers manipulation (no Cookie strip), no forward_auth wrap.
+func TestAddRoute_Plain(t *testing.T) {
+	handle := routeHandle(t, RouteConfig{InstanceID: "i1", Host: "whoami.local", Upstream: "app:80"})
+	if len(handle) != 1 {
+		t.Fatalf("plain route must be a single reverse_proxy, got %d handlers", len(handle))
+	}
+	h := handle[0].(map[string]any)
+	if h["handler"] != "reverse_proxy" {
+		t.Errorf("handler = %v, want reverse_proxy", h["handler"])
+	}
+	if _, ok := h["headers"]; ok {
+		t.Error("plain route must not touch headers (no Cookie strip)")
+	}
+	if dial := h["upstreams"].([]any)[0].(map[string]any)["dial"]; dial != "app:80" {
+		t.Errorf("dial = %v, want app:80", dial)
+	}
+}
+
+// Public hosted app: plain reverse_proxy but with the Cookie header stripped, so
+// the box's Domain-scoped forward-auth cookie never reaches the app upstream.
+func TestAddRoute_StripCookieOnly(t *testing.T) {
+	handle := routeHandle(t, RouteConfig{InstanceID: "i1", Host: "h", Upstream: "app:80", StripCookie: true})
+	if len(handle) != 1 {
+		t.Fatalf("public route must be a single reverse_proxy, got %d", len(handle))
+	}
+	assertCookieStripped(t, handle[0].(map[string]any))
+}
+
+// Restricted hosted app: the forward_auth gate in front of the (Cookie-stripped)
+// app reverse_proxy. This asserts the full native-JSON shape of the Caddyfile
+// forward_auth directive plus the added 401→login redirect block.
+func TestAddRoute_ForwardAuthGate(t *testing.T) {
+	handle := routeHandle(t, RouteConfig{
+		InstanceID: "i1", Host: "h", Upstream: "app:80", StripCookie: true,
+		ForwardAuth: &ForwardAuthConfig{
+			Upstream:    "malmo-brain:8080",
+			VerifyPath:  "/_malmo/forward-auth/verify",
+			CopyHeaders: []string{"X-Malmo-User", "X-Malmo-User-Id"},
+			LoginURL:    "https://cindy-fox.malmo.network/",
+		},
+	})
+	if len(handle) != 2 {
+		t.Fatalf("restricted route = forward_auth + app proxy, got %d handlers", len(handle))
+	}
+
+	// [0] the forward_auth reverse_proxy to the brain verify endpoint.
+	auth := handle[0].(map[string]any)
+	if auth["handler"] != "reverse_proxy" {
+		t.Fatalf("auth handler = %v, want reverse_proxy", auth["handler"])
+	}
+	if dial := auth["upstreams"].([]any)[0].(map[string]any)["dial"]; dial != "malmo-brain:8080" {
+		t.Errorf("verify dial = %v, want malmo-brain:8080", dial)
+	}
+	rw := auth["rewrite"].(map[string]any)
+	if rw["method"] != "GET" || rw["uri"] != "/_malmo/forward-auth/verify" {
+		t.Errorf("rewrite = %v, want GET /_malmo/forward-auth/verify", rw)
+	}
+	hr := auth["handle_response"].([]any)
+	if len(hr) != 2 {
+		t.Fatalf("want 2 handle_response blocks (2xx copy + catch-all redirect), got %d", len(hr))
+	}
+	// Block 0: a 2xx match scrubs any caller-supplied identity headers, THEN sets
+	// them from the verify response — the delete must precede the set so a client
+	// can't forge X-Malmo-User.
+	b0 := hr[0].(map[string]any)
+	if sc := b0["match"].(map[string]any)["status_code"].([]any); len(sc) != 1 || sc[0].(float64) != 2 {
+		t.Errorf("first block match = %v, want status_code [2] (2xx)", b0["match"])
+	}
+	twoxxHandle := b0["routes"].([]any)[0].(map[string]any)["handle"].([]any)
+	if len(twoxxHandle) != 2 {
+		t.Fatalf("2xx handle = %d handlers, want 2 (delete then set)", len(twoxxHandle))
+	}
+	del := twoxxHandle[0].(map[string]any)["request"].(map[string]any)["delete"].([]any)
+	set := twoxxHandle[1].(map[string]any)["request"].(map[string]any)["set"].(map[string]any)
+	for _, h := range []string{"X-Malmo-User", "X-Malmo-User-Id"} {
+		if _, ok := set[h]; !ok {
+			t.Errorf("identity header %s not set from the verify response", h)
+		}
+		found := false
+		for _, d := range del {
+			if d == h {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("identity header %s not scrubbed before set (forgery guard)", h)
+		}
+	}
+	// Block 1: no matcher (catch-all) → 302 redirect to the box login on any
+	// non-2xx (the brain returns 401 when the forward-auth cookie is missing).
+	b1 := hr[1].(map[string]any)
+	if _, ok := b1["match"]; ok {
+		t.Error("redirect block must have no matcher (catch-all for non-2xx)")
+	}
+	redir := b1["routes"].([]any)[0].(map[string]any)["handle"].([]any)[0].(map[string]any)
+	if redir["handler"] != "static_response" || redir["status_code"].(float64) != 302 {
+		t.Errorf("redirect = %v, want static_response 302", redir)
+	}
+	if loc := redir["headers"].(map[string]any)["Location"].([]any); len(loc) != 1 || loc[0] != "https://cindy-fox.malmo.network/" {
+		t.Errorf("redirect Location = %v", loc)
+	}
+
+	// [1] the app reverse_proxy: real upstream, Cookie header stripped.
+	app := handle[1].(map[string]any)
+	if dial := app["upstreams"].([]any)[0].(map[string]any)["dial"]; dial != "app:80" {
+		t.Errorf("app dial = %v, want app:80", dial)
+	}
+	assertCookieStripped(t, app)
+}
+
+// assertCookieStripped checks a reverse_proxy handler deletes the Cookie request
+// header — the invariant that no app upstream ever receives a cookie on hosted.
+func assertCookieStripped(t *testing.T, proxy map[string]any) {
+	t.Helper()
+	del := proxy["headers"].(map[string]any)["request"].(map[string]any)["delete"].([]any)
+	if len(del) != 1 || del[0] != "Cookie" {
+		t.Errorf("request header delete = %v, want [Cookie]", del)
+	}
+}
+
 // assertACMEIssuer checks the shared acme-dns issuer shape embedded in a
 // single-subject policy body.
 func assertACMEIssuer(t *testing.T, policy map[string]any, wantEndpoint, wantUser, wantPass, wantSubdomain string) {

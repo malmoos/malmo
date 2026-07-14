@@ -63,6 +63,11 @@ const (
 	// value (an API token, a connection string) is elevation-class, so it audits
 	// success and failure.
 	ActionAppConfigUpdate = "app.config.update"
+
+	// Per-app access-mode change (ENVIRONMENT.md #306, hosted): flipping an app
+	// between owner-only (restricted) and public alters who can reach it, so it is
+	// elevation-class and audits success and failure.
+	ActionAppExposureSet = "app.exposure.set"
 )
 
 // Target describes the object the action acts on. Both fields are optional.

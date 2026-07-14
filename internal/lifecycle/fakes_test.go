@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/malmoos/malmo/internal/caddy"
 	"github.com/malmoos/malmo/internal/protocol"
 )
 
@@ -245,12 +246,15 @@ func (f *fakeDocker) RemoveImage(_ context.Context, ref string) error {
 // --- caddy fake ----------------------------------------------------------
 
 type fakeCaddy struct {
-	mu     sync.Mutex
-	routes map[string]string // instanceID → "splash:<state>" | "upstream:<addr>"
-	calls  []call
+	mu      sync.Mutex
+	routes  map[string]string            // instanceID → "splash:<state>" | "upstream:<addr>"
+	configs map[string]caddy.RouteConfig // instanceID → last AddRoute policy (#306)
+	calls   []call
 }
 
-func newFakeCaddy() *fakeCaddy { return &fakeCaddy{routes: map[string]string{}} }
+func newFakeCaddy() *fakeCaddy {
+	return &fakeCaddy{routes: map[string]string{}, configs: map[string]caddy.RouteConfig{}}
+}
 
 func (c *fakeCaddy) record(method string, args ...any) {
 	c.mu.Lock()
@@ -263,10 +267,11 @@ func (c *fakeCaddy) EnsureServer(context.Context) error {
 	return nil
 }
 
-func (c *fakeCaddy) AddRoute(_ context.Context, id, host, upstream string) error {
-	c.record("AddRoute", id, host, upstream)
+func (c *fakeCaddy) AddRoute(_ context.Context, cfg caddy.RouteConfig) error {
+	c.record("AddRoute", cfg.InstanceID, cfg.Host, cfg.Upstream)
 	c.mu.Lock()
-	c.routes[id] = "upstream:" + upstream
+	c.routes[cfg.InstanceID] = "upstream:" + cfg.Upstream
+	c.configs[cfg.InstanceID] = cfg
 	c.mu.Unlock()
 	return nil
 }
@@ -291,6 +296,14 @@ func (c *fakeCaddy) route(id string) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.routes[id]
+}
+
+// config returns the last RouteConfig AddRoute recorded for an instance, so
+// #306 tests can assert on the resolved forward-auth + Cookie-strip policy.
+func (c *fakeCaddy) config(id string) caddy.RouteConfig {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.configs[id]
 }
 
 func (c *fakeCaddy) called(method string) bool {

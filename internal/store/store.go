@@ -43,12 +43,27 @@ type Instance struct {
 	// `compose up` failed, leaving its container on stale env. The reconcile pass
 	// retries the recreate while it is set, then clears it (#268).
 	PendingRecreate bool
-	CreatedAt       time.Time
+	// Exposure is the per-app access gate for the hosted profile (#306,
+	// ENVIRONMENT.md # Public-by-default): ExposureRestricted routes the app
+	// behind the box's forward-auth (owner-only), ExposurePublic serves it
+	// anonymously. New hosted installs default to ExposureRestricted; the
+	// appliance is always ExposurePublic (it has no public app subdomains, so the
+	// forward-auth wrap never applies there).
+	Exposure  string
+	CreatedAt time.Time
 }
 
 const (
 	ScopeHousehold = "household"
 	ScopePersonal  = "personal"
+)
+
+const (
+	// ExposurePublic serves the app's route as a plain reverse-proxy (the
+	// appliance's only mode; the hosted opt-out). ExposureRestricted wraps it in
+	// the box forward-auth gate (hosted owner-only). See ENVIRONMENT.md #306.
+	ExposurePublic     = "public"
+	ExposureRestricted = "restricted"
 )
 
 // User is a malmo dashboard account. The brain mirrors a Linux account
@@ -123,6 +138,7 @@ func (s *Store) migrate() error {
 			service_uid INTEGER NOT NULL DEFAULT 0,
 			service_gid INTEGER NOT NULL DEFAULT 0,
 			pending_recreate INTEGER NOT NULL DEFAULT 0,
+			exposure    TEXT NOT NULL DEFAULT 'public' CHECK (exposure IN ('public','restricted')),
 			created_at  INTEGER NOT NULL
 		);
 		CREATE TABLE IF NOT EXISTS instance_images (
@@ -372,6 +388,7 @@ func (s *Store) migrate() error {
 		{"instances", "service_uid", "ALTER TABLE instances ADD COLUMN service_uid INTEGER NOT NULL DEFAULT 0"},
 		{"instances", "service_gid", "ALTER TABLE instances ADD COLUMN service_gid INTEGER NOT NULL DEFAULT 0"},
 		{"instances", "pending_recreate", "ALTER TABLE instances ADD COLUMN pending_recreate INTEGER NOT NULL DEFAULT 0"},
+		{"instances", "exposure", "ALTER TABLE instances ADD COLUMN exposure TEXT NOT NULL DEFAULT 'public'"},
 	} {
 		has, hErr := s.hasColumn(col.table, col.name)
 		if hErr != nil {
@@ -728,10 +745,21 @@ func (s *Store) Create(i Instance) error {
 	if i.Scope != ScopeHousehold && i.Scope != ScopePersonal {
 		return fmt.Errorf("invalid instance scope %q", i.Scope)
 	}
+	// Same defense-in-depth as scope: the ALTER-migration path can't carry the
+	// CHECK, so normalize an unset exposure to public and reject anything else
+	// before it reaches the row. Empty must not be inserted verbatim — it would
+	// violate the fresh-DB CHECK (the column is written explicitly, so the DDL
+	// DEFAULT never applies to a Create).
+	if i.Exposure == "" {
+		i.Exposure = ExposurePublic
+	}
+	if i.Exposure != ExposurePublic && i.Exposure != ExposureRestricted {
+		return fmt.Errorf("invalid instance exposure %q", i.Exposure)
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO instances (id, manifest_id, name, slug, version, state, mdns_name, owner_user_id, scope, service_uid, service_gid, created_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		i.ID, i.ManifestID, i.Name, i.Slug, i.Version, i.State, i.MDNSName, i.OwnerUserID, i.Scope, i.ServiceUID, i.ServiceGID, i.CreatedAt.Unix())
+		`INSERT INTO instances (id, manifest_id, name, slug, version, state, mdns_name, owner_user_id, scope, service_uid, service_gid, exposure, created_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		i.ID, i.ManifestID, i.Name, i.Slug, i.Version, i.State, i.MDNSName, i.OwnerUserID, i.Scope, i.ServiceUID, i.ServiceGID, i.Exposure, i.CreatedAt.Unix())
 	return err
 }
 
@@ -786,12 +814,30 @@ func (s *Store) SetInstancePendingRecreate(id string, pending bool) error {
 	return nil
 }
 
+// SetInstanceExposure flips an app's access gate between ExposurePublic and
+// ExposureRestricted (#306, the hosted per-app Only-me / Public toggle). Desired
+// state — the lifecycle re-applies the Caddy route from it. Rejects an
+// out-of-range value so the reconcile route builder can trust the column.
+func (s *Store) SetInstanceExposure(id, exposure string) error {
+	if exposure != ExposurePublic && exposure != ExposureRestricted {
+		return fmt.Errorf("invalid instance exposure %q", exposure)
+	}
+	res, err := s.db.Exec(`UPDATE instances SET exposure=? WHERE id=?`, exposure, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) Delete(id string) error {
 	_, err := s.db.Exec(`DELETE FROM instances WHERE id=?`, id)
 	return err
 }
 
-const instanceColumns = `id, manifest_id, name, slug, version, state, mdns_name, owner_user_id, scope, service_uid, service_gid, pending_recreate, created_at`
+const instanceColumns = `id, manifest_id, name, slug, version, state, mdns_name, owner_user_id, scope, service_uid, service_gid, pending_recreate, exposure, created_at`
 
 func (s *Store) Get(id string) (Instance, error) {
 	return scan(s.db.QueryRow(
@@ -1358,7 +1404,7 @@ type scanner interface{ Scan(dest ...any) error }
 func scan(row scanner) (Instance, error) {
 	var i Instance
 	var created, pendingRecreate int64
-	err := row.Scan(&i.ID, &i.ManifestID, &i.Name, &i.Slug, &i.Version, &i.State, &i.MDNSName, &i.OwnerUserID, &i.Scope, &i.ServiceUID, &i.ServiceGID, &pendingRecreate, &created)
+	err := row.Scan(&i.ID, &i.ManifestID, &i.Name, &i.Slug, &i.Version, &i.State, &i.MDNSName, &i.OwnerUserID, &i.Scope, &i.ServiceUID, &i.ServiceGID, &pendingRecreate, &i.Exposure, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Instance{}, ErrNotFound
 	}

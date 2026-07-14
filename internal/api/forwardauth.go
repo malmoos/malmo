@@ -11,10 +11,11 @@ import (
 )
 
 // forwardAuthVerifyPath is the internal endpoint the box Caddy's per-app
-// forward_auth handler calls (issue #305, wired by #306). Named once so the
-// public-allowlist entry (auth.go) and the route registration (api.go) can't
-// drift apart.
-const forwardAuthVerifyPath = "/_malmo/forward-auth/verify"
+// forward_auth handler calls (issue #305, wired by #306). Sourced from
+// profile.ForwardAuthVerifyPath — the one canonical string shared with the
+// lifecycle route builder — so the public-allowlist entry (auth.go), the route
+// registration (api.go), and the Caddy route (internal/lifecycle) can't drift.
+const forwardAuthVerifyPath = profile.ForwardAuthVerifyPath
 
 // forwardAuthVerify is the box side of the hosted per-app forward_auth
 // (issue #305). The box Caddy calls it on every request to a restricted app,
