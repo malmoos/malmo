@@ -1231,7 +1231,8 @@ export interface components {
              * @example https://example.com/schemas/InstanceDTO.json
              */
             readonly $schema?: string;
-            exposure: string;
+            /** @enum {string} */
+            exposure: "restricted" | "public";
             icon_glyph?: string;
             icon_url?: string;
             id: string;

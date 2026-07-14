@@ -873,6 +873,9 @@ components:
           readOnly: true
           type: string
         exposure:
+          enum:
+            - restricted
+            - public
           type: string
         icon_glyph:
           type: string

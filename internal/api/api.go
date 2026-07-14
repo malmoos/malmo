@@ -306,7 +306,7 @@ type InstanceDTO struct {
 	// the box forward-auth) or "public" (anonymous). Meaningful on hosted, where
 	// the dashboard shows the Only-me / Public toggle (#307); always "public" on
 	// the appliance, which has no public app subdomains.
-	Exposure  string `json:"exposure"`
+	Exposure  string `json:"exposure" enum:"restricted,public"`
 	IconURL   string `json:"icon_url,omitempty"`
 	IconGlyph string `json:"icon_glyph,omitempty"`
 	// Mail fields are detail-page enrichments set only by getApp (list
