@@ -40,7 +40,7 @@ Second box-side slice of the hosted per-app access-restriction epic (#304), clos
 - **Runtime shape unverified in this slice.** The `forward_auth` JSON is asserted structurally against the recording admin fake (matching the known-good Caddyfile expansion), but real Caddy behavior — the subrequest, the 401→login redirect, the strip actually keeping the cookie off the app — is #308's e2e + cookie-leak probe.
 - **Owner-only, single-user.** Inherited from #305: only the box owner's session validates. Multi-user is the additive step (# Deferred).
 - **Default flip precedes its e2e proof.** By choice (`DECISIONS.md`): #308 proves an already-shipped default.
-- **The authz-guard 403 isn't audited.** `setAppExposure` audits the `SetExposure` success/failure paths (elevation-class), but the owner-or-admin 403 from the shared `authorizeAppMutation` is not audited — a **pre-existing** gap shared with `stopApp`/`startApp` (only `uninstallApp` audits its inline household guard). Left as-is here to stay surgical; centralizing the audit inside `authorizeAppMutation` (benefiting all three callers) is the right follow-up rather than a local fix.
+- **The authz-guard 403 isn't audited.** `setAppExposure` audits the `SetExposure` success/failure paths (elevation-class), but the owner-or-admin 403 from the shared `authorizeAppMutation` is not audited — a **pre-existing** gap shared with `stopApp`/`startApp` (only `uninstallApp` audits its inline household guard). Left as-is here to stay surgical; centralizing the audit inside `authorizeAppMutation` (benefiting all three callers) is the right follow-up rather than a local fix. Tracked in **#328**.
 
 ## What's next
 
