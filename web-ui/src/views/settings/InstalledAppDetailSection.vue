@@ -13,8 +13,8 @@ import { useRoute, useRouter, RouterLink } from "vue-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/vue-query";
 import { AppWindow, ChevronDown } from "lucide-vue-next";
 import { SwitchRoot, SwitchThumb } from "reka-ui";
-import { api, waitForJob, type Instance, type CatalogDetail, type Job, type MailProviderOption, type AppSecrets, type AppSecret, type AppConfig, type AppConfigField } from "@/api";
-import { useAuth } from "@/auth";
+import { api, waitForJob, type Instance, type CatalogDetail, type Job, type MailProviderOption, type AppSecrets, type AppSecret, type AppConfig, type AppConfigField, type Exposure } from "@/api";
+import { useAuth, isHosted } from "@/auth";
 import AppLogs from "@/components/AppLogs.vue";
 
 const route = useRoute();
@@ -99,6 +99,22 @@ const uninstall = useMutation({
 const busy = computed(
   () => stop.isPending.value || start.isPending.value || uninstall.isPending.value,
 );
+
+// ── Access mode (#306/#307, ENVIRONMENT.md # Per-app owner-only access) ───────
+// Hosted-only per-app toggle between "Only me" (restricted — the box login gates
+// the app) and "Public" (anyone with the link). Gated to the hosted profile
+// (the endpoint 404s on the appliance, which has no public app subdomains) and to
+// canControl (owner-or-admin, the same gate the brain re-checks). The PUT echoes
+// the updated instance — invalidate refreshes the detail + list without a job.
+const exposure = computed<Exposure>(() => app.value?.exposure ?? "public");
+const exposureOptions: { value: Exposure; label: string }[] = [
+  { value: "restricted", label: "Only me" },
+  { value: "public", label: "Public" },
+];
+const setExposure = useMutation({
+  mutationFn: (next: Exposure) => api.put<Instance>(`/apps/${id.value}/exposure`, { exposure: next }),
+  onSettled: invalidate,
+});
 
 // ── Outgoing email (SERVICE_PROVISIONING.md # BYO outgoing mail) ─────────────
 // Shown only for mail-capable apps (mail_supported comes from GET /apps/{id}).
@@ -338,6 +354,40 @@ const saveConfig = useMutation({
       <p v-if="uninstall.isError.value" class="text-sm text-destructive">
         Couldn't uninstall: {{ (uninstall.error.value as Error)?.message }}
       </p>
+
+      <!-- Access mode — hosted-only Only-me / Public toggle. Hidden on the
+           appliance (no public app subdomains) and for viewers who can't control
+           the app. Switching re-writes the app's Caddy route via the brain. -->
+      <section v-if="isHosted() && canControl" class="space-y-2">
+        <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Access</h2>
+        <div class="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card px-4 py-3">
+          <div class="min-w-0 flex-1">
+            <div class="text-sm font-medium">Who can open this app</div>
+            <div class="text-xs text-muted-foreground">
+              {{ exposure === "public"
+                ? "Anyone with the link can open it."
+                : "Only you can open it — visitors sign in to your box first." }}
+            </div>
+          </div>
+          <div role="group" aria-label="Access mode" class="inline-flex shrink-0 rounded-lg border border-border p-0.5 text-sm">
+            <button
+              v-for="opt in exposureOptions"
+              :key="opt.value"
+              type="button"
+              class="rounded-md px-3 py-1 transition-colors"
+              :class="exposure === opt.value ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground'"
+              :aria-pressed="exposure === opt.value"
+              :disabled="setExposure.isPending.value || busy || opt.value === exposure"
+              @click="setExposure.mutate(opt.value)"
+            >
+              {{ opt.label }}
+            </button>
+          </div>
+        </div>
+        <p v-if="setExposure.isError.value" class="text-sm text-destructive">
+          Couldn't change access: {{ (setExposure.error.value as Error)?.message }}
+        </p>
+      </section>
 
       <!-- Outgoing email — provider binding for mail-capable apps. -->
       <section v-if="app.mail_supported && canControl" class="space-y-2">
