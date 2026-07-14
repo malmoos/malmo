@@ -522,6 +522,10 @@ access)
     status_of() { head -1 <<<"$1" | tr -d '\r'; }
     # Extract NAME=VALUE from the first Set-Cookie carrying NAME (drops attributes).
     cookie_val() { grep -i '^Set-Cookie:' <<<"$1" | grep -oE "$2=[^;[:space:]]+" | head -1; }
+    # The WHOLE raw Set-Cookie line for NAME, attributes included — cookie_val above
+    # deliberately drops them, but the Domain attribute is exactly what the two-cookie
+    # safety model rests on, so it has to be asserted, not just carried.
+    cookie_line() { grep -i '^Set-Cookie: *'"$2"'=' <<<"$1" | head -1 | tr -d '\r'; }
 
     # 1. portal-to-box SSO, driven ONCE (the jti is single-use — a retry replays and
     #    401s). Steps 7-9 already proved the control plane up + the verifier armed, so
@@ -536,6 +540,26 @@ access)
     [ -n "$session_cookie" ] || fail "access: no malmo_session cookie from the SSO landing"
     [ -n "$fa_cookie" ] || fail "access: no malmo_forward_auth cookie from the SSO landing"
     echo "cloud-assertions: SSO owner session established (session + forward-auth cookies minted; box_id=$box_id)"
+
+    # 1a. THE TWO-COOKIE SAFETY MODEL, asserted on the wire (#304's headline claim).
+    #     The whole design rests on the two cookies having DIFFERENT scopes, and until
+    #     now that was only ever asserted structurally in unit tests — this lane
+    #     captured the real Set-Cookie headers and then looked only at their values.
+    #     Assert the attributes:
+    #       - malmo_session carries NO Domain ⇒ host-only, scoped to the dashboard host
+    #         alone. A Domain here would send the ADMIN session to every app subdomain,
+    #         where a third-party app could replay it as the owner. This is the single
+    #         most dangerous regression in the whole epic and it is one attribute wide.
+    #       - malmo_forward_auth carries Domain=<box-id>.malmo.network ⇒ deliberately
+    #         domain-wide, which is what lets the browser present it to an app subdomain
+    #         (and is why the app route must strip it — probed below).
+    sess_line="$(cookie_line "$sso_resp" malmo_session)"
+    fa_line="$(cookie_line "$sso_resp" malmo_forward_auth)"
+    grep -qiE 'Domain=' <<<"$sess_line" \
+        && fail "access: SESSION COOKIE IS DOMAIN-SCOPED — the dashboard session must be host-only or an app subdomain receives it and can replay it as the owner: $sess_line"
+    grep -qiE "Domain=\.?${apex}(;|$)" <<<"$fa_line" \
+        || fail "access: forward-auth cookie is not Domain-scoped to the box apex (${apex}); the browser would never present it to an app subdomain: $fa_line"
+    echo "cloud-assertions: cookie scopes correct on the wire (malmo_session host-only, malmo_forward_auth Domain=${apex})"
 
     # 2. install whoami air-gapped: offline mode trusts the catalog-promised digest of
     #    the docker-loaded image (no pull). 202 starts the async install job.
