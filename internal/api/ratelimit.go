@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/malmoos/malmo/internal/auth"
+	"github.com/malmoos/malmo/internal/profile"
 )
 
 // Request-rate throttling (BRAIN_UI_PROTOCOL.md # Rate limiting & abuse). Two
@@ -125,6 +126,35 @@ func newRateLimiter(now func() time.Time) *rateLimiter {
 	}
 }
 
+// forwardAuthExempt reports whether r is a hosted forward-auth verify request
+// that carries a *well-formed* forward-auth token, and may therefore skip the
+// per-IP request-rate bucket (#305).
+//
+// The exemption exists because the box Caddy calls verify on a forward_auth
+// subrequest for every asset of a restricted app, so the 30/min/IP allowlist
+// bucket would throttle legitimate app traffic. It is deliberately NOT a blanket
+// path exemption: a request with no cookie, or with a cookie that cannot be a
+// token we minted, is exactly the traffic a bucket should bound, and it stays on
+// the normal per-IP plane. A well-formed token is the only thing that reaches the
+// store's reverse lookup (auth.ValidateForwardAuth shape-checks first), so the
+// unthrottled path can no longer be used to drive anonymous DB load through the
+// brain's single SQLite connection.
+//
+// Keying a bucket on the client IP instead would not hold this line: for a verify
+// subrequest the IP the brain sees is either Caddy's own (one bucket for every
+// legitimate user of the box) or the first X-Forwarded-For hop, which is
+// caller-supplied since Caddy runs without trusted_proxies — a spoofable key
+// gives an attacker a fresh bucket per forged IP. The syntax gate, not the
+// bucket, is what protects the store here.
+//
+// Hosted-scoped: on the appliance the handler always 404s, so it keeps the
+// normal throttle rather than widening the unthrottled surface for no benefit.
+func (s *Server) forwardAuthExempt(r *http.Request) bool {
+	return s.profile == profile.Hosted &&
+		r.URL.Path == forwardAuthVerifyPath &&
+		auth.WellFormedToken(auth.ForwardAuthTokenFromRequest(r))
+}
+
 // rateLimit is the middleware that enforces the two request-rate planes. It sits
 // after authMiddleware (so identity is resolved) but before the mux, so it keys
 // on the session token for authenticated requests and falls back to client IP on
@@ -132,7 +162,7 @@ func newRateLimiter(now func() time.Time) *rateLimiter {
 // governed by the per-session stream cap, not the request-rate bucket.
 func (s *Server) rateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isStreaming(r) {
+		if isStreaming(r) || s.forwardAuthExempt(r) {
 			next.ServeHTTP(w, r)
 			return
 		}

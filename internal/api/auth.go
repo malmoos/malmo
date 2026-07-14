@@ -35,6 +35,11 @@ var publicPaths = map[string]bool{
 	// credential, so the box has no session to check here — it mints one
 	// (sso.go). Hosted-only at the handler; public to the middleware.
 	"/_malmo/sso": true,
+	// The hosted per-app forward-auth verify endpoint (#305): the box Caddy calls
+	// it with the app request's forward-auth cookie, not a dashboard session, so
+	// the admin-session middleware must let it through — it does its own
+	// forward-auth validation (forwardauth.go). Hosted-only at the handler.
+	forwardAuthVerifyPath: true,
 	// huma exposes these by default; leave them public so curl/devtools work.
 	"/openapi.json": true,
 	"/openapi.yaml": true,
@@ -394,7 +399,7 @@ func (s *Server) login(ctx context.Context, in *struct {
 		Password string `json:"password"`
 	}
 }) (*struct {
-	SetCookie string `header:"Set-Cookie"`
+	SetCookie []string `header:"Set-Cookie"`
 	Body      struct {
 		User UserDTO `json:"user"`
 	}
@@ -445,17 +450,36 @@ func (s *Server) login(ctx context.Context, in *struct {
 		return nil, huma.Error500InternalServerError("issue session", err)
 	}
 
+	// Hosted: mint the Domain-scoped forward-auth cookie so a later click-through
+	// to a restricted app carries a valid credential with no second login (issue
+	// #305). Done before the success audit — mirroring ssoLanding — so a store
+	// failure here 500s cleanly without recording a login.success for a request
+	// the client saw fail (huma discards the response headers on an error return,
+	// so no cookie reaches the browser either). Appliance issues only the
+	// host-only session cookie, so its login response stays byte-for-byte unchanged.
+	var faCookie string
+	if s.profile == profile.Hosted {
+		c, ferr := s.auth.IssueForwardAuth(sess.Token)
+		if ferr != nil {
+			return nil, huma.Error500InternalServerError("issue forward-auth cookie", ferr)
+		}
+		faCookie = c.String()
+	}
+
 	// Attach identity to ctx so the audit row carries the actor.
 	idCtx := auth.WithIdentity(ctx, auth.Identity{User: u, Session: sess})
 	s.auditor.Record(idCtx, audit.ActionLoginSuccess, audit.Target{Kind: "user", ID: u.ID}, nil, true)
 
 	out := &struct {
-		SetCookie string `header:"Set-Cookie"`
+		SetCookie []string `header:"Set-Cookie"`
 		Body      struct {
 			User UserDTO `json:"user"`
 		}
 	}{}
-	out.SetCookie = s.auth.Cookie(sess.Token).String()
+	out.SetCookie = []string{s.auth.Cookie(sess.Token).String()}
+	if faCookie != "" {
+		out.SetCookie = append(out.SetCookie, faCookie)
+	}
 	out.Body.User, err = s.fullUserDTO(u)
 	if err != nil {
 		return nil, huma.Error500InternalServerError("user count")
@@ -570,16 +594,23 @@ func (s *Server) recover(ctx context.Context, in *struct {
 // logout revokes the cookie-bound session if any. Idempotent: hitting it
 // without a session, or twice, both return 200 with a Clear-Cookie header.
 func (s *Server) logout(ctx context.Context, _ *struct{}) (*struct {
-	SetCookie string `header:"Set-Cookie"`
+	SetCookie []string `header:"Set-Cookie"`
 }, error) {
 	if id, ok := auth.FromContext(ctx); ok {
 		_ = s.auth.Revoke(id.Session.Token)
 		s.auditor.Record(ctx, audit.ActionLogout, audit.Target{Kind: "user", ID: id.User.ID}, nil, true)
 	}
 	out := &struct {
-		SetCookie string `header:"Set-Cookie"`
+		SetCookie []string `header:"Set-Cookie"`
 	}{}
-	out.SetCookie = s.auth.ClearCookie().String()
+	out.SetCookie = []string{s.auth.ClearCookie().String()}
+	// Hosted: also clear the Domain-scoped forward-auth cookie (issue #305). Revoke
+	// above already deleted the session row (and with it the fa_token), so the
+	// cookie is dead server-side; this tells the browser to discard it too.
+	// Appliance never set one, so its logout response is unchanged.
+	if s.profile == profile.Hosted {
+		out.SetCookie = append(out.SetCookie, s.auth.ClearForwardAuthCookie().String())
+	}
 	return out, nil
 }
 

@@ -490,6 +490,45 @@ func TestSessionCRUD(t *testing.T) {
 	}
 }
 
+// The hosted forward-auth token (issue #305) is stamped on the session row and
+// resolved back through a reverse lookup that must never match the empty-string
+// default every non-hosted session carries.
+func TestSessionForwardAuthToken(t *testing.T) {
+	s := open(t)
+	if err := s.CreateUser(sampleUser("u1", "andrei", RoleAdmin)); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	now := time.Unix(1_700_000_100, 0)
+	if err := s.CreateSession(Session{Token: "tok-1", UserID: "u1", CreatedAt: now, LastSeenAt: now}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	// A fresh session carries no forward-auth token, and the empty lookup must not
+	// resolve it (the '' default must never be matchable).
+	if _, err := s.GetSessionByForwardAuthToken(""); err != ErrNotFound {
+		t.Fatalf("empty fa_token lookup = %v, want ErrNotFound", err)
+	}
+	if _, err := s.GetSessionByForwardAuthToken("fa-1"); err != ErrNotFound {
+		t.Fatalf("unstamped fa_token lookup = %v, want ErrNotFound", err)
+	}
+
+	if err := s.SetSessionForwardAuthToken("tok-1", "fa-1"); err != nil {
+		t.Fatalf("SetSessionForwardAuthToken: %v", err)
+	}
+	got, err := s.GetSessionByForwardAuthToken("fa-1")
+	if err != nil || got.Token != "tok-1" || got.UserID != "u1" {
+		t.Fatalf("GetSessionByForwardAuthToken = %+v, %v", got, err)
+	}
+
+	// Deleting the session drops the token with it.
+	if err := s.DeleteSession("tok-1"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if _, err := s.GetSessionByForwardAuthToken("fa-1"); err != ErrNotFound {
+		t.Fatalf("fa_token after DeleteSession = %v, want ErrNotFound", err)
+	}
+}
+
 func TestDeleteUserCascadesSessions(t *testing.T) {
 	s := open(t)
 	if err := s.CreateUser(sampleUser("u1", "andrei", RoleAdmin)); err != nil {
