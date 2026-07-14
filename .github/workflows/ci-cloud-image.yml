@@ -105,6 +105,16 @@ jobs:
       - name: mkosi sandbox smoke (validates the userns fix in isolation)
         run: mkosi sandbox -- true
 
+      # Absolute path to the runner's go, for the access boot's host-side assertion
+      # mint (see the boot-test step). Resolved as a step output so a runner image
+      # that moves go doesn't silently fall back to the script's guesses.
+      - name: Resolve go (for the access boot's assertion mint)
+        id: go
+        run: |
+          go_bin="$(command -v go)"
+          echo "go-bin=${go_bin}" >> "$GITHUB_OUTPUT"
+          echo "go: ${go_bin} ($("$go_bin" version))"
+
       # 1. Build the production image that will be published. A fresh checkout has
       #    no .dev/ cache, so make rebuilds the control-plane images (brain/ui)
       #    from source — this is what removes the stale-cached-brain failure mode.
@@ -116,18 +126,35 @@ jobs:
       #    brain that rejects the live seed fails here -> nothing is published. The
       #    test image reuses the control-plane bundle built in step 1, so it
       #    exercises the same brain that ships.
-      # Scope to unseeded + seeded + bios: unseeded+seeded guard the regression
-      # this gate exists for (the built image's brain accepting the current seed
-      # schema); bios (#277) re-boots the same image under legacy BIOS (SeaBIOS)
-      # and must pass before publish — a box landed on a Hetzner CX (Intel) type
-      # is unbootable otherwise, and the OVMF-only lane can't catch it. The
-      # frozen-identity boot is orthogonal (it checks a re-delivered seed is
-      # ignored on a later boot) and has shown a flaky false "re-ingested"
-      # verdict whose root cause is still open, so it is left to the full local
-      # run (MALMO_CLOUD_BOOTS default = all) rather than blocking publish.
-      - name: Seeded-boot test (brain accepts the current seed schema; boots BIOS + UEFI)
+      # Scope to unseeded + seeded + bios + access — four boots, each guarding a
+      # regression that must never reach publish:
+      #   - unseeded + seeded: the regression this gate was built for — the built
+      #     image's brain accepting the current seed schema.
+      #   - bios (#277): re-boots the same image under legacy BIOS (SeaBIOS). A box
+      #     landed on a Hetzner CX (Intel) type is unbootable otherwise, and the
+      #     OVMF-only lane cannot catch it.
+      #   - access (#308): the ONLY real-Caddy proof of the hosted per-app
+      #     forward-auth gate + whole-Cookie-header strip (#305/#306) — a gate that is
+      #     ON BY DEFAULT for every hosted app (docs/specs/DECISIONS.md 2026-07-08
+      #     flipped the default to `restricted` ahead of this proof). A security
+      #     invariant whose only net runs when a developer remembers to run it by hand
+      #     is not a net, so a box that leaks its forward-auth cookie to an app
+      #     upstream must fail HERE and never publish.
+      #
+      # The frozen-identity boot stays out: it is orthogonal (it checks a re-delivered
+      # seed is ignored on a later boot) and has shown a flaky false "re-ingested"
+      # verdict whose root cause is still open, so it is left to the full local run
+      # (MALMO_CLOUD_BOOTS default = all) rather than blocking publish.
+      #
+      # GO: the access boot mints its test-portal owner assertion on the HOST
+      # (dev/cloud/mkassertion — the private key never enters the VM). The lane runs
+      # under `sudo -E`, and sudo's secure_path resets PATH, so `go` on the runner's
+      # PATH is invisible to the script; pass it explicitly (run-cloud-tests.sh
+      # honours ${GO:-}, and -E preserves it).
+      - name: Boot test (seed schema + BIOS/UEFI + per-app access modes through real Caddy)
         env:
-          MALMO_CLOUD_BOOTS: "unseeded seeded bios"
+          MALMO_CLOUD_BOOTS: "unseeded seeded bios access"
+          GO: ${{ steps.go.outputs.go-bin }}
         run: make test-cloud-qemu
 
       # ---- publish to Hetzner (only when requested) --------------------------

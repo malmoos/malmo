@@ -62,21 +62,33 @@ VERDICT=""
 # ignored, so /login still reports A.
 BOX_ID_A=cindy-fox
 BOX_ID_B=rusty-hawk
+# The access boot (#308) provisions its OWN box on a fresh overlay, seeded with a
+# test-portal key so it can mint a real owner session — separate identity from A/B.
+BOX_ID_ACCESS=owl-harbor
 
-# Which boots to run, space-separated (unseeded seeded frozen bios). Default: all.
+# Which boots to run, space-separated (unseeded seeded frozen bios access).
+# Default: all.
 # A subset lets a caller run only the boots it needs — notably the cloud-image
-# publish gate, which runs "unseeded seeded" to prove the built image's brain
-# accepts the current seed schema (the regression that gate exists for) and
+# publish gate, which runs "unseeded seeded bios access" to prove the built image's
+# brain accepts the current seed schema (the regression that gate exists for) and
 # leaves out the frozen-identity boot. Frozen is orthogonal to that gate (it
 # checks that a re-delivered seed is IGNORED on a later boot) and has shown a
 # flaky false "re-ingested" verdict in CI whose root cause is still open — so
 # it is kept in the default full run (where it can be triaged) but out of the
 # publish gate. Order still holds: frozen reuses the overlay seeded leaves
-# behind, so run seeded whenever frozen runs. The `bios` boot (#277) is the odd
-# one out: it re-boots the image under legacy BIOS (SeaBIOS) instead of UEFI on its
-# OWN fresh overlay, so it has no ordering dependency and the publish gate includes
-# it directly (see ci-cloud-image.yml).
-BOOTS="${MALMO_CLOUD_BOOTS:-unseeded seeded frozen bios}"
+# behind, so run seeded whenever frozen runs.
+#
+# Two boots stand outside that ordering, each on its OWN fresh overlay:
+#   - `bios` (#277) re-boots the image under legacy BIOS (SeaBIOS) instead of UEFI,
+#     so providers that only do legacy BIOS are covered; no ordering dependency, and
+#     the publish gate includes it directly.
+#   - `access` (#308) proves the per-app forward-auth access modes end-to-end
+#     (restricted gate, owner proxy-through, public, whole-Cookie-header strip). It
+#     is ALSO in the publish gate: the gate it proves is on by default for every
+#     hosted app (DECISIONS.md 2026-07-08), and this is its only real-Caddy net, so a
+#     box that leaks its forward-auth cookie to an app upstream must fail publish.
+# Both are in the gate — see ci-cloud-image.yml.
+BOOTS="${MALMO_CLOUD_BOOTS:-unseeded seeded frozen bios access}"
 should_run() { case " $BOOTS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 # QEMU writes serial logs as root (this script runs under sudo). Resolve the
@@ -156,12 +168,15 @@ fi
 ACCEL=tcg
 if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then ACCEL=kvm; fi
 
-# Build a compact seed JSON for a box-id and base64-encode it for an SMBIOS binary
-# credential. Two parts mirror a real cloud seed:
-#   - assertion_verification_key: a random 32-byte value (standard base64, the wire
-#     shape of a real portal Ed25519 public key) so the box loads its SSO verifier;
-#     this lane has no matching private key, so it only exercises the verifier's
-#     rejection path (a real portal assertion is the cloud on-ramp's job).
+# Build a compact seed JSON for a box-id + a given verification key, and base64-
+# encode it for an SMBIOS binary credential. Two parts mirror a real cloud seed:
+#   - assertion_verification_key: a standard-base64 32-byte Ed25519 public key — the
+#     wire shape of a real portal key — so the box loads its SSO verifier. The
+#     unseeded/seeded/frozen boots pass a RANDOM value (no matching private key ⇒
+#     only the verifier's rejection path runs); the access boot passes a real
+#     TEST-PORTAL public key whose private half the harness holds (dev/cloud/
+#     mkassertion), so a valid owner assertion verifies and the positive session
+#     path runs.
 #   - enrollment: a COMPLETE acme-dns credential block, so the brain runs its
 #     wildcard-TLS pass (cmd/brain EnsureWildcardTLS) — configures Caddy's acme-dns
 #     DNS-01 issuer for "*.<box-id>.malmo.network" and binds :443. The values are
@@ -171,12 +186,39 @@ if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then ACCEL=kvm; fi
 #     A seed with no enrollment (the prior shape) skipped that pass entirely, which
 #     is exactly why CI never caught a hosted box failing to bind :443.
 # Prints `io.systemd.credential.binary:malmo.seed=<base64>`.
-seed_cred() { # box_id -> SMBIOS value string
-    local box_id="$1" key json
-    key="$(head -c 32 /dev/urandom | base64 -w0)"
+seed_cred_keyed() { # box_id key_b64 -> SMBIOS value string
+    local box_id="$1" key="$2" json
     json="$(printf '{"box_id":"%s","assertion_verification_key":"%s","enrollment":{"subdomain":"%s","username":"%s","password":"%s"}}' \
         "$box_id" "$key" "cloud-lane-acmedns-subdomain" "cloud-lane-acmedns-user" "cloud-lane-acmedns-pass")"
     printf 'io.systemd.credential.binary:malmo.seed=%s' "$(printf '%s' "$json" | base64 -w0)"
+}
+# The unkeyed boots: a random 32-byte key (this box holds no matching private key).
+seed_cred() { seed_cred_keyed "$1" "$(head -c 32 /dev/urandom | base64 -w0)"; }
+
+# Resolve go for the access boot's assertion mint. Sudo strips PATH, so a caller's
+# pipx/asdf-style go under ~/.local may be invisible; fall back to common locations.
+# Only the access boot needs it — resolution failure is surfaced there, not here.
+GO="${GO:-$(command -v go 2>/dev/null || true)}"
+if [ -z "$GO" ] && [ -n "$CALLER" ]; then
+    CALLER_HOME="$(getent passwd "$CALLER" | cut -d: -f6 2>/dev/null || true)"
+    for cand in "${CALLER_HOME}/.local/go/bin/go" /usr/local/go/bin/go; do
+        [ -x "$cand" ] && { GO="$cand"; break; }
+    done
+fi
+
+# Mint the access boot's test-portal keypair + a valid owner assertion. Prints two
+# lines — the seed public key, then the signed token (dev/cloud/mkassertion). Runs as
+# the invoking caller under sudo so it uses their warm Go build cache (root's is cold
+# and offline-hostile); the private key stays on the host — only the public key (into
+# the seed) and the signed token (into the VM) cross into the box, exactly as a real
+# portal would hand them over.
+mint_owner_assertion() { # box_id -> "<pubkey_b64>\n<token>"
+    if [ -n "$CALLER" ]; then
+        sudo -u "$CALLER" env "HOME=$(getent passwd "$CALLER" | cut -d: -f6)" \
+            "$GO" -C "$REPO_ROOT" run ./dev/cloud/mkassertion -box "$1"
+    else
+        "$GO" -C "$REPO_ROOT" run ./dev/cloud/mkassertion -box "$1"
+    fi
 }
 
 # Boot the overlay once and run one scenario of in-VM assertions. The assert mode
@@ -227,9 +269,13 @@ run_boot() {
     # polls the stack up internally. 480s (not 360): the in-VM assertion widened its
     # flush-lag-tolerant log waits, so this outer budget must exceed the sum of the
     # guest's internal polls — otherwise a slow TCG boot times out here as a false
-    # "no verdict" before the guest can emit PASS/FAIL.
+    # "no verdict" before the guest can emit PASS/FAIL. VERDICT_TIMEOUT lets a boot
+    # that does MORE in-guest work raise it: the access boot adds SSO + an app install
+    # + the exposure toggle on top of the shared prechecks, so its worst-case internal
+    # poll sum is ~180s higher and it runs with a wider ceiling.
+    local timeout="${VERDICT_TIMEOUT:-480}"
     local v=""
-    for _i in $(seq 1 480); do
+    for _i in $(seq 1 "$timeout"); do
         if grep -q 'MALMO_CLOUD_ASSERTIONS:' "$QEMU_SERIAL" 2>/dev/null; then
             v="$(grep -o 'MALMO_CLOUD_ASSERTIONS:.*' "$QEMU_SERIAL" | tail -1 | tr -d '\r')"
             break
@@ -244,7 +290,7 @@ run_boot() {
     done
     VERDICT="$v"
     if [ -z "$v" ]; then
-        echo "no verdict on the serial console after 480s (phase=${phase}). serial:" >&2
+        echo "no verdict on the serial console after ${timeout}s (phase=${phase}). serial:" >&2
         dump_serial
         kill_qemu
         VERDICT="FAIL: no verdict (phase ${phase}, timeout)"
@@ -327,6 +373,50 @@ if ! run_boot "bios" "unseeded"; then
     exit 1
 fi
 echo "boot 4 OK — image boots under legacy BIOS (SeaBIOS), control plane up"
+fi
+
+# --- 8. access boot: per-app forward-auth access modes end-to-end (#308). Its OWN
+# fresh overlay + box-id, seeded with a TEST-PORTAL key so the box can mint a real
+# owner session (the positive path the box-only SSO gate above can't reach). The
+# harness holds the matching private key and mints a valid owner assertion, delivered
+# over a second credential (malmo.sso_token); the in-VM cloud-assertions.sh drives
+# SSO → installs whoami air-gapped → proves the restricted gate (302 without a
+# session, proxied-through WITH the owner's forward-auth cookie), the public toggle
+# (reachable with no session), and the Cookie-strip invariant (the app upstream never
+# receives the cookie) in both modes.
+if should_run access; then
+    [ -n "$GO" ] && [ -x "$GO" ] || {
+        echo "access boot needs go to mint the owner assertion; none found (\$GO='${GO:-}')" >&2
+        exit 1
+    }
+    mapfile -t access_mint < <(mint_owner_assertion "$BOX_ID_ACCESS") || true
+    ACCESS_KEY="${access_mint[0]:-}"
+    ACCESS_TOKEN="${access_mint[1]:-}"
+    [ -n "$ACCESS_KEY" ] && [ -n "$ACCESS_TOKEN" ] || {
+        echo "access boot: failed to mint the owner assertion (go run ./dev/cloud/mkassertion)" >&2
+        exit 1
+    }
+
+    # Fresh overlay: this box provisions with the test-portal key from its first boot,
+    # independent of the A/B identity the shared overlay carries. OVERLAY and FIRMWARE
+    # are run_boot's globals, and the bios boot above leaves them pointing at ITS
+    # overlay under SeaBIOS — so set both explicitly here rather than inheriting them.
+    ACCESS_OVERLAY="${RUN_DIR}/overlay-access.qcow2"
+    qemu-img create -f qcow2 -b "$QCOW2" -F qcow2 "$ACCESS_OVERLAY" >/dev/null
+    OVERLAY="$ACCESS_OVERLAY"
+    FIRMWARE=uefi
+
+    # Wider outer ceiling: the access scenario's in-guest work (SSO + app install +
+    # exposure toggle) adds ~180s of worst-case internal poll time over the shared
+    # prechecks, which alone can approach the 480s default under CI's TCG-only QEMU.
+    VERDICT_TIMEOUT=720
+    if ! run_boot "access" "access" \
+        -smbios "type=11,value=$(seed_cred_keyed "$BOX_ID_ACCESS" "$ACCESS_KEY")" \
+        -smbios "type=11,value=io.systemd.credential.binary:malmo.sso_token=$(printf '%s' "$ACCESS_TOKEN" | base64 -w0)"; then
+        echo "cloud gate proof: ${VERDICT}" >&2
+        exit 1
+    fi
+    echo "boot access OK — per-app forward-auth access modes verified end-to-end (restricted gate + owner proxy-through, public, Cookie strip), box_id=${BOX_ID_ACCESS}"
 fi
 
 echo "cloud end-to-end: PASS (boots: ${BOOTS})"
