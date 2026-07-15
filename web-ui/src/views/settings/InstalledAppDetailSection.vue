@@ -250,7 +250,7 @@ const saveConfig = useMutation({
 </script>
 
 <template>
-  <div class="flex h-full flex-col gap-8 pt-2">
+  <div class="flex flex-1 flex-col gap-8 pt-2">
     <RouterLink to="/settings/apps" class="inline-block text-sm text-muted-foreground hover:text-foreground">
       ← Installed apps
     </RouterLink>
@@ -564,11 +564,7 @@ const saveConfig = useMutation({
       <!-- Logs — collapsed by default; a full-width accordion row (styled like
            the Installed apps list rows) that expands the log panel on click. The
            chevron at the end rotates to signal expansion. -->
-      <section
-        v-if="canControl"
-        class="flex flex-col gap-2"
-        :class="{ 'min-h-0 flex-1': logsOpen }"
-      >
+      <section v-if="canControl" class="flex flex-col gap-2">
         <button
           type="button"
           class="flex w-full shrink-0 items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 text-sm hover:bg-muted"
@@ -578,7 +574,12 @@ const saveConfig = useMutation({
           <span class="font-medium">Logs</span>
           <ChevronDown class="size-4 shrink-0 text-muted-foreground transition-transform" :class="{ 'rotate-180': logsOpen }" />
         </button>
-        <AppLogs v-if="logsOpen" :id="app.id" fill class="min-h-0 flex-1" />
+        <!-- Bounded scroll box (not a viewport-fill): at least 400px so there is
+             always readable output, capped at 70vh so it stays in normal page
+             flow. The page scrolls around it and the AppShell spacer clears the
+             dock — a flex-1 fill would instead pin it to the viewport and, on a
+             short screen, overflow its last rows behind the dock. -->
+        <AppLogs v-if="logsOpen" :id="app.id" fill class="min-h-[400px] max-h-[70vh]" />
       </section>
     </template>
   </div>

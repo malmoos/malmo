@@ -22,11 +22,9 @@ useEvents();
     <HealthBanner />
     <!-- The content wrapper is min-h-full (fills the viewport when short, grows
          with content when long) rather than a fixed h-full box — a fixed box lets
-         tall pages overflow *past* the scroll container's padding, so the fixed
-         dock would cover the last rows. pb-28 rides on the wrapper so the clearance
-         is measured from the bottom of the content, guaranteeing the last row
-         clears the dock on pages of any length. flex-col so a full-height section
-         (Settings' logs pane) can still flex-1 to fill.
+         tall pages overflow *past* the scroll clearance, so the fixed dock would
+         cover the last rows. flex-col so a full-height section (Settings' logs
+         pane) can still flex-1 to fill.
          `main` itself must be flex/flex-col (not just a flex *item* of the shell)
          so the wrapper below is a genuine flex item of it — only then does the
          wrapper's resolved height count as "definite" for percentage/flex-basis
@@ -38,8 +36,15 @@ useEvents();
          under max-w-6xl/mx-auto, since a flex item with auto margins on the cross
          axis opts out of the default stretch sizing. -->
     <main class="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pt-2">
-      <div class="mx-auto flex w-full min-h-full max-w-6xl flex-1 flex-col pb-28">
+      <div class="mx-auto flex w-full min-h-full max-w-6xl flex-1 flex-col">
         <RouterView />
+        <!-- Dock clearance. This MUST be a real flex child, not padding on the
+             wrapper: a flex + overflow-y-auto scroll container drops trailing
+             padding-bottom from its scrollable height (verified in Chrome), so a
+             pb-* here leaves the last rows stranded behind the fixed dock. A
+             shrink-0 spacer is counted in scrollHeight, so any page can always
+             scroll its last row clear of the dock. -->
+        <div class="h-28 shrink-0" aria-hidden="true"></div>
       </div>
     </main>
     <Dock />
