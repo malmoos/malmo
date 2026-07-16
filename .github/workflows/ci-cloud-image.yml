@@ -89,18 +89,27 @@ jobs:
     name: Build + seeded-boot test + publish hosted cloud image
     # Single source of truth for "should this run publish", computed once so
     # the 3 publish-gated steps below can't drift out of sync with each other.
-    # A tag push always publishes (that's the point of tagging a release); a
-    # workflow_dispatch OR workflow_call run publishes iff its `publish` input
-    # says so. On a `push` event `inputs.publish` is undefined, which is why
-    # the tag-push half of the OR is needed — `inputs.publish` alone would
+    # A real tag push always publishes (that's the point of tagging a release);
+    # a workflow_dispatch OR workflow_call run publishes iff its `publish`
+    # input says so. On a `push` event `inputs.publish` is undefined, which is
+    # why the tag-push half of the OR is needed — `inputs.publish` alone would
     # evaluate falsy and silently skip publishing on every tagged release.
     # `workflow_call` and `workflow_dispatch` both populate the SAME `inputs`
     # context under the same input name (`publish`), so `release.yml` calling
-    # this workflow with `publish: true` flows through here identically to a
-    # human running `workflow_dispatch` with `publish=true` — no extra branch
-    # needed for the call path.
+    # this workflow with `publish: true` flows through the `inputs.publish`
+    # half identically to a human running `workflow_dispatch publish=true`.
+    #
+    # `startsWith(github.ref, 'refs/tags/')` is LOAD-BEARING, not
+    # belt-and-braces. In a reusable workflow the `github` context is the
+    # CALLER's, not this workflow's: when release.yml (triggered by
+    # `push: branches: [main]`) calls us, github.event_name here is `push` and
+    # github.ref is `refs/heads/main`. Keyed on event_name alone this would
+    # collapse to "any call from a push-triggered workflow publishes",
+    # ignoring `publish` entirely — a future caller passing publish=false
+    # would publish anyway. Keyed on the ref, the only path that publishes
+    # without an explicit input is a genuine tag push.
     env:
-      SHOULD_PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+      SHOULD_PUBLISH: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || inputs.publish }}
     # Pin 24.04 explicitly: this is the exact environment that reproduces the
     # mkosi-sandbox EPERM (#189), so the fix has to be proven here, not on a
     # floating ubuntu-latest.
@@ -118,15 +127,22 @@ jobs:
       # one version (BUILD.md # Versioning, DECISIONS.md 2026-07-16); a `v*`
       # tag push is only a real release if it matches. workflow_dispatch has no
       # tag (github.ref_name is the branch/ref it ran against), so this only
-      # runs — and only can fail — on the `push: tags: v*` trigger. Skipped on
-      # `workflow_call` too, deliberately: `release.yml` computed `want` from
-      # VERSION itself and only calls this workflow after the tag it pushed
-      # already equals that value, and github.ref_name in a called workflow is
-      # the caller's branch ref (`main`), not a tag, so there is nothing to
-      # assert here on that path — the equivalent check already happened
-      # upstream in `release.yml`.
+      # runs — and only can fail — on a genuine `push: tags: v*` trigger.
+      #
+      # Both halves of the condition are required. In a reusable workflow the
+      # `github` context is the CALLER's: when release.yml (triggered by
+      # `push: branches: [main]`) calls us, github.event_name here is `push`
+      # — NOT `workflow_call` — and github.ref is `refs/heads/main`. Gating on
+      # event_name alone would therefore run this step on the auto-release
+      # path and compare `main` against `v<VERSION>`, failing EVERY
+      # auto-release immediately after release.yml had already pushed the tag
+      # and cut the GitHub Release — a tagged release with no image. Keying on
+      # the ref being an actual tag is what separates a real tag push from a
+      # call made on a branch. On the call path there is nothing to assert
+      # anyway: release.yml derives the tag from VERSION itself, so they are
+      # equal by construction.
       - name: Assert the pushed tag matches VERSION
-        if: ${{ github.event_name == 'push' }}
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
         run: |
           set -euo pipefail
           want="v$(cat VERSION)"
