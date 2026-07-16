@@ -160,6 +160,25 @@ grow_state="$(systemctl is-active malmo-grow-root.service 2>&1 || true)"
 [ "$grow_state" = active ] || fail "malmo-grow-root.service did not complete successfully (state=$grow_state): $(journalctl -u malmo-grow-root.service -b --no-pager 2>/dev/null | tail -10)"
 echo "cloud-assertions: root-grow unit ok (state=$grow_state; systemd-repart + systemd-growfs present and wired — this lane cannot prove real growth, only that both steps ran)"
 
+# --- 1c. the baked host-agent carries a real build stamp (BUILD.md # Versioning:
+# "every build stamps two fields"). An unstamped build reports internal/version's
+# "dev" default; the brain's minimumAgentVersion check hands that to semver, an
+# unparseable core sorts before every valid version, and the box raises
+# version-mismatch — blocking app installs on a box that is otherwise perfectly
+# healthy. v0.4.0 shipped exactly that: stage-control-plane.sh built the agent
+# without the Makefile's -ldflags, so the image's agent reported "dev".
+#
+# This has to be asserted on a BUILT IMAGE, which makes this lane the only place
+# it can be caught. No unit test can: the stamp is applied by the build command,
+# so a `go test` binary is unstamped by construction and asserting anything about
+# version.Version in one only ever pins the default. The release workflow's
+# tag-vs-VERSION assert doesn't reach it either — it checks the file, not what
+# landed in the binary.
+ha_version="$(/usr/lib/malmo/host-agent-real --version 2>&1 || true)"
+grep -qE '^malmo [0-9]+\.[0-9]+\.[0-9]+ ' <<<"$ha_version" || \
+    fail "baked host-agent is not version-stamped: --version reports '$ha_version' (want 'malmo X.Y.Z (g<sha>)'; an unstamped 'dev' build raises version-mismatch and blocks app installs on a healthy box)"
+echo "cloud-assertions: host-agent build stamp ok ($ha_version)"
+
 # --- 2. PSI is live (BUILD.md # 1 — psi=1 on the cmdline). Without it the
 # ram-pressure health detector silently reads zeros; a boot test must catch that.
 # NB: read the CONTENT — /proc/pressure/memory reports st_size=0 like most proc
