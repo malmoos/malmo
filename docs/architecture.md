@@ -92,6 +92,7 @@ are stated below.
 | `assertion` | Verifies the portal's short-lived Ed25519 ownership assertion for the hosted portal-to-box SSO handshake (`Verify`: signature + expiry; box-id/issuer/replay are the handler's policy). Minimal signed token, not a JWT. Mirrors the cloud signer's wire format. Leaf package. | `api` |
 | `audit` | Append-only `audit_events` table writes. Every elevation-class mutation calls `audit.Record` on success **and** failure. | `api` |
 | `events` | In-memory pub-sub bus for SSE. Lifecycle stages publish; the SSE handler subscribes. | `lifecycle`, `api`, `cmd/brain` |
+| `version` | The malmo build identity: `Version` (repo `VERSION` file) and `Commit` (git sha), stamped at build time via `-ldflags -X` (`Makefile`, `BUILD.md` # Versioning). Dumb — vars + a `String()`, no logic. | `api`, `hostagent`, `cmd/brain`, `cmd/host-agent`, `cmd/host-agent-real` |
 
 **Cross-cutting invariants:**
 

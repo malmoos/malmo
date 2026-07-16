@@ -16,6 +16,7 @@ import (
 
 	"github.com/malmoos/malmo/internal/hostagent/netstate"
 	"github.com/malmoos/malmo/internal/protocol"
+	"github.com/malmoos/malmo/internal/version"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -24,7 +25,19 @@ import (
 // "unknown-user" so the brain can distinguish "user gone" from "host error."
 var ErrUnknownUser = errors.New("unknown user")
 
-const AgentVersion = "0.0.1-fake"
+// AgentVersion is the systemStatus handler's self-reported agent_version.
+// Despite living in a file full of fake-agent scaffolding, systemStatus is
+// SHARED code — it's compiled into and called by both cmd/host-agent (fake)
+// and cmd/host-agent-real, and today reports placeholder data for both alike
+// (Hostname below is hardcoded "malmo-dev" the same way, a known, separate
+// gap). So this derives from the real stamped internal/version.Version rather
+// than a "-fake" literal: a "-fake" suffix would mislabel host-agent-real too,
+// which this same constant also feeds until real per-binary system-status
+// reporting is built out. It also keeps a `make dev` brain (also stamped from
+// the same VERSION file) and the fake agent trivially in range of each
+// other's minimumAgentVersion check (cmd/brain's checkAgentVersion) without
+// a prerelease-suffix special case.
+var AgentVersion = version.Version
 
 // PasswordVerifier is a consumer-side interface: it lives here because this is
 // the package that calls it (the verifyPassword handler). Provider packages

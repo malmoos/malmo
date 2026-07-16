@@ -26,6 +26,8 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -38,9 +40,17 @@ import (
 	"github.com/malmoos/malmo/internal/hostagent/brainlaunch"
 	"github.com/malmoos/malmo/internal/profile"
 	"github.com/malmoos/malmo/internal/protocol"
+	"github.com/malmoos/malmo/internal/version"
 )
 
 func main() {
+	showVersion := flag.Bool("version", false, "print the version and exit")
+	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.String())
+		return
+	}
+
 	sockPath := os.Getenv("MALMO_AGENT_SOCK")
 	if sockPath == "" {
 		sockPath = protocol.SocketPath

@@ -1,7 +1,40 @@
 # Build the hosted cloud-VM image with mkosi, prove the brain accepts the CURRENT
 # first-boot seed schema (seeded QEMU boot), assert it stays lean, then publish it
-# to Hetzner as a snapshot and print the snapshot id. Manual-only
-# (workflow_dispatch) — the full build is expensive (~40 min) and a publish is a
+# to Hetzner as a snapshot and print the snapshot id.
+#
+# Three triggers, three intents:
+#   - `workflow_call` — the AUTOMATED release path. `release.yml` runs on every
+#     push to `main`; when it finds `VERSION` names a version with no matching
+#     tag yet, it creates the tag + GitHub Release itself, THEN calls this
+#     workflow with `publish: true` (`secrets: inherit`) to build and publish
+#     the image for that same commit. This is the path a release actually
+#     takes now — read on for why it isn't the `push: tags` trigger below.
+#   - `push: tags: v*` — the MANUAL escape hatch: a human pushing a `vX.Y.Z`
+#     tag by hand (e.g. re-cutting an image for an already-tagged release
+#     without touching `release.yml`). Deliberately KEPT alongside
+#     `workflow_call` rather than replaced by it, for a reason that is easy to
+#     "fix" into a bug if you don't know it: a tag created by `release.yml`
+#     using the default `GITHUB_TOKEN` does NOT fire this `push: tags`
+#     trigger — GitHub deliberately suppresses events from a `GITHUB_TOKEN`-
+#     authored push to prevent recursive workflow runs. That's *why*
+#     `release.yml` can't just push the tag and rely on this trigger to pick
+#     it up (it would silently never build/publish); it has to invoke this
+#     workflow directly via `workflow_call` instead. The upshot: the two
+#     triggers can never fire for the same tag-creation event, so there is no
+#     double-build risk from keeping both — `push: tags` only ever fires for a
+#     human-originated tag push (a PAT or a person's own `git push --tags`),
+#     never for the auto-tag `release.yml` creates.
+#   - `workflow_dispatch` — manual, on-demand, ad hoc ref. The `publish` input
+#     still governs whether the run publishes (default true); `publish=false`
+#     gives a build-only smoke run. Unchanged from before tags existed.
+#
+# All three share one `publish` input name/shape (`workflow_dispatch` and
+# `workflow_call` inputs both surface as the same `inputs.*` context), which
+# is why `SHOULD_PUBLISH` below needs no per-trigger special-casing for the
+# call path: `inputs.publish` already carries the right value regardless of
+# whether a human or `release.yml` set it.
+#
+# Either way the full build is expensive (~40 min) and a publish is a
 # deliberate act, not a per-push one.
 #
 # Closes the gap #189/#238 carried: until now the cloud image had NO automated
@@ -23,14 +56,23 @@
 # rebuilds the control-plane images from source, so the "image labeled new, brain
 # baked old" skew cannot recur.
 #
-# Trigger from the Actions tab or `gh workflow run "CI / Cloud image"`. The run
-# prints `MALMO_HETZNER_IMAGE=<id>`; set that on the control-plane and deploy.
+# Manual runs: trigger from the Actions tab or `gh workflow run "CI / Cloud
+# image"`. The run prints `MALMO_HETZNER_IMAGE=<id>`; set that on the
+# control-plane and deploy.
 #
 # Required secret: HCLOUD_TOKEN — a Hetzner Cloud API token (publish only).
 name: CI / Cloud image
 
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the built image to Hetzner as a snapshot"
+        type: boolean
+        default: true
+  workflow_call:
     inputs:
       publish:
         description: "Publish the built image to Hetzner as a snapshot"
@@ -45,6 +87,29 @@ concurrency:
 jobs:
   cloud-image:
     name: Build + seeded-boot test + publish hosted cloud image
+    # Single source of truth for "should this run publish", computed once so
+    # the 3 publish-gated steps below can't drift out of sync with each other.
+    # A real tag push always publishes (that's the point of tagging a release);
+    # a workflow_dispatch OR workflow_call run publishes iff its `publish`
+    # input says so. On a `push` event `inputs.publish` is undefined, which is
+    # why the tag-push half of the OR is needed — `inputs.publish` alone would
+    # evaluate falsy and silently skip publishing on every tagged release.
+    # `workflow_call` and `workflow_dispatch` both populate the SAME `inputs`
+    # context under the same input name (`publish`), so `release.yml` calling
+    # this workflow with `publish: true` flows through the `inputs.publish`
+    # half identically to a human running `workflow_dispatch publish=true`.
+    #
+    # `startsWith(github.ref, 'refs/tags/')` is LOAD-BEARING, not
+    # belt-and-braces. In a reusable workflow the `github` context is the
+    # CALLER's, not this workflow's: when release.yml (triggered by
+    # `push: branches: [main]`) calls us, github.event_name here is `push` and
+    # github.ref is `refs/heads/main`. Keyed on event_name alone this would
+    # collapse to "any call from a push-triggered workflow publishes",
+    # ignoring `publish` entirely — a future caller passing publish=false
+    # would publish anyway. Keyed on the ref, the only path that publishes
+    # without an explicit input is a genuine tag push.
+    env:
+      SHOULD_PUBLISH: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || inputs.publish }}
     # Pin 24.04 explicitly: this is the exact environment that reproduces the
     # mkosi-sandbox EPERM (#189), so the fix has to be proven here, not on a
     # floating ubuntu-latest.
@@ -56,6 +121,36 @@ jobs:
       image_id: ${{ steps.publish.outputs.image_id }}
     steps:
       - uses: actions/checkout@v5
+
+      # Fail FAST on a mistagged release, before the ~40min build below runs.
+      # VERSION (repo root) is the single source of truth for the monorepo's
+      # one version (BUILD.md # Versioning, DECISIONS.md 2026-07-16); a `v*`
+      # tag push is only a real release if it matches. workflow_dispatch has no
+      # tag (github.ref_name is the branch/ref it ran against), so this only
+      # runs — and only can fail — on a genuine `push: tags: v*` trigger.
+      #
+      # Both halves of the condition are required. In a reusable workflow the
+      # `github` context is the CALLER's: when release.yml (triggered by
+      # `push: branches: [main]`) calls us, github.event_name here is `push`
+      # — NOT `workflow_call` — and github.ref is `refs/heads/main`. Gating on
+      # event_name alone would therefore run this step on the auto-release
+      # path and compare `main` against `v<VERSION>`, failing EVERY
+      # auto-release immediately after release.yml had already pushed the tag
+      # and cut the GitHub Release — a tagged release with no image. Keying on
+      # the ref being an actual tag is what separates a real tag push from a
+      # call made on a branch. On the call path there is nothing to assert
+      # anyway: release.yml derives the tag from VERSION itself, so they are
+      # equal by construction.
+      - name: Assert the pushed tag matches VERSION
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          set -euo pipefail
+          want="v$(cat VERSION)"
+          if [ "${{ github.ref_name }}" != "$want" ]; then
+            echo "::error::tag ${{ github.ref_name }} does not match VERSION ($want) — the release PR must bump VERSION before tagging."
+            exit 1
+          fi
+          echo "tag ${{ github.ref_name }} matches VERSION"
 
       # mkosi 26 builds rootless: it unshares a user namespace and drops
       # capabilities inside it. Ubuntu 24.04 ships
@@ -160,13 +255,13 @@ jobs:
       # ---- publish to Hetzner (only when requested) --------------------------
 
       - name: Set up Go (for hcloud-upload-image)
-        if: ${{ inputs.publish }}
+        if: ${{ env.SHOULD_PUBLISH == 'true' }}
         uses: actions/setup-go@v5
         with:
           go-version: stable
 
       - name: Install hcloud-upload-image
-        if: ${{ inputs.publish }}
+        if: ${{ env.SHOULD_PUBLISH == 'true' }}
         run: |
           go install github.com/apricote/hcloud-upload-image@latest
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
@@ -179,7 +274,7 @@ jobs:
       # .dev/cloud/; we xz it for a smaller upload.
       - name: Publish image to Hetzner + resolve snapshot id
         id: publish
-        if: ${{ inputs.publish }}
+        if: ${{ env.SHOULD_PUBLISH == 'true' }}
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
@@ -194,8 +289,21 @@ jobs:
 
           run_id="$(date +%Y%m%d-%H%M%S)"
           os_rev="$(git rev-parse --short HEAD)"
-          desc="malmo hosted cloud image (C2) ${run_id} os@${os_rev}"
-          labels="malmo-image=hosted-cloud,malmo-c2-upload=${run_id},malmo-os-rev=${os_rev}"
+          # VERSION is the single source of truth for what was built (BUILD.md #
+          # Versioning) regardless of trigger: on a tag push it's already
+          # asserted equal to the tag (the early gate step above), and on a
+          # workflow_dispatch build-only/build+publish run it's still the real
+          # version of the checked-out commit — not "bogus" the way the old
+          # tag-only label was on a non-tag trigger, so it's labeled
+          # unconditionally rather than only when a tag happened to trigger the
+          # run.
+          malmo_version="$(cat VERSION)"
+          # Lead with the version: `desc` is what the Hetzner console shows as
+          # the snapshot's name in the images list, so the first thing you read
+          # should be which malmo this is. run_id keeps two snapshots of the
+          # same version apart; os_rev pins the exact commit it was built from.
+          desc="malmo v${malmo_version} — hosted cloud image (os@${os_rev}, ${run_id})"
+          labels="malmo-image=hosted-cloud,malmo-c2-upload=${run_id},malmo-os-rev=${os_rev},malmo-version=${malmo_version}"
 
           hcloud-upload-image upload \
             --image-path "$raw.xz" \

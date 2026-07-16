@@ -11,6 +11,16 @@ DEV_DIR := .dev
 STATE_DIR := $(DEV_DIR)/state
 AGENT_SOCK := $(abspath $(DEV_DIR)/agent.sock)
 
+# Build identity (BUILD.md # Versioning): one repo VERSION for the whole
+# monorepo, plus the git commit a build was cut from — two stamped fields, no
+# "-dev" suffix logic (DECISIONS.md 2026-07-16). VERSION is read from the repo
+# root; the commit falls back to "unknown" outside a git checkout (e.g. a
+# container build context with no .git) rather than failing the build.
+MALMO_VERSION := $(shell cat $(CURDIR)/VERSION)
+MALMO_COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+LDFLAGS := -X github.com/malmoos/malmo/internal/version.Version=$(MALMO_VERSION) \
+           -X github.com/malmoos/malmo/internal/version.Commit=$(MALMO_COMMIT)
+
 export MALMO_AGENT_SOCK := $(AGENT_SOCK)
 export MALMO_STATE_DIR := $(STATE_DIR)
 # The brain syncs the catalog from the control plane (MALMO_CATALOG_URL, default
@@ -94,13 +104,25 @@ fmt-check:
 vet:
 	$(GO) vet ./...
 
+# `build` stays host-agent (fake) + brain, unchanged from before this slice.
+# host-agent-real is deliberately NOT folded in: it's Linux + CGO +
+# libpam0g-dev always (see its header comment — both its build tags need real
+# PAM), so it already doesn't build on macOS/Windows/WSL2-without-headers.
+# Making it part of the default `build` would break `make build` on exactly
+# the machines the inner loop is supposed to work on with no platform-specific
+# setup (CLAUDE.md # Developing). It's still stamped — see its own target below
+# — for anyone building it directly or via the cloud-image / nspawn lanes.
 build: host-agent brain
 
+# The fake host-agent is stamped too — it prints --version like the real
+# binaries and its self-reported agent_version (internal/hostagent.AgentVersion)
+# derives from the same stamped internal/version.Version, so a dev build's fake
+# agent and dev brain agree without a separate hardcoded constant.
 host-agent:
-	$(GO) build -o $(DEV_DIR)/host-agent ./cmd/host-agent
+	$(GO) build -ldflags "$(LDFLAGS)" -o $(DEV_DIR)/host-agent ./cmd/host-agent
 
 host-agent-real:
-	$(GO) build -o $(DEV_DIR)/host-agent-real ./cmd/host-agent-real
+	$(GO) build -ldflags "$(LDFLAGS)" -o $(DEV_DIR)/host-agent-real ./cmd/host-agent-real
 
 # Slim hosted-cloud host-agent (ENVIRONMENT.md # How the profile is realized —
 # "A build-tagged slim cloud host-agent"; #204/C1c). The same production binary
@@ -110,10 +132,10 @@ host-agent-real:
 # per-app logs, reboot, brain launch) are identical. Linux + CGO + libpam0g-dev,
 # same as host-agent-real. The cloud image build (#203/C1b, #205/C2) consumes it.
 host-agent-real-hosted:
-	$(GO) build -tags hosted -o $(DEV_DIR)/host-agent-real-hosted ./cmd/host-agent-real
+	$(GO) build -tags hosted -ldflags "$(LDFLAGS)" -o $(DEV_DIR)/host-agent-real-hosted ./cmd/host-agent-real
 
 brain:
-	$(GO) build -o $(DEV_DIR)/brain ./cmd/brain
+	$(GO) build -ldflags "$(LDFLAGS)" -o $(DEV_DIR)/brain ./cmd/brain
 
 # ---- Control-plane images (M0, #163) -----------------------------------
 # Build the two malmo OCI images and `docker save` them — together with the two
@@ -129,7 +151,7 @@ CADDY_IMAGE  := caddy:2-alpine
 PROXY_IMAGE  := tecnativa/docker-socket-proxy:v0.4.2
 
 brain-image:
-	docker build -f cmd/brain/Dockerfile -t $(BRAIN_IMAGE) .
+	docker build -f cmd/brain/Dockerfile --build-arg MALMO_COMMIT=$(MALMO_COMMIT) -t $(BRAIN_IMAGE) .
 
 ui-image:
 	docker build -f web-ui/Dockerfile -t $(UI_IMAGE) web-ui

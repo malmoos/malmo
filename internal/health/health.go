@@ -537,15 +537,20 @@ func builtinDefinitions() []Definition {
 			NoPersist: true,
 		},
 		// Version (HEALTH.md # Version). version-mismatch is a locus-C brain
-		// check: host-agent's reported agent_version vs the version this brain
-		// expects (cmd/brain checkAgentVersion). Blocks apps — installing or
-		// updating an app against a mismatched agent is unsafe — but not writes
-		// or users. Error severity, Tier-2 remediation (update the lagging side).
+		// check: host-agent's reported agent_version against this brain's
+		// minimumAgentVersion floor (cmd/brain checkAgentVersion) — a compatible
+		// RANGE, not exact equality (DECISIONS.md 2026-07-16). host-agent updates
+		// ride apt on their own cadence and can lag the brain by up to 24h
+		// (UPDATES.md # 2), so a newer agent never raises this; only one older
+		// than the floor does. Blocks apps — installing or updating an app
+		// against a too-old agent is unsafe — but not writes or users. Error
+		// severity, Tier-2 remediation (the lagging agent updates itself; the
+		// issue clears once it does).
 		{
 			ID: "version-mismatch", Category: CategoryVersion,
 			Severity: SeverityError, Tier: 2,
 			BlocksApps: true,
-			Summary:    "malmo's system agent and dashboard are running mismatched versions.",
+			Summary:    "malmo's system agent needs an update.",
 		},
 		// State (HEALTH.md # State). brain-db-corrupt is a locus-C brain check:
 		// PRAGMA integrity_check at boot + every 6h (cmd/brain checkBrainDBIntegrity).
