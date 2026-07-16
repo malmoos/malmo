@@ -2,14 +2,19 @@ package lifecycle
 
 // Per-app exposure → Caddy route policy (#306). These lock the "one central route
 // builder is the safety boundary" invariant (ENVIRONMENT.md # Public-by-default):
-// every hosted app route strips the Cookie header (so the box's Domain-scoped
-// forward-auth cookie never reaches an app upstream), a restricted app is
+// every hosted app route strips the box's Domain-scoped forward-auth cookie (so
+// it never reaches an app upstream) and nothing else, a restricted app is
 // forward-auth gated, and the appliance route stays the plain reverse_proxy.
+//
+// These assert the *policy* the route builder resolves. That the emitted config
+// actually removes that cookie and leaves every other one intact is asserted
+// behaviourally in internal/caddy (#335).
 
 import (
 	"context"
 	"testing"
 
+	"github.com/malmoos/malmo/internal/auth"
 	"github.com/malmoos/malmo/internal/profile"
 	"github.com/malmoos/malmo/internal/store"
 )
@@ -35,8 +40,8 @@ func TestInstall_Appliance_PlainRoute(t *testing.T) {
 		t.Fatalf("appliance exposure = %q, want public", row.Exposure)
 	}
 	cfg := e.caddy.config(inst.ID)
-	if cfg.StripCookie {
-		t.Error("appliance route must not strip Cookie")
+	if cfg.StripCookieName != "" {
+		t.Errorf("appliance route must not strip any cookie, got %q", cfg.StripCookieName)
 	}
 	if cfg.ForwardAuth != nil {
 		t.Error("appliance route must not be forward-auth gated")
@@ -55,8 +60,8 @@ func TestInstall_Hosted_DefaultRestrictedStripsAndGates(t *testing.T) {
 		t.Fatalf("hosted default exposure = %q, want restricted", row.Exposure)
 	}
 	cfg := e.caddy.config(inst.ID)
-	if !cfg.StripCookie {
-		t.Fatal("hosted route must strip Cookie so the forward-auth cookie never reaches the app")
+	if cfg.StripCookieName != auth.ForwardAuthCookieName {
+		t.Fatalf("hosted route strips %q, want %q so the forward-auth cookie never reaches the app", cfg.StripCookieName, auth.ForwardAuthCookieName)
 	}
 	if cfg.ForwardAuth == nil {
 		t.Fatal("restricted app must be forward-auth gated")
@@ -76,9 +81,9 @@ func TestInstall_Hosted_DefaultRestrictedStripsAndGates(t *testing.T) {
 	}
 }
 
-// The load-bearing invariant: NO hosted app route ever forwards Cookie to an app
-// upstream. Flipping to public drops the gate but keeps the strip — the
-// forward-auth cookie is Domain-scoped to every "<slug>.<box-id>" subdomain, so a
+// The load-bearing invariant: NO hosted app route ever forwards the forward-auth
+// cookie to an app upstream. Flipping to public drops the gate but keeps the
+// strip — the cookie is Domain-scoped to every "<slug>.<box-id>" subdomain, so a
 // public app would otherwise receive it.
 func TestSetExposure_HostedPublicStillStripsCookie(t *testing.T) {
 	e := newTestEnv(t)
@@ -92,8 +97,8 @@ func TestSetExposure_HostedPublicStillStripsCookie(t *testing.T) {
 		t.Fatalf("exposure = %q, want public", row.Exposure)
 	}
 	cfg := e.caddy.config(inst.ID)
-	if !cfg.StripCookie {
-		t.Fatal("a public hosted app must STILL strip the Cookie header")
+	if cfg.StripCookieName != auth.ForwardAuthCookieName {
+		t.Fatalf("a public hosted app must STILL strip %q, got %q", auth.ForwardAuthCookieName, cfg.StripCookieName)
 	}
 	if cfg.ForwardAuth != nil {
 		t.Fatal("a public app must not be forward-auth gated")
@@ -176,7 +181,7 @@ func TestReconcile_Hosted_ReassertKeepsGate(t *testing.T) {
 		t.Fatalf("reconcile must reassert the route: %v", e.caddy.calls)
 	}
 	cfg := e.caddy.config(inst.ID)
-	if !cfg.StripCookie || cfg.ForwardAuth == nil {
+	if cfg.StripCookieName != auth.ForwardAuthCookieName || cfg.ForwardAuth == nil {
 		t.Fatalf("a restart must not drop the gate or strip: %+v", cfg)
 	}
 }

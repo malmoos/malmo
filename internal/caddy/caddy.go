@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -41,17 +42,23 @@ func routeID(instanceID string) string { return "malmo-app-" + instanceID }
 // The profile/exposure decision lives in the caller — internal/lifecycle is the
 // single central route builder (ENVIRONMENT.md #306, "one central route builder
 // is the safety boundary"); this package only renders the JSON. An appliance
-// caller leaves StripCookie false and ForwardAuth nil, so the emitted route is
-// byte-for-byte the plain reverse_proxy it has always been.
+// caller leaves StripCookieName empty and ForwardAuth nil, so the emitted route
+// is byte-for-byte the plain reverse_proxy it has always been.
 type RouteConfig struct {
 	InstanceID string
 	Host       string
 	Upstream   string // "host:port" reachable from Caddy (the app's malmo-ingress alias)
-	// StripCookie deletes the inbound Cookie request header before proxying to
-	// the app upstream (hosted). It keeps the box's Domain-scoped forward-auth
-	// cookie — and every other cookie — off the app; the app never receives a
-	// cookie, so the forward-auth token can't leak to it.
-	StripCookie bool
+	// StripCookieName, when non-empty, removes exactly that one cookie from the
+	// inbound Cookie header before proxying to the app upstream (hosted), and
+	// passes every other cookie through untouched. It carries the name rather
+	// than a bool so the one source of truth stays auth.ForwardAuthCookieName in
+	// the caller: a rename there must not silently stop the strip and leak the
+	// token to an app upstream.
+	//
+	// This deliberately does NOT delete the whole Cookie header. Doing so also
+	// deleted the app's own session cookies, so no third-party app with a
+	// cookie login could authenticate at all on hosted (#335).
+	StripCookieName string
 	// ForwardAuth, when non-nil, gates the route behind a Caddy forward_auth
 	// subrequest to the brain verify endpoint (hosted restricted apps). nil is a
 	// public app: the plain reverse_proxy with no gate.
@@ -75,9 +82,9 @@ func (c *Client) AddRoute(ctx context.Context, cfg RouteConfig) error {
 		"handler":   "reverse_proxy",
 		"upstreams": []any{map[string]any{"dial": cfg.Upstream}},
 	}
-	if cfg.StripCookie {
+	if cfg.StripCookieName != "" {
 		proxy["headers"] = map[string]any{
-			"request": map[string]any{"delete": []any{"Cookie"}},
+			"request": map[string]any{"replace": stripCookieReplacements(cfg.StripCookieName)},
 		}
 	}
 	handle := make([]any, 0, 2)
@@ -86,6 +93,36 @@ func (c *Client) AddRoute(ctx context.Context, cfg RouteConfig) error {
 	}
 	handle = append(handle, proxy)
 	return c.upsertRoute(ctx, cfg.InstanceID, cfg.Host, handle)
+}
+
+// stripCookieReplacements renders the Caddy headers.request.replace body that
+// removes exactly one named cookie from the inbound Cookie header, leaving every
+// other cookie byte-for-byte intact. Two ordered passes, both load-bearing:
+//
+//  1. `(?:^|;\s*)<name>=[^;]*` removes the cookie wherever it sits in the
+//     header. The leading anchor is the safety: the obvious unanchored form
+//     (`<name>=[^;]*`) also matches *inside* a longer cookie name, so an app
+//     cookie called `evil_malmo_forward_auth` gets silently mangled into `evil_`
+//     plus whatever followed it. Caddy compiles search_regexp with Go's regexp
+//     and applies it with ReplaceAllString, so every occurrence goes: an app
+//     that sets its own host-only copy of the name cannot push the real cookie
+//     into a later position and have it survive for the app to read.
+//  2. `^;\s*` removes the separator the first pass leaves behind when the
+//     stripped cookie happened to be first in the header.
+//
+// The alternation is deliberately non-capturing: Caddy expands `${1}` in a
+// replacement, so a capture here would be a live trap for any future edit that
+// puts something in the (currently empty) replacement string.
+//
+// regexp.QuoteMeta stops a name containing regex metacharacters from compiling
+// into a pattern that matches more than itself.
+func stripCookieReplacements(name string) map[string]any {
+	return map[string]any{
+		"Cookie": []any{
+			map[string]any{"search_regexp": `(?:^|;\s*)` + regexp.QuoteMeta(name) + `=[^;]*`, "replace": ""},
+			map[string]any{"search_regexp": `^;\s*`, "replace": ""},
+		},
+	}
 }
 
 // forwardAuthHandler renders the Caddy forward_auth step — a reverse_proxy to the
@@ -105,8 +142,8 @@ func (c *Client) AddRoute(ctx context.Context, cfg RouteConfig) error {
 //
 // It deliberately omits the informational X-Forwarded-Method/-Uri header_up that
 // stock forward_auth adds: the verify endpoint reads only the cookie (#305). The
-// Cookie strip is on the app reverse_proxy (RouteConfig.StripCookie), not here:
-// this subrequest must forward the cookie to the brain to be verified.
+// Cookie strip is on the app reverse_proxy (RouteConfig.StripCookieName), not
+// here: this subrequest must forward the cookie to the brain to be verified.
 func forwardAuthHandler(fa ForwardAuthConfig) map[string]any {
 	copyHeaders := map[string]any{}
 	scrub := make([]any, 0, len(fa.CopyHeaders))
