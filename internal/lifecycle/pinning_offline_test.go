@@ -44,7 +44,7 @@ func TestInstallOfflineTrustsPromisedDigest(t *testing.T) {
 	e.m.offlineInstall = true
 	e.writeCatalogApp(t, "whoami", whoamiCompose, whoamiManifest(testDigest))
 	// No registry: pull fails. The bundle loaded the image (no RepoDigest).
-	e.docker.pullErr[testImage] = fmt.Errorf("dial tcp: registry unreachable")
+	e.docker.pullErrAll = fmt.Errorf("dial tcp: registry unreachable")
 	e.docker.loaded[testImage] = true
 
 	inst, err := e.m.Install(context.Background(), "whoami", Owner{UserID: "u_admin", Username: "admin"}, store.ScopePersonal, nil, "", nil, nil)
@@ -83,7 +83,7 @@ func TestInstallOfflineMissingImageFails(t *testing.T) {
 	e := newTestEnv(t)
 	e.m.offlineInstall = true
 	e.writeCatalogApp(t, "whoami", whoamiCompose, whoamiManifest(testDigest))
-	e.docker.pullErr[testImage] = fmt.Errorf("dial tcp: registry unreachable")
+	e.docker.pullErrAll = fmt.Errorf("dial tcp: registry unreachable")
 	// loaded NOT set → ImageInspect errors → genuinely absent.
 
 	_, err := e.m.Install(context.Background(), "whoami", Owner{UserID: "u_admin", Username: "admin"}, store.ScopePersonal, nil, "", nil, nil)
@@ -105,7 +105,7 @@ func TestInstallOfflineNoPromiseFails(t *testing.T) {
 	e := newTestEnv(t)
 	e.m.offlineInstall = true
 	e.writeCatalogApp(t, "whoami", whoamiCompose, whoamiManifest("")) // no promised digest
-	e.docker.pullErr[testImage] = fmt.Errorf("dial tcp: registry unreachable")
+	e.docker.pullErrAll = fmt.Errorf("dial tcp: registry unreachable")
 	e.docker.loaded[testImage] = true
 
 	_, err := e.m.Install(context.Background(), "whoami", Owner{UserID: "u_admin", Username: "admin"}, store.ScopePersonal, nil, "", nil, nil)
@@ -124,7 +124,7 @@ func TestInstallPullFailureFatalWhenOnline(t *testing.T) {
 	e := newTestEnv(t)
 	// offlineInstall left false (default).
 	e.writeCatalogApp(t, "whoami", whoamiCompose, whoamiManifest(testDigest))
-	e.docker.pullErr[testImage] = fmt.Errorf("dial tcp: registry unreachable")
+	e.docker.pullErrAll = fmt.Errorf("dial tcp: registry unreachable")
 	e.docker.loaded[testImage] = true // present locally, but it must not matter
 
 	_, err := e.m.Install(context.Background(), "whoami", Owner{UserID: "u_admin", Username: "admin"}, store.ScopePersonal, nil, "", nil, nil)
@@ -136,13 +136,14 @@ func TestInstallPullFailureFatalWhenOnline(t *testing.T) {
 	}
 }
 
-// Offline mode does not alter the happy path: when the pull succeeds, the digest
-// is still resolved from the registry RepoDigest, not the catalog promise.
-func TestInstallOfflineModePullSucceedsUsesRegistry(t *testing.T) {
+// Offline mode does not alter the happy path: when the registry IS reachable
+// the promised digest pulls normally and the local-fallback never engages, so
+// the override pins the digest (not the tag, as the air-gapped case does).
+func TestInstallOfflineModePullSucceedsPinsDigest(t *testing.T) {
 	e := newTestEnv(t)
 	e.m.offlineInstall = true
 	e.writeCatalogApp(t, "whoami", whoamiCompose, whoamiManifest(testDigest))
-	e.docker.digests[testImage] = testDigest // pull succeeds, registry resolves
+	// Pull succeeds (no pullErrAll): the registry serves the promised digest.
 
 	inst, err := e.m.Install(context.Background(), "whoami", Owner{UserID: "u_admin", Username: "admin"}, store.ScopePersonal, nil, "", nil, nil)
 	if err != nil {

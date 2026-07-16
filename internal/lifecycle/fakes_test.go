@@ -42,9 +42,16 @@ func (c call) String() string {
 type fakeDocker struct {
 	mu sync.Mutex
 
-	digests       map[string]string // image → digest returned by ImageInspect
-	loaded        map[string]bool   // image present locally with NO RepoDigest (docker-loaded)
-	pullErr       map[string]error  // per-image Pull error (nil = success)
+	digests map[string]string // image → digest returned by ImageInspect
+	loaded  map[string]bool   // image present locally with NO RepoDigest (docker-loaded)
+	pullErr map[string]error  // per-ref Pull error (nil = success)
+	// pullErrAll fails Pull for every ref, tag or digest form alike. An
+	// unreachable registry is a property of the box, not of one ref — keying such
+	// a failure by ref would let a pull the code makes under a different ref
+	// (Door-1 pulls `name@sha256:…`, never the tag) succeed against a registry the
+	// test says is gone.
+	pullErrAll error
+
 	composeUp     func(ctx context.Context, dir, project string) (string, error)
 	inspect       func(id, mainService string) (running bool, health string, err error)
 	psManaged     map[string]bool    // returned by PSManaged
@@ -106,6 +113,17 @@ func (f *fakeDocker) methods() []string {
 	return out
 }
 
+// pulled returns the image refs Pull was called with, in order.
+func (f *fakeDocker) pulled() []string {
+	var out []string
+	for _, c := range f.Calls() {
+		if c.method == "Pull" && len(c.args) == 1 {
+			out = append(out, fmt.Sprintf("%v", c.args[0]))
+		}
+	}
+	return out
+}
+
 func (f *fakeDocker) called(method string) bool {
 	for _, m := range f.methods() {
 		if m == method {
@@ -117,6 +135,9 @@ func (f *fakeDocker) called(method string) bool {
 
 func (f *fakeDocker) Pull(_ context.Context, image string) error {
 	f.record("Pull", image)
+	if f.pullErrAll != nil {
+		return f.pullErrAll
+	}
 	return f.pullErr[image]
 }
 
