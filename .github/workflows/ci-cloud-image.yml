@@ -82,6 +82,23 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Fail FAST on a mistagged release, before the ~40min build below runs.
+      # VERSION (repo root) is the single source of truth for the monorepo's
+      # one version (BUILD.md # Versioning, DECISIONS.md 2026-07-16); a `v*`
+      # tag push is only a real release if it matches. workflow_dispatch has no
+      # tag (github.ref_name is the branch/ref it ran against), so this only
+      # runs — and only can fail — on the `push: tags: v*` trigger.
+      - name: Assert the pushed tag matches VERSION
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          set -euo pipefail
+          want="v$(cat VERSION)"
+          if [ "${{ github.ref_name }}" != "$want" ]; then
+            echo "::error::tag ${{ github.ref_name }} does not match VERSION ($want) — the release PR must bump VERSION before tagging."
+            exit 1
+          fi
+          echo "tag ${{ github.ref_name }} matches VERSION"
+
       # mkosi 26 builds rootless: it unshares a user namespace and drops
       # capabilities inside it. Ubuntu 24.04 ships
       # kernel.apparmor_restrict_unprivileged_userns=1, which hands an unconfined
@@ -207,11 +224,6 @@ jobs:
         if: ${{ env.SHOULD_PUBLISH == 'true' }}
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
-          # Only a tag push carries a real SemVer tag; github.ref_name on a
-          # workflow_dispatch run is the branch/ref it was run against, not a
-          # version, so leave MALMO_TAG empty in that case rather than emit a
-          # bogus malmo-version label.
-          MALMO_TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
         run: |
           set -euo pipefail
           [ -n "${HCLOUD_TOKEN:-}" ] || { echo "::error::HCLOUD_TOKEN secret not set"; exit 1; }
@@ -224,13 +236,17 @@ jobs:
 
           run_id="$(date +%Y%m%d-%H%M%S)"
           os_rev="$(git rev-parse --short HEAD)"
-          if [ -n "${MALMO_TAG:-}" ]; then
-            desc="malmo hosted cloud image (C2) ${run_id} ${MALMO_TAG} os@${os_rev}"
-            labels="malmo-image=hosted-cloud,malmo-c2-upload=${run_id},malmo-os-rev=${os_rev},malmo-version=${MALMO_TAG}"
-          else
-            desc="malmo hosted cloud image (C2) ${run_id} os@${os_rev}"
-            labels="malmo-image=hosted-cloud,malmo-c2-upload=${run_id},malmo-os-rev=${os_rev}"
-          fi
+          # VERSION is the single source of truth for what was built (BUILD.md #
+          # Versioning) regardless of trigger: on a tag push it's already
+          # asserted equal to the tag (the early gate step above), and on a
+          # workflow_dispatch build-only/build+publish run it's still the real
+          # version of the checked-out commit — not "bogus" the way the old
+          # tag-only label was on a non-tag trigger, so it's labeled
+          # unconditionally rather than only when a tag happened to trigger the
+          # run.
+          malmo_version="$(cat VERSION)"
+          desc="malmo hosted cloud image (C2) ${run_id} v${malmo_version} os@${os_rev}"
+          labels="malmo-image=hosted-cloud,malmo-c2-upload=${run_id},malmo-os-rev=${os_rev},malmo-version=${malmo_version}"
 
           hcloud-upload-image upload \
             --image-path "$raw.xz" \

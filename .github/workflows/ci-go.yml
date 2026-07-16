@@ -21,6 +21,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "Makefile"
+      - "VERSION"
       - "api/**"
       - ".github/workflows/ci-go.yml"
 
