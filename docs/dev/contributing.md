@@ -122,14 +122,17 @@ PR body must include **`Closes #<N>`** — do not delete this line. It is the on
 
 ## Release model
 
-Feature work always branches off `dev` and PRs into `dev` — that's covered above. Releases are a separate, maintainer-only step layered on top:
+Feature work always branches off `dev` and PRs into `dev` — that's covered above. Releases are a separate, maintainer-only step layered on top, and **the `VERSION` bump is what makes a merge a release** — everything past that point is automatic:
 
-- The maintainer bumps the repo-root `VERSION` file to the new `X.Y.Z` (BUILD.md # Versioning: one repo version for the whole monorepo, not independent per-component SemVer — DECISIONS.md 2026-07-16) as part of preparing the release, and opens a PR from `dev` into `main`. A dev->main PR **is** a release — that's what triggers it, not a separate "release" label or process.
+- The maintainer bumps the repo-root `VERSION` file to the new `X.Y.Z` (BUILD.md # Versioning: one repo version for the whole monorepo, not independent per-component SemVer — DECISIONS.md 2026-07-16) as part of preparing the release, and opens a PR from `dev` into `main`. A dev->main PR **is** a release candidate — but only if it bumps `VERSION`; a dev->main merge that doesn't touch `VERSION` ships nothing (see below).
 - Both `ci-go.yml` and `ci-web.yml` gate the dev->main PR the same way they gate every feature PR, so a release can't merge with a broken build or a stale OpenAPI/TS client.
-- Once the dev->main PR merges, the maintainer tags the resulting `main` commit `vX.Y.Z` (SemVer), matching the `VERSION` file exactly.
-- Pushing a `v*` tag triggers `ci-cloud-image.yml`, which first asserts the tag matches `VERSION` (fails fast, before the ~40min build, on a mistagged release), then builds the hosted cloud image, runs the full seeded-boot gate, and publishes it to Hetzner — a tagged release always ships an image stamped with that same version. `workflow_dispatch` remains available for manual build-only or build+publish runs outside the tag flow (see the workflow's header comment).
+- Once the dev->main PR merges, `.github/workflows/release.yml` runs on every push to `main`. It reads `VERSION` and checks whether a `vX.Y.Z` tag for it already exists:
+  - **If the tag already exists** (this merge didn't bump `VERSION`), the run is a clean no-op — no tag, no release, no image build. This is the common case for most `main` pushes and is expected to stay green.
+  - **If the tag doesn't exist** (this merge bumped `VERSION`), the workflow tags the merge commit `vX.Y.Z`, creates a GitHub Release for it with auto-generated notes, and then triggers the hosted cloud-image build+publish (`ci-cloud-image.yml`) for that same commit with publishing enabled.
+- The cloud-image build is invoked directly as a reusable workflow (`workflow_call`), not via `ci-cloud-image.yml`'s `push: tags` trigger — a tag pushed with the default `GITHUB_TOKEN` (as `release.yml` does) does not fire another workflow's tag-push trigger, so relying on that event would silently tag a release and never build or publish it. `ci-cloud-image.yml`'s `push: tags: v*` trigger still exists as a manual escape hatch for a human pushing a tag by hand; see that workflow's header comment for the full reasoning.
+- A tagged release always ships an image stamped with that same version, runs the full seeded-boot gate, and publishes it to Hetzner. `workflow_dispatch` on `ci-cloud-image.yml` remains available for manual build-only or build+publish runs outside the release flow (see the workflow's header comment).
 
-Contributors never push directly to `main` and never tag releases — that's the maintainer's call.
+Contributors never push directly to `main`; the tag and the GitHub Release are created automatically by `release.yml`, not by hand.
 
 ## Definition of done — checklist
 

@@ -2,17 +2,37 @@
 # first-boot seed schema (seeded QEMU boot), assert it stays lean, then publish it
 # to Hetzner as a snapshot and print the snapshot id.
 #
-# Two triggers, two intents:
-#   - `push: tags: v*` — a cut release. The maintainer opens a dev->main PR to
-#     release, merges it, then tags the resulting main commit `vX.Y.Z`. That tag
-#     push builds, runs the full boot-test gate, and PUBLISHES — publishing on a
-#     version tag is the whole point of tagging a release. Deliberately NOT
-#     triggered on a plain `push: branches: [main]` — a dev->main merge always
-#     gets tagged as part of the release, so a branch-push trigger would build
-#     the same commit twice for ~2x runner time.
-#   - `workflow_dispatch` — manual, on-demand. The `publish` input still governs
-#     whether the run publishes (default true); `publish=false` gives a
-#     build-only smoke run. Unchanged from before tags existed.
+# Three triggers, three intents:
+#   - `workflow_call` — the AUTOMATED release path. `release.yml` runs on every
+#     push to `main`; when it finds `VERSION` names a version with no matching
+#     tag yet, it creates the tag + GitHub Release itself, THEN calls this
+#     workflow with `publish: true` (`secrets: inherit`) to build and publish
+#     the image for that same commit. This is the path a release actually
+#     takes now — read on for why it isn't the `push: tags` trigger below.
+#   - `push: tags: v*` — the MANUAL escape hatch: a human pushing a `vX.Y.Z`
+#     tag by hand (e.g. re-cutting an image for an already-tagged release
+#     without touching `release.yml`). Deliberately KEPT alongside
+#     `workflow_call` rather than replaced by it, for a reason that is easy to
+#     "fix" into a bug if you don't know it: a tag created by `release.yml`
+#     using the default `GITHUB_TOKEN` does NOT fire this `push: tags`
+#     trigger — GitHub deliberately suppresses events from a `GITHUB_TOKEN`-
+#     authored push to prevent recursive workflow runs. That's *why*
+#     `release.yml` can't just push the tag and rely on this trigger to pick
+#     it up (it would silently never build/publish); it has to invoke this
+#     workflow directly via `workflow_call` instead. The upshot: the two
+#     triggers can never fire for the same tag-creation event, so there is no
+#     double-build risk from keeping both — `push: tags` only ever fires for a
+#     human-originated tag push (a PAT or a person's own `git push --tags`),
+#     never for the auto-tag `release.yml` creates.
+#   - `workflow_dispatch` — manual, on-demand, ad hoc ref. The `publish` input
+#     still governs whether the run publishes (default true); `publish=false`
+#     gives a build-only smoke run. Unchanged from before tags existed.
+#
+# All three share one `publish` input name/shape (`workflow_dispatch` and
+# `workflow_call` inputs both surface as the same `inputs.*` context), which
+# is why `SHOULD_PUBLISH` below needs no per-trigger special-casing for the
+# call path: `inputs.publish` already carries the right value regardless of
+# whether a human or `release.yml` set it.
 #
 # Either way the full build is expensive (~40 min) and a publish is a
 # deliberate act, not a per-push one.
@@ -52,6 +72,12 @@ on:
         description: "Publish the built image to Hetzner as a snapshot"
         type: boolean
         default: true
+  workflow_call:
+    inputs:
+      publish:
+        description: "Publish the built image to Hetzner as a snapshot"
+        type: boolean
+        default: true
 
 # Cancel superseded runs on the same ref.
 concurrency:
@@ -64,10 +90,15 @@ jobs:
     # Single source of truth for "should this run publish", computed once so
     # the 3 publish-gated steps below can't drift out of sync with each other.
     # A tag push always publishes (that's the point of tagging a release); a
-    # workflow_dispatch run publishes iff its `publish` input says so. On a
-    # `push` event `inputs.publish` is undefined, which is why the tag-push
-    # half of the OR is needed — `inputs.publish` alone would evaluate falsy
-    # and silently skip publishing on every tagged release.
+    # workflow_dispatch OR workflow_call run publishes iff its `publish` input
+    # says so. On a `push` event `inputs.publish` is undefined, which is why
+    # the tag-push half of the OR is needed — `inputs.publish` alone would
+    # evaluate falsy and silently skip publishing on every tagged release.
+    # `workflow_call` and `workflow_dispatch` both populate the SAME `inputs`
+    # context under the same input name (`publish`), so `release.yml` calling
+    # this workflow with `publish: true` flows through here identically to a
+    # human running `workflow_dispatch` with `publish=true` — no extra branch
+    # needed for the call path.
     env:
       SHOULD_PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
     # Pin 24.04 explicitly: this is the exact environment that reproduces the
@@ -87,7 +118,13 @@ jobs:
       # one version (BUILD.md # Versioning, DECISIONS.md 2026-07-16); a `v*`
       # tag push is only a real release if it matches. workflow_dispatch has no
       # tag (github.ref_name is the branch/ref it ran against), so this only
-      # runs — and only can fail — on the `push: tags: v*` trigger.
+      # runs — and only can fail — on the `push: tags: v*` trigger. Skipped on
+      # `workflow_call` too, deliberately: `release.yml` computed `want` from
+      # VERSION itself and only calls this workflow after the tag it pushed
+      # already equals that value, and github.ref_name in a called workflow is
+      # the caller's branch ref (`main`), not a tag, so there is nothing to
+      # assert here on that path — the equivalent check already happened
+      # upstream in `release.yml`.
       - name: Assert the pushed tag matches VERSION
         if: ${{ github.event_name == 'push' }}
         run: |
