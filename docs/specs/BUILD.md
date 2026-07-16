@@ -246,7 +246,7 @@ The dashboard ships as a **second OCI image**, built and distributed the same wa
 ### Build
 
 - Base `caddy:alpine`, with the built UI bundle (`web-ui/dist`) baked in at `/srv/ui` and the trivial SPA Caddyfile (serve `/srv/ui`, fallback to `index.html`, gzip/brotli/ETag on by default). No build-stage Go compile — the bundle is produced by the UI's own `vite build` upstream of the image build (`WEB_UI.md`).
-- Output is a single OCI image, tagged `vX.Y.Z` and `latest` (latest only on stable channel), versioned independently of the brain (`WEB_UI.md` # deploy + update flow).
+- Output is a single OCI image, tagged `vX.Y.Z` and `latest` (latest only on stable channel) — the same `vX.Y.Z` as the brain, one repo version (# Versioning, above; `WEB_UI.md` # deploy + update flow).
 
 ### Distribution
 
@@ -262,11 +262,13 @@ Same as the brain (# 5 Distribution): **bundled in the ISO for offline first-boo
 
 ### Per-release artifacts
 
+All artifacts of a release share the **one** `vX.Y.Z` from the repo `VERSION` file (# Versioning, above) — there is no independent per-component tag to keep in sync.
+
 - `malmo-vX.Y.Z-amd64.qcow2` — the **cloud VM image** (priority target; the hosted product provisions tenants from it — `ENVIRONMENT.md` # Provisioning). Emitted by mkosi `Format=disk`.
 - `malmo-vX.Y.Z-amd64.raw` — the **bare-metal install medium**, `dd`'d / flashed to a USB stick (the "old laptop in the pantry" path). Same mkosi `Format=disk` rootfs; not optical media (no `.iso` — see # 2's 2026-06-17 resolution and `DECISIONS.md`).
 - `malmo-host-agent_X.Y.Z_amd64.deb` — published to `apt.malmo.network`.
 - `registry.malmo.network/malmo/brain:vX.Y.Z` — the brain image. `latest` tag advances on stable channel.
-- `registry.malmo.network/malmo/ui:vX.Y.Z` — the dashboard image. Versioned independently of the brain; both bundled in the ISO for offline first-boot.
+- `registry.malmo.network/malmo/ui:vX.Y.Z` — the dashboard image. Same `vX.Y.Z` as the brain (one repo version); both bundled in the ISO for offline first-boot.
 
 ### Channels
 
@@ -278,9 +280,12 @@ A box's channel determines which apt repo it follows for `host-agent` and which 
 
 ### Versioning
 
-- **SemVer** for `host-agent` and `brain` (`vMAJOR.MINOR.PATCH`).
-- **CalVer (`YYYY.MM`)** for the ISO itself, since it's a snapshot of host-agent + brain + Debian + apps. Avoids semver-stretching for a thing that isn't a single component.
-- ISO carries a manifest listing the exact versions of every component it bundles.
+**One repo version for the whole monorepo** (`vMAJOR.MINOR.PATCH`), not independent per-component SemVer (DECISIONS.md 2026-07-16, flipping the two bullets this section used to carry). `host-agent`, `malmo-brain`, and `malmo-ui` all ship from one commit in one repo — an independent counter per component was bookkeeping with no consumer once that was true.
+
+- **`VERSION`** — a plain-text file at the repo root, the single source of truth. It holds the **last released** version and changes only in the dev->main release PR (`docs/dev/contributing.md` # Release model): bump `VERSION` -> merge dev->main -> tag `vX.Y.Z` matching `VERSION` -> the tag push builds and publishes. No `-dev` suffix, no "next target" bookkeeping between releases.
+- **Every build stamps two fields, not one:** the repo version (from `VERSION`) and the git commit it was built from (`git rev-parse --short HEAD`), via `-ldflags -X` into `internal/version` — e.g. `malmo-brain --version` prints `malmo 0.4.0 (g1a2b3c)`. On a tagged release the commit is the tag's commit; on a dev build between releases it isn't, and that's visible without needing a suffix on the version string itself. `VERSION` (not `git describe`) is the source CI asserts a pushed tag against, because the brain's container build and the mkosi cloud-image build both run from contexts without full `.git` history (the Dockerfile's build context excludes `.git` entirely — `.dockerignore`).
+- **The image inherits the repo SemVer, not CalVer.** The ISO/cloud-image build used to be planned as `YYYY.MM` on the reasoning that it's a snapshot of host-agent + brain + Debian + apps, not a single component — that reasoning assumed independent per-component versions needed reconciling into something else for the image. With one repo version, brain/UI/host-agent/image are all just "the same commit," so the image takes the same `vX.Y.Z` the commit already has. One commit, one identity, not two.
+- The image still carries a manifest listing the exact versions of every component it bundles (Debian base version, kernel, etc. — components genuinely external to this repo).
 
 ---
 
@@ -326,11 +331,11 @@ GitHub Actions or self-hosted CI — TBD, not architecturally interesting at thi
 - **Docker package source: `docker-ce` from Docker's official apt repo.** Revisit if Docker Inc. policy changes; swap to `docker.io` is a one-line apt source change.
 - **`host-agent` ships as a Debian package** from our own apt repo, not as a container.
 - **`malmo-brain` ships as an OCI image**, `debian:trixie-slim` runtime with the `docker` CLI + Compose plugin bundled (the brain shells out to them; distroless can't host them — `DECISIONS.md` 2026-06-13), from our own registry, also bundled in the ISO for offline first-boot.
-- **`malmo-ui` ships as a second OCI image** (`caddy:alpine` + baked UI bundle), versioned independently of the brain, from our own registry, also bundled in the ISO. Launched by the brain, not host-agent (`CONTROL_PLANE.md`).
+- **`malmo-ui` ships as a second OCI image** (`caddy:alpine` + baked UI bundle), from our own registry, also bundled in the ISO. Launched by the brain, not host-agent (`CONTROL_PLANE.md`).
 - **Same root filesystem serves both the live (installer) environment and the installed system.**
 - **SSH daemon enabled at boot; no account can authenticate until per-user opt-in** (`AUTH.md` # SSH access). Root login disabled.
 - **Channels: stable only in v1, no beta, no nightly.** Beta is additive when triggered (see `RELEASE_MANIFEST.md`).
-- **Versioning: SemVer for components, CalVer for the ISO.**
+- **Versioning: one repo SemVer for the whole monorepo, the image inherits it.** `VERSION` at the repo root is the source of truth; every build additionally stamps the git commit as a separate field. No independent per-component counters, no CalVer for the image (DECISIONS.md 2026-07-16, flipping both prior positions).
 
 ## Open questions
 

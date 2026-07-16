@@ -124,10 +124,10 @@ PR body must include **`Closes #<N>`** — do not delete this line. It is the on
 
 Feature work always branches off `dev` and PRs into `dev` — that's covered above. Releases are a separate, maintainer-only step layered on top:
 
-- The maintainer opens a PR from `dev` into `main` when it's time to cut a release. A dev->main PR **is** a release — that's what triggers it, not a separate "release" label or process.
+- The maintainer bumps the repo-root `VERSION` file to the new `X.Y.Z` (BUILD.md # Versioning: one repo version for the whole monorepo, not independent per-component SemVer — DECISIONS.md 2026-07-16) as part of preparing the release, and opens a PR from `dev` into `main`. A dev->main PR **is** a release — that's what triggers it, not a separate "release" label or process.
 - Both `ci-go.yml` and `ci-web.yml` gate the dev->main PR the same way they gate every feature PR, so a release can't merge with a broken build or a stale OpenAPI/TS client.
-- Once the dev->main PR merges, the maintainer tags the resulting `main` commit `vX.Y.Z` (SemVer).
-- Pushing a `v*` tag triggers `ci-cloud-image.yml`, which builds the hosted cloud image, runs the full seeded-boot gate, and publishes it to Hetzner — a tagged release always ships an image. `workflow_dispatch` remains available for manual build-only or build+publish runs outside the tag flow (see the workflow's header comment).
+- Once the dev->main PR merges, the maintainer tags the resulting `main` commit `vX.Y.Z` (SemVer), matching the `VERSION` file exactly.
+- Pushing a `v*` tag triggers `ci-cloud-image.yml`, which first asserts the tag matches `VERSION` (fails fast, before the ~40min build, on a mistagged release), then builds the hosted cloud image, runs the full seeded-boot gate, and publishes it to Hetzner — a tagged release always ships an image stamped with that same version. `workflow_dispatch` remains available for manual build-only or build+publish runs outside the tag flow (see the workflow's header comment).
 
 Contributors never push directly to `main` and never tag releases — that's the maintainer's call.
 
