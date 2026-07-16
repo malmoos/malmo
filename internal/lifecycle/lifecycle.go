@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/malmoos/malmo/internal/admission"
+	"github.com/malmoos/malmo/internal/auth"
 	"github.com/malmoos/malmo/internal/caddy"
 	"github.com/malmoos/malmo/internal/catalog"
 	"github.com/malmoos/malmo/internal/events"
@@ -255,15 +256,18 @@ func (m *Manager) defaultExposure() string {
 // calls the "safety boundary" (ENVIRONMENT.md #306): the forward-auth gate and
 // the Cookie strip are decided in exactly one place. Appliance returns a bare
 // reverse_proxy — no strip, no gate — byte-for-byte the route it has always
-// emitted. Hosted always strips the Cookie header (so the box's Domain-scoped
-// forward-auth cookie, and every other cookie, never reaches an app upstream) and
-// wraps a restricted app in the forward_auth gate at the brain verify endpoint.
+// emitted. Hosted strips the box's Domain-scoped forward-auth cookie from every
+// app route (restricted or public: the browser sends it to both) and wraps a
+// restricted app in the forward_auth gate at the brain verify endpoint.
+//
+// Only that one cookie is stripped. The app's own cookies must reach it, or a
+// third-party app with a cookie login cannot authenticate at all (#335).
 func (m *Manager) buildRouteConfig(inst store.Instance, host, upstream string) caddy.RouteConfig {
 	cfg := caddy.RouteConfig{InstanceID: inst.ID, Host: host, Upstream: upstream}
 	if !m.hosted() {
 		return cfg
 	}
-	cfg.StripCookie = true
+	cfg.StripCookieName = auth.ForwardAuthCookieName
 	if inst.Exposure == store.ExposureRestricted {
 		cfg.ForwardAuth = &caddy.ForwardAuthConfig{
 			Upstream:    m.brainUpstream,

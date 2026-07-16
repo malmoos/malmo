@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -203,14 +204,69 @@ func TestAddRoute_Plain(t *testing.T) {
 	}
 }
 
-// Public hosted app: plain reverse_proxy but with the Cookie header stripped, so
-// the box's Domain-scoped forward-auth cookie never reaches the app upstream.
+// Public hosted app: plain reverse_proxy but with the forward-auth cookie
+// stripped, so the box's Domain-scoped cookie never reaches the app upstream.
 func TestAddRoute_StripCookieOnly(t *testing.T) {
-	handle := routeHandle(t, RouteConfig{InstanceID: "i1", Host: "h", Upstream: "app:80", StripCookie: true})
+	handle := routeHandle(t, RouteConfig{InstanceID: "i1", Host: "h", Upstream: "app:80", StripCookieName: "malmo_forward_auth"})
 	if len(handle) != 1 {
 		t.Fatalf("public route must be a single reverse_proxy, got %d", len(handle))
 	}
 	assertCookieStripped(t, handle[0].(map[string]any))
+}
+
+// The strip is name-scoped, so its correctness is entirely in the regex. This is
+// the table that holds it: every case is a Cookie header a browser could really
+// send to a hosted app, including the ones an app can arrange for itself by
+// setting cookies on its own subdomain. Both halves of the invariant are
+// asserted for each: the token never survives, and nothing else is touched.
+func TestAddRoute_CookieStripBehaviour(t *testing.T) {
+	const secret = "REAL_TOKEN"
+	handle := routeHandle(t, RouteConfig{InstanceID: "i1", Host: "h", Upstream: "app:80", StripCookieName: "malmo_forward_auth"})
+	proxy := handle[0].(map[string]any)
+
+	cases := []struct{ name, in, want string }{
+		{"typical", "app_sess=abc; malmo_forward_auth=" + secret + "; other=1", "app_sess=abc; other=1"},
+		{"token first", "malmo_forward_auth=" + secret + "; app_sess=abc", "app_sess=abc"},
+		{"token last", "app_sess=abc; malmo_forward_auth=" + secret, "app_sess=abc"},
+		{"token only", "malmo_forward_auth=" + secret, ""},
+		{"empty value", "malmo_forward_auth=; app_sess=abc", "app_sess=abc"},
+		// An empty-but-present header. A request with no Cookie header at all
+		// never reaches the replacement (verified against real Caddy: the header
+		// stays absent rather than being created empty).
+		{"empty header", "", ""},
+		{"nothing to strip", "app_sess=abc; other=1", "app_sess=abc; other=1"},
+		// An app can set its own host-only cookie of the same name on its
+		// subdomain, so the browser sends the name twice and the app controls the
+		// ordering. A first-match-only strip would hand it the real token.
+		{"duplicate names, real one second", "malmo_forward_auth=junk; malmo_forward_auth=" + secret + "; a=1", "a=1"},
+		{"duplicate names, real one first", "malmo_forward_auth=" + secret + "; malmo_forward_auth=junk; a=1", "a=1"},
+		// Cookies whose names merely contain the forward-auth name must survive
+		// untouched. An unanchored regex silently mangles these.
+		{"prefixed name", "evil_malmo_forward_auth=junk; app_sess=abc", "evil_malmo_forward_auth=junk; app_sess=abc"},
+		{"suffixed name", "malmo_forward_auth_x=junk; app_sess=abc", "malmo_forward_auth_x=junk; app_sess=abc"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := applyEmittedCookieStrip(t, proxy, tc.in)
+			if got != tc.want {
+				t.Errorf("Cookie at app upstream = %q, want %q", got, tc.want)
+			}
+			if strings.Contains(got, secret) {
+				t.Errorf("forward-auth token reached the app upstream: %q", got)
+			}
+		})
+	}
+}
+
+// A name with regex metacharacters must not compile into a pattern that matches
+// more than itself (regexp.QuoteMeta). The only caller passes a Go constant
+// today, but the strip is a security control and the next caller might not.
+func TestAddRoute_CookieStripQuotesMetacharacters(t *testing.T) {
+	handle := routeHandle(t, RouteConfig{InstanceID: "i1", Host: "h", Upstream: "app:80", StripCookieName: "a.b"})
+	got := applyEmittedCookieStrip(t, handle[0].(map[string]any), "axb=keepme; a.b=drop; c=1")
+	if want := "axb=keepme; c=1"; got != want {
+		t.Errorf("Cookie at app upstream = %q, want %q (a.b must not match axb)", got, want)
+	}
 }
 
 // Restricted hosted app: the forward_auth gate in front of the (Cookie-stripped)
@@ -218,7 +274,7 @@ func TestAddRoute_StripCookieOnly(t *testing.T) {
 // forward_auth directive plus the added 401→login redirect block.
 func TestAddRoute_ForwardAuthGate(t *testing.T) {
 	handle := routeHandle(t, RouteConfig{
-		InstanceID: "i1", Host: "h", Upstream: "app:80", StripCookie: true,
+		InstanceID: "i1", Host: "h", Upstream: "app:80", StripCookieName: "malmo_forward_auth",
 		ForwardAuth: &ForwardAuthConfig{
 			Upstream:    "malmo-brain:8080",
 			VerifyPath:  "/_malmo/forward-auth/verify",
@@ -295,13 +351,56 @@ func TestAddRoute_ForwardAuthGate(t *testing.T) {
 	assertCookieStripped(t, app)
 }
 
-// assertCookieStripped checks a reverse_proxy handler deletes the Cookie request
-// header — the invariant that no app upstream ever receives a cookie on hosted.
+// applyEmittedCookieStrip runs the route's own emitted Cookie replacements over
+// a real Cookie header, exactly as Caddy does: each search_regexp is compiled
+// with Go's regexp and applied with ReplaceAllString, in the emitted order.
+//
+// Driving the *emitted* config rather than a copy of the pattern is the point.
+// The regex lives in one place (stripCookieReplacements), and a change to it is
+// a change these tests follow automatically instead of silently diverging from.
+func applyEmittedCookieStrip(t *testing.T, proxy map[string]any, cookie string) string {
+	t.Helper()
+	headers, ok := proxy["headers"].(map[string]any)
+	if !ok {
+		t.Fatal("route emits no headers block, so nothing strips the forward-auth cookie")
+	}
+	request, ok := headers["request"].(map[string]any)
+	if !ok {
+		t.Fatal("route emits no request-header block")
+	}
+	// Comma-ok every step: a regression back to a whole-header `delete` is exactly
+	// what this helper exists to catch, and it must report that, not panic on the
+	// missing `replace` key.
+	replace, ok := request["replace"].(map[string]any)
+	if !ok {
+		t.Fatalf("route emits no header replacement, got request block %v", request)
+	}
+	reps, ok := replace["Cookie"].([]any)
+	if !ok {
+		t.Fatal("route emits no Cookie header replacement")
+	}
+	for _, r := range reps {
+		m := r.(map[string]any)
+		re, err := regexp.Compile(m["search_regexp"].(string))
+		if err != nil {
+			t.Fatalf("emitted search_regexp %q does not compile: %v", m["search_regexp"], err)
+		}
+		cookie = re.ReplaceAllString(cookie, m["replace"].(string))
+	}
+	return cookie
+}
+
+// assertCookieStripped checks the invariant that actually matters: the app
+// upstream never receives malmo_forward_auth, and every other cookie survives
+// byte-for-byte. The strip is a regex now (#335), so asserting the emitted JSON
+// shape cannot prove it correct: a config-shape assertion cannot see a pattern
+// that strips the wrong thing, or mangles a cookie the app needed to log its
+// user in. Assert on the header the app would actually receive.
 func assertCookieStripped(t *testing.T, proxy map[string]any) {
 	t.Helper()
-	del := proxy["headers"].(map[string]any)["request"].(map[string]any)["delete"].([]any)
-	if len(del) != 1 || del[0] != "Cookie" {
-		t.Errorf("request header delete = %v, want [Cookie]", del)
+	got := applyEmittedCookieStrip(t, proxy, "app_sess=abc; malmo_forward_auth=SECRET; other=1")
+	if want := "app_sess=abc; other=1"; got != want {
+		t.Errorf("Cookie at app upstream = %q, want %q", got, want)
 	}
 }
 
