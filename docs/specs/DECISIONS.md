@@ -21,6 +21,32 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-07-16 — One repo version, not independent per-component SemVer
+
+**Previously:** `BUILD.md` # Versioning locked "SemVer for `host-agent` and `brain`" — each component carrying its own independently-incrementing `vMAJOR.MINOR.PATCH`, with `malmo-ui` called out explicitly as "versioned independently of the brain" in the same doc's artifact list and locked-decisions section.
+
+**Now:** **one repo version for the whole monorepo.** `host-agent`, `malmo-brain`, and `malmo-ui` all ship from one commit in one repo, so there is exactly one `vX.Y.Z` per release, carried in a `VERSION` file at the repo root — the single source of truth. `VERSION` holds the **last released** version and changes only in the dev->main release PR (`docs/dev/contributing.md` # Release model). Every build additionally stamps the git commit it was built from as a **separate field** — `malmo-brain --version` prints `malmo 0.4.0 (g1a2b3c)` — so a dev build between releases is visibly distinguishable from the tagged release commit without needing a `-dev` suffix or a "next target" counter.
+
+**Why:** independent per-component counters were bookkeeping with no consumer. Nothing in malmo ever installs a brain and a UI from different releases, or a host-agent that predates the repo state it shipped from by more than the normal apt-lag window (`UPDATES.md` # 2) — every release is cut from one commit, so three separately-incrementing numbers were always going to read the same story (a bump on one commit) in three different vocabularies. Tracking one number that means "this commit" is simpler to reason about, simpler to assert in CI (a pushed tag against one file, not three), and removes a whole class of "did I bump the UI's version too" release-checklist item that had no actual failure mode behind it.
+
+**What this doesn't change:** `RELEASE_MANIFEST.md`'s schema still carries separate `brain` and `ui` semver fields (unbuilt, out of scope for this change) — with one repo version those two fields are always equal in practice; a brief note was added there rather than redesigning the manifest.
+
+**Affected docs:** `BUILD.md` # Versioning (rewritten), artifact list, locked decisions; `RELEASE_MANIFEST.md` (note only); `docs/dev/contributing.md` # Release model (VERSION-bump step added); `docs/progress/repo-version-and-compat-range.md`.
+
+---
+
+## 2026-07-16 — The image inherits the repo SemVer; CalVer for the ISO is dropped
+
+**Previously:** `BUILD.md` # Versioning locked "CalVer (`YYYY.MM`) for the ISO itself, since it's a snapshot of host-agent + brain + Debian + apps" — reasoning that avoided "semver-stretching for a thing that isn't a single component," on the assumption that the ISO/cloud-image bundled multiple independently-versioned components that needed reconciling into a different scheme.
+
+**Now:** the image takes the **same `vX.Y.Z`** as the rest of the repo. The premise that motivated CalVer — the image is a bundle of independently-versioned things — no longer holds once host-agent/brain/UI share one repo version (the sibling entry above): the image is a snapshot of *one* version, not several, so there is no reconciliation problem left to solve with a different versioning scheme.
+
+**Why:** one commit shouldn't have two identities. A box builder, a support thread, or a bug report can now say "malmo 0.4.0" and mean the same thing whether they're looking at the brain's `--version` output, the UI's build, or the image filename (`malmo-v0.4.0-amd64.qcow2`) — there's no translation table between a SemVer and a CalVer for the same artifact.
+
+**Affected docs:** `BUILD.md` # Versioning, artifact list (`malmo-vX.Y.Z-amd64.qcow2`/`.raw` — filenames were already the SemVer form and needed no change, only the prose describing the scheme), locked decisions; `docs/progress/repo-version-and-compat-range.md`.
+
+---
+
 ## 2026-07-16 — The hosted app strip is per-cookie, not the whole `Cookie` header (#335)
 
 **Previously:** #306 stripped the **whole `Cookie` header** from every hosted app route, on the reasoning (logged below, same-day 2026-07-08 entry) that it was "the simplest form that satisfies the 'no app upstream ever receives a cookie' invariant". That entry stated the tradeoff plainly and named its own escape hatch: an app keeping cookie-based session/CSRF state "won't see it in `restricted` *or* `public` mode", the injected `X-Malmo-User` headers are the session for owner-only apps, "and per-cookie surgical stripping is the follow-up if a real app needs its own cookies."

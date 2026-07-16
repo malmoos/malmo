@@ -7,16 +7,46 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/malmoos/malmo/internal/auth"
+	"github.com/malmoos/malmo/internal/version"
 )
 
 // registerSystem registers the box-level system routes. Only the one-time
-// storage poll lives here today; the live resource stream (GET
-// /api/v1/system/live) is a raw SSE handler registered in Handler, not huma.
+// storage poll and the build-version read live here today; the live resource
+// stream (GET /api/v1/system/live) is a raw SSE handler registered in Handler,
+// not huma.
 func (s *Server) registerSystem(api huma.API) {
 	huma.Register(api, huma.Operation{
 		OperationID: "get-system-storage", Method: "GET", Path: "/api/v1/system/storage",
 		Summary: "Per-disk storage usage (used/total bytes) for the system-resources panel",
 	}, s.systemStorage)
+	huma.Register(api, huma.Operation{
+		OperationID: "get-system-version", Method: "GET", Path: "/api/v1/system/version",
+		Summary: "The running malmo-brain build's version and git commit",
+	}, s.systemVersion)
+}
+
+// SystemVersionDTO is the GET /api/v1/system/version body: the brain build's
+// repo SemVer (VERSION file, BUILD.md # Versioning — one version for the whole
+// monorepo, DECISIONS.md 2026-07-16) plus the short git commit it was built
+// from, both stamped at build time (internal/version). Surfacing this in the
+// dashboard is a later slice; this endpoint is the box-level read it will use.
+type SystemVersionDTO struct {
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+}
+
+// systemVersion reads the brain's own stamped build identity — no host-agent
+// round trip, it's compiled into this binary. Available to every signed-in
+// user with no role gate, same posture as systemStorage: build identity isn't
+// per-user or sensitive data.
+func (s *Server) systemVersion(ctx context.Context, _ *struct{}) (*struct{ Body SystemVersionDTO }, error) {
+	if _, ok := auth.FromContext(ctx); !ok {
+		return nil, huma.Error401Unauthorized("unauthenticated")
+	}
+	return &struct{ Body SystemVersionDTO }{Body: SystemVersionDTO{
+		Version: version.Version,
+		Commit:  version.Commit,
+	}}, nil
 }
 
 // DiskSpaceDTO is one volume's fullness for the Storage bars: a human Label

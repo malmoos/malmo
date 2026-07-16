@@ -108,7 +108,7 @@ These are the issue types the brain knows about at v1. New issues are added by c
 
 | ID | Severity | Blocks | Tier | Summary |
 |---|---|---|---|---|
-| `version-mismatch` | error | apps | 2 | host-agent and brain versions are not the lockstep pair they should be. |
+| `version-mismatch` | error | apps | 2 | host-agent's reported version is older than the minimum this brain requires — a compatible **range**, not an exact-match pair; a newer host-agent never raises this (`UPDATES.md` # 1 update ordering: host-agent updates first). |
 | `app-image-partial` | warning | (that app only) | 2 | An app image download was interrupted and is incomplete. |
 | `container-restart-loop` | warning | (nothing) | 2 | An app's container is crash-looping (restarted more than N times in a window). Per-app `instance_key`. The app is already failing; we surface it rather than block. Tier-2 action: view logs / stop the app. |
 | `app-unresponsive` | warning | (nothing) | 2 | An app's container is running but its declared HTTP health-probe fails ("up but not responding"). Gated on the optional manifest `health_probe` field — apps that don't declare it are never probed. The app is reachable in Docker terms but not answering coherently; we surface it rather than block. Tier-2 action: view logs / restart the app. |
@@ -156,7 +156,7 @@ The brain runs in a container behind the Docker socket-proxy (`CONTROL_PLANE.md`
 
 These defaults apply to **every** detector unless its row overrides them. `HEALTH.md` previously deferred this to "inside each detector"; pinning a default stops every detector reinventing anti-flap.
 
-- **Debounce — raise on 2 consecutive bad samples, clear on 1 good sample.** Asymmetric on purpose: slow to alarm (avoid transient-noise banners), fast to reassure. **Exception:** locus-A boot reporters and locus-D reactive signals (udev, Docker events) are authoritative and 1-shot — no debounce. Locus-C detectors that check a deterministic, non-noisy value (e.g. `version-mismatch`: exact equality of a version string) are also 1-shot: raise/clear on the first definitive reading, no debounce needed.
+- **Debounce — raise on 2 consecutive bad samples, clear on 1 good sample.** Asymmetric on purpose: slow to alarm (avoid transient-noise banners), fast to reassure. **Exception:** locus-A boot reporters and locus-D reactive signals (udev, Docker events) are authoritative and 1-shot — no debounce. Locus-C detectors that check a deterministic, non-noisy value (e.g. `version-mismatch`: a semver comparison of host-agent's reported version against the brain's `minimumAgentVersion` floor — DECISIONS.md 2026-07-16) are also 1-shot: raise/clear on the first definitive reading, no debounce needed.
 - **Hysteresis on threshold issues.** Raise and clear thresholds differ so a value hovering at the boundary doesn't flap the banner: `disk-nearly-full` raises at 90%/85% but clears only below 88%/83%; `disk-full` raises at 95%, clears below 93%.
 - **No severity escalation over time** (already locked) — a warning that's been up for a week is still a warning. Detectors may raise a *different, more severe issue* when the *evidence* worsens (e.g. SMART pre-fail vs. confirmed self-test FAIL could be two issues), but never escalate the same issue by age.
 - **Last-checked is always fresh.** Every poll updates `last_checked_at` even when nothing transitions, so the dashboard can show "checked 30s ago" and a stale timestamp itself signals a dead detector.
@@ -186,7 +186,7 @@ These defaults apply to **every** detector unless its row overrides them. `HEALT
 | `brain-db-corrupt` | `PRAGMA integrity_check` | boot + 6h | result ≠ `ok` *(built)* |
 | `schema-migration-failed` | migration runner result | boot | migration aborted |
 | `bootstrap-state-mismatch` | bootstrap marker present but DB absent | boot | mismatch |
-| `version-mismatch` | host-agent vs brain version on handshake | each handshake | not the lockstep pair *(built)* |
+| `version-mismatch` | host-agent's reported `agent_version` vs the brain's `minimumAgentVersion` floor, on handshake | each handshake | agent version older than the minimum *(built)* |
 | `tls-cert-near-expiry` | NotAfter of the served `.malmo.network` cert | daily | within renewal-failure window |
 | `update-available` | release/catalog manifest vs installed | per refresh | newer version present |
 | `backup-overdue` | last successful backup timestamp | hourly | older than window *(deferred with backup)* |

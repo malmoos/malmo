@@ -288,11 +288,14 @@ curl --unix-socket .dev/agent.sock http://agent/v1/discovery/state
 
 ## CI
 
-Two **path-filtered, PR-only** workflows gate every PR into `main`, mirroring
-the local pre-PR gate. Each runs only when its own files change, so a docs-only
-PR spins no runner, a Go-only PR skips the web build, and vice versa. They're
-PR-only (no `push: main`) because every change lands via PR — a push trigger
-would just double-run.
+Two **path-filtered, PR-only** workflows gate every PR into `dev` or `main`,
+mirroring the local pre-PR gate. `dev` is the default branch and where
+ordinary feature PRs land; `main` only moves via the dev->main PR the
+maintainer opens to cut a release, and it's gated the same way so a release
+can't merge with a broken build. Each workflow runs only when its own files
+change, so a docs-only PR spins no runner, a Go-only PR skips the web build,
+and vice versa. They're PR-only (no `push:`) because every change lands via
+PR — a push trigger would just double-run.
 
 - **`.github/workflows/ci-go.yml`** — runs on `**.go` / `go.mod` / `go.sum` /
   `Makefile` changes: installs `libpam0g-dev`, then `go build ./...`,

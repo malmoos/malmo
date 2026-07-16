@@ -15,7 +15,15 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/malmo-brain ./cmd/brain
+# Build identity (BUILD.md # Versioning): VERSION is in the build context (repo
+# root), but .git is excluded (.dockerignore — never ship dev/VCS state into the
+# image), so the commit can't be resolved with `git rev-parse` in here. The
+# Makefile's brain-image target passes it in as a build-arg instead.
+ARG MALMO_COMMIT=unknown
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w \
+      -X github.com/malmoos/malmo/internal/version.Version=$(cat VERSION) \
+      -X github.com/malmoos/malmo/internal/version.Commit=${MALMO_COMMIT}" \
+      -o /out/malmo-brain ./cmd/brain
 
 FROM debian:trixie-slim AS runtime
 # docker-ce-cli + docker-compose-plugin from Docker's official apt repo — the
