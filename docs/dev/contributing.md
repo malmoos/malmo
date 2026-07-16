@@ -35,12 +35,12 @@ gh issue edit <N> --add-assignee @me                 # claim it — assignment, 
 
 If a task turns out to need a **design decision that isn't in a spec**, stop — that's a `NEXT.md` item, not implementation. Surface it (comment on the issue + flag the maintainer); don't invent the answer (see [`../specs/NEXT.md`](../specs/NEXT.md) and CLAUDE.md # Working style).
 
-## Step 2 — Branch off `main`
+## Step 2 — Branch off `dev`
 
-Always work on a branch; **never commit to `main`**. Every change lands via a PR into `main`.
+Always work on a branch; **never commit to `dev` or `main`**. Every change lands via a PR into `dev` — that's the default branch and where feature work integrates. `main` only moves via a dev->main PR the maintainer opens to cut a release (see [Release model](#release-model) below); a contributor never targets `main` directly.
 
 ```bash
-git checkout main && git pull            # always start from a fresh main
+git checkout dev && git pull             # always start from a fresh dev
 git checkout -b <area>/<N>-<short-slug>  # e.g. feat/12-health-banners, fix/8-login-lockout
 ```
 
@@ -113,12 +113,23 @@ Address every **Block** finding before opening the PR. If you disagree with a fi
 
 ```bash
 git push -u origin <your-branch>
-gh pr create --base main --fill        # then flesh out the body
+gh pr create --base dev --fill         # then flesh out the body
 ```
 
 PR body must include **`Closes #<N>`** — do not delete this line. It is the only thing that tells GitHub to auto-close the linked issue when the PR merges; without it the issue stays open and the board goes stale. Replace `<N>` with the issue number. Also include: the spec(s) touched, what you tested (and against what — real Docker? a VM boot?), and any known gaps. If your work unblocks a dependent issue, drop its `blocked` label (`gh issue edit <N> --remove-label blocked`).
 
-**Don't merge your own PR** unless the maintainer has said to. PRs into `main` get a review pass first; merging closes the linked issue automatically.
+**Don't merge your own PR** unless the maintainer has said to. PRs into `dev` get a review pass first; merging closes the linked issue automatically.
+
+## Release model
+
+Feature work always branches off `dev` and PRs into `dev` — that's covered above. Releases are a separate, maintainer-only step layered on top:
+
+- The maintainer opens a PR from `dev` into `main` when it's time to cut a release. A dev->main PR **is** a release — that's what triggers it, not a separate "release" label or process.
+- Both `ci-go.yml` and `ci-web.yml` gate the dev->main PR the same way they gate every feature PR, so a release can't merge with a broken build or a stale OpenAPI/TS client.
+- Once the dev->main PR merges, the maintainer tags the resulting `main` commit `vX.Y.Z` (SemVer).
+- Pushing a `v*` tag triggers `ci-cloud-image.yml`, which builds the hosted cloud image, runs the full seeded-boot gate, and publishes it to Hetzner — a tagged release always ships an image. `workflow_dispatch` remains available for manual build-only or build+publish runs outside the tag flow (see the workflow's header comment).
+
+Contributors never push directly to `main` and never tag releases — that's the maintainer's call.
 
 ## Definition of done — checklist
 
@@ -133,10 +144,10 @@ PR body must include **`Closes #<N>`** — do not delete this line. It is the on
 - [ ] No swallowed errors (`_ = err`); user-facing error messages are plain English, not raw Go error strings.
 - [ ] Commits are logical units with "why" messages; no micro-commit or WIP history.
 - [ ] Self-review run (`/code-review low` with progress doc as context per [`code-review.md`](code-review.md)); all Block findings addressed, disagreements noted in Known gaps.
-- [ ] Branched off a fresh `main` (`git checkout main && git pull` before branching); branch named `<area>/<N>-<short-slug>`.
+- [ ] Branched off a fresh `dev` (`git checkout dev && git pull` before branching); branch named `<area>/<N>-<short-slug>`.
 - [ ] One PR closes exactly one issue; if scope grew, the issue was split first.
 - [ ] Review feedback addressed with fixup commits on the existing branch, not a new PR; if the PR was replaced, the old one was closed first with "Supersedes #<N>".
-- [ ] PR into `main` with `Closes #<N>` (do not delete — GitHub won't auto-close the issue otherwise); any dependent issue un-`blocked`.
+- [ ] PR into `dev` with `Closes #<N>` (do not delete — GitHub won't auto-close the issue otherwise); any dependent issue un-`blocked`.
 
 ## When you're stuck or unsure
 

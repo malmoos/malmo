@@ -55,7 +55,7 @@ The inner/outer boundary is also the **cross-platform / Linux-only** boundary. T
 
 **Prerequisites for the inner loop:** Docker + `docker compose`, Node 20+, Go 1.23+, host port `:80` free (dev Caddy binds it so `<slug>.local` works portless), and `avahi-daemon` running on Linux (so `.local` names resolve under `make dev`). The full Go test suite additionally needs `libpam0g-dev` on Linux; see `docs/dev/running-locally.md`.
 
-**Start every piece of work from a fresh branch off latest `main`:** `git checkout main && git pull && git checkout -b <branch>`. Never commit straight to `main`.
+**Start every piece of work from a fresh branch off latest `dev`:** `git checkout dev && git pull && git checkout -b <branch>`. Never commit straight to `dev` or `main`. `dev` is the default branch and where feature PRs land; a PR from `dev` into `main` is how the maintainer cuts a release, so a contributor never targets `main` directly.
 
 Actionable parallel work lives in [GitHub Issues](https://github.com/malmoos/malmo/issues) (`gh issue list --label P1`).
 

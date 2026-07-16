@@ -1,13 +1,15 @@
 # CI gate for the web-ui dashboard: typecheck + production build.
 #
-# Triggers on PRs into main, and only when web-ui/ changes (path filter) —
-# Go-only / docs-only PRs don't spin a runner. PR-only by design: every change
-# lands via PR, so a push:main trigger would just double-run.
+# Triggers on PRs into dev or main, and only when web-ui/ changes (path
+# filter) — Go-only / docs-only PRs don't spin a runner. `dev` is the default
+# branch and gates ordinary feature PRs; `main` gates the dev->main PR that
+# cuts a release, so a release can't merge ungated. PR-only by design: every
+# change lands via PR, so a push trigger would just double-run.
 name: CI / web-ui
 
 on:
   pull_request:
-    branches: [main]
+    branches: [dev, main]
     paths:
       - "web-ui/**"
       - "api/**"

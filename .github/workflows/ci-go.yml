@@ -1,9 +1,12 @@
 # CI gate for the Go brain layer: full test pyramid + vet + build.
 # The CI realization of the fast Go layers in docs/specs/TESTING.md.
 #
-# Triggers on PRs into main, and only when Go-relevant files change (path
-# filter) — docs-only / web-only PRs don't spin a runner. PR-only by design:
-# every change lands via PR, so a push:main trigger would just double-run.
+# Triggers on PRs into dev or main, and only when Go-relevant files change
+# (path filter) — docs-only / web-only PRs don't spin a runner. `dev` is the
+# default branch and gates ordinary feature PRs; `main` gates the dev->main
+# PR that cuts a release, so a release can't merge ungated. PR-only by
+# design: every change lands via PR, so a push trigger would just
+# double-run.
 #
 # DEFERRED — not wired here (issue #14 follow-up): the medium/slow boot lanes
 # (`make test-boot-chain-nspawn`, `make test-medium-qemu`) need privileged
@@ -12,7 +15,7 @@ name: CI / Go
 
 on:
   pull_request:
-    branches: [main]
+    branches: [dev, main]
     paths:
       - "**.go"
       - "go.mod"

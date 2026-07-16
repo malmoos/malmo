@@ -1,7 +1,20 @@
 # Build the hosted cloud-VM image with mkosi, prove the brain accepts the CURRENT
 # first-boot seed schema (seeded QEMU boot), assert it stays lean, then publish it
-# to Hetzner as a snapshot and print the snapshot id. Manual-only
-# (workflow_dispatch) — the full build is expensive (~40 min) and a publish is a
+# to Hetzner as a snapshot and print the snapshot id.
+#
+# Two triggers, two intents:
+#   - `push: tags: v*` — a cut release. The maintainer opens a dev->main PR to
+#     release, merges it, then tags the resulting main commit `vX.Y.Z`. That tag
+#     push builds, runs the full boot-test gate, and PUBLISHES — publishing on a
+#     version tag is the whole point of tagging a release. Deliberately NOT
+#     triggered on a plain `push: branches: [main]` — a dev->main merge always
+#     gets tagged as part of the release, so a branch-push trigger would build
+#     the same commit twice for ~2x runner time.
+#   - `workflow_dispatch` — manual, on-demand. The `publish` input still governs
+#     whether the run publishes (default true); `publish=false` gives a
+#     build-only smoke run. Unchanged from before tags existed.
+#
+# Either way the full build is expensive (~40 min) and a publish is a
 # deliberate act, not a per-push one.
 #
 # Closes the gap #189/#238 carried: until now the cloud image had NO automated
@@ -23,13 +36,16 @@
 # rebuilds the control-plane images from source, so the "image labeled new, brain
 # baked old" skew cannot recur.
 #
-# Trigger from the Actions tab or `gh workflow run "CI / Cloud image"`. The run
-# prints `MALMO_HETZNER_IMAGE=<id>`; set that on the control-plane and deploy.
+# Manual runs: trigger from the Actions tab or `gh workflow run "CI / Cloud
+# image"`. The run prints `MALMO_HETZNER_IMAGE=<id>`; set that on the
+# control-plane and deploy.
 #
 # Required secret: HCLOUD_TOKEN — a Hetzner Cloud API token (publish only).
 name: CI / Cloud image
 
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       publish:
@@ -45,6 +61,15 @@ concurrency:
 jobs:
   cloud-image:
     name: Build + seeded-boot test + publish hosted cloud image
+    # Single source of truth for "should this run publish", computed once so
+    # the 3 publish-gated steps below can't drift out of sync with each other.
+    # A tag push always publishes (that's the point of tagging a release); a
+    # workflow_dispatch run publishes iff its `publish` input says so. On a
+    # `push` event `inputs.publish` is undefined, which is why the tag-push
+    # half of the OR is needed — `inputs.publish` alone would evaluate falsy
+    # and silently skip publishing on every tagged release.
+    env:
+      SHOULD_PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
     # Pin 24.04 explicitly: this is the exact environment that reproduces the
     # mkosi-sandbox EPERM (#189), so the fix has to be proven here, not on a
     # floating ubuntu-latest.
@@ -160,13 +185,13 @@ jobs:
       # ---- publish to Hetzner (only when requested) --------------------------
 
       - name: Set up Go (for hcloud-upload-image)
-        if: ${{ inputs.publish }}
+        if: ${{ env.SHOULD_PUBLISH == 'true' }}
         uses: actions/setup-go@v5
         with:
           go-version: stable
 
       - name: Install hcloud-upload-image
-        if: ${{ inputs.publish }}
+        if: ${{ env.SHOULD_PUBLISH == 'true' }}
         run: |
           go install github.com/apricote/hcloud-upload-image@latest
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
@@ -179,9 +204,14 @@ jobs:
       # .dev/cloud/; we xz it for a smaller upload.
       - name: Publish image to Hetzner + resolve snapshot id
         id: publish
-        if: ${{ inputs.publish }}
+        if: ${{ env.SHOULD_PUBLISH == 'true' }}
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          # Only a tag push carries a real SemVer tag; github.ref_name on a
+          # workflow_dispatch run is the branch/ref it was run against, not a
+          # version, so leave MALMO_TAG empty in that case rather than emit a
+          # bogus malmo-version label.
+          MALMO_TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
         run: |
           set -euo pipefail
           [ -n "${HCLOUD_TOKEN:-}" ] || { echo "::error::HCLOUD_TOKEN secret not set"; exit 1; }
@@ -194,8 +224,13 @@ jobs:
 
           run_id="$(date +%Y%m%d-%H%M%S)"
           os_rev="$(git rev-parse --short HEAD)"
-          desc="malmo hosted cloud image (C2) ${run_id} os@${os_rev}"
-          labels="malmo-image=hosted-cloud,malmo-c2-upload=${run_id},malmo-os-rev=${os_rev}"
+          if [ -n "${MALMO_TAG:-}" ]; then
+            desc="malmo hosted cloud image (C2) ${run_id} ${MALMO_TAG} os@${os_rev}"
+            labels="malmo-image=hosted-cloud,malmo-c2-upload=${run_id},malmo-os-rev=${os_rev},malmo-version=${MALMO_TAG}"
+          else
+            desc="malmo hosted cloud image (C2) ${run_id} os@${os_rev}"
+            labels="malmo-image=hosted-cloud,malmo-c2-upload=${run_id},malmo-os-rev=${os_rev}"
+          fi
 
           hcloud-upload-image upload \
             --image-path "$raw.xz" \

@@ -28,7 +28,7 @@
 - [ ] Progress entry written (`docs/progress/NNNN-…`); indexes in both READMEs updated; Up-next re-ordered if needed.
 - [ ] Spec doc updated if behavior realized/diverged; `DECISIONS.md` entry if a locked decision flipped.
 - [ ] No section-sign symbol (write `#` instead), no hard-wrapped markdown, `log/slog` only, conventions per `CLAUDE.md`.
-- [ ] Branch off `main`, PR into `main` with `Closes #<N>` (do not delete this line — GitHub will not auto-close the issue otherwise); any dependent issue un-`blocked`.
+- [ ] Branch off `dev`, PR into `dev` with `Closes #<N>` (do not delete this line — GitHub will not auto-close the issue otherwise); any dependent issue un-`blocked`.
 
 <!-- ⚠️ REQUIRED: keep the Closes line below — do not delete it. Without it GitHub will NOT auto-close the issue on merge and it will remain open. Replace <N> with the issue number. -->
 Closes #<N>
