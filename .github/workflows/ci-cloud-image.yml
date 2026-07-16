@@ -298,7 +298,11 @@ jobs:
           # unconditionally rather than only when a tag happened to trigger the
           # run.
           malmo_version="$(cat VERSION)"
-          desc="malmo hosted cloud image (C2) ${run_id} v${malmo_version} os@${os_rev}"
+          # Lead with the version: `desc` is what the Hetzner console shows as
+          # the snapshot's name in the images list, so the first thing you read
+          # should be which malmo this is. run_id keeps two snapshots of the
+          # same version apart; os_rev pins the exact commit it was built from.
+          desc="malmo v${malmo_version} — hosted cloud image (os@${os_rev}, ${run_id})"
           labels="malmo-image=hosted-cloud,malmo-c2-upload=${run_id},malmo-os-rev=${os_rev},malmo-version=${malmo_version}"
 
           hcloud-upload-image upload \
