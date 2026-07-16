@@ -204,11 +204,14 @@ func serviceImages(composeBytes []byte) (map[string]string, error) {
 }
 
 // repoOf returns the registry repo portion of an image reference, stripping
-// both `:tag` and `@sha256:…` suffixes. The tag colon is distinguished from a
-// port colon by checking whether a `/` follows it.
+// both `:tag` and `@sha256:…` suffixes. A ref may carry both (`name:tag@sha256:…`),
+// so the digest goes first and the tag is stripped from what remains — the pin
+// written into the override must be the canonical `name@sha256:…`
+// (APP_LIFECYCLE.md # image digest pinning), carrying no tag. The tag colon is
+// distinguished from a port colon by checking whether a `/` follows it.
 func repoOf(image string) string {
 	if at := strings.Index(image, "@"); at >= 0 {
-		return image[:at]
+		image = image[:at]
 	}
 	if colon := strings.LastIndex(image, ":"); colon > 0 && !strings.Contains(image[colon:], "/") {
 		return image[:colon]
