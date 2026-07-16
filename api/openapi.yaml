@@ -1612,6 +1612,24 @@ components:
       required:
         - disks
       type: object
+    SystemVersionDTO:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/SystemVersionDTO.json
+          format: uri
+          readOnly: true
+          type: string
+        commit:
+          type: string
+        version:
+          type: string
+      required:
+        - version
+        - commit
+      type: object
     Test-mail-providerRequest:
       additionalProperties: false
       properties:
@@ -2810,6 +2828,23 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       summary: Set the system time zone via host-agent timedatectl (admin)
+  /api/v1/system/version:
+    get:
+      operationId: get-system-version
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemVersionDTO"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: The running malmo-brain build's version and git commit
   /api/v1/users:
     get:
       operationId: list-users
