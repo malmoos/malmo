@@ -485,8 +485,9 @@ access)
     #   - restricted (the hosted default): unauthenticated ⇒ 302 to the box login;
     #     the owner's forward-auth cookie ⇒ proxied through with no second login;
     #   - public (after the exposure toggle): reachable with no session;
-    #   - the Cookie header never reaches the app upstream in EITHER mode (#306's
-    #     whole-header strip — the load-bearing anti-leak invariant).
+    #   - malmo_forward_auth never reaches the app upstream in EITHER mode, while an
+    #     app's own cookie DOES (#335's per-cookie strip — the whole-header delete it
+    #     replaced made every third-party app with a browser login unusable, #306).
     [ -f "$SEED" ] || fail "access mode but $SEED absent (seed materializer did not run?)"
     box_id="$(json_str "$SEED" box_id)"
     [ -n "$box_id" ] || fail "access mode: could not read box_id from $SEED"
@@ -573,8 +574,9 @@ access)
     #    app proxies through. Poll until whoami actually answers (install + compose up
     #    + the route flip from splash to app race this): a 200 whose body is the
     #    whoami echo (Hostname:) means the whole transaction converged AND the
-    #    forward_auth verify let the owner through. Send an extra throwaway cookie so
-    #    the strip assertion below proves a WHOLE-header strip, not just the fa cookie.
+    #    forward_auth verify let the owner through. Send an extra throwaway cookie:
+    #    the strip assertion below proves the strip is PER-COOKIE (#335) — the probe
+    #    must survive to the app upstream, and malmo_forward_auth must not.
     a_resp=""; a_status=""
     for _i in $(seq 1 150); do
         a_resp="$(full_get / "$app_host" "${fa_cookie}; probe=leakcheck" 2>/dev/null || true)"
@@ -586,9 +588,11 @@ access)
         || fail "access: restricted app with the owner forward-auth cookie never proxied through to whoami after 150s: status='$a_status'"
     grep -qiE '^X-Malmo-User:' <<<"$a_resp" \
         || fail "access: forward-auth identity header X-Malmo-User was not forwarded to the app upstream"
-    grep -qiE '^Cookie:' <<<"$a_resp" \
-        && fail "access: COOKIE LEAK (restricted) — the app upstream received a Cookie header; the #306 whole-header strip is broken"
-    echo "cloud-assertions: restricted app proxies the owner through with no second login (identity forwarded, Cookie stripped)"
+    grep -qiE '^Cookie:.*malmo_forward_auth=' <<<"$a_resp" \
+        && fail "access: COOKIE LEAK (restricted) — the app upstream received malmo_forward_auth; the #335 per-cookie strip is broken"
+    grep -qiE '^Cookie:.*probe=leakcheck' <<<"$a_resp" \
+        || fail "access: restricted app upstream did not receive its own cookie (probe=leakcheck) — the strip is removing more than malmo_forward_auth: $(grep -i '^Cookie:' <<<"$a_resp" | tr -d '\r')"
+    echo "cloud-assertions: restricted app proxies the owner through with no second login (identity forwarded, only malmo_forward_auth stripped)"
 
     # 3a. RESTRICTED, NO session ⇒ 302 to the box login. Now that the app has
     #     converged, an unauthenticated GET exercises the forward_auth gate's closed
@@ -628,15 +632,19 @@ access)
 
     # 4b. PUBLIC + a forward-auth cookie ⇒ STILL stripped before the app upstream. A
     #     public app must never receive the Domain-scoped cookie, or it could replay
-    #     it against the owner's restricted apps — the reason #306 strips the whole
-    #     Cookie header on every hosted route, public included.
+    #     it against the owner's restricted apps — the reason the route builder
+    #     strips malmo_forward_auth on every hosted route, public included (#335
+    #     narrows this from #306's whole-header delete to just that one cookie; the
+    #     probe cookie must still reach a public app, same as a restricted one).
     pl_resp="$(full_get / "$app_host" "${fa_cookie}; probe=leakcheck" 2>/dev/null || true)"
     grep -qi 'Hostname:' <<<"$pl_resp" || fail "access: public-app cookie-leak probe did not reach whoami"
-    grep -qiE '^Cookie:' <<<"$pl_resp" \
-        && fail "access: COOKIE LEAK (public) — the app upstream received a Cookie header; the #306 whole-header strip is broken"
-    echo "cloud-assertions: public app also strips the Cookie header (no forward-auth cookie leaks to a public upstream)"
+    grep -qiE '^Cookie:.*malmo_forward_auth=' <<<"$pl_resp" \
+        && fail "access: COOKIE LEAK (public) — the app upstream received malmo_forward_auth; the #335 per-cookie strip is broken"
+    grep -qiE '^Cookie:.*probe=leakcheck' <<<"$pl_resp" \
+        || fail "access: public app upstream did not receive its own cookie (probe=leakcheck) — the strip is removing more than malmo_forward_auth: $(grep -i '^Cookie:' <<<"$pl_resp" | tr -d '\r')"
+    echo "cloud-assertions: public app also strips only malmo_forward_auth (no forward-auth cookie leaks to a public upstream, app's own cookie intact)"
 
-    echo "cloud-assertions: hosted per-app access modes verified end-to-end (restricted gate + owner proxy-through, public reachability, Cookie strip in both modes)"
+    echo "cloud-assertions: hosted per-app access modes verified end-to-end (restricted gate + owner proxy-through, public reachability, per-cookie strip in both modes)"
     ;;
 *)
     fail "unknown assert mode '$MODE'"
