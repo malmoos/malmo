@@ -33,7 +33,7 @@ WIRING="${CLOUD_DIR}/mkosi.extra.wiring" # shared production wiring (ExtraTree o
 PKGMNGR="${TEST_DIR}/mkosi.pkgmngr"
 CP_BUNDLE="${REPO_ROOT}/.dev/control-plane"
 CANARY="${WORK}/.cloud-boot-ready"
-CANARY_VERSION="v17"  # bump when staging/mkosi.conf/repart changes require a clean rebuild
+CANARY_VERSION="v18"  # bump when staging/mkosi.conf/repart changes require a clean rebuild
 IMAGE_OUT="${WORK}/malmo-cloud.raw"
 
 if [ "${EUID:-$(id -u)}" -ne 0 ]; then
@@ -123,6 +123,53 @@ mkdir -p "$EXTRA/usr/local/bin" "$EXTRA/etc/systemd/system"
 cp "${CLOUD_DIR}/cloud-assertions.sh" "$EXTRA/usr/local/bin/cloud-assertions.sh"
 chmod 0755 "$EXTRA/usr/local/bin/cloud-assertions.sh"
 cp "${TEST_DIR}/malmo-cloud-assertions.service" "$EXTRA/etc/systemd/system/"
+
+# --- 3b. app-install fixtures for the access-mode e2e (#308) — TEST-LANE ONLY. The
+# access boot installs whoami air-gapped and drives the per-app forward-auth access
+# modes through real Caddy. These land in the TEST ExtraTree (dev/cloud/test/
+# mkosi.extra), NOT the shared production wiring ($WIRING) — the lean image ships no
+# app and no offline-install mode. mkosi overlays both trees onto one rootfs, so the
+# whoami tar sits alongside the control-plane bundle and the first-boot loader (which
+# globs *.tar) docker-loads it too.
+echo "baking whoami app image + catalog snapshot for the access-mode e2e (#308)..."
+mkdir -p "$EXTRA/var/lib/malmo/control-plane-images" \
+         "$EXTRA/var/lib/malmo/catalog-cache" \
+         "$EXTRA/etc/systemd/system/host-agent.service.d"
+
+# whoami image: pull by DIGEST (not the mutable tag), re-tag to the v1.10.3 the
+# compose + catalog reference — a save/load image carries no RepoDigest, so offline
+# mode pins the tag. Same image + digest the medium lane bakes.
+WHOAMI_REF="traefik/whoami@sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c"
+docker pull "$WHOAMI_REF"
+docker tag "$WHOAMI_REF" traefik/whoami:v1.10.3
+docker save traefik/whoami:v1.10.3 -o "$EXTRA/var/lib/malmo/control-plane-images/whoami.tar"
+
+# Pre-seed the brain's last-good catalog cache with a whoami snapshot: air-gapped,
+# the brain reads this at boot exactly as a synced-then-offline snapshot and installs
+# from it (internal/catalog/remote.go # loadCache). mkcatalog generates it from the
+# minimal hosted whoami package (pure routing, no folder grant — the access proof is
+# the gate + strip, not bind mounts) and stamps the integrity digest the brain
+# verifies. Built as the caller (warm Go cache) via stage_build_go, then run as root.
+MKCATALOG_BIN="${WORK}/mkcatalog"
+stage_build_go "$MKCATALOG_BIN" "${REPO_ROOT}/dev/mkcatalog/"
+"$MKCATALOG_BIN" \
+    -pkg "${TEST_DIR}/catalog/whoami" \
+    -environments hosted \
+    -out "$EXTRA/var/lib/malmo/catalog-cache/catalog.json"
+
+# Offline-install env, layered over the shared 10-cloud-brain.conf drop-in (20- sorts
+# after, so these win). host-agent-real forwards them into the brain container
+# (cmd/host-agent-real/main.go → brainlaunch): OFFLINE_INSTALL trusts the docker-
+# loaded image's catalog-promised digest instead of pulling, and the inert catalog
+# URL makes the background sync fail fast so the pre-seeded cache stands. A real
+# tenant box keeps the production default (pulls from the control plane) — this
+# override exists only in the boot-proof image.
+cat > "$EXTRA/etc/systemd/system/host-agent.service.d/20-cloud-test-catalog.conf" <<'EOF'
+[Service]
+Environment=MALMO_CATALOG_URL=http://127.0.0.1:9
+Environment=MALMO_CATALOG_CACHE_DIR=/var/lib/malmo/catalog-cache
+Environment=MALMO_OFFLINE_INSTALL=1
+EOF
 
 # --- 4. Docker apt repo for the build's package manager (trixie pocket — the
 # cloud image is Release=trixie). Build-host network only; the VM never apt-installs.

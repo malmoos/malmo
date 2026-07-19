@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -37,16 +38,159 @@ func New(adminAddr string) *Client {
 // routeID is the stable @id we attach to each route so we can delete it later.
 func routeID(instanceID string) string { return "malmo-app-" + instanceID }
 
-// AddRoute registers Host(host) -> reverse_proxy(upstream): the real upstream
-// once the app is healthy. upstream is "host:port" reachable from the Caddy
-// container (the main_service's alias on the malmo-ingress network).
-func (c *Client) AddRoute(ctx context.Context, instanceID, host, upstream string) error {
-	return c.upsertRoute(ctx, instanceID, host, []any{
-		map[string]any{
-			"handler":   "reverse_proxy",
-			"upstreams": []any{map[string]any{"dial": upstream}},
+// RouteConfig is the fully-resolved policy for one app's reverse-proxy route.
+// The profile/exposure decision lives in the caller — internal/lifecycle is the
+// single central route builder (ENVIRONMENT.md #306, "one central route builder
+// is the safety boundary"); this package only renders the JSON. An appliance
+// caller leaves StripCookieName empty and ForwardAuth nil, so the emitted route
+// is byte-for-byte the plain reverse_proxy it has always been.
+type RouteConfig struct {
+	InstanceID string
+	Host       string
+	Upstream   string // "host:port" reachable from Caddy (the app's malmo-ingress alias)
+	// StripCookieName, when non-empty, removes exactly that one cookie from the
+	// inbound Cookie header before proxying to the app upstream (hosted), and
+	// passes every other cookie through untouched. It carries the name rather
+	// than a bool so the one source of truth stays auth.ForwardAuthCookieName in
+	// the caller: a rename there must not silently stop the strip and leak the
+	// token to an app upstream.
+	//
+	// This deliberately does NOT delete the whole Cookie header. Doing so also
+	// deleted the app's own session cookies, so no third-party app with a
+	// cookie login could authenticate at all on hosted (#335).
+	StripCookieName string
+	// ForwardAuth, when non-nil, gates the route behind a Caddy forward_auth
+	// subrequest to the brain verify endpoint (hosted restricted apps). nil is a
+	// public app: the plain reverse_proxy with no gate.
+	ForwardAuth *ForwardAuthConfig
+}
+
+// ForwardAuthConfig parameterises the forward_auth gate placed in front of a
+// restricted app's reverse_proxy.
+type ForwardAuthConfig struct {
+	Upstream    string   // brain address Caddy dials for the verify subrequest
+	VerifyPath  string   // verify endpoint path, rewritten onto the subrequest
+	CopyHeaders []string // response headers copied from a 2xx verify onto the app request (identity)
+	LoginURL    string   // 302 target when verify does not return 2xx (the box login)
+}
+
+// AddRoute registers Host(cfg.Host) -> the app's reverse_proxy(cfg.Upstream),
+// optionally wrapped in a forward_auth gate and/or a Cookie strip per cfg. The
+// upstream is the real container alias, added once the app is healthy.
+func (c *Client) AddRoute(ctx context.Context, cfg RouteConfig) error {
+	proxy := map[string]any{
+		"handler":   "reverse_proxy",
+		"upstreams": []any{map[string]any{"dial": cfg.Upstream}},
+	}
+	if cfg.StripCookieName != "" {
+		proxy["headers"] = map[string]any{
+			"request": map[string]any{"replace": stripCookieReplacements(cfg.StripCookieName)},
+		}
+	}
+	handle := make([]any, 0, 2)
+	if cfg.ForwardAuth != nil {
+		handle = append(handle, forwardAuthHandler(*cfg.ForwardAuth))
+	}
+	handle = append(handle, proxy)
+	return c.upsertRoute(ctx, cfg.InstanceID, cfg.Host, handle)
+}
+
+// stripCookieReplacements renders the Caddy headers.request.replace body that
+// removes exactly one named cookie from the inbound Cookie header, leaving every
+// other cookie byte-for-byte intact. Two ordered passes, both load-bearing:
+//
+//  1. `(?:^|;\s*)<name>=[^;]*` removes the cookie wherever it sits in the
+//     header. The leading anchor is the safety: the obvious unanchored form
+//     (`<name>=[^;]*`) also matches *inside* a longer cookie name, so an app
+//     cookie called `evil_malmo_forward_auth` gets silently mangled into `evil_`
+//     plus whatever followed it. Caddy compiles search_regexp with Go's regexp
+//     and applies it with ReplaceAllString, so every occurrence goes: an app
+//     that sets its own host-only copy of the name cannot push the real cookie
+//     into a later position and have it survive for the app to read.
+//  2. `^;\s*` removes the separator the first pass leaves behind when the
+//     stripped cookie happened to be first in the header.
+//
+// The alternation is deliberately non-capturing: Caddy expands `${1}` in a
+// replacement, so a capture here would be a live trap for any future edit that
+// puts something in the (currently empty) replacement string.
+//
+// regexp.QuoteMeta stops a name containing regex metacharacters from compiling
+// into a pattern that matches more than itself.
+func stripCookieReplacements(name string) map[string]any {
+	return map[string]any{
+		"Cookie": []any{
+			map[string]any{"search_regexp": `(?:^|;\s*)` + regexp.QuoteMeta(name) + `=[^;]*`, "replace": ""},
+			map[string]any{"search_regexp": `^;\s*`, "replace": ""},
 		},
-	})
+	}
+}
+
+// forwardAuthHandler renders the Caddy forward_auth step — a reverse_proxy to the
+// brain verify endpoint with a handle_response policy — that gates a restricted
+// app. It is the native-JSON form of the Caddyfile `forward_auth` directive
+// (malmo drives Caddy over its admin API, so there is no Caddyfile): the
+// subrequest is copied, rewritten to GET fa.VerifyPath, and dialed at
+// fa.Upstream, carrying the request's cookies so the brain can read the
+// forward-auth cookie. On the response:
+//   - a 2xx (authorized) **deletes any client-supplied copy of fa.CopyHeaders,
+//     then sets them from the verify response**, and falls through to the next
+//     handler (the app reverse_proxy) — the delete-before-set is the load-bearing
+//     part: the app must never receive a caller-forged identity header, only what
+//     the brain vouched for (mirrors upstream Caddy's own copy_headers scrub);
+//   - any other status — the brain returns 401 when the forward-auth cookie is
+//     missing/invalid (#305) — is turned into a 302 redirect to fa.LoginURL.
+//
+// It deliberately omits the informational X-Forwarded-Method/-Uri header_up that
+// stock forward_auth adds: the verify endpoint reads only the cookie (#305). The
+// Cookie strip is on the app reverse_proxy (RouteConfig.StripCookieName), not
+// here: this subrequest must forward the cookie to the brain to be verified.
+func forwardAuthHandler(fa ForwardAuthConfig) map[string]any {
+	copyHeaders := map[string]any{}
+	scrub := make([]any, 0, len(fa.CopyHeaders))
+	for _, h := range fa.CopyHeaders {
+		copyHeaders[h] = []any{"{http.reverse_proxy.header." + h + "}"}
+		scrub = append(scrub, h)
+	}
+	return map[string]any{
+		"handler":   "reverse_proxy",
+		"upstreams": []any{map[string]any{"dial": fa.Upstream}},
+		"rewrite": map[string]any{
+			"method": "GET",
+			"uri":    fa.VerifyPath,
+		},
+		"handle_response": []any{
+			// 2xx: authorized — scrub any caller-supplied identity headers, then set
+			// them from the verify response, then continue to the app reverse_proxy
+			// (an empty final response falls through). Two ordered `headers` handlers
+			// so the delete provably runs before the set.
+			map[string]any{
+				"match": map[string]any{"status_code": []any{2}},
+				"routes": []any{map[string]any{
+					"handle": []any{
+						map[string]any{
+							"handler": "headers",
+							"request": map[string]any{"delete": scrub},
+						},
+						map[string]any{
+							"handler": "headers",
+							"request": map[string]any{"set": copyHeaders},
+						},
+					},
+				}},
+			},
+			// No matcher ⇒ everything else (401 from #305, or a brain error):
+			// redirect the browser to the box login instead of leaking the app.
+			map[string]any{
+				"routes": []any{map[string]any{
+					"handle": []any{map[string]any{
+						"handler":     "static_response",
+						"status_code": 302,
+						"headers":     map[string]any{"Location": []any{fa.LoginURL}},
+					}},
+				}},
+			},
+		},
+	}
 }
 
 // AddSplashRoute registers Host(host) -> a malmo-served splash page for the

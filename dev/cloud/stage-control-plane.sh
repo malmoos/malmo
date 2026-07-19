@@ -25,15 +25,41 @@
 # set -euo pipefail; mirror it here so sourcing from a non-strict script still fails fast.
 set -euo pipefail
 
+# Build identity (BUILD.md # Versioning: "every build stamps two fields") — the
+# same -ldflags the Makefile's LDFLAGS apply, recomputed here because they cannot
+# be inherited: bootstrap.sh is invoked as `sudo -E ./dev/cloud/bootstrap.sh`, so
+# make's MALMO_VERSION/MALMO_COMMIT are plain make variables that never reach this
+# script. An unstamped build is silent — it ships internal/version's "dev" default,
+# the brain's minimumAgentVersion check can't parse it as semver, an unparseable
+# core sorts before every valid version, and a correctly-built box raises
+# version-mismatch and blocks app installs. That is what v0.4.0 shipped.
+#
+# git runs as CALLER because under sudo the repo is owned by the invoking user and
+# git refuses a dubious-ownership repo as root; the commit falls back to "unknown"
+# exactly as the Makefile's does rather than failing a ~40min image build over it.
+# Only Commit can degrade — Version comes from the file, so the health check the
+# stamp exists for passes either way.
+stage_version_ldflags() {
+    local v c
+    v="$(cat "${REPO_ROOT}/VERSION")"
+    if [ -n "$CALLER" ]; then
+        c="$(sudo -u "$CALLER" git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    else
+        c="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    fi
+    printf -- '-X github.com/malmoos/malmo/internal/version.Version=%s -X github.com/malmoos/malmo/internal/version.Commit=%s' "$v" "$c"
+}
+
 # Build a Go binary, as the invoking user when running under sudo so the caller
 # owns the build cache. CGO on (PAM verify is kept in hosted) + CGO_CFLAGS as the
 # Makefile sets — dynamic against the build host's libpam, run on the Debian VM.
 stage_build_go() { # OUT PKG [extra go-build args...]
     local out="$1" pkg="$2"; shift 2
+    local ldflags; ldflags="$(stage_version_ldflags)"
     if [ -n "$CALLER" ]; then
-        sudo -u "$CALLER" env CGO_ENABLED=1 CGO_CFLAGS=-D_GNU_SOURCE "$GO" build "$@" -o "$out" "$pkg"
+        sudo -u "$CALLER" env CGO_ENABLED=1 CGO_CFLAGS=-D_GNU_SOURCE "$GO" build -ldflags "$ldflags" "$@" -o "$out" "$pkg"
     else
-        CGO_ENABLED=1 CGO_CFLAGS=-D_GNU_SOURCE "$GO" build "$@" -o "$out" "$pkg"
+        CGO_ENABLED=1 CGO_CFLAGS=-D_GNU_SOURCE "$GO" build -ldflags "$ldflags" "$@" -o "$out" "$pkg"
     fi
 }
 

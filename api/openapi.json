@@ -1236,6 +1236,13 @@
             "readOnly": true,
             "type": "string"
           },
+          "exposure": {
+            "enum": [
+              "restricted",
+              "public"
+            ],
+            "type": "string"
+          },
           "icon_glyph": {
             "type": "string"
           },
@@ -1289,7 +1296,8 @@
           "url",
           "owner_user_id",
           "owner_username",
-          "scope"
+          "scope",
+          "exposure"
         ],
         "type": "object"
       },
@@ -2031,6 +2039,31 @@
         ],
         "type": "object"
       },
+      "Set-app-exposureRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/Set-app-exposureRequest.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "exposure": {
+            "enum": [
+              "restricted",
+              "public"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "exposure"
+        ],
+        "type": "object"
+      },
       "Set-app-mail-bindingRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2235,6 +2268,31 @@
         },
         "required": [
           "disks"
+        ],
+        "type": "object"
+      },
+      "SystemVersionDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/SystemVersionDTO.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "commit"
         ],
         "type": "object"
       },
@@ -2746,6 +2804,54 @@
           }
         },
         "summary": "Update an app instance's user-supplied configuration (owner or admin)"
+      }
+    },
+    "/api/v1/apps/{id}/exposure": {
+      "put": {
+        "operationId": "set-app-exposure",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Set-app-exposureRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceDTO"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Set an app's access mode — restricted (owner-only) or public (hosted; owner or admin)"
       }
     },
     "/api/v1/apps/{id}/mail-binding": {
@@ -4132,6 +4238,34 @@
           }
         },
         "summary": "Set the system time zone via host-agent timedatectl (admin)"
+      }
+    },
+    "/api/v1/system/version": {
+      "get": {
+        "operationId": "get-system-version",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemVersionDTO"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The running malmo-brain build's version and git commit"
       }
     },
     "/api/v1/users": {

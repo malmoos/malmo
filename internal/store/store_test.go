@@ -289,6 +289,49 @@ func TestSetInstancePendingRecreate(t *testing.T) {
 	}
 }
 
+func TestInstanceExposure(t *testing.T) {
+	s := open(t)
+	// A Create with no exposure normalizes to public (the appliance default and the
+	// value migrated rows carry); it round-trips through both Get and List.
+	if err := s.Create(sample("a", "alpha")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if row, _ := s.Get("a"); row.Exposure != ExposurePublic {
+		t.Fatalf("default exposure = %q, want public", row.Exposure)
+	}
+	if err := s.SetInstanceExposure("a", ExposureRestricted); err != nil {
+		t.Fatalf("set restricted: %v", err)
+	}
+	if row, _ := s.Get("a"); row.Exposure != ExposureRestricted {
+		t.Fatalf("exposure did not round-trip through Get")
+	}
+	list, err := s.List()
+	if err != nil || len(list) != 1 || list[0].Exposure != ExposureRestricted {
+		t.Fatalf("exposure did not round-trip through List: %v %+v", err, list)
+	}
+	// Invalid values are rejected on both the setter and Create.
+	if err := s.SetInstanceExposure("a", "bogus"); err == nil {
+		t.Error("SetInstanceExposure accepted an out-of-range value")
+	}
+	if err := s.SetInstanceExposure("missing", ExposurePublic); err != ErrNotFound {
+		t.Errorf("set on missing instance: err = %v, want ErrNotFound", err)
+	}
+	bad := sample("b", "beta")
+	bad.Exposure = "bogus"
+	if err := s.Create(bad); err == nil {
+		t.Error("Create accepted an out-of-range exposure")
+	}
+	// An explicit restricted at Create is honored (the hosted install path).
+	r := sample("c", "gamma")
+	r.Exposure = ExposureRestricted
+	if err := s.Create(r); err != nil {
+		t.Fatalf("create restricted: %v", err)
+	}
+	if row, _ := s.Get("c"); row.Exposure != ExposureRestricted {
+		t.Fatalf("explicit restricted not persisted at Create")
+	}
+}
+
 func TestSetStateOnMissingInstanceErrors(t *testing.T) {
 	s := open(t)
 	if err := s.SetState("nope", "running"); err != ErrNotFound {
@@ -487,6 +530,45 @@ func TestSessionCRUD(t *testing.T) {
 	}
 	if _, err := s.GetSession("tok-1"); err != ErrNotFound {
 		t.Fatalf("after DeleteSession: %v", err)
+	}
+}
+
+// The hosted forward-auth token (issue #305) is stamped on the session row and
+// resolved back through a reverse lookup that must never match the empty-string
+// default every non-hosted session carries.
+func TestSessionForwardAuthToken(t *testing.T) {
+	s := open(t)
+	if err := s.CreateUser(sampleUser("u1", "andrei", RoleAdmin)); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	now := time.Unix(1_700_000_100, 0)
+	if err := s.CreateSession(Session{Token: "tok-1", UserID: "u1", CreatedAt: now, LastSeenAt: now}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	// A fresh session carries no forward-auth token, and the empty lookup must not
+	// resolve it (the '' default must never be matchable).
+	if _, err := s.GetSessionByForwardAuthToken(""); err != ErrNotFound {
+		t.Fatalf("empty fa_token lookup = %v, want ErrNotFound", err)
+	}
+	if _, err := s.GetSessionByForwardAuthToken("fa-1"); err != ErrNotFound {
+		t.Fatalf("unstamped fa_token lookup = %v, want ErrNotFound", err)
+	}
+
+	if err := s.SetSessionForwardAuthToken("tok-1", "fa-1"); err != nil {
+		t.Fatalf("SetSessionForwardAuthToken: %v", err)
+	}
+	got, err := s.GetSessionByForwardAuthToken("fa-1")
+	if err != nil || got.Token != "tok-1" || got.UserID != "u1" {
+		t.Fatalf("GetSessionByForwardAuthToken = %+v, %v", got, err)
+	}
+
+	// Deleting the session drops the token with it.
+	if err := s.DeleteSession("tok-1"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if _, err := s.GetSessionByForwardAuthToken("fa-1"); err != ErrNotFound {
+		t.Fatalf("fa_token after DeleteSession = %v, want ErrNotFound", err)
 	}
 }
 

@@ -61,10 +61,12 @@ const flatItems = computed(() => visibleGroups.value.flatMap((g) => g.items));
 </script>
 
 <template>
-  <!-- flex-1 (not h-full) so the shell fills the AppShell content wrapper, which
-       is now min-h-full rather than a fixed height. min-h-0 keeps the content pane
-       able to host a full-height, internally-scrolling child (the logs pane). -->
-  <div class="flex min-h-0 flex-1 flex-col gap-6 pt-2 md:flex-row md:gap-8">
+  <!-- flex-1 (not h-full) so the shell fills the AppShell content wrapper on
+       short pages, and — because there is no min-h-0 — grows past the viewport on
+       tall ones so the page scrolls (the AppShell spacer then clears the dock).
+       min-h-0 is deliberately absent: it would let a tall section collapse the
+       column and overflow its content behind the fixed dock instead of scrolling. -->
+  <div class="flex flex-1 flex-col gap-6 pt-2 md:flex-row md:gap-8">
     <!-- Mobile: flat, horizontally scrollable tab strip. -->
     <nav class="-mx-1 flex shrink-0 gap-1 overflow-x-auto px-1 md:hidden">
       <RouterLink
@@ -98,9 +100,10 @@ const flatItems = computed(() => visibleGroups.value.flatMap((g) => g.items));
       </div>
     </nav>
 
-    <!-- Content pane — the active section. flex-col + min-h-0 so a section can
-         host a full-height child (e.g. the app detail page's expanded logs). -->
-    <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+    <!-- Content pane — the active section. min-w-0 so long content (e.g. log
+         lines) can shrink rather than force horizontal overflow; no min-h-0, so a
+         tall section grows the page (scrolls) instead of overflowing the dock. -->
+    <div class="flex min-w-0 flex-1 flex-col">
       <RouterView />
     </div>
   </div>

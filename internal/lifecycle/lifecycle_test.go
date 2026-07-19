@@ -120,7 +120,8 @@ services:
 func TestInstallHappyDoor1(t *testing.T) {
 	e := newTestEnv(t)
 	e.writeCatalogApp(t, "whoami", whoamiCompose, whoamiManifest(testDigest))
-	e.docker.digests[testImage] = testDigest
+	// No digests entry: Door-1 resolves nothing from the registry — the catalog's
+	// promise IS the address it pulls.
 
 	inst, err := e.m.Install(context.Background(), "whoami", Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err != nil {
@@ -158,10 +159,15 @@ func TestInstallHappyDoor1(t *testing.T) {
 		t.Fatalf("caddy route at end = %q, want upstream:…", got)
 	}
 
-	// Ordered key driver calls: Pull → ImageInspect → ComposeUp.
-	want := []string{"Pull", "ImageInspect", "ComposeUp"}
+	// Ordered key driver calls: Pull → ComposeUp. No ImageInspect — there is no
+	// registry-resolved digest to read back when the promise is what we pulled.
+	want := []string{"Pull", "ComposeUp"}
 	if !containsInOrder(e.docker.methods(), want) {
 		t.Fatalf("driver call order missing %v in %v", want, e.docker.methods())
+	}
+	// The pull went to the digest, never the tag.
+	if got := e.docker.pulled(); len(got) != 1 || got[0] != wantPin {
+		t.Fatalf("pulled %v, want exactly [%s]", got, wantPin)
 	}
 }
 
@@ -233,16 +239,65 @@ func TestInstallAdmissionRejection(t *testing.T) {
 	}
 }
 
-// --- 4. Digest mismatch (Door-1) ----------------------------------------
+// --- 4. Upstream tag movement (Door-1) ----------------------------------
 
-func TestInstallDigestMismatchRollsBack(t *testing.T) {
+// An upstream rebuild moves the tag to new bytes after the catalog pinned it —
+// routine for library images, which rebuild the same version tag whenever their
+// base image is patched. The box must install what the catalog promised and not
+// care (APP_STORE.md # Trust model, # Failure modes). Regression test for #331,
+// where the tag was pulled and compared instead, turning every upstream rebuild
+// into a failed install.
+func TestInstallDoor1IgnoresUpstreamTagMove(t *testing.T) {
 	e := newTestEnv(t)
-	e.writeCatalogApp(t, "whoami", whoamiCompose, whoamiManifest("sha256:promised"))
-	e.docker.digests[testImage] = "sha256:actuallydifferent"
+	e.writeCatalogApp(t, "whoami", whoamiCompose, whoamiManifest(testDigest))
+	// The tag now resolves to different bytes than the catalog pinned.
+	e.docker.digests[testImage] = "sha256:rebuiltupstream"
+
+	inst, err := e.m.Install(context.Background(), "whoami", Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
+	if err != nil {
+		t.Fatalf("install must succeed despite the tag moving: %v", err)
+	}
+
+	// The promised bytes are what got pulled, pinned, and recorded.
+	wantPin := "traefik/whoami@" + testDigest
+	if got := e.docker.pulled(); len(got) != 1 || got[0] != wantPin {
+		t.Fatalf("pulled %v, want exactly [%s] — the tag must never be pulled", got, wantPin)
+	}
+	if got := overridePin(t, e.stateDir, inst.ID, "whoami"); got != wantPin {
+		t.Fatalf("override pin = %q, want %q", got, wantPin)
+	}
+	imgs, err := e.store.GetInstanceImages(inst.ID)
+	if err != nil {
+		t.Fatalf("InstanceImages: %v", err)
+	}
+	if len(imgs) != 1 || imgs[0].Digest != testDigest {
+		t.Fatalf("stored images = %+v, want one with digest %s", imgs, testDigest)
+	}
+}
+
+// A compose pinned by digest AND a catalog promise that disagrees is the
+// catalog contradicting itself — a curation bug, not upstream drift. There is
+// no safe pick between them, so the install fails and rolls back clean.
+func TestInstallDigestPromiseContradictionRollsBack(t *testing.T) {
+	e := newTestEnv(t)
+	const composeRef = "traefik/whoami@sha256:pinnedincompose"
+	compose := "services:\n  whoami:\n    image: " + composeRef + "\n    ports: [\"80\"]\n"
+	man := fmt.Sprintf(`
+id: whoami
+manifest_version: 1
+name: Whoami
+version: "1.10"
+compose_file: compose.yml
+main_service: whoami
+main_port: 80
+images:
+  %s: sha256:promisedbycatalog
+`, composeRef)
+	e.writeCatalogApp(t, "whoami", compose, man)
 
 	_, err := e.m.Install(context.Background(), "whoami", Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err == nil {
-		t.Fatalf("want mismatch error")
+		t.Fatalf("want error when the compose pin and the catalog promise disagree")
 	}
 
 	// Rollback clean: SQLite empty, instance dir gone, compose up never run.
@@ -251,7 +306,7 @@ func TestInstallDigestMismatchRollsBack(t *testing.T) {
 		t.Fatalf("instance row must be rolled back, got %v", list)
 	}
 	if e.docker.called("ComposeUp") {
-		t.Fatalf("ComposeUp must not run on digest mismatch")
+		t.Fatalf("ComposeUp must not run on a contradictory pin")
 	}
 	entries, _ := os.ReadDir(filepath.Join(e.stateDir, "instances"))
 	if len(entries) != 0 {

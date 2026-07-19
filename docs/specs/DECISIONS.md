@@ -21,6 +21,77 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-07-16 — One repo version, not independent per-component SemVer
+
+**Previously:** `BUILD.md` # Versioning locked "SemVer for `host-agent` and `brain`" — each component carrying its own independently-incrementing `vMAJOR.MINOR.PATCH`, with `malmo-ui` called out explicitly as "versioned independently of the brain" in the same doc's artifact list and locked-decisions section.
+
+**Now:** **one repo version for the whole monorepo.** `host-agent`, `malmo-brain`, and `malmo-ui` all ship from one commit in one repo, so there is exactly one `vX.Y.Z` per release, carried in a `VERSION` file at the repo root — the single source of truth. `VERSION` holds the **last released** version and changes only in the dev->main release PR (`docs/dev/contributing.md` # Release model). Every build additionally stamps the git commit it was built from as a **separate field** — `malmo-brain --version` prints `malmo 0.4.0 (g1a2b3c)` — so a dev build between releases is visibly distinguishable from the tagged release commit without needing a `-dev` suffix or a "next target" counter.
+
+**Why:** independent per-component counters were bookkeeping with no consumer. Nothing in malmo ever installs a brain and a UI from different releases, or a host-agent that predates the repo state it shipped from by more than the normal apt-lag window (`UPDATES.md` # 2) — every release is cut from one commit, so three separately-incrementing numbers were always going to read the same story (a bump on one commit) in three different vocabularies. Tracking one number that means "this commit" is simpler to reason about, simpler to assert in CI (a pushed tag against one file, not three), and removes a whole class of "did I bump the UI's version too" release-checklist item that had no actual failure mode behind it.
+
+**What this doesn't change:** `RELEASE_MANIFEST.md`'s schema still carries separate `brain` and `ui` semver fields (unbuilt, out of scope for this change) — with one repo version those two fields are always equal in practice; a brief note was added there rather than redesigning the manifest.
+
+**Affected docs:** `BUILD.md` # Versioning (rewritten), artifact list, locked decisions; `RELEASE_MANIFEST.md` (note only); `docs/dev/contributing.md` # Release model (VERSION-bump step added); `docs/progress/repo-version-and-compat-range.md`.
+
+---
+
+## 2026-07-16 — The image inherits the repo SemVer; CalVer for the ISO is dropped
+
+**Previously:** `BUILD.md` # Versioning locked "CalVer (`YYYY.MM`) for the ISO itself, since it's a snapshot of host-agent + brain + Debian + apps" — reasoning that avoided "semver-stretching for a thing that isn't a single component," on the assumption that the ISO/cloud-image bundled multiple independently-versioned components that needed reconciling into a different scheme.
+
+**Now:** the image takes the **same `vX.Y.Z`** as the rest of the repo. The premise that motivated CalVer — the image is a bundle of independently-versioned things — no longer holds once host-agent/brain/UI share one repo version (the sibling entry above): the image is a snapshot of *one* version, not several, so there is no reconciliation problem left to solve with a different versioning scheme.
+
+**Why:** one commit shouldn't have two identities. A box builder, a support thread, or a bug report can now say "malmo 0.4.0" and mean the same thing whether they're looking at the brain's `--version` output, the UI's build, or the image filename (`malmo-v0.4.0-amd64.qcow2`) — there's no translation table between a SemVer and a CalVer for the same artifact.
+
+**Affected docs:** `BUILD.md` # Versioning, artifact list (`malmo-vX.Y.Z-amd64.qcow2`/`.raw` — filenames were already the SemVer form and needed no change, only the prose describing the scheme), locked decisions; `docs/progress/repo-version-and-compat-range.md`.
+
+---
+
+## 2026-07-16 — The hosted app strip is per-cookie, not the whole `Cookie` header (#335)
+
+**Previously:** #306 stripped the **whole `Cookie` header** from every hosted app route, on the reasoning (logged below, same-day 2026-07-08 entry) that it was "the simplest form that satisfies the 'no app upstream ever receives a cookie' invariant". That entry stated the tradeoff plainly and named its own escape hatch: an app keeping cookie-based session/CSRF state "won't see it in `restricted` *or* `public` mode", the injected `X-Malmo-User` headers are the session for owner-only apps, "and per-cookie surgical stripping is the follow-up if a real app needs its own cookies."
+
+**Now:** the follow-up lands, on the first real app that needed it. The route strips `malmo_forward_auth` **and only it**, passing every other cookie through byte-for-byte. The invariant it holds is narrowed to the one that was always the point: no app upstream ever receives *malmo's* cookie.
+
+**Why:** "a real app needs its own cookies" turned out to be not an edge case but the common case, and the failure is worse than the tradeoff predicted. The prediction was that an app wouldn't see its own session state; the reality is that a third-party app with a browser login is **unusable**, and unusable in a way that reads as a credential bug rather than a platform one. Nextcloud renders its login page, is handed correct credentials, and rejects them: with no `Cookie` reaching it, it mints a fresh session on every request, so the login POST arrives with no session and no CSRF binding. Verified against a stock `nextcloud:34.0.1-apache` behind a real Caddy carrying the emitted config — two sequential `GET /login` return **different** session ids through the whole-header strip and the **same** id through the per-cookie strip. The `X-Malmo-User` header is not a substitute: a third-party image has no idea what it means. This is most of a real catalog (Nextcloud, Gitea, Memos, Actual Budget, Calibre-web), so the strip's simplicity was buying nothing and costing the app surface.
+
+**What the narrowing costs, accepted:** once apps receive cookies again, an app can set a `Domain=<box-id>.malmo.network` cookie that a sibling app on another subdomain receives (cookie tossing / session fixation between apps). That is inherent to hosting apps as subdomains of one registrable domain, and the whole-header strip was never a deliberate defence against it — only an accidental one, and not a usable one, since it left no app working at all. `__Host-` prefixed cookies are immune; that cannot be forced on third-party images.
+
+**The correctness now lives in a regex, so the test shape had to change.** A `StripCookie bool` on the route config could be asserted true and prove nothing about what the app receives. The strip is `(^|;\s*)<name>=[^;]*` plus a separator cleanup, and the anchor is load-bearing: the obvious unanchored form silently mangles any cookie whose name merely *contains* the forward-auth name (`evil_malmo_forward_auth` arrives as `evil_`). `internal/caddy` now asserts behaviourally against the **emitted** config over an adversarial table (duplicate names, prefixed/suffixed names, token-only, empty value), and `RouteConfig` carries `StripCookieName string` sourced from `auth.ForwardAuthCookieName` so a rename cannot silently stop the strip.
+
+**Affected docs:** `ENVIRONMENT.md` # Public-by-default (the forward-auth cookie bullet + the #306 enforcement paragraph). Progress: `docs/progress/hosted-cookie-strip-per-cookie.md`. Code: `internal/caddy` (`RouteConfig.StripCookieName`, `stripCookieReplacements`), `internal/lifecycle` (`buildRouteConfig`). Narrows the first shape call of the 2026-07-08 (#306) entry below; the second (flip the default to `restricted` now) is untouched.
+
+---
+
+## 2026-07-16 — The catalog-promised digest is the address a Door-1 install pulls, not a promise to check afterwards (#331)
+
+**Previously:** an online box pulled the **tag**, read the resulting registry `RepoDigest`, and compared it to the catalog's promise, refusing the install on any difference (`APP_LIFECYCLE.md` # Locked: image digest pinning; restated as recently as 2026-06-16 (#167) below — "a box *with* a registry is unchanged: it pulls and verifies as before"). `APP_STORE.md` # Trust model had meanwhile always said the opposite — the box "pulls by digest", and an upstream tag move "doesn't affect it". The two specs contradicted each other and the code implemented the `APP_LIFECYCLE` side.
+
+**Now:** the promise is the **address**. A Door-1 install pulls `name@sha256:…` and never consults the tag. The comparison is **deleted rather than moved**: a content-addressed pull cannot return other bytes, so there is nothing left to verify. Door-2 / TOFU still pulls the tag and trusts what it resolves to (no promise exists to pull by). The offline path is behaviorally unchanged, and the online path now *agrees* with it rather than diverging. One narrow failure replaces the old one: a compose pinned `name@sha256:…` that disagrees with the `images`-map promise for the same ref — the catalog contradicting *itself*, a curation bug with no safe pick.
+
+**Why:** a real install failed on `nextcloud:34.0.1-apache` when Docker Hub rebuilt the tag to absorb base-image package updates — same Nextcloud version, same Dockerfile steps, same Debian base layer, 21 of 22 layers new. Nothing was wrong with the catalog or the registry, and the install was refused anyway. This is **routine** for library images, which rebuild a version tag whenever their base is patched, so a version tag is mutable in practice and not just in theory. Pulling it made the bytes a box runs depend on *when* it installed (two boxes, same catalog version, different images — a "works on my box" support problem that is real and undiagnosable), and made every upstream rebuild a hard failure. Pulling the promised digest makes a rebuild a non-event and makes installs of a catalog version byte-identical across boxes.
+
+The deeper point: verifying a promise *after* pulling a tag was never the trust binding it looked like. It could only ever tell us the tag had moved — it could not make the bytes right, and refusing the install was the only thing it could do about it. Deciding whether upstream's new bytes should be promised is **curation's** call, made where the catalog is built, never the box's and never implicitly by the clock. This change also removes the last way unreviewed upstream bytes could reach a box, since a tag pull is what a Door-1 box no longer does.
+
+**Trade accepted:** nothing upstream now reaches a box unless a promise is deliberately updated, so pins are only as fresh as curation makes them, and the registry keeping untagged manifests addressable becomes load-bearing (`APP_STORE.md` # Failure modes already accepts this: a *deleted* digest fails the install with a registry-side error). Both were already true of the offline path and of any un-bumped pin; this makes them true uniformly and on purpose.
+
+**Affected docs:** `APP_LIFECYCLE.md` (# Locked: image digest pinning — rewritten; the offline paragraph's stale "pulls and verifies against it" phrasing corrected), `docs/progress/door1-pull-promised-digest.md`. Supersedes the final clause of 2026-06-16 (#167) below; `APP_STORE.md` needed no change — it described this all along.
+
+## 2026-07-08 — Hosted apps default to owner-only, and every hosted app route strips the whole `Cookie` header (#306)
+
+**Previously:** the hosted profile was "public-by-default, auth-gated" with per-app "public vs require a malmo session" controls **deferred** (`ENVIRONMENT.md` # Deferred), and the eventual flip of the default to owner-only was to be **gated on the mechanism being proven end-to-end** (the #308 e2e), per the #305 progress note. The cookie strip in front of a restricted app was specified narrowly as "so the app never receives the forward-auth cookie."
+
+**Now:** #306 lands the box-side mechanism (per-instance exposure state, the central `forward_auth` + Cookie-strip route builder, the toggle endpoint) **and flips the hosted default to `restricted` in the same change**, rather than waiting for #308. Two shape calls that diverge from the issue's literal text:
+
+- **Whole-`Cookie`-header strip on *every* hosted app route** — both `restricted` and `public`, not just restricted. The forward-auth cookie is `Domain=<box-id>.malmo.network`, so the browser sends it to *every* `<slug>.<box-id>` subdomain, including public apps; stripping only restricted routes would still leak it to a public app that could replay it against the owner's restricted apps. Stripping the whole header (not just the one cookie) is the simplest form that satisfies the "no app upstream ever receives a cookie" invariant the issue asks to make load-bearing.
+- **Flip the default now, don't gate on #308.** The mechanism (#305 verify + #306 route) is complete and unit-tested (route shape, strip invariant, appliance-unchanged); #308 becomes the e2e *proof* of an already-shipped default rather than the gate that unlocks it.
+
+**Why:** a per-app gate that leaks its own bearer token to a sibling app is not a gate; making the strip universal closes that at the one central builder the spec already calls the safety boundary. Flipping now keeps the "secure by default" posture (a new hosted app is owner-only until the owner opts it public) instead of shipping the machinery dormant. **Tradeoff, stated plainly:** the whole-header strip means a hosted app never receives *any* browser cookie, so an app that keeps its own cookie-based session/CSRF state won't see it in `restricted` *or* `public` mode; the box identity (injected `X-Malmo-User` headers) is the session for owner-only apps, and per-cookie surgical stripping is the follow-up if a real app needs its own cookies. Appliance is untouched — no exposure concept, no `forward_auth`, byte-for-byte the same plain reverse_proxy.
+
+**Affected docs:** `ENVIRONMENT.md` # Public-by-default (Per-app owner-only access rewritten; # Deferred bullet narrowed to multi-user). Progress: `hosted-forward-auth-route.md`. Code: `internal/store` (`exposure` column), `internal/caddy` (`RouteConfig`/`ForwardAuthConfig` + `AddRoute` rebuild), `internal/lifecycle` (`buildRouteConfig`/`defaultExposure`/`SetExposure`), `internal/api` (`PUT /apps/{id}/exposure`).
+
+---
+
 ## 2026-07-04 — The wildcard cert must be named in `certificates.automate`; the apex is served by Caddy's default issuer, not acme-dns
 
 **Previously:** the 2026-07-03 entry below framed the hosted TLS failure as a concurrency bug — two ACME orders (wildcard + apex) racing on the shared `_acme-challenge.<box-id>` acme-dns record — and fixed it by serializing them (`EnsureWildcardTLS` issues the wildcard, waits via a `:443` probe, then adds the apex as a second policy). Both subjects went through acme-dns DNS-01.

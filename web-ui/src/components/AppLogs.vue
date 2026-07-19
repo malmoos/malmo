@@ -12,9 +12,10 @@
 import { ref, nextTick, watch } from "vue";
 import { useLogStream } from "../useLogStream";
 
-// fill: grow to fill the parent (a flex item) instead of the default capped
-// max-h-64 box. The detail page uses it so an expanded Logs accordion runs to
-// the bottom of the viewport; the inline list usage keeps the compact default.
+// fill: let the scroller flex to fill this component's own height instead of the
+// default capped max-h-64 box. The detail page sizes the root (min-h-[400px]
+// max-h-[70vh]) and passes fill so the log area fills that bounded box and
+// scrolls internally; the inline list usage keeps the compact default.
 const props = defineProps<{ id: string; fill?: boolean }>();
 
 const { lines, connected } = useLogStream(props.id);
@@ -50,7 +51,10 @@ function jumpToLatest() {
 </script>
 
 <template>
-  <div class="relative flex flex-col rounded-lg border border-border bg-muted/40" :class="fill ? 'min-h-0' : ''">
+  <!-- In fill mode the caller sizes this root (e.g. min-h-[400px] max-h-[70vh]);
+       the inner scroller flexes to fill it and scrolls. The root itself needs no
+       min-h-0 — adding one here would collide with the caller's min-height. -->
+  <div class="relative flex flex-col rounded-lg border border-border bg-muted/40">
     <div
       ref="scroller"
       class="overflow-y-auto px-3 py-2 font-mono text-xs leading-relaxed"

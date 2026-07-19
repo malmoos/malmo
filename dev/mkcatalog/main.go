@@ -1,12 +1,27 @@
 // Command mkcatalog generates a control-plane catalog snapshot (the /catalog/sync
-// wire format) from one or more on-disk app packages, for the air-gapped QEMU
-// full-stack lane (dev/test-qemu). The lane can't reach the real control plane
-// (restrict=on), so instead of running a stub catalog server it pre-seeds the
-// brain's last-good cache with this snapshot: the brain's remote catalog client
-// loads it at boot exactly as it would a synced-then-offline snapshot, and installs
-// the app from it (internal/catalog/remote.go # loadCache). This keeps the e2e
-// meaningful — the real remote read path (verify → project → Load) is exercised —
-// without a catalog/ directory in the image.
+// wire format) from a single on-disk app package. It pre-seeds the brain's
+// last-good cache with that snapshot: the brain's remote catalog client loads it
+// at boot exactly as it would a synced-then-offline snapshot, and installs the app
+// from it (internal/catalog/remote.go # loadCache). This exercises the real remote
+// read path (verify → project → Load) with no catalog/ directory in the image.
+//
+// Two callers:
+//   - `make dev-app APP=<id>` — the native dev inner loop for authoring/curating a
+//     store app against the brain post-catalog-cutover (cloud #62; store #22). It
+//     reads apps/<id>/manifest.yml + compose straight from a store checkout, so it
+//     needs no verdict on the app (unlike the cloud publish tool, catalog-sync,
+//     which serves only listed: true records) — you boot the app to *decide* its
+//     verdict. The Makefile points MALMO_CATALOG_URL at an inert address so the
+//     background sync can't overwrite the seed with the real published catalog.
+//   - dev/test-qemu/bootstrap.sh — the air-gapped QEMU full-stack lane, which
+//     can't reach a control plane (restrict=on), seeds a whoami snapshot at
+//     image-build time.
+//
+// Display-only fidelity: it fills the inline card fields (name, descriptions,
+// author, license, links, categories, footprint) but not icon_file/screenshots —
+// those are proxied from the control plane, and the seed path has no asset server,
+// so an authored icon renders as its glyph fallback. For full visual QA run a
+// local control plane instead (dev/cloud).
 //
 // The App / CatalogFile shapes here mirror internal/catalog/wire.go (which itself
 // mirrors the cloud published shape) byte-for-byte: same fields, order, and JSON
@@ -91,12 +106,26 @@ func main() {
 		Name:             man.Name,
 		Version:          man.Version,
 		ShortDescription: man.Description.Short,
+		LongDescription:  man.Description.Long,
 		Categories:       man.Categories,
 		IconGlyph:        man.IconGlyph,
+		License:          man.License,
+		ChangelogURL:     man.ChangelogURL,
 		Footprint:        man.Footprint(),
 		Environments:     splitEnvs(*envList),
 		Manifest:         string(manBytes),
 		Compose:          string(composeBytes),
+	}
+	// Carry the author/links display metadata too, so the store card an author
+	// eyeballs during a curation boot is the real one. Assets (icon_file /
+	// screenshots) are deliberately omitted: the box proxies those from the
+	// control plane, and the seed path has no asset server behind the inert URL,
+	// so a filename here would only 404 (docs/dev/authoring-apps-with-an-agent.md).
+	if man.Author != (manifest.Author{}) {
+		a.Author = &man.Author
+	}
+	if man.Links != (manifest.Links{}) {
+		a.Links = &man.Links
 	}
 
 	apps := []app{a}

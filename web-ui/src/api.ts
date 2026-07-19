@@ -80,6 +80,11 @@ export type CatalogDetail = Schemas["Detail"];
 export type CatalogHome = Schemas["Home"];
 export type CatalogCategory = Schemas["Category"];
 export type Instance = Schemas["InstanceDTO"];
+// Exposure is the per-app access mode (#306, hosted only): "restricted" is the
+// box-login-gated owner-only default, "public" is anonymous. Unlike Scope below,
+// the brain DOES declare this one as an enum, so the generated schema carries the
+// literal union — derive from it rather than re-typing the values here.
+export type Exposure = Instance["exposure"];
 export type Notification = Schemas["NotificationDTO"];
 export type AuditEvent = Schemas["AuditEventDTO"];
 // HealthIssue mirrors health.Issue (HEALTH.md # Issue shape) — the degraded-mode

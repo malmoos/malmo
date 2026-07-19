@@ -125,7 +125,20 @@ func (s *Server) ssoLanding(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	// Also mint the Domain-scoped forward-auth cookie so the owner's click-through
+	// to a restricted app needs no second login (issue #305). Compute it before
+	// setting any cookie so a store failure here 500s cleanly — no session cookie
+	// on a 500 — and a fresh portal round-trip retries the whole exchange. This
+	// handler is hosted-only (gated at the top), so no extra profile check.
+	faCookie, err := s.auth.IssueForwardAuth(sess.Token)
+	if err != nil {
+		slog.Error("sso: issue forward-auth cookie failed", "err", err, "user_id", user.ID)
+		s.auditSSOFailure(ctx)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	http.SetCookie(w, s.auth.Cookie(sess.Token))
+	http.SetCookie(w, faCookie)
 	idCtx := auth.WithIdentity(ctx, auth.Identity{User: user, Session: sess})
 	s.auditor.Record(idCtx, audit.ActionSSOSuccess, audit.Target{Kind: "user", ID: user.ID}, nil, true)
 

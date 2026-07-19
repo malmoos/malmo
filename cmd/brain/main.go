@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -20,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/mod/semver"
 
 	"github.com/malmoos/malmo/internal/api"
 	"github.com/malmoos/malmo/internal/applog"
@@ -37,6 +40,7 @@ import (
 	"github.com/malmoos/malmo/internal/protocol"
 	"github.com/malmoos/malmo/internal/store"
 	"github.com/malmoos/malmo/internal/systemlive"
+	"github.com/malmoos/malmo/internal/version"
 )
 
 // caddyReadyTimeout bounds the wait for Caddy's admin API after the brain brings
@@ -46,6 +50,13 @@ import (
 const caddyReadyTimeout = 10 * time.Second
 
 func main() {
+	showVersion := flag.Bool("version", false, "print the version and exit")
+	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.String())
+		return
+	}
+
 	cfg := loadConfig()
 	installLogger(cfg.logLevel, cfg.logFormat)
 
@@ -120,6 +131,10 @@ func main() {
 	// gates the hosted-only resource-limit CPU cap (#211). Appliance leaves the
 	// box-id empty and the lifecycle keeps its .local/mDNS path.
 	life.SetEnvironment(prof, boxID)
+	// The box Caddy dials this same brain upstream for the hosted per-app
+	// forward_auth verify subrequest (#306) that it dials for the dashboard's
+	// /api + /_malmo legs; wire it from the one config value.
+	life.SetBrainUpstream(cfg.dashboardBrainUpstream)
 
 	// Production: the brain owns the control-plane stack (Caddy + malmo-ui) and
 	// brings it up from the compose staged by host-agent before it configures any
@@ -738,13 +753,50 @@ func notificationPruneLoop(ctx context.Context, st *store.Store, interval time.D
 	}
 }
 
-// expectedAgentVersion is the host-agent version this brain build expects to
-// talk to. It mirrors internal/hostagent.AgentVersion (the version the in-repo
-// agent advertises) — the conservative v1 reading of HEALTH.md's "lockstep
-// pair": exact string equality against a brain-side constant. The richer
-// release-manifest model (RELEASE_MANIFEST.md / UPDATES.md) will replace this
-// when it lands; until then, bump this in lockstep with hostagent.AgentVersion.
-const expectedAgentVersion = "0.0.1-fake"
+// minimumAgentVersion is the oldest host-agent version this brain build still
+// works with — the box-side stand-in for the release manifest's
+// minimum_host_agent field (UPDATES.md # 7 Compatibility matrix,
+// RELEASE_MANIFEST.md # Manifest schema) until that manifest is actually wired
+// up. It is deliberately NOT the same value as this brain's own
+// internal/version.Version: with one repo version (DECISIONS.md 2026-07-16),
+// host-agent and brain still ship from the same commit, but host-agent updates
+// ride apt on their own cadence and can lag the brain by up to 24h during a
+// rollout (UPDATES.md # 2) — an update ordering where host-agent updates
+// *first*, so a brain running a newer build than the agent it's paired with is
+// the normal, expected mid-rollout state, not a mismatch. Bump this by hand
+// only when a real host-agent<->brain protocol break lands (i.e. an agent
+// older than this genuinely can't serve this brain), not on every release.
+const minimumAgentVersion = "0.4.0"
+
+// agentVersionAcceptable reports whether reportedVersion is new enough to
+// satisfy minimum — i.e. NOT older than it. A newer agent is always
+// acceptable (UPDATES.md # 1 update ordering: host-agent updates before
+// brain); only an older agent is a mismatch. Comparison is on the release core
+// (MAJOR.MINOR.PATCH) only: a build/prerelease suffix (e.g. the fake
+// host-agent's "-fake", DECISIONS.md 2026-07-16) must not make an
+// otherwise-current agent look older — semver's prerelease-sorts-before-release
+// rule would otherwise flag the in-repo dev fake agent as a mismatch against
+// its own brain on every `make dev`. Uses golang.org/x/mod/semver (already in
+// the module graph via modernc.org/sqlite's test deps — see go.sum) rather than
+// hand-rolling comparison.
+func agentVersionAcceptable(reportedVersion, minimum string) bool {
+	return semver.Compare(versionCore(reportedVersion), versionCore(minimum)) >= 0
+}
+
+// versionCore strips any semver prerelease/build suffix and normalizes to the
+// "v"-prefixed form golang.org/x/mod/semver requires, e.g. "0.4.0-fake" ->
+// "v0.4.0". An unparseable core sorts before every valid version (semver.Compare
+// semantics), which is the safe default: an agent reporting a garbled version
+// string is treated as too old rather than silently accepted.
+func versionCore(v string) string {
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		v = v[:i]
+	}
+	if !strings.HasPrefix(v, "v") {
+		v = "v" + v
+	}
+	return v
+}
 
 // agentStatusReader is the slice of the host client the version check needs — a
 // single GET /v1/system/status read. Consumer-side interface (CLAUDE.md) so
@@ -756,12 +808,14 @@ type agentStatusReader interface {
 
 // checkAgentVersion is the locus-C version-mismatch detector (HEALTH.md
 // # Detector catalog, locus C). It reads host-agent's reported agent_version
-// and reconciles the version-mismatch issue: raise when it differs from the
-// version this brain expects, clear when they match. There is no dedicated
-// handshake RPC, so each successful status read is the handshake (HEALTH.md:
-// "each handshake"). A version string is deterministic and authoritative — it
-// cannot flap like a threshold sample — so the check is 1-shot (no debounce):
-// it raises/clears on the first definitive reading. A transient unreachable
+// and reconciles the version-mismatch issue against a **compatible range**,
+// not exact equality: raise only when the agent is older than
+// minimumAgentVersion, clear otherwise (a newer agent is fine — UPDATES.md # 1
+// update ordering puts host-agent first). There is no dedicated handshake RPC,
+// so each successful status read is the handshake (HEALTH.md: "each
+// handshake"). A version string is deterministic and authoritative — it cannot
+// flap like a threshold sample — so the check is 1-shot (no debounce): it
+// raises/clears on the first definitive reading. A transient unreachable
 // host-agent neither raises nor clears, so the issue state survives a blip.
 // Transitions are audited per issue and fanned out to notifications, mirroring
 // pullStorageHealth. NOTIFICATIONS.md's v1 allowlist routes version-mismatch
@@ -779,13 +833,13 @@ func checkAgentVersion(ctx context.Context, host agentStatusReader, healthMgr *h
 	}
 
 	var raised, cleared []health.IssueKey
-	if status.AgentVersion != expectedAgentVersion {
-		details := fmt.Sprintf("The system agent reports version %s, but this dashboard expects %s.",
-			status.AgentVersion, expectedAgentVersion)
+	if !agentVersionAcceptable(status.AgentVersion, minimumAgentVersion) {
+		details := fmt.Sprintf("The system agent is running an older version (%s) than this malmo needs (%s or newer). It will update automatically; if this persists, check the box's internet connection.",
+			status.AgentVersion, minimumAgentVersion)
 		if healthMgr.Raise("version-mismatch", "", details) {
 			raised = []health.IssueKey{{ID: "version-mismatch"}}
-			slog.Warn("version check: agent/brain version mismatch",
-				"agent_version", status.AgentVersion, "expected", expectedAgentVersion)
+			slog.Warn("version check: agent older than the minimum this brain requires",
+				"agent_version", status.AgentVersion, "minimum", minimumAgentVersion)
 		}
 	} else if healthMgr.Clear("version-mismatch", "") {
 		cleared = []health.IssueKey{{ID: "version-mismatch"}}

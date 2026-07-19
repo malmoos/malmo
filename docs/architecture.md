@@ -79,19 +79,20 @@ are stated below.
 | Package | Owns | Imported by |
 |---|---|---|
 | `api` | HTTP handlers (huma), auth middleware, request/response shapes. The only package that knows about HTTP. | `cmd/brain` |
-| `lifecycle` | The install transaction: door-1 (catalog) and door-2 (paste-a-compose), digest pinning, reconcile pass, health-wait, Caddy timing, uninstall. Defines `DockerDriver` consumer-side. | `api`, `cmd/brain` |
+| `lifecycle` | The install transaction: door-1 (catalog) and door-2 (paste-a-compose), digest pinning, reconcile pass, health-wait, Caddy timing, uninstall. Owns the **one central route builder** (`buildRouteConfig`) that resolves each app's `caddy.RouteConfig` from profile + per-instance `exposure` (hosted owner-only default, `SetExposure` toggle, #306). Defines `DockerDriver` consumer-side. | `api`, `cmd/brain` |
 | `store` | SQLite schema + queries. Sole persistence boundary. `ErrNotFound` is the only typed error. | `api`, `lifecycle`, `auth`, `audit`, `cmd/brain` |
 | `catalog` | Door-1 source behind a fixed six-method facade. Production (every profile) uses the control-plane thin client (`NewRemote`, `MALMO_CATALOG_URL`): fetches `GET /catalog/sync`, integrity-digest-verifies, last-good on-disk cache, proxies+caches assets. The disk reader (`New`) is retained only as a test constructor; no catalog is baked into the image. | `lifecycle`, `api`, `cmd/brain` |
 | `manifest` | `manifest.yml` schema (parse + validate), and the synthesizer that wraps a pasted compose into a door-2 manifest. | `catalog`, `lifecycle`, `api` |
 | `admission` | The single compose admission policy applied to both doors (image pinning rules, forbidden constructs, etc.). | `lifecycle` |
-| `caddy` | Client for Caddy's admin API. Site-block JSON generation lives here, plus the hosted wildcard-TLS automation policy (`EnsureWildcardTLS`: ACME DNS-01 via the `acmedns` provider for `*.<box-id>.malmo.network`). | `lifecycle`, `cmd/brain` |
+| `caddy` | Client for Caddy's admin API. Site-block JSON generation lives here (per-app route via `AddRoute(RouteConfig)` — optional hosted `forward_auth` gate + a strip of the single `RouteConfig.StripCookieName` cookie from the `Cookie` header, never the whole header, #306/#335), plus the hosted wildcard-TLS automation policy (`EnsureWildcardTLS`: ACME DNS-01 via the `acmedns` provider for `*.<box-id>.malmo.network`). Profile-agnostic: the strip/gate policy is resolved by the caller. | `lifecycle`, `cmd/brain` |
 | `profile` | The environment-profile marker (`appliance`\|`hosted`) + the first-boot seed reader, and the hosted URL-shape helpers (`HostedAppHost`/`HostedAppURL`/`HostedDashboardHost`/`CertSubjects` — the single place `<slug>.<box-id>.malmo.network` is named). Leaf package. | `api`, `lifecycle`, `cmd/brain` |
 | `hostclient` | Brain-side client for `host-agent`. Mirrors the routes in `protocol`. | `lifecycle`, `api`, `auth`, `cmd/brain` |
 | `protocol` | Wire types shared with `cmd/host-agent`. Source of truth for the host protocol. | `hostclient`, `cmd/host-agent` |
-| `auth` | First-admin bootstrap, password verification (delegates to host-agent), opaque cookie sessions. No password hashes on the brain side. | `api`, `cmd/brain` |
+| `auth` | First-admin bootstrap, password verification (delegates to host-agent), opaque cookie sessions, plus the hosted per-app forward-auth credential (a second, lower-privilege `Domain`-scoped cookie on the session row that the box Caddy's `forward_auth` verifies against the brain, #305). Owns `ForwardAuthCookieName`, the one source of truth for the cookie name the route builder strips (#335). No password hashes on the brain side. | `api`, `lifecycle`, `cmd/brain` |
 | `assertion` | Verifies the portal's short-lived Ed25519 ownership assertion for the hosted portal-to-box SSO handshake (`Verify`: signature + expiry; box-id/issuer/replay are the handler's policy). Minimal signed token, not a JWT. Mirrors the cloud signer's wire format. Leaf package. | `api` |
 | `audit` | Append-only `audit_events` table writes. Every elevation-class mutation calls `audit.Record` on success **and** failure. | `api` |
 | `events` | In-memory pub-sub bus for SSE. Lifecycle stages publish; the SSE handler subscribes. | `lifecycle`, `api`, `cmd/brain` |
+| `version` | The malmo build identity: `Version` (repo `VERSION` file) and `Commit` (git sha), stamped at build time via `-ldflags -X` (`Makefile`, `BUILD.md` # Versioning). Dumb — vars + a `String()`, no logic. | `api`, `hostagent`, `cmd/brain`, `cmd/host-agent`, `cmd/host-agent-real` |
 
 **Cross-cutting invariants:**
 

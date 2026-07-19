@@ -160,6 +160,25 @@ grow_state="$(systemctl is-active malmo-grow-root.service 2>&1 || true)"
 [ "$grow_state" = active ] || fail "malmo-grow-root.service did not complete successfully (state=$grow_state): $(journalctl -u malmo-grow-root.service -b --no-pager 2>/dev/null | tail -10)"
 echo "cloud-assertions: root-grow unit ok (state=$grow_state; systemd-repart + systemd-growfs present and wired — this lane cannot prove real growth, only that both steps ran)"
 
+# --- 1c. the baked host-agent carries a real build stamp (BUILD.md # Versioning:
+# "every build stamps two fields"). An unstamped build reports internal/version's
+# "dev" default; the brain's minimumAgentVersion check hands that to semver, an
+# unparseable core sorts before every valid version, and the box raises
+# version-mismatch — blocking app installs on a box that is otherwise perfectly
+# healthy. v0.4.0 shipped exactly that: stage-control-plane.sh built the agent
+# without the Makefile's -ldflags, so the image's agent reported "dev".
+#
+# This has to be asserted on a BUILT IMAGE, which makes this lane the only place
+# it can be caught. No unit test can: the stamp is applied by the build command,
+# so a `go test` binary is unstamped by construction and asserting anything about
+# version.Version in one only ever pins the default. The release workflow's
+# tag-vs-VERSION assert doesn't reach it either — it checks the file, not what
+# landed in the binary.
+ha_version="$(/usr/lib/malmo/host-agent-real --version 2>&1 || true)"
+grep -qE '^malmo [0-9]+\.[0-9]+\.[0-9]+ ' <<<"$ha_version" || \
+    fail "baked host-agent is not version-stamped: --version reports '$ha_version' (want 'malmo X.Y.Z (g<sha>)'; an unstamped 'dev' build raises version-mismatch and blocks app installs on a healthy box)"
+echo "cloud-assertions: host-agent build stamp ok ($ha_version)"
+
 # --- 2. PSI is live (BUILD.md # 1 — psi=1 on the cmdline). Without it the
 # ram-pressure health detector silently reads zeros; a boot test must catch that.
 # NB: read the CONTENT — /proc/pressure/memory reports st_size=0 like most proc
@@ -312,6 +331,7 @@ wait_brain_log() { # pattern [timeout_s]
 case "$MODE" in
 seeded)   DASH_HOST="$(json_str "$SEED" box_id).malmo.network" ;;
 frozen:*) DASH_HOST="${MODE#frozen:}.malmo.network" ;;
+access)   DASH_HOST="$(json_str "$SEED" box_id).malmo.network" ;;
 esac
 echo "cloud-assertions: probing control plane at Host=$DASH_HOST (mode=$MODE)"
 
@@ -340,11 +360,14 @@ grep -qE ' (200|401)' <<<"$api" || fail "/api not routed to the brain through Ca
 # The hosted box bootstraps its first admin through the portal-to-box SSO handshake,
 # not a /setup secret. /setup is disabled on hosted, and GET /_malmo/sso verifies a
 # portal-signed ownership assertion against the seed-delivered verification key.
-# This lane has no portal private key, so it asserts the *negative* gate properties
-# (the verifier is armed and refuses every token it shouldn't accept); the positive
-# path — a valid assertion → owner auto-create → session → wizard completion — needs
-# the real portal key and is the joint cloud on-ramp acceptance (cloud
-# docs/ops/e2e-onramp.md), not this box-only boot lane.
+# For the unseeded/seeded/frozen boots this lane has no portal private key, so it
+# asserts the *negative* gate properties (the verifier is armed and refuses every
+# token it shouldn't accept); the positive path against the REAL production portal —
+# owner auto-create → session → wizard — is the joint cloud on-ramp acceptance (cloud
+# docs/ops/e2e-onramp.md), not this box-only boot lane. The `access` boot (#308) is
+# the deliberate exception: it seeds a *test-portal* key whose private half the
+# harness holds, so it drives the positive session path here to prove the per-app
+# forward-auth access modes (see the access case below).
 
 # /setup is disabled on every hosted boot (the owner uses SSO): 403, never the
 # appliance's open empty-box 200/409. Proof the profile marker reached the container.
@@ -469,6 +492,178 @@ frozen:*)
             echo "cloud-assertions: WARN frozen seed.json box_id ($disk_box) == frozen identity — re-delivery not distinct" >&2
     fi
     echo "cloud-assertions: frozen identity held across reboot — served under box_id $expect, re-delivered seed ignored"
+    ;;
+access)
+    # Per-app forward-auth access-mode proof (#308), the positive path the box-only
+    # SSO gate above can't reach: it needs a real owner session, so this scenario is
+    # seeded with a TEST-PORTAL key (the harness holds the matching private key —
+    # dev/cloud/mkassertion) and the harness delivers a valid owner assertion over
+    # the malmo.sso_token credential. The box verifies it exactly as a real portal
+    # assertion, auto-creates the owner, and mints both cookies. We then install a
+    # real app and drive every access mode end-to-end through the box's own Caddy:
+    #   - restricted (the hosted default): unauthenticated ⇒ 302 to the box login;
+    #     the owner's forward-auth cookie ⇒ proxied through with no second login;
+    #   - public (after the exposure toggle): reachable with no session;
+    #   - malmo_forward_auth never reaches the app upstream in EITHER mode, while an
+    #     app's own cookie DOES (#335's per-cookie strip — the whole-header delete it
+    #     replaced made every third-party app with a browser login unusable, #306).
+    [ -f "$SEED" ] || fail "access mode but $SEED absent (seed materializer did not run?)"
+    box_id="$(json_str "$SEED" box_id)"
+    [ -n "$box_id" ] || fail "access mode: could not read box_id from $SEED"
+    apex="${box_id}.malmo.network"
+    app_host="whoami.${apex}"
+
+    # The signed owner assertion the harness minted with the test-portal private key,
+    # delivered over SMBIOS (ImportCredential=malmo.sso_token in the unit).
+    sso_token="$(tr -d '\r\n' < "${CREDENTIALS_DIRECTORY:-/nonexistent}/malmo.sso_token" 2>/dev/null || true)"
+    [ -n "$sso_token" ] || fail "access mode: malmo.sso_token credential missing (harness did not mint/deliver the owner assertion)"
+
+    # Full-response HTTP helpers (headers + body) over Caddy :80 — the status-only
+    # helpers above can't see Set-Cookie / Location / the whoami echo body. Scoped to
+    # this mode; ${N:-} keeps them safe under `set -u` when a cookie arg is omitted.
+    full_get() { # PATH HOST [COOKIE] -> full response
+        exec 3<>/dev/tcp/127.0.0.1/80 || return 1
+        if [ -n "${3:-}" ]; then
+            printf 'GET %s HTTP/1.0\r\nHost: %s\r\nCookie: %s\r\nConnection: close\r\n\r\n' "$1" "$2" "$3" >&3
+        else
+            printf 'GET %s HTTP/1.0\r\nHost: %s\r\nConnection: close\r\n\r\n' "$1" "$2" >&3
+        fi
+        cat <&3
+        exec 3>&- 3<&-
+    }
+    full_send() { # METHOD PATH HOST COOKIE JSON -> full response
+        local len; len="$(printf '%s' "$5" | wc -c | tr -d ' ')"
+        exec 3<>/dev/tcp/127.0.0.1/80 || return 1
+        printf '%s %s HTTP/1.0\r\nHost: %s\r\nCookie: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' \
+            "$1" "$2" "$3" "$4" "$len" "$5" >&3
+        cat <&3
+        exec 3>&- 3<&-
+    }
+    status_of() { head -1 <<<"$1" | tr -d '\r'; }
+    # Extract NAME=VALUE from the first Set-Cookie carrying NAME (drops attributes).
+    cookie_val() { grep -i '^Set-Cookie:' <<<"$1" | grep -oE "$2=[^;[:space:]]+" | head -1; }
+    # The WHOLE raw Set-Cookie line for NAME, attributes included — cookie_val above
+    # deliberately drops them, but the Domain attribute is exactly what the two-cookie
+    # safety model rests on, so it has to be asserted, not just carried.
+    cookie_line() { grep -i '^Set-Cookie: *'"$2"'=' <<<"$1" | head -1 | tr -d '\r'; }
+
+    # 1. portal-to-box SSO, driven ONCE (the jti is single-use — a retry replays and
+    #    401s). Steps 7-9 already proved the control plane up + the verifier armed, so
+    #    a valid token now lands the owner. Expect 303 + both cookies: the host-only
+    #    session and the Domain-scoped forward-auth credential.
+    sso_resp="$(full_get "/_malmo/sso?token=${sso_token}" "$apex" 2>/dev/null || true)"
+    sso_status="$(status_of "$sso_resp")"
+    grep -q ' 303' <<<"$sso_status" \
+        || fail "access: SSO landing did not 303 to the dashboard (owner auto-create failed?): status='$sso_status'"
+    session_cookie="$(cookie_val "$sso_resp" malmo_session)"
+    fa_cookie="$(cookie_val "$sso_resp" malmo_forward_auth)"
+    [ -n "$session_cookie" ] || fail "access: no malmo_session cookie from the SSO landing"
+    [ -n "$fa_cookie" ] || fail "access: no malmo_forward_auth cookie from the SSO landing"
+    echo "cloud-assertions: SSO owner session established (session + forward-auth cookies minted; box_id=$box_id)"
+
+    # 1a. THE TWO-COOKIE SAFETY MODEL, asserted on the wire (#304's headline claim).
+    #     The whole design rests on the two cookies having DIFFERENT scopes, and until
+    #     now that was only ever asserted structurally in unit tests — this lane
+    #     captured the real Set-Cookie headers and then looked only at their values.
+    #     Assert the attributes:
+    #       - malmo_session carries NO Domain ⇒ host-only, scoped to the dashboard host
+    #         alone. A Domain here would send the ADMIN session to every app subdomain,
+    #         where a third-party app could replay it as the owner. This is the single
+    #         most dangerous regression in the whole epic and it is one attribute wide.
+    #       - malmo_forward_auth carries Domain=<box-id>.malmo.network ⇒ deliberately
+    #         domain-wide, which is what lets the browser present it to an app subdomain
+    #         (and is why the app route must strip it — probed below).
+    sess_line="$(cookie_line "$sso_resp" malmo_session)"
+    fa_line="$(cookie_line "$sso_resp" malmo_forward_auth)"
+    grep -qiE 'Domain=' <<<"$sess_line" \
+        && fail "access: SESSION COOKIE IS DOMAIN-SCOPED — the dashboard session must be host-only or an app subdomain receives it and can replay it as the owner: $sess_line"
+    grep -qiE "Domain=\.?${apex}(;|$)" <<<"$fa_line" \
+        || fail "access: forward-auth cookie is not Domain-scoped to the box apex (${apex}); the browser would never present it to an app subdomain: $fa_line"
+    echo "cloud-assertions: cookie scopes correct on the wire (malmo_session host-only, malmo_forward_auth Domain=${apex})"
+
+    # 2. install whoami air-gapped: offline mode trusts the catalog-promised digest of
+    #    the docker-loaded image (no pull). 202 starts the async install job.
+    inst_status="$(status_of "$(full_send POST /api/v1/apps "$apex" "$session_cookie" '{"manifest_id":"whoami","scope":"personal"}' 2>/dev/null)")"
+    case "$inst_status" in
+        *" 202"*|*" 200"*) ;;
+        *) fail "access: install whoami did not start: status='$inst_status' (offline bundle/catalog cache missing?)" ;;
+    esac
+
+    # 3. RESTRICTED (the hosted default), with the owner's forward-auth cookie ⇒ the
+    #    app proxies through. Poll until whoami actually answers (install + compose up
+    #    + the route flip from splash to app race this): a 200 whose body is the
+    #    whoami echo (Hostname:) means the whole transaction converged AND the
+    #    forward_auth verify let the owner through. Send an extra throwaway cookie:
+    #    the strip assertion below proves the strip is PER-COOKIE (#335) — the probe
+    #    must survive to the app upstream, and malmo_forward_auth must not.
+    a_resp=""; a_status=""
+    for _i in $(seq 1 150); do
+        a_resp="$(full_get / "$app_host" "${fa_cookie}; probe=leakcheck" 2>/dev/null || true)"
+        a_status="$(status_of "$a_resp")"
+        grep -q ' 200' <<<"$a_status" && grep -qi 'Hostname:' <<<"$a_resp" && break
+        sleep 1
+    done
+    grep -q ' 200' <<<"$a_status" && grep -qi 'Hostname:' <<<"$a_resp" \
+        || fail "access: restricted app with the owner forward-auth cookie never proxied through to whoami after 150s: status='$a_status'"
+    grep -qiE '^X-Malmo-User:' <<<"$a_resp" \
+        || fail "access: forward-auth identity header X-Malmo-User was not forwarded to the app upstream"
+    grep -qiE '^Cookie:.*malmo_forward_auth=' <<<"$a_resp" \
+        && fail "access: COOKIE LEAK (restricted) — the app upstream received malmo_forward_auth; the #335 per-cookie strip is broken"
+    grep -qiE '^Cookie:.*probe=leakcheck' <<<"$a_resp" \
+        || fail "access: restricted app upstream did not receive its own cookie (probe=leakcheck) — the strip is removing more than malmo_forward_auth: $(grep -i '^Cookie:' <<<"$a_resp" | tr -d '\r')"
+    echo "cloud-assertions: restricted app proxies the owner through with no second login (identity forwarded, only malmo_forward_auth stripped)"
+
+    # 3a. RESTRICTED, NO session ⇒ 302 to the box login. Now that the app has
+    #     converged, an unauthenticated GET exercises the forward_auth gate's closed
+    #     path: the brain verify 401s and Caddy turns it into a redirect to the box
+    #     dashboard (https://<box-id>.malmo.network/, the login).
+    n_resp="$(full_get / "$app_host" 2>/dev/null || true)"
+    n_status="$(status_of "$n_resp")"
+    grep -q ' 302' <<<"$n_status" \
+        || fail "access: restricted app without a session did not 302 to the box login: status='$n_status'"
+    grep -iE "^Location: *https://${apex}/" <<<"$n_resp" >/dev/null \
+        || fail "access: restricted-app 302 Location is not the box login: $(grep -i '^Location:' <<<"$n_resp" | tr -d '\r')"
+    echo "cloud-assertions: restricted app gates an unauthenticated request (302 → box login)"
+
+    # 4. flip to PUBLIC via the exposure toggle (owner session; the endpoint is
+    #    hosted-only + owner-or-admin). Resolve the instance id from the running
+    #    container's malmo.instance_id label (whoami is FROM-scratch — no shell to
+    #    exec — so read it host-side, as the medium lane does).
+    cname="$(docker ps --format '{{.Names}}' | grep -i whoami | head -1)"
+    [ -n "$cname" ] || fail "access: no running whoami container to resolve the instance id (docker ps: $(docker ps --format '{{.Names}}' | tr '\n' ' '))"
+    inst_id="$(docker inspect "$cname" --format '{{ index .Config.Labels "malmo.instance_id" }}' 2>/dev/null)"
+    [ -n "$inst_id" ] || fail "access: whoami container $cname has no malmo.instance_id label"
+    exp_status="$(status_of "$(full_send PUT "/api/v1/apps/${inst_id}/exposure" "$apex" "$session_cookie" '{"exposure":"public"}' 2>/dev/null)")"
+    grep -q ' 200' <<<"$exp_status" || fail "access: exposure toggle to public failed: status='$exp_status'"
+
+    # 4a. PUBLIC, NO session ⇒ reachable (200), no gate. The route flip from
+    #     forward_auth to a bare proxy lands a beat after the PUT, so poll.
+    p_resp=""; p_status=""
+    for _i in $(seq 1 30); do
+        p_resp="$(full_get / "$app_host" 2>/dev/null || true)"
+        p_status="$(status_of "$p_resp")"
+        grep -q ' 200' <<<"$p_status" && grep -qi 'Hostname:' <<<"$p_resp" && break
+        sleep 1
+    done
+    grep -q ' 200' <<<"$p_status" && grep -qi 'Hostname:' <<<"$p_resp" \
+        || fail "access: public app not reachable without a session after the toggle: status='$p_status'"
+    echo "cloud-assertions: public app reachable with no session (200)"
+
+    # 4b. PUBLIC + a forward-auth cookie ⇒ STILL stripped before the app upstream. A
+    #     public app must never receive the Domain-scoped cookie, or it could replay
+    #     it against the owner's restricted apps — the reason the route builder
+    #     strips malmo_forward_auth on every hosted route, public included (#335
+    #     narrows this from #306's whole-header delete to just that one cookie; the
+    #     probe cookie must still reach a public app, same as a restricted one).
+    pl_resp="$(full_get / "$app_host" "${fa_cookie}; probe=leakcheck" 2>/dev/null || true)"
+    grep -qi 'Hostname:' <<<"$pl_resp" || fail "access: public-app cookie-leak probe did not reach whoami"
+    grep -qiE '^Cookie:.*malmo_forward_auth=' <<<"$pl_resp" \
+        && fail "access: COOKIE LEAK (public) — the app upstream received malmo_forward_auth; the #335 per-cookie strip is broken"
+    grep -qiE '^Cookie:.*probe=leakcheck' <<<"$pl_resp" \
+        || fail "access: public app upstream did not receive its own cookie (probe=leakcheck) — the strip is removing more than malmo_forward_auth: $(grep -i '^Cookie:' <<<"$pl_resp" | tr -d '\r')"
+    echo "cloud-assertions: public app also strips only malmo_forward_auth (no forward-auth cookie leaks to a public upstream, app's own cookie intact)"
+
+    echo "cloud-assertions: hosted per-app access modes verified end-to-end (restricted gate + owner proxy-through, public reachability, per-cookie strip in both modes)"
     ;;
 *)
     fail "unknown assert mode '$MODE'"

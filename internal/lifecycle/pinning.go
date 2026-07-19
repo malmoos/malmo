@@ -32,11 +32,23 @@ func (p servicePin) PinnedRef() string {
 	return p.ref
 }
 
-// resolveImages pulls each service's image, reads the registry RepoDigest,
-// verifies any catalog promise (Door-1), and returns the per-service pin in
-// stable order. Door-2 callers pass a manifest with an empty Images map; that
-// path is pure TOFU. Failures here happen before any compose up — they roll
-// back the partial install cleanly.
+// resolveImages resolves each service's image to the bytes it will run and
+// returns the per-service pin in stable order.
+//
+// For a Door-1 (catalog) install the manifest already carries the promised
+// digest, so that digest IS the address: the image is pulled as
+// `name@sha256:…` and the tag is never consulted (APP_STORE.md # Trust model —
+// "the box pulls by digest, so the upstream's new bytes don't affect it").
+// Upstream rebuilding a tag is therefore a non-event, and two boxes installing
+// the same catalog version always run identical bytes. The tag survives only as
+// the human-readable label in the manifest.
+//
+// Door-2 callers pass a manifest with an empty Images map: there is no promise,
+// so the tag is pulled and whatever it resolves to is trusted on first use
+// (TOFU).
+//
+// Failures here happen before any compose up — they roll back the partial
+// install cleanly.
 //
 // When offline is set (a baked, air-gapped box — there is no registry to pull
 // from; CONTROL_PLANE.md # First-boot brain bootstrap, APP_LIFECYCLE.md # image
@@ -69,19 +81,6 @@ func resolveImages(ctx context.Context, docker DockerDriver, man *manifest.Manif
 		local[img] = fromLocal
 	}
 
-	// Verify against the catalog's promised digests, if any
-	// (APP_STORE.md # Trust model — catalog binds version→bytes).
-	for img, gotDigest := range seen {
-		promised, ok := man.Images[img]
-		if !ok {
-			continue
-		}
-		if promised.Digest != gotDigest {
-			return nil, fmt.Errorf("catalog digest mismatch for %s: catalog promised %s, registry served %s",
-				img, promised.Digest, gotDigest)
-		}
-	}
-
 	pins := make([]servicePin, 0, len(svcImages))
 	for svc, img := range svcImages {
 		// Digest ref normally; the original tag when the image was resolved from a
@@ -97,28 +96,43 @@ func resolveImages(ctx context.Context, docker DockerDriver, man *manifest.Manif
 	return pins, nil
 }
 
-// pullAndResolve pulls the image and returns the registry content digest
-// (`sha256:…`) plus whether it was resolved from a local-only image (the offline
-// fallback — the caller then references it by tag, not digest, in the override).
-// If the image is already in digest form, the pull is still done (to ensure the
-// bytes are local) and the supplied digest is returned.
+// pullAndResolve pulls the image and returns the content digest (`sha256:…`)
+// plus whether it was resolved from a local-only image (the offline fallback —
+// the caller then references it by tag, not digest, in the override).
+//
+// promised is the catalog-promised digest for this image ("" for a Door-2 /
+// TOFU install). When we hold a digest — the catalog's promise, or an author who
+// pinned `name@sha256:…` in the compose directly — it is the address we pull:
+// the registry cannot serve anything else for it, so those exact bytes arrive or
+// the pull fails. Only a Door-2 install consults the tag, and then whatever it
+// resolves to now is what gets pinned (TOFU).
 //
 // In offline mode a pull failure falls back to the locally-present image — see
-// resolveOffline. promised is the catalog-promised digest for this image (""
-// for a Door-2 / TOFU install), used only on the offline fallback path.
+// resolveOffline.
 func pullAndResolve(ctx context.Context, docker DockerDriver, image, promised string, offline bool) (string, bool, error) {
-	if d, ok := digestOf(image); ok {
-		if err := docker.Pull(ctx, image); err != nil {
+	if inRef, ok := digestOf(image); ok {
+		// A compose pinned by digest AND a catalog promise for it: if they disagree
+		// the catalog contradicts itself. Unlike an upstream tag rebuild (routine,
+		// and no longer our problem), this is a curation bug with no safe pick.
+		if promised != "" && promised != inRef {
+			return "", false, fmt.Errorf("catalog contradicts itself for %s: compose pins %s, catalog promises %s",
+				image, inRef, promised)
+		}
+		promised = inRef
+	}
+	if promised != "" {
+		ref := repoOf(image) + "@" + promised
+		if err := docker.Pull(ctx, ref); err != nil {
 			if offline {
-				return resolveOffline(ctx, docker, image, d, err)
+				return resolveOffline(ctx, docker, image, promised, err)
 			}
 			return "", false, err
 		}
-		return d, false, nil
+		return promised, false, nil
 	}
 	if err := docker.Pull(ctx, image); err != nil {
 		if offline {
-			return resolveOffline(ctx, docker, image, promised, err)
+			return resolveOffline(ctx, docker, image, "", err)
 		}
 		return "", false, err
 	}
@@ -190,11 +204,14 @@ func serviceImages(composeBytes []byte) (map[string]string, error) {
 }
 
 // repoOf returns the registry repo portion of an image reference, stripping
-// both `:tag` and `@sha256:…` suffixes. The tag colon is distinguished from a
-// port colon by checking whether a `/` follows it.
+// both `:tag` and `@sha256:…` suffixes. A ref may carry both (`name:tag@sha256:…`),
+// so the digest goes first and the tag is stripped from what remains — the pin
+// written into the override must be the canonical `name@sha256:…`
+// (APP_LIFECYCLE.md # image digest pinning), carrying no tag. The tag colon is
+// distinguished from a port colon by checking whether a `/` follows it.
 func repoOf(image string) string {
 	if at := strings.Index(image, "@"); at >= 0 {
-		return image[:at]
+		image = image[:at]
 	}
 	if colon := strings.LastIndex(image, ":"); colon > 0 && !strings.Contains(image[colon:], "/") {
 		return image[:colon]

@@ -221,18 +221,59 @@ func versionActive(mgr *health.Manager) bool {
 	return ok
 }
 
-// TestCheckAgentVersion_MismatchRaises is the headline behavior (#37 Done-when):
-// a reported agent_version that differs from the brain's expected version raises
-// version-mismatch and writes exactly one raised audit record for it.
-func TestCheckAgentVersion_MismatchRaises(t *testing.T) {
+// TestAgentVersionAcceptable pins the compatible-range comparison
+// (DECISIONS.md 2026-07-16: version-mismatch moved off exact equality)
+// against minimumAgentVersion's semantics directly, independent of the health
+// wiring exercised by the checkAgentVersion tests below.
+func TestAgentVersionAcceptable(t *testing.T) {
+	const min = "0.4.0"
+	cases := []struct {
+		name  string
+		agent string
+		want  bool
+	}{
+		{"older patch is not acceptable", "0.3.9", false},
+		{"older minor is not acceptable", "0.3.0", false},
+		{"older major is not acceptable", "0.0.1", false},
+		{"exact match is acceptable", "0.4.0", true},
+		{"newer patch is acceptable", "0.4.1", true},
+		{"newer minor is acceptable", "0.5.0", true},
+		{"newer major is acceptable", "1.0.0", true},
+		// The in-repo fake host-agent self-identifies with a "-fake" build
+		// suffix (internal/hostagent.AgentVersion = version.Version, no
+		// suffix actually — but a defensive case in general: any
+		// prerelease/build suffix on an otherwise-current version must not
+		// make it look older, or every `make dev` would spuriously raise
+		// version-mismatch against its own paired brain).
+		{"prerelease suffix on the exact core is acceptable", "0.4.0-fake", true},
+		{"build suffix on the exact core is acceptable", "0.4.0+build123", true},
+		{"prerelease suffix on an older core is not acceptable", "0.3.9-fake", false},
+		{"garbled version is not acceptable", "not-a-version", false},
+		{"empty version is not acceptable", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := agentVersionAcceptable(tc.agent, min)
+			if got != tc.want {
+				t.Errorf("agentVersionAcceptable(%q, %q) = %v, want %v", tc.agent, min, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCheckAgentVersion_OlderThanMinimumRaises is the headline behavior (#37
+// Done-when, updated for the compatible-range model): an agent_version older
+// than minimumAgentVersion raises version-mismatch and writes exactly one
+// raised audit record for it.
+func TestCheckAgentVersion_OlderThanMinimumRaises(t *testing.T) {
 	mgr := health.NewManager(nil)
 	fs := &fakeEventStore{}
 
-	checkAgentVersion(context.Background(), fakeStatusReader{version: "9.9.9-other"},
+	checkAgentVersion(context.Background(), fakeStatusReader{version: "0.1.0"},
 		mgr, audit.New(fs), notify.New(&fakeNotifStore{}, nil), nil)
 
 	if !versionActive(mgr) {
-		t.Fatal("want version-mismatch active after a mismatched agent version")
+		t.Fatal("want version-mismatch active after an agent version older than the minimum")
 	}
 	if len(fs.events) != 1 ||
 		fs.events[0].Action != audit.ActionHealthIssueRaised ||
@@ -241,21 +282,40 @@ func TestCheckAgentVersion_MismatchRaises(t *testing.T) {
 	}
 }
 
-// TestCheckAgentVersion_MatchClears: once raised, a subsequent matching version
-// clears version-mismatch and writes the clear audit record.
-func TestCheckAgentVersion_MatchClears(t *testing.T) {
+// TestCheckAgentVersion_NewerThanMinimumNeverRaises pins the compatible-range
+// point directly: an agent newer than minimumAgentVersion is normal mid-rollout
+// state (UPDATES.md # 1, host-agent updates before brain), not a mismatch.
+func TestCheckAgentVersion_NewerThanMinimumNeverRaises(t *testing.T) {
+	mgr := health.NewManager(nil)
+	fs := &fakeEventStore{}
+
+	checkAgentVersion(context.Background(), fakeStatusReader{version: "9.9.9"},
+		mgr, audit.New(fs), notify.New(&fakeNotifStore{}, nil), nil)
+
+	if versionActive(mgr) {
+		t.Error("want no version-mismatch for an agent newer than the minimum")
+	}
+	if len(fs.events) != 0 {
+		t.Errorf("want no audit records for a newer-than-minimum agent, got %d", len(fs.events))
+	}
+}
+
+// TestCheckAgentVersion_AtOrAboveMinimumClears: once raised, a subsequent
+// version at or above the minimum clears version-mismatch and writes the clear
+// audit record.
+func TestCheckAgentVersion_AtOrAboveMinimumClears(t *testing.T) {
 	mgr := health.NewManager(nil)
 	fs := &fakeEventStore{}
 	auditor := audit.New(fs)
 	notifier := notify.New(&fakeNotifStore{}, nil)
 
-	checkAgentVersion(context.Background(), fakeStatusReader{version: "9.9.9-other"}, mgr, auditor, notifier, nil)
+	checkAgentVersion(context.Background(), fakeStatusReader{version: "0.1.0"}, mgr, auditor, notifier, nil)
 	if !versionActive(mgr) {
-		t.Fatal("setup: want version-mismatch active after a mismatch")
+		t.Fatal("setup: want version-mismatch active after an older agent version")
 	}
-	checkAgentVersion(context.Background(), fakeStatusReader{version: expectedAgentVersion}, mgr, auditor, notifier, nil)
+	checkAgentVersion(context.Background(), fakeStatusReader{version: minimumAgentVersion}, mgr, auditor, notifier, nil)
 	if versionActive(mgr) {
-		t.Fatal("want version-mismatch cleared after a matching version")
+		t.Fatal("want version-mismatch cleared once the agent is at the minimum")
 	}
 	if len(fs.events) != 2 ||
 		fs.events[1].Action != audit.ActionHealthIssueCleared ||
@@ -264,17 +324,18 @@ func TestCheckAgentVersion_MatchClears(t *testing.T) {
 	}
 }
 
-// TestCheckAgentVersion_MatchNoIssueIsNoop pins the steady happy path: a matching
-// version with no active issue raises nothing and writes no audit row.
+// TestCheckAgentVersion_MatchNoIssueIsNoop pins the steady happy path: a
+// version at the minimum with no active issue raises nothing and writes no
+// audit row.
 func TestCheckAgentVersion_MatchNoIssueIsNoop(t *testing.T) {
 	mgr := health.NewManager(nil)
 	fs := &fakeEventStore{}
 
-	checkAgentVersion(context.Background(), fakeStatusReader{version: expectedAgentVersion},
+	checkAgentVersion(context.Background(), fakeStatusReader{version: minimumAgentVersion},
 		mgr, audit.New(fs), notify.New(&fakeNotifStore{}, nil), nil)
 
 	if versionActive(mgr) {
-		t.Error("want no version-mismatch for a matching version")
+		t.Error("want no version-mismatch for a version at the minimum")
 	}
 	if len(fs.events) != 0 {
 		t.Errorf("want no audit records for a steady matching version, got %d", len(fs.events))
@@ -282,9 +343,9 @@ func TestCheckAgentVersion_MatchNoIssueIsNoop(t *testing.T) {
 }
 
 // TestCheckAgentVersion_SteadyMismatchRefreshesWithoutReaudit: a persistent
-// mismatch raises once; a second poll refreshes last_checked_at (HEALTH.md
-// last-checked-always-fresh) without re-raising or writing a second audit row,
-// and leaves raised_at untouched.
+// older-than-minimum agent raises once; a second poll refreshes
+// last_checked_at (HEALTH.md last-checked-always-fresh) without re-raising or
+// writing a second audit row, and leaves raised_at untouched.
 func TestCheckAgentVersion_SteadyMismatchRefreshesWithoutReaudit(t *testing.T) {
 	mgr := health.NewManager(nil)
 	clock := time.Unix(0, 0).UTC()
@@ -292,7 +353,7 @@ func TestCheckAgentVersion_SteadyMismatchRefreshesWithoutReaudit(t *testing.T) {
 	fs := &fakeEventStore{}
 	auditor := audit.New(fs)
 	notifier := notify.New(&fakeNotifStore{}, nil)
-	reader := fakeStatusReader{version: "9.9.9-other"}
+	reader := fakeStatusReader{version: "0.1.0"}
 
 	checkAgentVersion(context.Background(), reader, mgr, auditor, notifier, nil)
 	first, _ := mgr.Get("version-mismatch", "")
@@ -317,13 +378,13 @@ func TestCheckAgentVersion_SteadyMismatchRefreshesWithoutReaudit(t *testing.T) {
 }
 
 // TestCheckAgentVersion_UnreachableLeavesStateUnchanged: a poll that can't reach
-// host-agent must not clear an active version-mismatch (an error is not a match)
-// and must write no audit record.
+// host-agent must not clear an active version-mismatch (an error is not
+// acceptable) and must write no audit record.
 func TestCheckAgentVersion_UnreachableLeavesStateUnchanged(t *testing.T) {
 	mgr := health.NewManager(nil)
 	notifier := notify.New(&fakeNotifStore{}, nil)
 
-	checkAgentVersion(context.Background(), fakeStatusReader{version: "9.9.9-other"},
+	checkAgentVersion(context.Background(), fakeStatusReader{version: "0.1.0"},
 		mgr, audit.New(&fakeEventStore{}), notifier, nil)
 	if !versionActive(mgr) {
 		t.Fatal("setup: want version-mismatch active")

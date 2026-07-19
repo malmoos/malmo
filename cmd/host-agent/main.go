@@ -30,6 +30,8 @@
 package main
 
 import (
+	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -41,9 +43,17 @@ import (
 	"github.com/malmoos/malmo/internal/hostagent/healthsource"
 	"github.com/malmoos/malmo/internal/hostagent/netstate"
 	"github.com/malmoos/malmo/internal/protocol"
+	"github.com/malmoos/malmo/internal/version"
 )
 
 func main() {
+	showVersion := flag.Bool("version", false, "print the version and exit")
+	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.String() + " (fake)")
+		return
+	}
+
 	sockPath := os.Getenv("MALMO_AGENT_SOCK")
 	if sockPath == "" {
 		sockPath = protocol.SocketPath

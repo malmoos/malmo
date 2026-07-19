@@ -22,6 +22,9 @@ func TestRepoOf(t *testing.T) {
 		{"ghcr.io:5000/foo/bar", "ghcr.io:5000/foo/bar"},
 		// Digest form strips at `@`, regardless of any preceding tag.
 		{"redis@sha256:deadbeef", "redis"},
+		// Tag AND digest: both come off, so the pin stays canonical `name@sha256:…`.
+		{"nextcloud:34.0.1-apache@sha256:deadbeef", "nextcloud"},
+		{"ghcr.io:5000/foo/bar:v1@sha256:deadbeef", "ghcr.io:5000/foo/bar"},
 	} {
 		if got := repoOf(tc.in); got != tc.want {
 			t.Errorf("repoOf(%q)=%q want %q", tc.in, got, tc.want)

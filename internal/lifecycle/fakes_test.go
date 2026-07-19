@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/malmoos/malmo/internal/caddy"
 	"github.com/malmoos/malmo/internal/protocol"
 )
 
@@ -41,9 +42,16 @@ func (c call) String() string {
 type fakeDocker struct {
 	mu sync.Mutex
 
-	digests       map[string]string // image → digest returned by ImageInspect
-	loaded        map[string]bool   // image present locally with NO RepoDigest (docker-loaded)
-	pullErr       map[string]error  // per-image Pull error (nil = success)
+	digests map[string]string // image → digest returned by ImageInspect
+	loaded  map[string]bool   // image present locally with NO RepoDigest (docker-loaded)
+	pullErr map[string]error  // per-ref Pull error (nil = success)
+	// pullErrAll fails Pull for every ref, tag or digest form alike. An
+	// unreachable registry is a property of the box, not of one ref — keying such
+	// a failure by ref would let a pull the code makes under a different ref
+	// (Door-1 pulls `name@sha256:…`, never the tag) succeed against a registry the
+	// test says is gone.
+	pullErrAll error
+
 	composeUp     func(ctx context.Context, dir, project string) (string, error)
 	inspect       func(id, mainService string) (running bool, health string, err error)
 	psManaged     map[string]bool    // returned by PSManaged
@@ -105,6 +113,17 @@ func (f *fakeDocker) methods() []string {
 	return out
 }
 
+// pulled returns the image refs Pull was called with, in order.
+func (f *fakeDocker) pulled() []string {
+	var out []string
+	for _, c := range f.Calls() {
+		if c.method == "Pull" && len(c.args) == 1 {
+			out = append(out, fmt.Sprintf("%v", c.args[0]))
+		}
+	}
+	return out
+}
+
 func (f *fakeDocker) called(method string) bool {
 	for _, m := range f.methods() {
 		if m == method {
@@ -116,6 +135,9 @@ func (f *fakeDocker) called(method string) bool {
 
 func (f *fakeDocker) Pull(_ context.Context, image string) error {
 	f.record("Pull", image)
+	if f.pullErrAll != nil {
+		return f.pullErrAll
+	}
 	return f.pullErr[image]
 }
 
@@ -245,12 +267,15 @@ func (f *fakeDocker) RemoveImage(_ context.Context, ref string) error {
 // --- caddy fake ----------------------------------------------------------
 
 type fakeCaddy struct {
-	mu     sync.Mutex
-	routes map[string]string // instanceID → "splash:<state>" | "upstream:<addr>"
-	calls  []call
+	mu      sync.Mutex
+	routes  map[string]string            // instanceID → "splash:<state>" | "upstream:<addr>"
+	configs map[string]caddy.RouteConfig // instanceID → last AddRoute policy (#306)
+	calls   []call
 }
 
-func newFakeCaddy() *fakeCaddy { return &fakeCaddy{routes: map[string]string{}} }
+func newFakeCaddy() *fakeCaddy {
+	return &fakeCaddy{routes: map[string]string{}, configs: map[string]caddy.RouteConfig{}}
+}
 
 func (c *fakeCaddy) record(method string, args ...any) {
 	c.mu.Lock()
@@ -263,10 +288,11 @@ func (c *fakeCaddy) EnsureServer(context.Context) error {
 	return nil
 }
 
-func (c *fakeCaddy) AddRoute(_ context.Context, id, host, upstream string) error {
-	c.record("AddRoute", id, host, upstream)
+func (c *fakeCaddy) AddRoute(_ context.Context, cfg caddy.RouteConfig) error {
+	c.record("AddRoute", cfg.InstanceID, cfg.Host, cfg.Upstream)
 	c.mu.Lock()
-	c.routes[id] = "upstream:" + upstream
+	c.routes[cfg.InstanceID] = "upstream:" + cfg.Upstream
+	c.configs[cfg.InstanceID] = cfg
 	c.mu.Unlock()
 	return nil
 }
@@ -291,6 +317,14 @@ func (c *fakeCaddy) route(id string) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.routes[id]
+}
+
+// config returns the last RouteConfig AddRoute recorded for an instance, so
+// #306 tests can assert on the resolved forward-auth + Cookie-strip policy.
+func (c *fakeCaddy) config(id string) caddy.RouteConfig {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.configs[id]
 }
 
 func (c *fakeCaddy) called(method string) bool {

@@ -11,6 +11,16 @@ DEV_DIR := .dev
 STATE_DIR := $(DEV_DIR)/state
 AGENT_SOCK := $(abspath $(DEV_DIR)/agent.sock)
 
+# Build identity (BUILD.md # Versioning): one repo VERSION for the whole
+# monorepo, plus the git commit a build was cut from — two stamped fields, no
+# "-dev" suffix logic (DECISIONS.md 2026-07-16). VERSION is read from the repo
+# root; the commit falls back to "unknown" outside a git checkout (e.g. a
+# container build context with no .git) rather than failing the build.
+MALMO_VERSION := $(shell cat $(CURDIR)/VERSION)
+MALMO_COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+LDFLAGS := -X github.com/malmoos/malmo/internal/version.Version=$(MALMO_VERSION) \
+           -X github.com/malmoos/malmo/internal/version.Commit=$(MALMO_COMMIT)
+
 export MALMO_AGENT_SOCK := $(AGENT_SOCK)
 export MALMO_STATE_DIR := $(STATE_DIR)
 # The brain syncs the catalog from the control plane (MALMO_CATALOG_URL, default
@@ -19,7 +29,7 @@ export MALMO_STATE_DIR := $(STATE_DIR)
 # local control plane to develop the store offline.
 export MALMO_CATALOG_CACHE_DIR := ./.dev/catalog-cache
 
-.PHONY: build host-agent brain host-agent-real host-agent-real-hosted brain-image ui-image control-plane-images build-cloud-image check check-web fmt fmt-check vet test test-nopam test-caddy test-avahi test-netstate test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu test-cloud-qemu run-agent run-brain net caddy caddy-down ui dev stop openapi openapi-check clean check-state-owner help
+.PHONY: build host-agent brain host-agent-real host-agent-real-hosted brain-image ui-image control-plane-images build-cloud-image check check-web fmt fmt-check vet test test-nopam test-caddy test-avahi test-netstate test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu test-cloud-qemu run-agent run-brain net caddy caddy-down ui dev dev-app seed-catalog stop openapi openapi-check clean check-state-owner help
 
 # msteinert/pam v2.1.0 uses RTLD_NEXT, a GNU extension that requires
 # _GNU_SOURCE at C compile time. Apply globally; harmless to non-cgo builds.
@@ -35,6 +45,7 @@ help:
 	@echo "make clean       - stop apps, remove dev state"
 	@echo "make control-plane-images - build malmo-brain + malmo-ui images and docker-save the control-plane bundle to .dev/"
 	@echo "make dev         - all three foreground procs in one terminal (recommended)"
+	@echo "make dev-app APP=<id> [STORE=../store] - boot ONE store app under curation: seed its catalog snapshot, then make dev with an inert catalog URL"
 	@echo "make fmt         - rewrite Go sources into gofmt-canonical form (autofix)"
 	@echo "make host-agent-real-hosted - build the slim hosted-cloud host-agent (-tags hosted; #204/C1c)"
 	@echo "make net         - create the malmo-ingress docker network"
@@ -93,13 +104,25 @@ fmt-check:
 vet:
 	$(GO) vet ./...
 
+# `build` stays host-agent (fake) + brain, unchanged from before this slice.
+# host-agent-real is deliberately NOT folded in: it's Linux + CGO +
+# libpam0g-dev always (see its header comment — both its build tags need real
+# PAM), so it already doesn't build on macOS/Windows/WSL2-without-headers.
+# Making it part of the default `build` would break `make build` on exactly
+# the machines the inner loop is supposed to work on with no platform-specific
+# setup (CLAUDE.md # Developing). It's still stamped — see its own target below
+# — for anyone building it directly or via the cloud-image / nspawn lanes.
 build: host-agent brain
 
+# The fake host-agent is stamped too — it prints --version like the real
+# binaries and its self-reported agent_version (internal/hostagent.AgentVersion)
+# derives from the same stamped internal/version.Version, so a dev build's fake
+# agent and dev brain agree without a separate hardcoded constant.
 host-agent:
-	$(GO) build -o $(DEV_DIR)/host-agent ./cmd/host-agent
+	$(GO) build -ldflags "$(LDFLAGS)" -o $(DEV_DIR)/host-agent ./cmd/host-agent
 
 host-agent-real:
-	$(GO) build -o $(DEV_DIR)/host-agent-real ./cmd/host-agent-real
+	$(GO) build -ldflags "$(LDFLAGS)" -o $(DEV_DIR)/host-agent-real ./cmd/host-agent-real
 
 # Slim hosted-cloud host-agent (ENVIRONMENT.md # How the profile is realized —
 # "A build-tagged slim cloud host-agent"; #204/C1c). The same production binary
@@ -109,10 +132,10 @@ host-agent-real:
 # per-app logs, reboot, brain launch) are identical. Linux + CGO + libpam0g-dev,
 # same as host-agent-real. The cloud image build (#203/C1b, #205/C2) consumes it.
 host-agent-real-hosted:
-	$(GO) build -tags hosted -o $(DEV_DIR)/host-agent-real-hosted ./cmd/host-agent-real
+	$(GO) build -tags hosted -ldflags "$(LDFLAGS)" -o $(DEV_DIR)/host-agent-real-hosted ./cmd/host-agent-real
 
 brain:
-	$(GO) build -o $(DEV_DIR)/brain ./cmd/brain
+	$(GO) build -ldflags "$(LDFLAGS)" -o $(DEV_DIR)/brain ./cmd/brain
 
 # ---- Control-plane images (M0, #163) -----------------------------------
 # Build the two malmo OCI images and `docker save` them — together with the two
@@ -128,7 +151,7 @@ CADDY_IMAGE  := caddy:2-alpine
 PROXY_IMAGE  := tecnativa/docker-socket-proxy:v0.4.2
 
 brain-image:
-	docker build -f cmd/brain/Dockerfile -t $(BRAIN_IMAGE) .
+	docker build -f cmd/brain/Dockerfile --build-arg MALMO_COMMIT=$(MALMO_COMMIT) -t $(BRAIN_IMAGE) .
 
 ui-image:
 	docker build -f web-ui/Dockerfile -t $(UI_IMAGE) web-ui
@@ -285,6 +308,40 @@ dev: check-state-owner build caddy
 	  ($(DEV_DIR)/brain      2>&1 | sed -u 's/^/[brain] /') & \
 	  (cd web-ui && npm run dev 2>&1 | sed -u 's/^/[ui]    /') & \
 	  wait
+
+# ---- Curate one store app against the brain (store #22) --------------------
+# Post-catalog-cutover (cloud #62) there is no baked os/catalog/ to boot from —
+# the brain is a thin HTTP client of the control plane. `make dev-app APP=<id>`
+# restores the inner loop for authoring/curating a store app: it seeds the
+# brain's last-good catalog cache from a store checkout (STORE/apps/APP) with
+# mkcatalog, then runs the normal dev stack. The brain loads that cache at boot
+# exactly as it would a synced-then-offline snapshot (internal/catalog/remote.go
+# # loadCache) and installs the app from it.
+#
+# It uses mkcatalog, NOT cloud's catalog-sync, on purpose: catalog-sync publishes
+# only listed:true records, but an app under curation has no verdict yet — you
+# boot it to *decide* whether it is full or degraded. mkcatalog reads the
+# manifest+compose directly and ignores status.yml, so no provisional listed:true
+# is ever needed (and can't be committed by accident).
+STORE ?= ../store
+
+seed-catalog:
+	@[ -n "$(APP)" ] || { echo "usage: make dev-app APP=<id> [STORE=../store]" >&2; exit 2; }
+	@[ -d "$(STORE)/apps/$(APP)" ] || { echo "error: no app package at $(STORE)/apps/$(APP)" >&2; exit 2; }
+	@mkdir -p $(DEV_DIR)/catalog-cache
+	@$(GO) run ./dev/mkcatalog -pkg "$(STORE)/apps/$(APP)" -environments appliance,hosted -out $(DEV_DIR)/catalog-cache/catalog.json
+	@echo "seeded $(APP) -> $(DEV_DIR)/catalog-cache/catalog.json (visible on: appliance, hosted)"
+
+# The inert catalog URL is a target-specific, exported variable, so it is in
+# effect for the `dev` prerequisite's recipe too — the brain reads
+# MALMO_CATALOG_URL from the env, and cmd/brain defaults it to the real apex
+# (https://malmo.network). Without the override the first background sync would
+# succeed and overwrite the seed with the published catalog, silently dropping
+# the app under test. Port 1 has nothing listening, so the sync fails fast (same
+# inert-URL trick as dev/test-health.sh). seed-catalog runs first and aborts the
+# whole target if APP is missing, so `dev` never starts against a bad seed.
+dev-app: export MALMO_CATALOG_URL := http://127.0.0.1:1
+dev-app: seed-catalog dev
 
 # Regenerate the committed OpenAPI spec (api/openapi.{json,yaml}) from the huma
 # handler registrations — no running brain, no port (BRAIN_UI_PROTOCOL.md

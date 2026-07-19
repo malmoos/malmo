@@ -377,7 +377,7 @@ docker save traefik/whoami:v1.10.3 \
 # real use-case-folder bind mount + content-survives-uninstall) and stamps the
 # integrity digest the brain verifies. It rides the brain's /var/lib/malmo mount.
 mkdir -p "$EXTRA/var/lib/malmo/catalog-cache"
-"$GO" -C "$REPO_ROOT" run ./dev/test-qemu/mkcatalog \
+"$GO" -C "$REPO_ROOT" run ./dev/mkcatalog \
     -pkg "${TEST_DIR}/catalog/whoami" \
     -environments appliance,hosted \
     -out "$EXTRA/var/lib/malmo/catalog-cache/catalog.json"

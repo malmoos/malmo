@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/malmoos/malmo/internal/admission"
+	"github.com/malmoos/malmo/internal/auth"
+	"github.com/malmoos/malmo/internal/caddy"
 	"github.com/malmoos/malmo/internal/catalog"
 	"github.com/malmoos/malmo/internal/events"
 	"github.com/malmoos/malmo/internal/hostclient"
@@ -168,6 +170,13 @@ type Manager struct {
 	profile profile.Profile
 	boxID   string
 
+	// brainUpstream is the brain's own address the box Caddy dials for the per-app
+	// forward_auth verify subrequest of a restricted hosted app (#306) — the same
+	// upstream the dashboard route proxies /api + /_malmo to. cmd/brain wires it
+	// from MALMO_DASHBOARD_BRAIN_UPSTREAM via SetBrainUpstream; the default matches
+	// the compose service name so hosted route building works in tests unwired.
+	brainUpstream string
+
 	// instLocks serializes lifecycle ops on a single existing instance
 	// (APP_LIFECYCLE.md # concurrency — one op at a time per instance). Stop,
 	// Start, and Uninstall all take the per-id lock so a stop can't race an
@@ -186,8 +195,15 @@ func NewManager(st *store.Store, cat *catalog.Catalog, host HostDriver, cd Caddy
 		serviceReadyWait: serviceReadyTimeout,
 		instLocks:        map[string]*sync.Mutex{},
 		profile:          profile.Appliance,
+		brainUpstream:    defaultBrainUpstream,
 	}
 }
+
+// defaultBrainUpstream is the compose service address the box Caddy dials for the
+// hosted forward_auth verify subrequest, matching config.go's
+// MALMO_DASHBOARD_BRAIN_UPSTREAM default. cmd/brain overrides it via
+// SetBrainUpstream; the constant only matters for tests that don't wire it.
+const defaultBrainUpstream = "malmo-brain:8080"
 
 // SetOfflineInstall enables (or disables) the air-gapped install fallback —
 // trusting the catalog-promised digest of a locally-present image when its pull
@@ -210,6 +226,57 @@ func (m *Manager) SetEnvironment(prof profile.Profile, boxID string) {
 // installed anyway, so falling back to the appliance path is harmless.
 func (m *Manager) hosted() bool {
 	return m.profile == profile.Hosted && m.boxID != ""
+}
+
+// SetBrainUpstream overrides the address the box Caddy dials for the hosted
+// forward_auth verify subrequest (#306). cmd/brain wires it from the same config
+// value it gives the dashboard route's brain leg; an empty value keeps the
+// default so a misconfiguration can't blank the upstream.
+func (m *Manager) SetBrainUpstream(addr string) {
+	if addr != "" {
+		m.brainUpstream = addr
+	}
+}
+
+// defaultExposure is the exposure a fresh install is created with: restricted
+// (owner-only) on a hosted box — the box login gates every new app by default
+// (ENVIRONMENT.md # Public-by-default, the #306 flip of the old public default) —
+// and public everywhere else. The owner opts an individual app out to public via
+// the dashboard toggle (#307); the appliance has no forward-auth, so its apps are
+// always public.
+func (m *Manager) defaultExposure() string {
+	if m.hosted() {
+		return store.ExposureRestricted
+	}
+	return store.ExposurePublic
+}
+
+// buildRouteConfig resolves the Caddy route policy for an app from the profile
+// and the instance's exposure. This is the single central route builder the spec
+// calls the "safety boundary" (ENVIRONMENT.md #306): the forward-auth gate and
+// the Cookie strip are decided in exactly one place. Appliance returns a bare
+// reverse_proxy — no strip, no gate — byte-for-byte the route it has always
+// emitted. Hosted strips the box's Domain-scoped forward-auth cookie from every
+// app route (restricted or public: the browser sends it to both) and wraps a
+// restricted app in the forward_auth gate at the brain verify endpoint.
+//
+// Only that one cookie is stripped. The app's own cookies must reach it, or a
+// third-party app with a cookie login cannot authenticate at all (#335).
+func (m *Manager) buildRouteConfig(inst store.Instance, host, upstream string) caddy.RouteConfig {
+	cfg := caddy.RouteConfig{InstanceID: inst.ID, Host: host, Upstream: upstream}
+	if !m.hosted() {
+		return cfg
+	}
+	cfg.StripCookieName = auth.ForwardAuthCookieName
+	if inst.Exposure == store.ExposureRestricted {
+		cfg.ForwardAuth = &caddy.ForwardAuthConfig{
+			Upstream:    m.brainUpstream,
+			VerifyPath:  profile.ForwardAuthVerifyPath,
+			CopyHeaders: []string{"X-Malmo-User", "X-Malmo-User-Id"},
+			LoginURL:    "https://" + profile.HostedDashboardHost(m.boxID) + "/",
+		}
+	}
+	return cfg
 }
 
 // lockInstance acquires the per-instance lock (creating it on first use) and
@@ -417,7 +484,8 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	inst := store.Instance{
 		ID: id, ManifestID: man.ID, Name: man.Name, Slug: slug,
 		Version: man.Version, State: "installing",
-		OwnerUserID: owner.UserID, Scope: scope, CreatedAt: time.Now(),
+		OwnerUserID: owner.UserID, Scope: scope,
+		Exposure: m.defaultExposure(), CreatedAt: time.Now(),
 	}
 	if err := m.store.Create(inst); err != nil {
 		return store.Instance{}, fmt.Errorf("write instance row: %w", err)
@@ -744,7 +812,7 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	// 12. Flip the Caddy upstream from splash to the real container.
 	step("flipping_route")
 	upstream := fmt.Sprintf("malmo-%s-%s:%d", id, man.MainService, man.MainPort)
-	if err := m.caddy.AddRoute(ctx, id, host, upstream); err != nil {
+	if err := m.caddy.AddRoute(ctx, m.buildRouteConfig(inst, host, upstream)); err != nil {
 		slog.Warn("caddy upstream flip failed (continuing)",
 			"instance_id", id, "host", host, "upstream", upstream, "err", err)
 	}
@@ -979,13 +1047,46 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 
 	// Healthy — flip the splash to the real container.
 	upstream := fmt.Sprintf("malmo-%s-%s:%d", id, man.MainService, man.MainPort)
-	if err := m.caddy.AddRoute(ctx, id, host, upstream); err != nil {
+	if err := m.caddy.AddRoute(ctx, m.buildRouteConfig(inst, host, upstream)); err != nil {
 		slog.Warn("start: caddy upstream flip failed (continuing)",
 			"instance_id", id, "host", host, "upstream", upstream, "err", err)
 	}
 	m.emitState(inst, prevState)
 	slog.Info("app started", "instance_id", id, "name", inst.Name, "upstream", upstream)
 	return nil
+}
+
+// SetExposure flips an app between public and owner-only (restricted) access and
+// re-applies its Caddy route so the change takes effect immediately (#306, the
+// backend for #307's per-app Only-me / Public toggle). Desired state: the
+// exposure is persisted first, then the running route is rebuilt from it through
+// the same central builder install and reconcile use. A stopped/failed app has
+// only a splash route (no upstream to gate), so persisting the column is enough —
+// its next Start picks up the new exposure. Owner-only in v1 is enforced by the
+// forward-auth verify endpoint (#305), not here; this just chooses the gate.
+func (m *Manager) SetExposure(ctx context.Context, instanceID, exposure string) error {
+	unlock := m.lockInstance(instanceID)
+	defer unlock()
+
+	inst, err := m.store.Get(instanceID)
+	if err != nil {
+		return err
+	}
+	if err := m.store.SetInstanceExposure(instanceID, exposure); err != nil {
+		return err
+	}
+	inst.Exposure = exposure
+	slog.Info("app exposure set", "instance_id", instanceID, "slug", inst.Slug, "exposure", exposure)
+	if inst.State != "running" {
+		return nil
+	}
+	man, err := m.loadInstanceManifest(instanceID)
+	if err != nil {
+		return err
+	}
+	host, _ := m.publishHost(ctx, inst)
+	upstream := fmt.Sprintf("malmo-%s-%s:%d", inst.ID, man.MainService, man.MainPort)
+	return m.caddy.AddRoute(ctx, m.buildRouteConfig(inst, host, upstream))
 }
 
 // startFailed parks a start that came up but never went healthy in the same
@@ -1335,7 +1436,7 @@ func (m *Manager) reassertRouting(ctx context.Context, inst store.Instance) bool
 	}
 	host, avahiOK := m.publishHost(ctx, inst)
 	upstream := fmt.Sprintf("malmo-%s-%s:%d", inst.ID, man.MainService, man.MainPort)
-	if err := m.caddy.AddRoute(ctx, inst.ID, host, upstream); err != nil {
+	if err := m.caddy.AddRoute(ctx, m.buildRouteConfig(inst, host, upstream)); err != nil {
 		slog.Warn("reconcile: caddy route",
 			"instance_id", inst.ID, "host", host, "upstream", upstream, "err", err)
 	}
