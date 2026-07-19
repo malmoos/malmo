@@ -151,7 +151,7 @@ So this doc isn't read as a claim about the finished product:
 - **Login UI.** `Setup` and `Dashboard` render; `Login.vue` is kept in the tree
   but not routed (single-user dev phase). Cookie sessions and the underlying
   auth pipeline are real.
-- **App store.** Every box syncs the catalog from the control plane (`GET /catalog/sync`) with integrity-digest verification, a last-good cache, and TLS for authenticity; no catalog is baked into the image and there is no Ed25519 signature (`DECISIONS.md` 2026-07-02). What remains is cloud-side: the store is the authoring surface, and reconciling the door-1 app-authoring how-to (`docs/dev/authoring-apps-with-an-agent.md`) with that.
+- **App store.** Every box syncs the catalog from the control plane (`GET /catalog/sync`) with integrity-digest verification, a last-good cache, and TLS for authenticity; no catalog is baked into the image and there is no Ed25519 signature (`DECISIONS.md` 2026-07-02). What remains is cloud-side: the store is the authoring surface. The door-1 app-authoring how-to (`docs/dev/authoring-apps-with-an-agent.md`) is reconciled with that — it authors into `store:apps/<id>/` and keeps the schema, tooling, and gap ledger here.
 
 For where each of these is planned, see the matching `specs/` doc.
 
