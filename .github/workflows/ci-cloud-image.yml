@@ -61,6 +61,15 @@
 # control-plane and deploy.
 #
 # Required secret: HCLOUD_TOKEN — a Hetzner Cloud API token (publish only).
+#
+# On the same publish gate, the build also attaches the image to the tagged
+# GitHub Release as a release asset (compressed image + checksum) — a
+# release should carry its own reproducible, provider-neutral built
+# artifact, fetchable by anyone from the release page alone, no Hetzner
+# account required. Purely additive alongside the Hetzner publish above: it
+# reuses the same compressed file rather than building or compressing a
+# second time, and needs no new secret (the job's own GITHUB_TOKEN, granted
+# `contents: write` below, is enough to attach an asset to a release).
 name: CI / Cloud image
 
 on:
@@ -78,6 +87,12 @@ on:
         description: "Publish the built image to Hetzner as a snapshot"
         type: boolean
         default: true
+
+# contents: write is the minimum grant for `gh release upload`/`gh release
+# create` in the release-asset step below; nothing else in this workflow
+# needs write access.
+permissions:
+  contents: write
 
 # Cancel superseded runs on the same ref.
 concurrency:
@@ -322,6 +337,9 @@ jobs:
           [ -n "$id" ] || { echo "::error::upload finished but no snapshot found for label malmo-c2-upload=${run_id}"; exit 1; }
 
           echo "image_id=$id" >> "$GITHUB_OUTPUT"
+          # Shared with the release-asset step below so it doesn't xz the
+          # same .raw a second time.
+          echo "raw_xz=$raw.xz" >> "$GITHUB_OUTPUT"
           {
             echo "### Hosted cloud image published"
             echo ""
@@ -333,3 +351,56 @@ jobs:
             echo ""
             echo "_description: ${desc}_"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # ---- attach the image to the tagged GitHub Release (only when requested) ----
+
+      # Every release should carry its own built artifact, not just source —
+      # a downstream deployer fetches `malmo-vX.Y.Z-amd64.raw.xz` straight off
+      # the Release page and verifies it against the accompanying `.sha256`,
+      # with no dependency on any one hosting provider. This reuses the exact
+      # `.raw.xz` the step above already produced (`steps.publish.outputs.raw_xz`)
+      # rather than compressing the `.raw` a second time.
+      #
+      # Naming follows BUILD.md # 6's existing per-release artifact scheme
+      # (`malmo-vX.Y.Z-amd64.<ext>`, one `vX.Y.Z` from the repo `VERSION`
+      # file) — `.raw.xz` names the actual shipped format (raw disk image,
+      # xz-compressed) rather than the `.qcow2` that section's cloud-image
+      # bullet names, since this lane's build produces `.raw` (mkosi
+      # `Format=disk`), not a qcow2 conversion.
+      #
+      # Tag resolution: `v$(cat VERSION)` matches the tag on both paths that
+      # reach here with SHOULD_PUBLISH=true — a human tag push (asserted
+      # equal to VERSION by the earlier gate step) and the workflow_call from
+      # the release automation (which tags from VERSION by construction
+      # before calling this workflow). The create-if-missing fallback only
+      # matters for a workflow_dispatch publish run against a commit whose
+      # VERSION hasn't been tagged yet.
+      - name: Attach image + checksum to the GitHub Release
+        if: ${{ env.SHOULD_PUBLISH == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          raw_xz="${{ steps.publish.outputs.raw_xz }}"
+          [ -n "$raw_xz" ] && [ -f "$raw_xz" ] || { echo "::error::no compressed image at '${raw_xz:-<unset>}' (expected the Hetzner publish step above to have produced it)"; exit 1; }
+
+          malmo_version="$(cat VERSION)"
+          tag="v${malmo_version}"
+          asset="malmo-${tag}-amd64.raw.xz"
+          checksum="${asset}.sha256"
+
+          cp -- "$raw_xz" "$asset"
+          sha256sum -- "$asset" > "$checksum"
+          echo "asset: $asset ($(du -h "$asset" | cut -f1))"
+          cat "$checksum"
+
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            echo "no GitHub Release found for $tag yet — creating one"
+            gh release create "$tag" --title "$tag" --target "$GITHUB_SHA" --generate-notes
+          fi
+
+          # --clobber: a re-run against the same tag (e.g. retrying a failed
+          # publish) replaces the asset instead of failing on "already exists".
+          gh release upload "$tag" "$asset" "$checksum" --clobber
+          echo "attached $asset + $checksum to release $tag"
