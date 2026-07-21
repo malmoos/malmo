@@ -27,7 +27,7 @@ Wire: `browser → web-ui → brain`, and the brain fans out to `docker compose`
 - **`internal/`** — the brain's packages (`api`, `lifecycle`, `store`, `catalog`, `manifest`, `admission`, `caddy`, `hostclient`, `protocol`, `auth`, `audit`, `events`, plus host-integration and health packages). What each owns and the import rules are in `docs/architecture.md` # Inside the brain.
 - **`cmd/`** — entry points: `brain`, `host-agent` (fake), `host-agent-real`, plus small tools (`malmo`, `malmo-storage-verify`, `openapi-gen`).
 - **`web-ui/`** — the dashboard. Internal code architecture in `docs/dev/web-ui.md`.
-- **`catalog/`** — hand-written sample manifests (currently `whoami`); door-1 install source. **Adding an app starts with a Catalog app issue** (`.github/ISSUE_TEMPLATE/catalog-app.md` — it gates against duplicate/already-rejected apps); authoring works from that issue per `docs/dev/authoring-apps-with-an-agent.md`.
+- **Catalog apps** — no longer in this repo. The artifacts live in the private `malmoos/store` (`apps/<id>/`) and boxes fetch the catalog from the control plane (cloud #62, `DECISIONS.md` 2026-07-02). **Adding an app starts with a Catalog app issue in `malmoos/store`**, not here; authoring works from that issue per `docs/dev/authoring-apps-with-an-agent.md`, which keeps the schema (`internal/manifest`), the admission policy, the `malmo manifest` CLI, and the gap ledger on this side.
 - **`Makefile` + `dev/`** — dev orchestration (`make help`).
 - **`docs/`** — `architecture.md` (as-built), `README.md` (spec map), `specs/` (design source of truth), `progress/` (per-change ADR log), `dev/` (how-to).
 
