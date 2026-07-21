@@ -269,6 +269,7 @@ All artifacts of a release share the **one** `vX.Y.Z` from the repo `VERSION` fi
 - `malmo-host-agent_X.Y.Z_amd64.deb` — published to `apt.malmo.network`.
 - `registry.malmo.network/malmo/brain:vX.Y.Z` — the brain image. `latest` tag advances on stable channel.
 - `registry.malmo.network/malmo/ui:vX.Y.Z` — the dashboard image. Same `vX.Y.Z` as the brain (one repo version); both bundled in the ISO for offline first-boot.
+- **As-built:** `CI / Cloud image` (`.github/workflows/ci-cloud-image.yml`) additionally attaches `malmo-vX.Y.Z-amd64.raw.xz` + `malmo-vX.Y.Z-amd64.raw.xz.sha256` to the tagged GitHub Release, on the same publish gate as the Hetzner snapshot upload above. `.raw.xz` names the actual shipped format — this lane's mkosi build produces `.raw` directly (xz-compressed for the upload), not a qcow2 conversion — so a release carries its own reproducible, provider-neutral image asset fetchable from the Release page alone, alongside the Hetzner snapshot path.
 
 ### Channels
 
