@@ -1,6 +1,9 @@
 # Build the hosted cloud-VM image with mkosi, prove the brain accepts the CURRENT
-# first-boot seed schema (seeded QEMU boot), assert it stays lean, then publish it
-# to Hetzner as a snapshot and print the snapshot id.
+# first-boot seed schema (seeded QEMU boot), assert it stays lean, then attach it
+# to the tagged GitHub Release as a downloadable, provider-neutral image asset
+# (compressed image + checksum). Publishing to any one hosting provider is a
+# separate, downstream concern that consumes this asset; this workflow does not
+# do it and holds no provider credentials.
 #
 # Three triggers, three intents:
 #   - `workflow_call` — the AUTOMATED release path. `release.yml` runs on every
@@ -57,19 +60,12 @@
 # baked old" skew cannot recur.
 #
 # Manual runs: trigger from the Actions tab or `gh workflow run "CI / Cloud
-# image"`. The run prints `MALMO_HETZNER_IMAGE=<id>`; set that on the
-# control-plane and deploy.
+# image"`. A publish run attaches `malmo-vX.Y.Z-amd64.raw.xz` + a `.sha256`
+# to the tagged Release; a downstream consumer fetches and deploys it.
 #
-# Required secret: HCLOUD_TOKEN — a Hetzner Cloud API token (publish only).
-#
-# On the same publish gate, the build also attaches the image to the tagged
-# GitHub Release as a release asset (compressed image + checksum) — a
-# release should carry its own reproducible, provider-neutral built
-# artifact, fetchable by anyone from the release page alone, no Hetzner
-# account required. Purely additive alongside the Hetzner publish above: it
-# reuses the same compressed file rather than building or compressing a
-# second time, and needs no new secret (the job's own GITHUB_TOKEN, granted
-# `contents: write` below, is enough to attach an asset to a release).
+# No provider secret: publishing means attaching the built image to the
+# GitHub Release, which the job's own GITHUB_TOKEN (granted `contents: write`
+# below) can do. The build holds no hosting-provider credentials.
 name: CI / Cloud image
 
 on:
@@ -78,13 +74,13 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: "Publish the built image to Hetzner as a snapshot"
+        description: "Attach the built image to the tagged GitHub Release as an asset"
         type: boolean
         default: true
   workflow_call:
     inputs:
       publish:
-        description: "Publish the built image to Hetzner as a snapshot"
+        description: "Attach the built image to the tagged GitHub Release as an asset"
         type: boolean
         default: true
 
@@ -102,8 +98,8 @@ concurrency:
 jobs:
   cloud-image:
     name: Build + seeded-boot test + publish hosted cloud image
-    # Single source of truth for "should this run publish", computed once so
-    # the 3 publish-gated steps below can't drift out of sync with each other.
+    # Single source of truth for "should this run publish", computed once and
+    # read by the release-asset step below.
     # A real tag push always publishes (that's the point of tagging a release);
     # a workflow_dispatch OR workflow_call run publishes iff its `publish`
     # input says so. On a `push` event `inputs.publish` is undefined, which is
@@ -130,11 +126,9 @@ jobs:
     # floating ubuntu-latest.
     runs-on: ubuntu-24.04
     # Two mkosi builds (production image + QEMU test image), three QEMU boots, and
-    # the rescue-server publish run ~10 min in practice; the 120 cap is a generous
-    # ceiling so a one-off slow runner is never killed mid-build.
+    # the compress-and-attach publish run ~10 min in practice; the 120 cap is a
+    # generous ceiling so a one-off slow runner is never killed mid-build.
     timeout-minutes: 120
-    outputs:
-      image_id: ${{ steps.publish.outputs.image_id }}
     steps:
       - uses: actions/checkout@v5
 
@@ -268,99 +262,14 @@ jobs:
           GO: ${{ steps.go.outputs.go-bin }}
         run: make test-cloud-qemu
 
-      # ---- publish to Hetzner (only when requested) --------------------------
-
-      - name: Set up Go (for hcloud-upload-image)
-        if: ${{ env.SHOULD_PUBLISH == 'true' }}
-        uses: actions/setup-go@v5
-        with:
-          go-version: stable
-
-      - name: Install hcloud-upload-image
-        if: ${{ env.SHOULD_PUBLISH == 'true' }}
-        run: |
-          go install github.com/apricote/hcloud-upload-image@latest
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-
-      # Hetzner Cloud has no native custom-image upload API: a snapshot is made by
-      # booting a throwaway rescue server, dd'ing the image onto its disk, and
-      # snapshotting it. apricote/hcloud-upload-image does that dance. We tag the
-      # snapshot with a unique label so its id is resolvable deterministically
-      # afterwards (the tool only logs it). The .raw built in step 1 lives under
-      # .dev/cloud/; we xz it for a smaller upload.
-      - name: Publish image to Hetzner + resolve snapshot id
-        id: publish
-        if: ${{ env.SHOULD_PUBLISH == 'true' }}
-        env:
-          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
-        run: |
-          set -euo pipefail
-          [ -n "${HCLOUD_TOKEN:-}" ] || { echo "::error::HCLOUD_TOKEN secret not set"; exit 1; }
-
-          raw="$(ls -t .dev/cloud/*.raw 2>/dev/null | head -n1 || true)"
-          [ -n "$raw" ] && [ -f "$raw" ] || { echo "::error::no .raw under .dev/cloud/ (build failed?)"; exit 1; }
-          echo "image: $raw ($(du -h "$raw" | cut -f1))"
-          xz -T0 -c -- "$raw" > "$raw.xz"
-          echo "compressed: $(du -h "$raw.xz" | cut -f1)"
-
-          run_id="$(date +%Y%m%d-%H%M%S)"
-          os_rev="$(git rev-parse --short HEAD)"
-          # VERSION is the single source of truth for what was built (BUILD.md #
-          # Versioning) regardless of trigger: on a tag push it's already
-          # asserted equal to the tag (the early gate step above), and on a
-          # workflow_dispatch build-only/build+publish run it's still the real
-          # version of the checked-out commit — not "bogus" the way the old
-          # tag-only label was on a non-tag trigger, so it's labeled
-          # unconditionally rather than only when a tag happened to trigger the
-          # run.
-          malmo_version="$(cat VERSION)"
-          # Lead with the version: `desc` is what the Hetzner console shows as
-          # the snapshot's name in the images list, so the first thing you read
-          # should be which malmo this is. run_id keeps two snapshots of the
-          # same version apart; os_rev pins the exact commit it was built from.
-          desc="malmo v${malmo_version} — hosted cloud image (os@${os_rev}, ${run_id})"
-          labels="malmo-image=hosted-cloud,malmo-c2-upload=${run_id},malmo-os-rev=${os_rev},malmo-version=${malmo_version}"
-
-          hcloud-upload-image upload \
-            --image-path "$raw.xz" \
-            --compression xz \
-            --architecture x86 \
-            --location nbg1 \
-            --description "$desc" \
-            --labels "$labels"
-
-          id="$(curl -fsS -G "https://api.hetzner.cloud/v1/images" \
-            -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
-            --data-urlencode "type=snapshot" \
-            --data-urlencode "sort=created:desc" \
-            --data-urlencode "label_selector=malmo-c2-upload=${run_id}" \
-            | python3 -c 'import sys,json; i=json.load(sys.stdin).get("images",[]); print(i[0]["id"] if i else "")')"
-          [ -n "$id" ] || { echo "::error::upload finished but no snapshot found for label malmo-c2-upload=${run_id}"; exit 1; }
-
-          echo "image_id=$id" >> "$GITHUB_OUTPUT"
-          # Shared with the release-asset step below so it doesn't xz the
-          # same .raw a second time.
-          echo "raw_xz=$raw.xz" >> "$GITHUB_OUTPUT"
-          {
-            echo "### Hosted cloud image published"
-            echo ""
-            echo "Set this on the control-plane, then deploy:"
-            echo ""
-            echo '```'
-            echo "MALMO_HETZNER_IMAGE=${id}"
-            echo '```'
-            echo ""
-            echo "_description: ${desc}_"
-          } >> "$GITHUB_STEP_SUMMARY"
-
       # ---- attach the image to the tagged GitHub Release (only when requested) ----
 
       # Every release should carry its own built artifact, not just source —
       # a downstream deployer fetches `malmo-vX.Y.Z-amd64.raw.xz` straight off
       # the Release page and verifies it against the accompanying `.sha256`,
-      # with no dependency on any one hosting provider. This reuses the exact
-      # `.raw.xz` the step above already produced (`steps.publish.outputs.raw_xz`)
-      # rather than compressing the `.raw` a second time.
+      # with no dependency on any one hosting provider. This is the ONLY thing
+      # a publish emits: the `.raw` built in step 1 lives under `.dev/cloud/`;
+      # we xz it here and attach it plus a checksum to the Release.
       #
       # Naming follows BUILD.md # 6's existing per-release artifact scheme
       # (`malmo-vX.Y.Z-amd64.<ext>`, one `vX.Y.Z` from the repo `VERSION`
@@ -383,8 +292,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          raw_xz="${{ steps.publish.outputs.raw_xz }}"
-          [ -n "$raw_xz" ] && [ -f "$raw_xz" ] || { echo "::error::no compressed image at '${raw_xz:-<unset>}' (expected the Hetzner publish step above to have produced it)"; exit 1; }
+          raw="$(ls -t .dev/cloud/*.raw 2>/dev/null | head -n1 || true)"
+          [ -n "$raw" ] && [ -f "$raw" ] || { echo "::error::no .raw under .dev/cloud/ (build failed?)"; exit 1; }
+          echo "image: $raw ($(du -h "$raw" | cut -f1))"
+          raw_xz="$raw.xz"
+          xz -T0 -c -- "$raw" > "$raw_xz"
+          echo "compressed: $(du -h "$raw_xz" | cut -f1)"
 
           malmo_version="$(cat VERSION)"
           tag="v${malmo_version}"
