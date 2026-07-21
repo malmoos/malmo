@@ -395,12 +395,37 @@ jobs:
           echo "asset: $asset ($(du -h "$asset" | cut -f1))"
           cat "$checksum"
 
-          if ! gh release view "$tag" >/dev/null 2>&1; then
-            echo "no GitHub Release found for $tag yet — creating one"
-            gh release create "$tag" --title "$tag" --target "$GITHUB_SHA" --generate-notes
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          gh_curl() { curl -sS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "$@"; }
+
+          # Guard against overwriting a canonical release. SHOULD_PUBLISH is also
+          # true for a manual workflow_dispatch, which can run against ANY commit
+          # while VERSION still names an already-shipped release. If the tag already
+          # points at a different commit than this build, refuse rather than clobber
+          # that release's image with one built from another source. `/commits/<ref>`
+          # follows the tag to its commit; empty when the tag does not exist yet.
+          tag_commit="$(gh_curl "${api}/commits/${tag}" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("sha","") if isinstance(d,dict) else "")')"
+          if [ -n "$tag_commit" ] && [ "$tag_commit" != "$GITHUB_SHA" ]; then
+            echo "::notice::tag ${tag} points at ${tag_commit}, not this build (${GITHUB_SHA}); skipping Release asset upload to avoid clobbering canonical assets"
+            exit 0
           fi
 
-          # --clobber: a re-run against the same tag (e.g. retrying a failed
-          # publish) replaces the asset instead of failing on "already exists".
+          # Ensure a Release object exists (a bare tag push makes a ref but no
+          # Release). Create ONLY on a definitive 404 — a transient or permission
+          # error must abort, never be misread as absence, which would fail the
+          # create and mask the real cause instead of uploading.
+          status="$(gh_curl -o /dev/null -w '%{http_code}' "${api}/releases/tags/${tag}")"
+          case "$status" in
+            200) echo "release ${tag} exists" ;;
+            404)
+              echo "no Release for ${tag} yet — creating at ${GITHUB_SHA}"
+              gh release create "$tag" --title "$tag" --target "$GITHUB_SHA" --generate-notes
+              ;;
+            *) echo "::error::release lookup for ${tag} returned HTTP ${status}; aborting rather than treating it as absent"; exit 1 ;;
+          esac
+
+          # --clobber: a legitimate re-run against this same commit's tag (e.g.
+          # retrying a failed publish) replaces the asset instead of erroring on
+          # "already exists".
           gh release upload "$tag" "$asset" "$checksum" --clobber
           echo "attached $asset + $checksum to release $tag"
