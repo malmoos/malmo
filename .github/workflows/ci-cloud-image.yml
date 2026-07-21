@@ -34,8 +34,8 @@
 # call path: `inputs.publish` already carries the right value regardless of
 # whether a human or `release.yml` set it.
 #
-# Either way the full build is expensive (~40 min) and a publish is a
-# deliberate act, not a per-push one.
+# Either way the full build takes ~10 min and a publish is a deliberate act,
+# not a per-push one.
 #
 # Closes the gap #189/#238 carried: until now the cloud image had NO automated
 # build — `make build-cloud-image` ran only by hand, and on an Ubuntu 24.04 box
@@ -130,14 +130,15 @@ jobs:
     # floating ubuntu-latest.
     runs-on: ubuntu-24.04
     # Two mkosi builds (production image + QEMU test image), three QEMU boots, and
-    # the rescue-server publish. Generous vs the old build-only 40m cap.
+    # the rescue-server publish run ~10 min in practice; the 120 cap is a generous
+    # ceiling so a one-off slow runner is never killed mid-build.
     timeout-minutes: 120
     outputs:
       image_id: ${{ steps.publish.outputs.image_id }}
     steps:
       - uses: actions/checkout@v5
 
-      # Fail FAST on a mistagged release, before the ~40min build below runs.
+      # Fail FAST on a mistagged release, before the ~10min build below runs.
       # VERSION (repo root) is the single source of truth for the monorepo's
       # one version (BUILD.md # Versioning, DECISIONS.md 2026-07-16); a `v*`
       # tag push is only a real release if it matches. workflow_dispatch has no
