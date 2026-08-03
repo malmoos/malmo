@@ -135,7 +135,10 @@ func TestDefaultTrustedProxies(t *testing.T) {
 		}
 	}
 
-	untrusted := []string{"203.0.113.4:1", "8.8.8.8:1", "[2001:db8::1]:1"}
+	// The three former-default ranges are listed explicitly: a peer in a client
+	// range must not be trusted as a proxy, which is what the earlier default got
+	// wrong.
+	untrusted := []string{"203.0.113.4:1", "8.8.8.8:1", "[2001:db8::1]:1", "10.4.5.6:1", "192.168.1.9:1", "[fd00::2]:1"}
 	for _, peer := range untrusted {
 		r := &http.Request{RemoteAddr: peer, Header: http.Header{}}
 		r.Header.Set("X-Forwarded-For", "203.0.113.9")
@@ -148,7 +151,7 @@ func TestDefaultTrustedProxies(t *testing.T) {
 
 // TestDefaultTrustedProxiesKeepsLANClientsApart is the regression test for the
 // trap in a "trust the private ranges" default: a trusted hop is *skipped*
-// during the chain walk, so trusting 192.168/8 or 10/8 would erase every LAN
+// during the chain walk, so trusting 192.168.0.0/16 or 10.0.0.0/8 would erase every LAN
 // client's own hop and key the whole household on Caddy's address — one device
 // could then spend everyone's login and allowlist budget. Each household device
 // must resolve to itself.
