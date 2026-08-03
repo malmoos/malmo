@@ -376,13 +376,44 @@ func (c *Client) EnsureCatchAll(ctx context.Context) error {
 
 // EnsureServer resets the "malmo" server's route list to empty at brain
 // startup, giving the reconciler a clean slate to rebuild routes from desired
-// state. It PATCHes only the routes array, so it never touches the server's
-// listen addr or Caddy's admin config. Both dev (dev/caddy.json) and production
-// (dev/control-plane/caddy.json, staged by the M1b bootstrap) boot Caddy with
-// this server and its :80 listener pre-declared, so the brain never sets the
-// listen addr — there is no caller-supplied listen to apply.
+// state, and (re)declares the empty trusted-proxy set. It touches only those two
+// keys, so it never changes the server's listen addr or Caddy's admin config.
+// Both dev (dev/caddy.json) and production (dev/control-plane/caddy.json, staged
+// by the M1b bootstrap) boot Caddy with this server and its :80 listener
+// pre-declared, so the brain never sets the listen addr — there is no
+// caller-supplied listen to apply.
 func (c *Client) EnsureServer(ctx context.Context) error {
+	if err := c.ensureTrustedProxies(ctx); err != nil {
+		return err
+	}
 	return c.patch(ctx, "/config/apps/http/servers/malmo/routes", []any{})
+}
+
+// ensureTrustedProxies declares that this Caddy trusts *no* client to have sent
+// an honest X-Forwarded-For (#329). Caddy is the box's edge: its clients are LAN
+// devices and, on hosted, the open internet. With an empty trusted set Caddy
+// replaces any inbound X-Forwarded-For with the address it actually saw, so a
+// forged chain cannot survive the hop to the brain and be used to mint a fresh
+// per-IP rate-limit bucket.
+//
+// That is already Caddy's default (verified against caddy 2.11.4: an inbound
+// "X-Forwarded-For: 1.2.3.4" arrives upstream as the peer address alone, while
+// the same request from a *trusted* peer arrives with the forged hops intact).
+// Declaring it explicitly pins the behaviour so a future default change or a
+// hand-edited caddy.json cannot quietly re-open the hole, and states the trust
+// model where someone reading the config will look for it. The brain still
+// derives the client from the last untrusted hop rather than believing the
+// header (internal/api/clientip.go) — either half alone leaves a gap.
+//
+// POST, not PUT: the bootstrap caddy.json declares this key too, and Caddy's
+// admin API rejects a PUT onto an existing object key (409 "key already
+// exists"), while POST creates-or-replaces. That keeps this idempotent across
+// brain restarts.
+func (c *Client) ensureTrustedProxies(ctx context.Context) error {
+	return c.post(ctx, "/config/apps/http/servers/malmo/trusted_proxies", map[string]any{
+		"source": "static",
+		"ranges": []any{},
+	})
 }
 
 // EnrollmentCredentials is the per-box acme-dns account Caddy uses to answer the

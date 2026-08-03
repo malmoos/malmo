@@ -508,3 +508,53 @@ func TestSplitCertSubjects(t *testing.T) {
 		})
 	}
 }
+
+// TestEnsureServerDeclaresEmptyTrustedProxies pins the Caddy half of #329: the
+// box's edge trusts no client to have sent an honest X-Forwarded-For, so a
+// forged chain is replaced with the address Caddy actually saw and cannot reach
+// the brain. POST, not PUT — the bootstrap caddy.json already declares the key
+// and Caddy's admin API rejects a PUT onto an existing object key.
+func TestEnsureServerDeclaresEmptyTrustedProxies(t *testing.T) {
+	admin := &recordingAdmin{}
+	srv := httptest.NewServer(admin.handler())
+	defer srv.Close()
+	c := New(srv.URL)
+
+	if err := c.EnsureServer(context.Background()); err != nil {
+		t.Fatalf("EnsureServer: %v", err)
+	}
+
+	post := admin.find("POST", "/trusted_proxies")
+	if post == nil {
+		t.Fatal("EnsureServer must declare the server's trusted_proxies")
+	}
+	if post.body["source"] != "static" {
+		t.Errorf("trusted_proxies source = %v, want static", post.body["source"])
+	}
+	ranges, ok := post.body["ranges"].([]any)
+	if !ok || len(ranges) != 0 {
+		t.Errorf("trusted_proxies ranges = %v, want an empty list (trust no client)", post.body["ranges"])
+	}
+	if admin.find("PATCH", "/routes") == nil {
+		t.Error("EnsureServer must still reset the route list")
+	}
+}
+
+// TestEnsureServerFailsClosedOnTrustedProxyError makes sure a Caddy that
+// rejected the trusted-proxy declaration is reported rather than silently
+// serving routes under an unknown trust model.
+func TestEnsureServerFailsClosedOnTrustedProxyError(t *testing.T) {
+	admin := &recordingAdmin{status: map[string]int{
+		"/config/apps/http/servers/malmo/trusted_proxies": http.StatusBadRequest,
+	}}
+	srv := httptest.NewServer(admin.handler())
+	defer srv.Close()
+	c := New(srv.URL)
+
+	if err := c.EnsureServer(context.Background()); err == nil {
+		t.Fatal("EnsureServer: want an error when the trusted-proxy declaration is rejected")
+	}
+	if admin.find("PATCH", "/routes") != nil {
+		t.Error("route reset should not run once the trust model could not be applied")
+	}
+}

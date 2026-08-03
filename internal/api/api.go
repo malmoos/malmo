@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"time"
 
@@ -59,6 +60,12 @@ type Server struct {
 	profile      profile.Profile
 	boxID        string
 	assertionKey ed25519.PublicKey
+
+	// Proxies whose X-Forwarded-For the brain reads when deriving the client IP
+	// the per-IP throttles key on (clientip.go, #329). Set once at startup via
+	// SetTrustedProxies; nil means "trust nothing", so every request keys on its
+	// peer address.
+	trustedProxies []netip.Prefix
 }
 
 func NewServer(
