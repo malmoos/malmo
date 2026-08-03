@@ -195,9 +195,9 @@ Everything dev-generated is under `.dev/` (git-ignored):
     └── instances/<id>/           # per-app: manifest, compose, override, .env, data/
 ```
 
-Override defaults with env vars: `MALMO_LISTEN`, `MALMO_STATE_DIR`,
-`MALMO_CATALOG_URL`, `MALMO_CATALOG_CACHE_DIR`, `MALMO_CATALOG_REFRESH`,
-`MALMO_AGENT_SOCK`, `MALMO_CADDY_ADMIN`, `MALMO_CADDY_LISTEN`.
+Override defaults with env vars: `MALMO_LISTEN`, `MALMO_STATE_DIR`, `MALMO_CATALOG_URL`, `MALMO_CATALOG_CACHE_DIR`, `MALMO_CATALOG_REFRESH`, `MALMO_AGENT_SOCK`, `MALMO_CADDY_ADMIN`, `MALMO_CADDY_LISTEN`, `MALMO_TRUSTED_PROXIES`.
+
+`MALMO_TRUSTED_PROXIES` is the one with a security consequence: it lists the proxies (comma-separated IPs or CIDRs) whose `X-Forwarded-For` the brain will believe when deriving the client IP its per-IP throttles key on (`BRAIN_UI_PROTOCOL.md` # Rate limiting & abuse). Leave it unset and it defaults to loopback + the private ranges; set it to the empty string to ignore the header entirely and key on the peer address. A value that doesn't parse stops the brain at startup rather than silently falling back.
 
 **Why `fake-shadow.json` exists.** The password lives on the host-agent side, never in the brain (`AUTH.md` # Password storage — the brain calls `verify_password` on every login). The *real* host-agent persists it in `/etc/shadow`; the *fake* one used by `make dev` would otherwise keep it in an in-memory map that dies with the process. Because the brain's SQLite persists the user **and** session rows across a restart, that asymmetry produced a confusing bug: restart the stack, clear cookies, log in again, and the password was rejected even though the account still existed (the session cookie had masked it — a kept cookie skips the password re-check). Backing the fake maps with `fake-shadow.json` under `MALMO_STATE_DIR` makes dev accounts survive a restart, matching the real agent. Set `MALMO_STATE_DIR` and the fake agent picks it up automatically (the dev stack exports it); leave it unset and the fake stays purely in-memory.
 
