@@ -51,7 +51,7 @@ No `apt`, no terminal-by-default. The OS surface area is the UI.
 
 ### Catalog (v1)
 
-- **Postgres** — versions 15 and 16. Most modern self-hosted apps target Postgres.
+- **Postgres** — versions 15, 16, 17 and 18. Most modern self-hosted apps target Postgres. **New manifests should declare 18**: apps have started depending on 18-only built-ins (`uuidv7()` is the first one the catalog hit), and a shim can't stand in for a built-in used as a column `DEFAULT`. **15 is deprecated** — still accepted so existing installs keep working, but not for new manifests. It stays accepted rather than being removed because there is no cross-version migration path yet (see the deferred list below), so dropping it would strand a box already running it.
 - **MySQL** — versions 8.0 and 8.4 (upstream LTS series; 8.0 is past Oracle EOL but kept because Ghost pins it specifically). Some apps speak only the MySQL dialect — Ghost, Kimai.
 - **MariaDB** — versions 10.11 and 11.4 (upstream LTS series). Some apps require it specifically — Nextcloud, WordPress.
 - **Valkey** — version 8. Caching, sessions, queues. Provided by [Valkey](https://valkey.io), the Linux Foundation BSD-3-Clause fork of Redis 7.2.4 — RESP/ACL-compatible. New manifests should declare `type: valkey`.
@@ -62,6 +62,16 @@ MySQL and MariaDB share one wire protocol and SQL dialect, so they are two `type
 We add new types when **3+ store apps actually want them**, not before. Each new type is real ongoing operational complexity (backup integration, version management, schema isolation).
 
 Plausible v2+ additions: see # Post-v1 candidates. (MongoDB was evaluated and **declined** as a managed type — `DECISIONS.md` 2026-06-25; Mongo apps bundle their own engine.)
+
+### Database extensions
+
+There is no `extensions:` key in the manifest and no brain involvement in extensions. What an app can install is decided entirely by what the engine image ships and what its own credential is allowed to do, which splits Postgres extensions into three cases:
+
+- **Trusted contrib extensions work today, unchanged** — `pgcrypto`, `uuid-ossp`, `citext`, `hstore`, `pg_trgm`, `ltree`, `unaccent`, `btree_gin`/`btree_gist`, `tablefunc` and the rest of the trusted set. They ship in the official `postgres` image, and since PG13 a non-superuser **database owner** may `CREATE EXTENSION` them. malmo's per-app role owns its database (`CREATE DATABASE <db> OWNER <role>`), so an app just runs the statement in its own migrations. This is the case that covers most apps that "need an extension"; it needs nothing from the platform.
+- **Untrusted contrib extensions are not available** — `pg_stat_statements`, `plpython3u`, `file_fdw` and friends are in the image but require superuser, which no app credential has. An app needing one bundles its own engine.
+- **Third-party extensions are a different image, not a version** — `pgvector`, `postgis`, `timescaledb` are absent from the official image entirely, so no grant can help; they would need `pgvector/pgvector` or `postgis/postgis` as a distinct managed **type**, subject to the same "3+ store apps actually want it" bar as any other type (#355 holds that decision). Until then, an app needing one bundles its own engine (the `services:`-routing checklist's "not yet provisioned" case).
+
+The same rule holds for the MySQL family and Valkey: whatever the upstream image ships is what an app gets.
 
 ### Provisioning protocol — end to end
 
