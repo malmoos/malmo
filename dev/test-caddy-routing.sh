@@ -6,6 +6,7 @@
 #   1. Brain is reachable and Caddy is up (proxy + admin)
 #   2. Installing whoami registers a subdomain route in Caddy
 #   3. GET http://whoami.local:80/ (via Host header) → 2xx with whoami body
+#   3b. A forged X-Forwarded-For is replaced by Caddy, not passed upstream (#329)
 #   4. GET http://localhost:80/whoami/   (path-based)       → exactly 404 (subdomain-only routing)
 #   5. GET http://localhost:80/ with Host: nobody.local → exactly 404
 #   6. Uninstalling whoami withdraws the route (same Host → exactly 404)
@@ -212,6 +213,29 @@ BODY=$(curl -sf \
 printf '%s' "$BODY" | grep -qi "Hostname:" \
   || fail "whoami body did not contain 'Hostname:' — unexpected response: $BODY"
 echo "    PASS: subdomain route works, body contains 'Hostname:'"
+
+# --- forged X-Forwarded-For does not survive the Caddy hop -------------------
+
+echo "==> [TEST 1b] Forged X-Forwarded-For → expect Caddy to replace it with the real peer"
+# The brain's per-IP throttles key on the client IP Caddy reports (#329), so a
+# client-supplied X-Forwarded-For must never reach an upstream. whoami echoes the
+# request headers it received, which makes this observable end to end against the
+# real Caddy rather than a fake admin API.
+XFF_BODY=$(curl -sf \
+  --resolve "$SLUG.local:80:127.0.0.1" \
+  -H "X-Forwarded-For: 203.0.113.9, 198.51.100.7" \
+  "http://$SLUG.local:80/") \
+  || fail "curl with a forged X-Forwarded-For returned non-2xx"
+
+XFF_SEEN=$(printf '%s' "$XFF_BODY" | grep -i "^X-Forwarded-For:" || true)
+[[ -n "$XFF_SEEN" ]] \
+  || fail "whoami did not echo an X-Forwarded-For header — cannot verify the trust boundary. Body: $XFF_BODY"
+for forged in 203.0.113.9 198.51.100.7; do
+  if printf '%s' "$XFF_SEEN" | grep -q "$forged"; then
+    fail "TRUST BOUNDARY BROKEN: forged X-Forwarded-For hop $forged survived the Caddy hop — got: $XFF_SEEN"
+  fi
+done
+echo "    PASS: Caddy replaced the forged chain ($XFF_SEEN)"
 
 # --- negative path-based test -----------------------------------------------
 
