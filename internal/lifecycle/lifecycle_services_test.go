@@ -456,6 +456,24 @@ func TestWaitServiceReadyAbortsOnContext(t *testing.T) {
 	})
 }
 
+// TestPostgresComposePinsPGDATA guards the data bind against the image default
+// moving underneath it. postgres 18 defaults PGDATA to
+// /var/lib/postgresql/18/docker, so an unpinned 18 instance would bind ./data at
+// a path the server never uses. The live proof that the cluster actually
+// survives a container rebuild is TestLivePostgres18Persistence (dockerlive);
+// this is the cheap always-on regression guard on the rendered template.
+func TestPostgresComposePinsPGDATA(t *testing.T) {
+	for _, version := range []string{"15", "16", "17", "18"} {
+		compose := postgresServiceCompose(version)
+		if !strings.Contains(compose, "PGDATA: /var/lib/postgresql/data") {
+			t.Errorf("postgres %s: compose does not pin PGDATA:\n%s", version, compose)
+		}
+		if !strings.Contains(compose, "- ./data:/var/lib/postgresql/data") {
+			t.Errorf("postgres %s: compose does not bind ./data at the pinned PGDATA:\n%s", version, compose)
+		}
+	}
+}
+
 func readInstanceEnv(t *testing.T, e *testEnv, id string) string {
 	t.Helper()
 	return readInstanceFile(t, e, id, ".env")

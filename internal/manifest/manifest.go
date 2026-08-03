@@ -455,8 +455,13 @@ type ConfigField struct {
 // Valkey engine at provisioning time (redis 7 → valkey 8, RESP/ACL-compatible).
 // The MySQL-family entries are the upstream LTS series; mysql 8.0 is past Oracle
 // EOL but kept because Ghost pins it specifically.
+//
+// Postgres 15 is deprecated for new manifests (still accepted so existing
+// installs keep working — there is no cross-version migration path yet, so
+// removing it would strand any box already on it). New manifests should target
+// 18: apps have started reaching for 18-only built-ins such as uuidv7().
 var serviceVersions = map[string]map[string]bool{
-	"postgres": {"15": true, "16": true},
+	"postgres": {"15": true, "16": true, "17": true, "18": true},
 	"valkey":   {"8": true},
 	"redis":    {"7": true},
 	"mysql":    {"8.0": true, "8.4": true},

@@ -102,13 +102,13 @@ services:
 	dbName := grants[0].DBName
 
 	// The shared Postgres container is up and actually has the provisioned DB.
-	if !pgDatabaseExists(t, dbName) {
+	if !pgDatabaseExists(t, "15", dbName) {
 		t.Fatalf("database %q not found in the live Postgres", dbName)
 	}
 	t.Logf("provisioned database %q present in live Postgres", dbName)
 
 	// The role can connect to its own database with the injected password.
-	if !pgRoleCanConnect(t, grants[0].RoleName, grants[0].Password, dbName) {
+	if !pgRoleCanConnect(t, "15", grants[0].RoleName, grants[0].Password, dbName) {
 		t.Fatalf("role %q could not connect to %q with injected password", grants[0].RoleName, dbName)
 	}
 	t.Logf("role %q connects to %q with the injected credentials", grants[0].RoleName, dbName)
@@ -117,10 +117,139 @@ services:
 	if err := m.Uninstall(ctx, inst.ID); err != nil {
 		t.Fatalf("uninstall: %v", err)
 	}
-	if pgDatabaseExists(t, dbName) {
+	if pgDatabaseExists(t, "15", dbName) {
 		t.Fatalf("database %q survived uninstall", dbName)
 	}
 	t.Logf("database %q dropped on uninstall", dbName)
+}
+
+// TestLivePostgres18Persistence is the data-durability proof for the shared
+// Postgres bind, run against 18 because that is the major where the image's
+// default PGDATA moved (/var/lib/postgresql/18/docker) away from the path the
+// compose template binds. A wrong bind is invisible to every other assertion:
+// the server boots, passes pg_isready, provisions databases and serves traffic —
+// the cluster just lives on the container filesystem and vanishes with it.
+//
+// So the test writes real rows, then destroys the *container* (not a restart —
+// `docker restart` keeps the container filesystem, and would pass happily
+// against the broken bind) and brings the service back through the brain's own
+// boot path, reconcileServices. Surviving that is what proves ./data holds the
+// cluster.
+//
+//	go test ./internal/lifecycle/ -tags dockerlive -run TestLivePostgres18Persistence -v -timeout 300s
+func TestLivePostgres18Persistence(t *testing.T) {
+	ctx := context.Background()
+	stateDir := t.TempDir()
+	catDir := t.TempDir()
+	s, err := store.Open(filepath.Join(stateDir, "malmo.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	cat := catalog.New(catDir)
+	docker := NewCLIDocker()
+	m := NewManager(s, cat, newFakeHost(), newFakeCaddy(), docker, events.NewBus(), stateDir)
+	m.SetAdmitter(admission.Check)
+
+	if err := docker.NetworkCreate(ctx, ingressNetwork, false); err != nil {
+		t.Fatalf("ingress net: %v", err)
+	}
+
+	man := `
+id: livepg18
+manifest_version: 1
+name: Live PG18 App
+version: "1.0"
+compose_file: compose.yml
+main_service: app
+main_port: 80
+preferred_slugs: [livepg18]
+services:
+  database:
+    type: postgres
+    version: "18"
+permissions:
+  internet: false
+  lan: false
+`
+	compose := `
+services:
+  app:
+    image: traefik/whoami:v1.10.3
+    environment:
+      POSTGRES_URL: ${MALMO_SERVICE_DATABASE_DSN}
+`
+	writeLiveCatalogApp(t, catDir, "livepg18", compose, man)
+
+	t.Cleanup(func() {
+		_ = exec.Command("docker", "rm", "-f", serviceContainerName("postgres", "18")).Run()
+		_ = exec.Command("docker", "network", "rm", serviceNetworkName("postgres", "18")).Run()
+		_ = exec.Command("docker", "network", "rm", ingressNetwork).Run()
+		_ = exec.Command("docker", "run", "--rm", "-v", stateDir+":/s",
+			"alpine", "rm", "-rf", "/s/services").Run()
+	})
+
+	inst, err := m.Install(ctx, "livepg18",
+		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	grants, err := s.GetServiceGrants(inst.ID)
+	if err != nil || len(grants) != 1 {
+		t.Fatalf("grants = %v, err %v", grants, err)
+	}
+	g := grants[0]
+
+	// uuidv7() is the 18-only built-in that motivated the major (issue #354); an
+	// app pinned to 18 for it must actually find it in the provisioned engine.
+	// Writing through it also gives the durability check a real row to look for.
+	if _, err := pgExec(t, "18", g.RoleName, g.Password, g.DBName,
+		"CREATE TABLE durable (id uuid PRIMARY KEY DEFAULT uuidv7(), note text)"); err != nil {
+		t.Fatalf("create table with uuidv7 default: %v", err)
+	}
+	if _, err := pgExec(t, "18", g.RoleName, g.Password, g.DBName,
+		"INSERT INTO durable (note) VALUES ('survives a container rebuild')"); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	// Destroy the container, taking its filesystem with it, then bring the
+	// service back the way the brain does on boot.
+	if out, err := exec.Command("docker", "rm", "-f", serviceContainerName("postgres", "18")).CombinedOutput(); err != nil {
+		t.Fatalf("rm service container: %v\n%s", err, out)
+	}
+	m.reconcileServices(ctx)
+	if err := m.waitServiceReady(ctx, "postgres", "18"); err != nil {
+		t.Fatalf("service not ready after rebuild: %v", err)
+	}
+
+	if !pgDatabaseExists(t, "18", g.DBName) {
+		t.Fatalf("database %q did not survive the container rebuild — the data bind is not holding the cluster", g.DBName)
+	}
+	if !pgRoleCanConnect(t, "18", g.RoleName, g.Password, g.DBName) {
+		t.Fatalf("role %q could not connect after the container rebuild", g.RoleName)
+	}
+	out, err := pgExec(t, "18", g.RoleName, g.Password, g.DBName, "SELECT note FROM durable")
+	if err != nil {
+		t.Fatalf("read back after rebuild: %v", err)
+	}
+	if out != "survives a container rebuild" {
+		t.Fatalf("row after rebuild = %q, want the inserted note", out)
+	}
+	t.Logf("database %q and its rows survived the container rebuild", g.DBName)
+}
+
+// pgExec runs one SQL statement as the provisioned app role over TCP, returning
+// the trimmed single-value output.
+func pgExec(t *testing.T, version, role, password, dbName, sql string) (string, error) {
+	t.Helper()
+	out, err := exec.Command("docker", "exec", "-e", "PGPASSWORD="+password,
+		serviceContainerName("postgres", version),
+		"psql", "-h", "127.0.0.1", "-U", role, "-d", dbName, "-tAc", sql).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, out)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // TestLiveMySQLProvisioning mirrors TestLivePostgresProvisioning for the MySQL
@@ -645,10 +774,11 @@ func writeLiveCatalogApp(t *testing.T, catDir, id, compose, man string) {
 	}
 }
 
-// pgDatabaseExists reports whether a database is present in the live container.
-func pgDatabaseExists(t *testing.T, dbName string) bool {
+// pgDatabaseExists reports whether a database is present in the live container
+// of the given Postgres major.
+func pgDatabaseExists(t *testing.T, version, dbName string) bool {
 	t.Helper()
-	out, _ := exec.Command("docker", "exec", serviceContainerName("postgres", "15"),
+	out, _ := exec.Command("docker", "exec", serviceContainerName("postgres", version),
 		"psql", "-U", "postgres", "-tAc",
 		"SELECT 1 FROM pg_database WHERE datname='"+dbName+"'").CombinedOutput()
 	return strings.TrimSpace(string(out)) == "1"
@@ -656,10 +786,10 @@ func pgDatabaseExists(t *testing.T, dbName string) bool {
 
 // pgRoleCanConnect verifies the provisioned role authenticates against its DB
 // over TCP with the injected password (PGPASSWORD), exercising the real DSN.
-func pgRoleCanConnect(t *testing.T, role, password, dbName string) bool {
+func pgRoleCanConnect(t *testing.T, version, role, password, dbName string) bool {
 	t.Helper()
 	cmd := exec.Command("docker", "exec", "-e", "PGPASSWORD="+password,
-		serviceContainerName("postgres", "15"),
+		serviceContainerName("postgres", version),
 		"psql", "-h", "127.0.0.1", "-U", role, "-d", dbName, "-tAc", "SELECT 1")
 	deadline := time.Now().Add(10 * time.Second)
 	for {
@@ -673,7 +803,7 @@ func pgRoleCanConnect(t *testing.T, role, password, dbName string) bool {
 		}
 		time.Sleep(time.Second)
 		cmd = exec.Command("docker", "exec", "-e", "PGPASSWORD="+password,
-			serviceContainerName("postgres", "15"),
+			serviceContainerName("postgres", version),
 			"psql", "-h", "127.0.0.1", "-U", role, "-d", dbName, "-tAc", "SELECT 1")
 	}
 }
