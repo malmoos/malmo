@@ -21,25 +21,34 @@ import (
 // malmo's topology makes the trusted set small: the brain container publishes no
 // port, so its only reachable peers are on the box's own `malmo-ingress`
 // network, and its only legitimate client is the box's Caddy. The default set is
-// therefore the private ranges (see defaultTrustedProxies); MALMO_TRUSTED_PROXIES
-// narrows or widens it, and an empty value pins the brain to RemoteAddr alone.
+// therefore loopback plus Docker's bridge pool (see defaultTrustedProxyCIDRs, and
+// the warning there about why it must not include the ranges LAN *clients* use);
+// MALMO_TRUSTED_PROXIES narrows or widens it, and an empty value pins the brain
+// to RemoteAddr alone.
 
 // defaultTrustedProxyCIDRs is the trusted-proxy set the brain uses when
-// MALMO_TRUSTED_PROXIES is unset: loopback plus the private ranges, which is
-// every address a peer on the box's own Docker network can have (and, under
-// `make dev`, the native brain's 127.0.0.1 caller). It mirrors Caddy's own
-// `private_ranges` shortcut so the two sides of the hop describe the same set.
+// MALMO_TRUSTED_PROXIES is unset: loopback (the native `make dev` brain's
+// caller) plus Docker's default bridge-network pool, which is where the box's
+// Caddy container sits. The brain container publishes no port, so those are the
+// only addresses a legitimate peer can have.
 //
-// It deliberately does not include the public internet: a request that reaches
-// the brain from a routable address has not come through the box's Caddy, and
-// nothing it says about its own origin is worth reading.
+// It is deliberately NARROWER than "the private ranges". The set has to exclude
+// the addresses real clients use, not just the ones proxies use: a trusted hop
+// is skipped during the chain walk, so trusting 192.168.0.0/16 or 10.0.0.0/8
+// would make every LAN client's own hop invisible and collapse the whole
+// household into one shared rate-limit bucket keyed on Caddy's address — one
+// device could then throttle everyone, which is the failure the per-IP planes
+// exist to prevent.
+//
+// The cost of the narrow default is the opposite, milder failure: a box whose
+// Docker network was moved outside 172.16/12 sees an untrusted peer, ignores the
+// header, and keys everything on Caddy's address — safe, and fixed by setting
+// MALMO_TRUSTED_PROXIES to that network. A LAN that itself uses 172.16/12 has
+// the same overlap problem in reverse and wants the same override.
 var defaultTrustedProxyCIDRs = []string{
 	"127.0.0.0/8",
 	"::1/128",
-	"10.0.0.0/8",
 	"172.16.0.0/12",
-	"192.168.0.0/16",
-	"fd00::/8",
 }
 
 // DefaultTrustedProxies returns the parsed default set. It panics on a malformed

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"testing"
 	"time"
 
@@ -417,7 +416,7 @@ func TestRateLimit_ForgedForwardedForSharesOneBucket(t *testing.T) {
 func TestRateLimit_TrustedProxyForwardedForIsHonoured(t *testing.T) {
 	clk := newFixedClock()
 	srv := probeLimiterServer(5, 1, clk.now)
-	srv.SetTrustedProxies(mustTrustedProxies(t, "172.18.0.0/16"))
+	srv.SetTrustedProxies(DefaultTrustedProxies()) // the shipped set, not a set tailored to this test
 	var hits int
 	h := srv.authMiddleware(srv.rateLimit(countingNext(&hits)))
 
@@ -442,13 +441,4 @@ func TestRateLimit_TrustedProxyForwardedForIsHonoured(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("a different LAN client behind the same proxy must keep its own budget: got %d", rr.Code)
 	}
-}
-
-func mustTrustedProxies(t *testing.T, spec string) []netip.Prefix {
-	t.Helper()
-	prefixes, err := ParseTrustedProxies(spec)
-	if err != nil {
-		t.Fatalf("parse trusted proxies %q: %v", spec, err)
-	}
-	return prefixes
 }
