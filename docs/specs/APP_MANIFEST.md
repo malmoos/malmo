@@ -185,16 +185,16 @@ The "OS as platform" bet made concrete. Apps declare what infra they need; the b
 services:
   database:
     type: postgres
-    version: "15"                     # version pin
+    version: "18"                     # version pin
     name: photoprism_db               # logical name within this app
   cache:
     type: valkey
     version: "8"
 ```
 
-The brain provisions the resource (e.g., creates a database in the shared Postgres-15 instance with a scoped user) and **injects credentials as environment variables**.
+The brain provisions the resource (e.g., creates a database in the shared Postgres-18 instance with a scoped user) and **injects credentials as environment variables**.
 
-Available types and versions (`SERVICE_PROVISIONING.md` # Catalog (v1)): `postgres` (15, 16), `mysql` (8.0, 8.4), `mariadb` (10.11, 11.4), `valkey` (8). `redis` (7) is accepted as a **compatibility alias for `valkey`** — it always provisions the BSD-3 Valkey engine underneath, never upstream Redis (`DECISIONS.md` 2026-06-13); new manifests should prefer `valkey`. A type/version outside this set is rejected at manifest parse time. The MySQL family injects port 3306 and a `mysql://` DSN for both engines (one wire protocol); Valkey injects port 6379 and a `redis://` DSN (the universal RESP scheme).
+Available types and versions (`SERVICE_PROVISIONING.md` # Catalog (v1)): `postgres` (15, 16, 17, 18 — new manifests should declare **18**; 15 is deprecated but still accepted), `mysql` (8.0, 8.4), `mariadb` (10.11, 11.4), `valkey` (8). `redis` (7) is accepted as a **compatibility alias for `valkey`** — it always provisions the BSD-3 Valkey engine underneath, never upstream Redis (`DECISIONS.md` 2026-06-13); new manifests should prefer `valkey`. A type/version outside this set is rejected at manifest parse time. The MySQL family injects port 3306 and a `mysql://` DSN for both engines (one wire protocol); Valkey injects port 6379 and a `redis://` DSN (the universal RESP scheme). There is no `extensions:` key: an app installs trusted Postgres extensions itself (its role owns its database), and anything needing an untrusted or third-party extension bundles its own engine — `SERVICE_PROVISIONING.md` # Database extensions.
 
 **Naming convention: app-defined.** The malmo brain exposes the credentials under stable, documented variable names (e.g., `MALMO_SERVICE_DATABASE_HOST`, `MALMO_SERVICE_DATABASE_USER`, `MALMO_SERVICE_DATABASE_PASSWORD`, `MALMO_SERVICE_DATABASE_NAME`, `MALMO_SERVICE_DATABASE_DSN`). The app's compose file maps these to whatever variables the app actually expects:
 
@@ -428,7 +428,7 @@ storage:
   estimated_size: 10GB
 
 services:
-  database: { type: postgres, version: "15" }
+  database: { type: postgres, version: "18" }
 
 permissions:
   internet: true
@@ -472,7 +472,7 @@ permissions:
 
 **What the brain infers vs. asks (Door-2 paste).** `main_service` is **autodetected** when the compose has exactly one service, and **asked** otherwise (a dropdown of the compose's services). `main_port` is the *container-internal* port Caddy routes to — **best-effort inferred** from every signal the compose carries: a single `expose:` value, or the *container side* of a published `ports:` mapping (`8080:80` ⇒ `80`), mined out for the prefill before the mapping itself is rejected. It is **asked** only when the compose is silent (malmo can't read the image's `EXPOSE` without pulling it) and is always editable. A published `ports:` is never *honored* (it's an admission rejection — Caddy fronts every app on internal networks); its container side is only read to prefill `main_port`. The full screen UX — where the flow lives, the permission controls and YAML escape hatch, inline admission-error coaching, the live URL preview, and the deferred edit-after-install path — is locked in `DASHBOARD.md` # Door-2 custom container install flow.
 
-**Custom apps may request managed services.** Allowed, not encouraged. A power user pasting compose can manually add `services: { database: { type: postgres, version: "15" } }` and gets the same managed Postgres treatment. We document the path; we don't gate it.
+**Custom apps may request managed services.** Allowed, not encouraged. A power user pasting compose can manually add `services: { database: { type: postgres, version: "18" } }` and gets the same managed Postgres treatment. We document the path; we don't gate it.
 
 ## Locked decisions
 

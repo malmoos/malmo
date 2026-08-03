@@ -541,6 +541,18 @@ func (m *Manager) writeServiceDir(kind, version, superuserPW string) error {
 // under the postgres-<version>.malmo.internal alias apps use in their DSN, and
 // pg_isready backs the healthcheck the brain polls for readiness. container_name
 // is the brain's inspect handle.
+//
+// PGDATA is pinned explicitly because the image default moved: 15/16/17 default
+// to /var/lib/postgresql/data, but 18 defaults to /var/lib/postgresql/18/docker
+// (major-version-specific dirs, docker-library/postgres#1259). Without the pin an
+// 18 instance refuses to start at all — the image detects the mount at the old
+// path and exits with "there appears to be PostgreSQL data in
+// /var/lib/postgresql/data (unused mount/volume)" — so lazy spinup fails the
+// readiness wait and install rolls back. Pinning keeps one template and one
+// on-disk layout (services/postgres-<v>/data is the cluster dir) across every
+// major. Binding the 18 parent (/var/lib/postgresql) instead is not an option:
+// the 18 entrypoint drops to uid 999 before creating $PGDATA, so it cannot mkdir
+// inside the 0700 dir writeServiceDir creates.
 func postgresServiceCompose(version string) string {
 	container := serviceContainerName("postgres", version)
 	netName := serviceNetworkName("postgres", version)
@@ -553,6 +565,7 @@ func postgresServiceCompose(version string) string {
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
+      PGDATA: /var/lib/postgresql/data
     volumes:
       - ./data:/var/lib/postgresql/data
     networks:

@@ -19,8 +19,8 @@
 #     Versioning section already treats the tag as the source-of-truth marker
 #     for "this commit is vX.Y.Z" independent of any downstream artifact.
 #   - If the tag/release step ran AFTER a successful image build instead, a
-#     build failure — or the runner dying mid-build, which happens on
-#     ~40-120min jobs — would leave NO tag and NO release for a commit whose
+#     build failure — or the runner dying mid-build, which can happen on any
+#     job (the build is ~10min) — would leave NO tag and NO release for a commit whose
 #     VERSION was already bumped and merged to main. The next push to main
 #     (if VERSION isn't bumped again) would see the same untagged VERSION and
 #     retry the SAME multi-hour build every time until it succeeds, or worse,

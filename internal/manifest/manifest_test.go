@@ -358,6 +358,35 @@ services:
 	}
 }
 
+// TestParseServicesPostgresMajors pins the offered Postgres majors. 15 stays
+// accepted (deprecated for new manifests, but existing installs have no
+// migration path off it); 17 and 18 were added for apps reaching 18-only
+// built-ins such as uuidv7() (#354).
+func TestParseServicesPostgresMajors(t *testing.T) {
+	for _, version := range []string{"15", "16", "17", "18"} {
+		src := []byte(`
+id: kan
+manifest_version: 1
+name: Kan
+version: "1.0"
+compose_file: compose.yml
+main_service: web
+main_port: 3000
+services:
+  database:
+    type: postgres
+    version: "` + version + `"
+`)
+		m, err := Parse(src)
+		if err != nil {
+			t.Fatalf("postgres %s: parse: %v", version, err)
+		}
+		if got := m.Services["database"]; got.Version != version {
+			t.Errorf("postgres %s: database = %+v", version, got)
+		}
+	}
+}
+
 func TestParseServicesMySQLFamily(t *testing.T) {
 	for _, dep := range []struct{ typ, version string }{
 		{"mysql", "8.0"}, {"mysql", "8.4"}, {"mariadb", "10.11"}, {"mariadb", "11.4"},
@@ -392,6 +421,7 @@ func TestParseRejectsBadServices(t *testing.T) {
 		// (DECISIONS.md 2026-06-25, docs/progress/mongodb-compat-spike.md). Keep it rejected.
 		"unknown type":    "database:\n    type: mongodb\n    version: \"7\"",
 		"bad pg version":  "database:\n    type: postgres\n    version: \"13\"",
+		"unreleased pg":   "database:\n    type: postgres\n    version: \"19\"",
 		"bad redis ver":   "cache:\n    type: redis\n    version: \"6\"",
 		"bad mysql ver":   "database:\n    type: mysql\n    version: \"5.7\"",
 		"major-only ver":  "database:\n    type: mysql\n    version: \"8\"",

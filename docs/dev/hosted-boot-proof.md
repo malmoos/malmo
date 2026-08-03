@@ -44,7 +44,7 @@ A **broken image build** presents as several of these at once (e.g. `:443` refus
 
 ## How to run it
 
-- **CI (preferred — no local root/KVM, no image push):** `gh workflow run "CI / Cloud image" --ref <branch> -f publish=false`. Builds the image, then runs the `unseeded seeded bios` boots under QEMU (the `bios` boot re-boots under legacy BIOS, #277). `publish=true` (the default) additionally uploads the built image to the provider — only do that deliberately. Runtime ~40–120 min.
+- **CI (preferred — no local root/KVM, no image push):** `gh workflow run "CI / Cloud image" --ref <branch> -f publish=false`. Builds the image, then runs the `unseeded seeded bios` boots under QEMU (the `bios` boot re-boots under legacy BIOS, #277). `publish=true` (the default) additionally uploads the built image to the provider — only do that deliberately. Runtime ~10 min.
 - **Local:** `sudo make test-cloud-qemu` (needs root + `/dev/kvm`). Scope boots with `MALMO_CLOUD_BOOTS="seeded"` to reproduce the wildcard path alone, `"bios"` to reproduce the legacy-BIOS boot alone, or the default `"unseeded seeded frozen bios"` for the full run.
 
 ## Related history (frozen snapshots — background, not the current view)
