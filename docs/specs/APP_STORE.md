@@ -244,15 +244,17 @@ The vocabulary is not part of the snapshot's integrity digest, which covers the 
 
 ## What the box models, and what it drops
 
-The box does not model the whole published snapshot. `internal/catalog/wire.go` declares the fields the box surfaces, and it declares a **subset** on purpose: the publish side can add a field without waiting for every box in the field to update first.
+The box does not model the whole published snapshot. `internal/catalog/wire.go` declares the fields the box surfaces, and it declares a **subset** on purpose: the publish side can add a field without waiting for every deployed box to update first.
 
 The price of that choice is silent loss. `encoding/json` ignores any key it has no field for, so a field added upstream reaches the box and vanishes there — no error, no log line, nothing the box could act on even in principle. **A new field is not delivered when the control plane starts serving it. It is delivered when the box models it.** Adding one is a two-side change: the wire struct here, plus the projection into whatever the box surfaces.
 
 The integrity digest cannot catch this. `index_sha256` covers the app index (`apps`) only, so it catches a truncated or corrupted snapshot and says nothing about a dropped top-level field. The landing block (`home`) was added upstream, dropped by the box, and the digest check stayed green throughout.
 
-What catches it is a pinned copy of a real snapshot at `internal/catalog/testdata/snapshot.json`, plus `TestNoUnmodeledFields` (`internal/catalog/wire_test.go`). The test parses the fixture into a generic map and fails on any top-level or per-app key the box's own types do not declare. A key that shows up is not automatically a bug — it means the published shape moved and the box has a decision to make: model the field, or list it in `ignoredTopLevelKeys` with the reason. An explicit "we looked and said no", never silence.
+What catches it is a pinned copy of a real snapshot at `internal/catalog/testdata/snapshot.json`, plus `TestNoUnmodeledFields` (`internal/catalog/wire_test.go`). The test parses the fixture into a generic map and fails on any top-level or per-app key the box's own types do not declare, including the nested per-app shapes (footprint, author, links, images). A key that shows up is not automatically a bug — it means the published shape moved and the box has a decision to make: model the field, or list it in `ignoredTopLevelKeys` with the reason. An explicit "we looked and said no", never silence.
 
 That guard only ever reads the copy it is pinned to, so **it is armed by refreshing that copy** from a snapshot the control plane really serves, in the same unit of work as the shape change. A stale fixture means the test never sees the new field, the box drops it in production, and every test stays green — the exact failure the guard exists to stop.
+
+Modelling a field is per-consumer work: this same subset-and-drop rule holds for any other surface that consumes the published shape, so a field one surface starts showing does not appear on another until that surface models it too.
 
 ## Locked decisions
 
