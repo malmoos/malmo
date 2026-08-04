@@ -40,7 +40,7 @@ import { api, type CatalogEntry, type CatalogHome, type CatalogCategory } from "
 import StoreAppCard from "../components/StoreAppCard.vue";
 import StoreSpotlight from "../components/StoreSpotlight.vue";
 import Heading from "@/components/ui/Heading.vue";
-import { packRows, groupSpan, groupCols, categoryLabel } from "../lib/storeLayout";
+import { packRows, groupSpan, groupCols } from "../lib/storeLayout";
 import Button from "@/components/ui/Button.vue";
 
 const { currentUser } = useAuth();
@@ -189,20 +189,30 @@ const catalogEmpty = computed(
     (home.data.value?.featured?.length ?? 0) === 0,
 );
 
+// activeCategoryLabel is the heading for the category view. The category payload
+// carries its own authored label, so this prefers that and only falls back to the
+// pill list while the request is in flight.
+const activeCategoryLabel = computed(
+  () =>
+    category.data.value?.label ??
+    categories.value.find((c) => c.id === activeCategory.value)?.label ??
+    activeCategory.value,
+);
+
 // pillActive reports whether c is the pill currently shown as selected — used
 // both for styling and to decide the click's toggle direction, so the two never
 // disagree. A search in progress de-selects every pill (mirrors the control
 // plane's own store surface).
-function pillActive(c: string): boolean {
-  return activeCategory.value === c && mode.value !== "search";
+function pillActive(id: string): boolean {
+  return activeCategory.value === id && mode.value !== "search";
 }
 
 // Clicking a pill selects it; clicking the already-active pill toggles back to
 // the landing (mirrors the control plane's own store surface: "the recommended
 // landing is the default view, not a pill — clicking the active category
 // toggles back to it").
-function selectCategory(c: string) {
-  activeCategory.value = pillActive(c) ? "recommended" : c;
+function selectCategory(id: string) {
+  activeCategory.value = pillActive(id) ? "recommended" : id;
   // Pills and search are exclusive entry points — picking a pill drops the search.
   query.value = "";
   searchTerm.value = "";
@@ -264,17 +274,17 @@ function clearFilters() {
       <div v-if="categories.length > 0" class="flex flex-wrap gap-2">
         <button
           v-for="c in categories"
-          :key="c"
+          :key="c.id"
           type="button"
-          class="cursor-pointer rounded-full border px-3.5 py-1 text-sm font-medium capitalize transition-colors"
+          class="cursor-pointer rounded-full border px-3.5 py-1 text-sm font-medium transition-colors"
           :class="
-            pillActive(c)
+            pillActive(c.id)
               ? 'border-accent bg-accent text-accent-foreground'
               : 'border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground'
           "
-          @click="selectCategory(c)"
+          @click="selectCategory(c.id)"
         >
-          {{ categoryLabel(c) }}
+          {{ c.label }}
         </button>
       </div>
 
@@ -310,7 +320,7 @@ function clearFilters() {
 
         <!-- Category view: that category's apps under a section heading. -->
         <section v-if="mode === 'category'" class="space-y-4">
-          <h3 class="text-base font-semibold capitalize text-foreground">{{ categoryLabel(activeCategory) }}</h3>
+          <h3 class="text-base font-semibold text-foreground">{{ activeCategoryLabel }}</h3>
           <div
             v-if="browseApps.length"
             class="grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-3 lg:grid-cols-4"
@@ -352,7 +362,7 @@ function clearFilters() {
           <div v-if="packedGroupRows.length" class="flex flex-col gap-12">
             <div v-for="(row, i) in packedGroupRows" :key="i" class="grid gap-x-6 gap-y-10 sm:grid-cols-4">
               <div v-for="g in row" :key="g.category" class="flex flex-col gap-4" :class="groupSpan(g.apps)">
-                <h3 class="text-base font-semibold capitalize text-foreground">{{ categoryLabel(g.category) }}</h3>
+                <h3 class="text-base font-semibold text-foreground">{{ g.label }}</h3>
                 <div class="grid grid-cols-2 gap-x-6 gap-y-8" :class="groupCols(g.apps)">
                   <StoreAppCard v-for="c in g.apps" :key="c.id" :app="c" />
                 </div>

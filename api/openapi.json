@@ -266,10 +266,26 @@
       "Category": {
         "additionalProperties": false,
         "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ],
+        "type": "object"
+      },
+      "CategoryPage": {
+        "additionalProperties": false,
+        "properties": {
           "$schema": {
             "description": "A URL to the JSON Schema for this object.",
             "examples": [
-              "https://example.com/schemas/Category.json"
+              "https://example.com/schemas/CategoryPage.json"
             ],
             "format": "uri",
             "readOnly": true,
@@ -295,10 +311,14 @@
               "array",
               "null"
             ]
+          },
+          "label": {
+            "type": "string"
           }
         },
         "required": [
           "category",
+          "label",
           "apps"
         ],
         "type": "object"
@@ -851,7 +871,7 @@
           },
           "categories": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/Category"
             },
             "type": [
               "array",
@@ -899,10 +919,14 @@
           },
           "category": {
             "type": "string"
+          },
+          "label": {
+            "type": "string"
           }
         },
         "required": [
           "category",
+          "label",
           "apps"
         ],
         "type": "object"
@@ -3239,7 +3263,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Category"
+                  "$ref": "#/components/schemas/CategoryPage"
                 }
               }
             },

@@ -39,8 +39,13 @@ func TestCatalogHome(t *testing.T) {
 		t.Fatalf("categories = %v, want %v", home.Categories, want)
 	}
 	for i, c := range want {
-		if home.Categories[i] != c {
+		if home.Categories[i].ID != c {
 			t.Fatalf("categories = %v, want %v (sorted union)", home.Categories, want)
+		}
+		// A disk catalog carries no authored vocabulary, so every label is the
+		// readable-id fallback rather than blank.
+		if home.Categories[i].Label == "" {
+			t.Errorf("category %q has an empty label; want the readable-id fallback", c)
 		}
 	}
 	if len(home.Featured) != 0 {
@@ -59,7 +64,7 @@ func TestCatalogCategory(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
 	}
-	cat := decodeJSON[catalog.Category](t, resp)
+	cat := decodeJSON[catalog.CategoryPage](t, resp)
 	if cat.Category != "tools" || len(cat.Apps) != 1 || cat.Apps[0].ID != "widget" {
 		t.Fatalf("category tools = %+v, want just widget", cat)
 	}

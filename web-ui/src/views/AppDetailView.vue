@@ -12,7 +12,7 @@ import { useRoute, RouterLink } from "vue-router";
 import { useQuery } from "@tanstack/vue-query";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { api, type CatalogDetail } from "../api";
+import { api, type CatalogDetail, type CatalogHome } from "../api";
 import { useInstall } from "../useInstall";
 import { formatSize, safeExternalUrl } from "../utils";
 import AppGlyph from "../components/AppGlyph.vue";
@@ -30,6 +30,24 @@ const detailQuery = useQuery({
   queryFn: () => api.get<CatalogDetail>(`/catalog/${manifestId.value}`),
 });
 const app = computed(() => detailQuery.data.value ?? null);
+
+// The detail payload carries category ids, not display text. The landing payload
+// carries the authored label for each, so read it from there rather than deriving
+// one from the id — deriving is what let this page and the store page disagree.
+// Same query key as StoreView, so this is a cache read, not a second request.
+const homeQuery = useQuery({
+  queryKey: ["catalog", "home"],
+  queryFn: () => api.get<CatalogHome>("/catalog/home"),
+});
+
+// categoryLabels is the app's categories as authored display text, joined for the
+// info panel. An id the vocabulary doesn't carry falls back to the id itself.
+const categoryLabels = computed(() => {
+  const vocab = homeQuery.data.value?.categories ?? [];
+  return (app.value?.categories ?? [])
+    .map((id) => vocab.find((c) => c.id === id)?.label ?? id)
+    .join(", ");
+});
 
 const {
   activePlan,
@@ -227,7 +245,7 @@ const hasLinks = computed(
             </div>
             <div v-if="app.categories?.length" class="flex justify-between gap-4">
               <dt class="text-muted-foreground">Category</dt>
-              <dd class="text-right capitalize">{{ app.categories.join(", ") }}</dd>
+              <dd class="text-right">{{ categoryLabels }}</dd>
             </div>
             <div v-if="sizeLabel" class="flex justify-between gap-4">
               <dt class="text-muted-foreground">Size</dt>

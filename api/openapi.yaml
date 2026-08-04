@@ -188,10 +188,21 @@ components:
     Category:
       additionalProperties: false
       properties:
+        id:
+          type: string
+        label:
+          type: string
+      required:
+        - id
+        - label
+      type: object
+    CategoryPage:
+      additionalProperties: false
+      properties:
         $schema:
           description: A URL to the JSON Schema for this object.
           examples:
-            - https://example.com/schemas/Category.json
+            - https://example.com/schemas/CategoryPage.json
           format: uri
           readOnly: true
           type: string
@@ -209,8 +220,11 @@ components:
           type:
             - array
             - "null"
+        label:
+          type: string
       required:
         - category
+        - label
         - apps
       type: object
     Change-my-passwordRequest:
@@ -600,7 +614,7 @@ components:
           type: string
         categories:
           items:
-            type: string
+            $ref: "#/components/schemas/Category"
           type:
             - array
             - "null"
@@ -632,8 +646,11 @@ components:
             - "null"
         category:
           type: string
+        label:
+          type: string
       required:
         - category
+        - label
         - apps
       type: object
     Inspect-custom-appRequest:
@@ -2223,7 +2240,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Category"
+                $ref: "#/components/schemas/CategoryPage"
           description: OK
         default:
           content:
