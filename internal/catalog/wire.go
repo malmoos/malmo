@@ -154,3 +154,44 @@ func parseSnapshot(data []byte) (catalogFile, error) {
 	}
 	return f, nil
 }
+
+// SnapshotApp, SnapshotHome and SnapshotHomeGroup are exported aliases of this
+// file's own wire types, for tooling that builds a snapshot from on-disk app
+// packages (dev/mkcatalog) rather than parsing one. They are aliases, not
+// copies, so there is exactly one App/Home shape in this box, visible under a
+// second name to a second audience — a snapshot builder can never drift from
+// the parser the way a hand-copied struct in another package did before.
+type (
+	SnapshotApp       = wireApp
+	SnapshotHome      = wireHomePage
+	SnapshotHomeGroup = wireHomeGroup
+)
+
+// BuildSnapshot assembles a /catalog/sync-shaped snapshot from already-built
+// apps (and an optional curated landing page) and marshals it to the exact
+// bytes a box can parse and verify: it stamps SchemaVersion, GeneratedAt and
+// StoreRef, computes IndexSHA256 over the apps array (parseSnapshot / verify
+// recompute the same digest on the read side), and marshals the whole thing.
+// This is the one seam a snapshot-building tool needs — it builds SnapshotApp
+// values from its own source (a manifest+compose pair, a home.yml) and calls
+// this once, instead of re-declaring the wire shape to do its own digest +
+// marshal.
+func BuildSnapshot(apps []SnapshotApp, home SnapshotHome, storeRef string) ([]byte, error) {
+	digest, err := indexDigest(apps)
+	if err != nil {
+		return nil, err
+	}
+	f := catalogFile{
+		SchemaVersion: wireSchemaVersion,
+		GeneratedAt:   time.Now().UTC(),
+		StoreRef:      storeRef,
+		IndexSHA256:   digest,
+		Apps:          apps,
+		Home:          home,
+	}
+	b, err := json.Marshal(f)
+	if err != nil {
+		return nil, fmt.Errorf("marshal catalog snapshot: %w", err)
+	}
+	return b, nil
+}
