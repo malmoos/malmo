@@ -13,6 +13,10 @@
 // The three views are mutually exclusive entry points: a non-empty search box wins
 // over a selected category, which wins over the landing. Selecting a pill clears
 // the search, and vice versa, so the grid always reflects exactly one of them.
+// Category and search are both *filtered* views — the curated Featured row is a
+// landing-only concept and never appears under a pill or a search (mirrors the
+// marketing store's renderGrid; `catalog.Category` still carries `Featured` on
+// the wire, for parity, but the box UI does not render it there).
 //
 // The landing itself falls back in three steps so it is never empty
 // (docs/specs/APP_STORE.md # Landing page): the authored home (spotlight banner +
@@ -42,10 +46,15 @@ import Button from "@/components/ui/Button.vue";
 const { currentUser } = useAuth();
 const isAdmin = computed(() => currentUser.value?.role === "admin");
 
-// Free-text query and the active category pill ("all" = landing). They are
-// exclusive: selecting a pill clears the search, so mode() resolves to one view.
+// Free-text query and the active category pill ("recommended" = the curated
+// landing, mirroring cloud's Store class). They are exclusive: selecting a pill
+// clears the search, so mode() resolves to one view. "recommended" is never a
+// user-visible pill — the landing is the default view, not a pill — and it can't
+// collide with a real category id: store/categories.yml's ids today are
+// productivity, developer-tools, media, documents, ai, personal, security,
+// automation.
 const query = ref("");
-const activeCategory = ref("all");
+const activeCategory = ref("recommended");
 
 // Debounced search term feeding the search request: each keystroke would otherwise
 // round-trip to the brain, so we wait for a short pause in typing. mode() keys off
@@ -57,7 +66,7 @@ watch(query, (q) => {
   // immediately (not debounced — mode() already switches to "search" on the same
   // tick), so a category never lingers underneath a cleared search box and then
   // pop back in once the query empties out again.
-  if (q.trim() !== "") activeCategory.value = "all";
+  if (q.trim() !== "") activeCategory.value = "recommended";
   clearTimeout(debounce);
   debounce = setTimeout(() => {
     searchTerm.value = q.trim();
@@ -69,7 +78,7 @@ onUnmounted(() => clearTimeout(debounce));
 
 const mode = computed<"home" | "category" | "search">(() => {
   if (query.value.trim() !== "") return "search";
-  if (activeCategory.value !== "all") return "category";
+  if (activeCategory.value !== "recommended") return "category";
   return "home";
 });
 
@@ -97,9 +106,11 @@ const search = useQuery({
   enabled: computed(() => mode.value === "search" && searchTerm.value !== ""),
 });
 
-// Pills: "All" plus the categories the landing advertised for this box. Sorted by
-// the brain, so a new catalog category appears without a UI change.
-const categories = computed(() => ["all", ...(home.data.value?.categories ?? [])]);
+// Pills: the categories the landing advertised for this box, and nothing else —
+// the curated landing is the default view, not a pill (mirrors the marketing
+// store's Store class). Sorted by the brain, so a new catalog category appears
+// without a UI change.
+const categories = computed(() => home.data.value?.categories ?? []);
 
 // The authored landing (store's home.yml, carried through /catalog/home): a
 // spotlight app and its category groups. Both are already environment-filtered
@@ -113,12 +124,14 @@ const hasCuratedHome = computed(() => !!spotlight.value || homeGroups.value.leng
 // Packed two-or-more to a row, mirroring the marketing store (lib/storeLayout.ts).
 const packedGroupRows = computed(() => packRows(homeGroups.value));
 
-// Featured row: shown on category pages always, and on the landing only as a
-// fallback when nothing is authored in home.yml (the curated spotlight/groups
-// take its place there — docs/specs/APP_STORE.md # Landing page). Never on
-// search — search is a focused lookup, not a browse surface.
+// Featured row: landing-only, and only as a fallback when nothing is authored in
+// home.yml (the curated spotlight/groups take its place there —
+// docs/specs/APP_STORE.md # Landing page). Never on a category or search view —
+// both are filtered views, and the curated row is a landing-only concept, the
+// same posture as the marketing store's renderGrid (its category branch renders
+// only the heading + that category's grid, never a featured row), even though
+// catalog.Category still carries `Featured` on the wire for parity.
 const featured = computed<CatalogEntry[]>(() => {
-  if (mode.value === "category") return category.data.value?.featured ?? [];
   if (mode.value === "home" && !hasCuratedHome.value) return home.data.value?.featured ?? [];
   return [];
 });
@@ -174,8 +187,19 @@ const catalogEmpty = computed(
     (home.data.value?.featured?.length ?? 0) === 0,
 );
 
+// pillActive reports whether c is the pill currently shown as selected — used
+// both for styling and to decide the click's toggle direction, so the two never
+// disagree. A search in progress de-selects every pill (mirrors cloud's Store).
+function pillActive(c: string): boolean {
+  return activeCategory.value === c && mode.value !== "search";
+}
+
+// Clicking a pill selects it; clicking the already-active pill toggles back to
+// the landing (mirrors cloud's Store.renderPills: "the recommended landing is
+// the default view, not a pill — clicking the active category toggles back to
+// it").
 function selectCategory(c: string) {
-  activeCategory.value = c;
+  activeCategory.value = pillActive(c) ? "recommended" : c;
   // Pills and search are exclusive entry points — picking a pill drops the search.
   query.value = "";
   searchTerm.value = "";
@@ -185,7 +209,7 @@ function selectCategory(c: string) {
 function clearFilters() {
   query.value = "";
   searchTerm.value = "";
-  activeCategory.value = "all";
+  activeCategory.value = "recommended";
 }
 </script>
 
@@ -230,22 +254,24 @@ function clearFilters() {
         </div>
       </div>
 
-      <!-- Category pills: "All" plus the catalog's own categories. Highlighted only
-           when browsing that category (a search de-selects the pills). -->
-      <div v-if="categories.length > 1" class="flex flex-wrap gap-2">
+      <!-- Category pills: the catalog's own categories only — the curated landing
+           is the default view, not a pill. Highlighted only when browsing that
+           category (a search de-selects the pills); clicking the active pill
+           toggles back to the landing. -->
+      <div v-if="categories.length > 0" class="flex flex-wrap gap-2">
         <button
           v-for="c in categories"
           :key="c"
           type="button"
           class="cursor-pointer rounded-full border px-3.5 py-1 text-sm font-medium capitalize transition-colors"
           :class="
-            activeCategory === c && mode !== 'search'
+            pillActive(c)
               ? 'border-accent bg-accent text-accent-foreground'
               : 'border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground'
           "
           @click="selectCategory(c)"
         >
-          {{ c === "all" ? "All" : categoryLabel(c) }}
+          {{ categoryLabel(c) }}
         </button>
       </div>
 
@@ -267,7 +293,8 @@ function clearFilters() {
       </div>
 
       <template v-else>
-        <!-- Featured row: curated top apps on the landing and category pages. -->
+        <!-- Featured row: landing-only fallback (see the `featured` computed) —
+             never shown on a category or search view. -->
         <section v-if="featured.length" class="space-y-4">
           <h3 class="flex items-center gap-2 text-base font-semibold text-foreground">
             <Sparkles class="size-4 text-accent" aria-hidden="true" />
@@ -290,7 +317,7 @@ function clearFilters() {
           <div v-else class="rounded-2xl border border-dashed border-border py-16 text-center">
             <SearchX class="mx-auto size-8 text-muted-foreground" aria-hidden="true" />
             <h3 class="mt-3 text-sm font-semibold text-foreground">No apps in this category</h3>
-            <Button variant="secondary" size="sm" class="mt-4" @click="clearFilters">Back to all</Button>
+            <Button variant="secondary" size="sm" class="mt-4" @click="clearFilters">Back to recommended</Button>
           </div>
         </section>
 

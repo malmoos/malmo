@@ -109,8 +109,12 @@ type HomeGroupView struct {
 	Apps     []Entry `json:"apps"`
 }
 
-// Category is one category's apps plus the curated top apps (so a category page can
-// render the same featured row as the landing). Mirror of cloud catalog.Category.
+// Category is one category's apps plus the curated top apps. Featured travels on
+// the payload for parity with cloud catalog.Category (which this mirrors), but the
+// box UI's category view does not currently render it — only the landing does,
+// and only as its no-authored-home fallback (docs/specs/APP_STORE.md # Landing
+// page); a category view is a filtered view, and the curated row is a
+// landing-only concept, matching the marketing store's own renderGrid.
 type Category struct {
 	Category string  `json:"category"`
 	Apps     []Entry `json:"apps"`
