@@ -43,6 +43,29 @@ type catalogFile struct {
 	// fetch, so there is no separate signature (owner decision, cloud #62).
 	IndexSHA256 string    `json:"index_sha256"`
 	Apps        []wireApp `json:"apps"`
+	// Home is the authored recommended-apps page (a curated home.yml): a
+	// spotlight app plus ordered category groups. Carried verbatim, not derived —
+	// the landing page's shape is a curation decision the store curation source
+	// owns. It plays no part in IndexSHA256 (that digest covers Apps only), so
+	// adding this field does not change the box's index-digest contract with the
+	// control plane. Mirror of the control plane's own CatalogFile.Home.
+	Home wireHomePage `json:"home"`
+}
+
+// wireHomePage / wireHomeGroup mirror the control plane's own HomePage / HomeGroup
+// shapes, field-for-field and json-tag-for-json-tag, for the same reason the rest
+// of this file mirrors the control plane's shapes: the box re-parses exactly what
+// the sync tool published.
+type wireHomePage struct {
+	Spotlight string          `json:"spotlight"`
+	Groups    []wireHomeGroup `json:"groups"`
+}
+
+// wireHomeGroup is one category's row on the landing page, in authored order.
+// Category is a catalog category id; Apps are app ids resolving within Apps.
+type wireHomeGroup struct {
+	Category string   `json:"category"`
+	Apps     []string `json:"apps"`
 }
 
 // wireApp is one published app: the display metadata the box store surfaces plus

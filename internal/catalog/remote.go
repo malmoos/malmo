@@ -100,12 +100,17 @@ type remoteSource struct {
 type snapshot struct {
 	apps []wireApp
 	byID map[string]*wireApp
+	// home is the authored recommended-apps page carried verbatim from the
+	// snapshot (a curated home.yml via the sync tool); home() below is what
+	// applies this box's environment filter to it.
+	home wireHomePage
 }
 
 func newSnapshot(f catalogFile) *snapshot {
 	s := &snapshot{
 		apps: append([]wireApp(nil), f.Apps...),
 		byID: make(map[string]*wireApp, len(f.Apps)),
+		home: f.Home,
 	}
 	sort.Slice(s.apps, func(i, j int) bool { return s.apps[i].Name < s.apps[j].Name })
 	for i := range s.apps {
@@ -355,6 +360,38 @@ func (r *remoteSource) featured() ([]Entry, error) {
 		out[i] = entryOfApp(a)
 	}
 	return out, nil
+}
+
+// home returns the landing page's spotlight app and category groups, filtered
+// to this box's environment exactly like List/featured: an app the snapshot's
+// home block names but this surface doesn't advertise drops out of its slot
+// (the spotlight goes nil, or the app is skipped within its group), and a group
+// left with no advertised apps is dropped entirely rather than rendered empty.
+// Mirror of the control plane's own spotlight/groups projection. An empty or
+// never-synced store has neither.
+func (r *remoteSource) home() (*Entry, []HomeGroupView, error) {
+	snap := r.current()
+	if snap == nil {
+		return nil, nil, nil
+	}
+	var spotlight *Entry
+	if a, ok := snap.byID[snap.home.Spotlight]; ok && a.visibleIn(r.env) {
+		e := entryOfApp(a)
+		spotlight = &e
+	}
+	var groups []HomeGroupView
+	for _, g := range snap.home.Groups {
+		var apps []Entry
+		for _, id := range g.Apps {
+			if a, ok := snap.byID[id]; ok && a.visibleIn(r.env) {
+				apps = append(apps, entryOfApp(a))
+			}
+		}
+		if len(apps) > 0 {
+			groups = append(groups, HomeGroupView{Category: g.Category, Apps: apps})
+		}
+	}
+	return spotlight, groups, nil
 }
 
 // rankOf reads an app's curated rank, treating an absent rank as last so a

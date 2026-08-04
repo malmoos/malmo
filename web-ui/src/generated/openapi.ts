@@ -1136,6 +1136,12 @@ export interface components {
             readonly $schema?: string;
             categories: string[] | null;
             featured?: components["schemas"]["Entry"][] | null;
+            groups?: components["schemas"]["HomeGroupView"][] | null;
+            spotlight?: components["schemas"]["Entry"];
+        };
+        HomeGroupView: {
+            apps: components["schemas"]["Entry"][] | null;
+            category: string;
         };
         "Inspect-custom-appRequest": {
             /**

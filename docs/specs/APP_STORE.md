@@ -209,6 +209,14 @@ As shipped (cloud #62; the live wire shape is cloud `specs/CATALOG.md`), end-to-
 
 Trust is **TLS to the control plane + the snapshot's sha256 integrity digest** — there is no signing keypair and no pubkey baked into the brain image. The publish flow is git-driven (a store PR regenerates the snapshot the API serves); the box-side flow is fetch-verify-cache.
 
+## Landing page
+
+The store's front page — the box's landing view and the control plane's own store surface at `store.malmo.network` alike — is authored whole in a curated `home.yml`, not derived from any app's own metadata: a single `spotlight:` app id rendered as a banner, plus an ordered list of `groups:` (a `category:` id from the catalog's category list and 1-4 app ids) rendered as packed rows below it. Editing the front page is editing that one file; importing a new app or reordering a manifest's `categories:` never reshuffles it, because the page's shape isn't computed from categories at all.
+
+The control plane publishes the block **verbatim** on the snapshot (`CatalogFile.Home`) — carried, not derived, so the curation decision stays with the store curation source, not with a projection the control plane or a box could drift out of step with. Both consumers apply the same one filter at serve time: an app the block names that isn't advertised on the requesting surface (`Environments`, # Catalog schema above) drops out of its slot — the spotlight goes unset, or the app is skipped within its group — and a group left with no advertised apps is dropped entirely rather than rendered empty. The control plane does this once per request for its own store surface; the box does the equivalent projection locally over its synced snapshot (`internal/catalog/remote.go`, mirroring the control plane's `HomePage`/`HomeGroup` wire shapes field-for-field in `internal/catalog/wire.go`), since a box's landing must still render from its last-good cache when offline.
+
+The box derives nothing else from the block: it does not compute rank and does not re-sort groups. It also does not look up the catalog's authored category `label:` for the group headings — that field isn't on the wire — but it does not render the bare id either: both the box and the control plane's own store surface apply the same display-only stopgap (hyphens to spaces, e.g. `developer-tools` → "developer tools") so the two surfaces don't visibly disagree with each other while the real fix (putting the authored category label on the wire) is still a separate follow-up change. If a synced snapshot carries no home block (an older control plane, or a curation publish with an empty `home.yml`), the box's landing has no spotlight and no groups; the view falls back to the flat curated Featured row, and if that's empty too, to a plain "pick a category or search" prompt — the landing is never blank, but an empty home block is not the same as "nothing curated."
+
 ## Locked decisions
 
 _(Updated for the shipped design — `DECISIONS.md` 2026-07-02, cloud #62. The earlier signed-static-CDN calls are superseded; the digest-pinning and don't-host-images calls carry over.)_
@@ -222,6 +230,7 @@ _(Updated for the shipped design — `DECISIONS.md` 2026-07-02, cloud #62. The e
 - **v1 catalog is hand-curated by malmo.** Every manifest is malmo-authored. Third-party authorship (PRs against the store) lands later.
 - **No baked catalog in the box image.** Every box — appliance and hosted — is a control-plane thin client (`DECISIONS.md` 2026-07-02).
 - **Promotion is a PR against the store repo** with a regenerated snapshot. CI validates schema, admission rules, image reachability, and digests; merge is the publish action (the control plane then serves the new snapshot).
+- **The landing page (spotlight + category groups) is authored whole in a curated `home.yml`, carried verbatim on the snapshot, and filtered by environment at serve time** — never derived from an app's own `categories:` or computed by either consumer (# Landing page). Both the box and the control plane's own store surface render the same authored shape.
 
 ## Open questions
 
