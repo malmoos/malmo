@@ -328,9 +328,9 @@ dev: check-state-owner build caddy
 # passed in APPS — the point of seeding locally is to catch that before a real
 # publish does. The store's categories.yml is picked up automatically when the
 # checkout has one, so the seeded store renders the authored category labels
-# rather than the readable-id fallback. (Named HOMEFILE, not HOME, so it can't collide with the shell's
-# own $HOME.) APP=<id> keeps working unchanged — it is just the single-app case
-# of the same underlying seed-catalog recipe.
+# rather than the readable-id fallback. (Named HOMEFILE, not HOME, so it can't
+# collide with the shell's own $HOME.) APP=<id> keeps working unchanged — it is
+# just the single-app case of the same underlying seed-catalog recipe.
 #
 # It uses mkcatalog, NOT cloud's catalog-sync, on purpose: catalog-sync publishes
 # only listed:true records, but an app under curation has no verdict yet — you

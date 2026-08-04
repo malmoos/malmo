@@ -130,13 +130,14 @@ type Category struct {
 
 // CategoryPage is one category's apps, its authored display label, plus the
 // curated top apps. Named CategoryPage, not Category, because Category is the
-// authored vocabulary entry above — this is the rendered page, that is the datum. Featured travels on
-// the payload for parity with the control plane's own Category shape (which this
-// mirrors), but the box UI's category view does not currently render it — only
-// the landing does, and only as its no-authored-home fallback
-// (docs/specs/APP_STORE.md # Landing page); a category view is a filtered view,
-// and the curated row is a landing-only concept, matching how the control
-// plane's own store surface renders a category.
+// authored vocabulary entry above — this is the rendered page, that is the
+// datum. Featured travels on the payload for parity with the control plane's
+// own Category shape (which this mirrors), but the box UI's category view does
+// not currently render it — only the landing does, and only as its
+// no-authored-home fallback (docs/specs/APP_STORE.md # Landing page); a
+// category view is a filtered view, and the curated row is a landing-only
+// concept, matching how the control plane's own store surface renders a
+// category.
 type CategoryPage struct {
 	Category string  `json:"category"`
 	Label    string  `json:"label"`
