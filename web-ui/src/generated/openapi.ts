@@ -931,15 +931,20 @@ export interface components {
             apps: components["schemas"]["Entry"][] | null;
         };
         Category: {
+            id: string;
+            label: string;
+        };
+        CategoryPage: {
             /**
              * Format: uri
              * @description A URL to the JSON Schema for this object.
-             * @example https://example.com/schemas/Category.json
+             * @example https://example.com/schemas/CategoryPage.json
              */
             readonly $schema?: string;
             apps: components["schemas"]["Entry"][] | null;
             category: string;
             featured?: components["schemas"]["Entry"][] | null;
+            label: string;
         };
         "Change-my-passwordRequest": {
             /**
@@ -1134,7 +1139,7 @@ export interface components {
              * @example https://example.com/schemas/Home.json
              */
             readonly $schema?: string;
-            categories: string[] | null;
+            categories: components["schemas"]["Category"][] | null;
             featured?: components["schemas"]["Entry"][] | null;
             groups?: components["schemas"]["HomeGroupView"][] | null;
             spotlight?: components["schemas"]["Entry"];
@@ -1142,6 +1147,7 @@ export interface components {
         HomeGroupView: {
             apps: components["schemas"]["Entry"][] | null;
             category: string;
+            label: string;
         };
         "Inspect-custom-appRequest": {
             /**
@@ -2348,7 +2354,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Category"];
+                    "application/json": components["schemas"]["CategoryPage"];
                 };
             };
             /** @description Error */

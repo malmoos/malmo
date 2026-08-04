@@ -50,6 +50,20 @@ type catalogFile struct {
 	// adding this field does not change the box's index-digest contract with the
 	// control plane. Mirror of the control plane's own CatalogFile.Home.
 	Home wireHomePage `json:"home"`
+	// Categories is the authored category vocabulary: every category id an app may
+	// claim, with the display label the store surfaces render and the order they
+	// are authored in. Carried, never derived — before it was on the wire the box
+	// invented display text from the id ("developer-tools" -> "developer tools",
+	// "ai" -> "ai") and disagreed with the other store surface doing the same. Like
+	// Home it plays no part in IndexSHA256 (that digest covers Apps only).
+	Categories []wireCategory `json:"categories"`
+}
+
+// wireCategory is one entry of the authored category vocabulary. Mirror of the
+// control plane's own Category shape.
+type wireCategory struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
 }
 
 // wireHomePage / wireHomeGroup mirror the control plane's own HomePage / HomeGroup
@@ -165,6 +179,7 @@ type (
 	SnapshotApp       = wireApp
 	SnapshotHome      = wireHomePage
 	SnapshotHomeGroup = wireHomeGroup
+	SnapshotCategory  = wireCategory
 )
 
 // BuildSnapshot assembles a /catalog/sync-shaped snapshot from already-built
@@ -176,7 +191,7 @@ type (
 // values from its own source (a manifest+compose pair, a home.yml) and calls
 // this once, instead of re-declaring the wire shape to do its own digest +
 // marshal.
-func BuildSnapshot(apps []SnapshotApp, home SnapshotHome, storeRef string) ([]byte, error) {
+func BuildSnapshot(apps []SnapshotApp, home SnapshotHome, cats []SnapshotCategory, storeRef string) ([]byte, error) {
 	digest, err := indexDigest(apps)
 	if err != nil {
 		return nil, err
@@ -188,6 +203,7 @@ func BuildSnapshot(apps []SnapshotApp, home SnapshotHome, storeRef string) ([]by
 		IndexSHA256:   digest,
 		Apps:          apps,
 		Home:          home,
+		Categories:    cats,
 	}
 	b, err := json.Marshal(f)
 	if err != nil {

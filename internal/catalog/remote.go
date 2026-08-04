@@ -104,6 +104,9 @@ type snapshot struct {
 	// snapshot (a curated home.yml via the sync tool); home() below is what
 	// applies this box's environment filter to it.
 	home wireHomePage
+	// cats is the authored category vocabulary carried verbatim from the snapshot
+	// (a curated categories.yml via the sync tool), in authored order.
+	cats []wireCategory
 }
 
 func newSnapshot(f catalogFile) *snapshot {
@@ -111,6 +114,7 @@ func newSnapshot(f catalogFile) *snapshot {
 		apps: append([]wireApp(nil), f.Apps...),
 		byID: make(map[string]*wireApp, len(f.Apps)),
 		home: f.Home,
+		cats: f.Categories,
 	}
 	sort.Slice(s.apps, func(i, j int) bool { return s.apps[i].Name < s.apps[j].Name })
 	for i := range s.apps {
@@ -392,6 +396,23 @@ func (r *remoteSource) home() (*Entry, []HomeGroupView, error) {
 		}
 	}
 	return spotlight, groups, nil
+}
+
+// categories returns the snapshot's authored category vocabulary in authored
+// order. Unlike the app projections it is not environment-filtered here: the
+// facade only ever renders the entries whose categories are actually present on
+// this surface, so filtering twice would just be a second place to get it wrong.
+// A never-synced box has no snapshot and so no vocabulary.
+func (r *remoteSource) categories() ([]Category, error) {
+	snap := r.current()
+	if snap == nil {
+		return nil, nil
+	}
+	out := make([]Category, 0, len(snap.cats))
+	for _, c := range snap.cats {
+		out = append(out, Category{ID: c.ID, Label: c.Label})
+	}
+	return out, nil
 }
 
 // rankOf reads an app's curated rank, treating an absent rank as last so a

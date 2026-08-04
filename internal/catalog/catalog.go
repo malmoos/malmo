@@ -48,6 +48,11 @@ type source interface {
 	// facade can't derive from List: the remote source reads it from the synced
 	// snapshot's Featured/Rank; the disk source has no curation and returns nil.
 	featured() ([]Entry, error)
+	// categories returns the authored category vocabulary (id + display label) in
+	// authored order, or nil when the source has none — the disk source has no
+	// curation, and a never-synced remote has no snapshot. A nil vocabulary is not
+	// an error: the facade falls back to a readable form of each id.
+	categories() ([]Category, error)
 	// home returns the authored landing page's spotlight app (nil when unset or
 	// not advertised on this surface) and its category groups (a group left with
 	// no advertised apps is dropped), both already environment-filtered. Like
@@ -92,7 +97,10 @@ func (c *Catalog) Load(id string) (*manifest.Manifest, []byte, error) { return c
 // top-apps row. No per-app grid — the UI drills into a category or search for
 // that. Mirror of cloud catalog.Home.
 type Home struct {
-	Categories []string `json:"categories"`
+	// Categories are the categories present on this surface, each with its
+	// authored display label, in the vocabulary's authored order. Carrying the
+	// label is what stops the UI deriving display text from the id.
+	Categories []Category `json:"categories"`
 	// Spotlight is the banner app, nil when unset or not advertised on this
 	// surface.
 	Spotlight *Entry `json:"spotlight,omitempty"`
@@ -102,22 +110,37 @@ type Home struct {
 	Featured []Entry         `json:"featured,omitempty"`
 }
 
-// HomeGroupView is one rendered category row of the landing page. Mirror of
-// the control plane's own HomeGroupView shape.
+// HomeGroupView is one rendered category row of the landing page. Label is the
+// row heading — the authored one, so the heading and the pill for the same id
+// always read identically. Mirror of the control plane's own HomeGroupView shape.
 type HomeGroupView struct {
 	Category string  `json:"category"`
+	Label    string  `json:"label"`
 	Apps     []Entry `json:"apps"`
 }
 
-// Category is one category's apps plus the curated top apps. Featured travels on
-// the payload for parity with the control plane's own Category shape (which this
-// mirrors), but the box UI's category view does not currently render it — only
-// the landing does, and only as its no-authored-home fallback
-// (docs/specs/APP_STORE.md # Landing page); a category view is a filtered view,
-// and the curated row is a landing-only concept, matching how the control
-// plane's own store surface renders a category.
+// Category is one entry of the authored category vocabulary: the id apps tag
+// themselves with, and the display label the UI renders. Authored in the store
+// curation source and carried on the snapshot, never derived here. Mirror of the
+// control plane's own Category shape.
 type Category struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+// CategoryPage is one category's apps, its authored display label, plus the
+// curated top apps. Named CategoryPage, not Category, because Category is the
+// authored vocabulary entry above — this is the rendered page, that is the
+// datum. Featured travels on the payload for parity with the control plane's
+// own Category shape (which this mirrors), but the box UI's category view does
+// not currently render it — only the landing does, and only as its
+// no-authored-home fallback (docs/specs/APP_STORE.md # Landing page); a
+// category view is a filtered view, and the curated row is a landing-only
+// concept, matching how the control plane's own store surface renders a
+// category.
+type CategoryPage struct {
 	Category string  `json:"category"`
+	Label    string  `json:"label"`
 	Apps     []Entry `json:"apps"`
 	Featured []Entry `json:"featured,omitempty"`
 }
@@ -135,11 +158,11 @@ func (c *Catalog) Home() (Home, error) {
 			seen[cat] = true
 		}
 	}
-	cats := make([]string, 0, len(seen))
-	for cat := range seen {
-		cats = append(cats, cat)
+	vocab, err := c.src.categories()
+	if err != nil {
+		return Home{}, err
 	}
-	sort.Strings(cats)
+	cats := presentCategories(vocab, seen)
 	feat, err := c.src.featured()
 	if err != nil {
 		return Home{}, err
@@ -148,16 +171,70 @@ func (c *Catalog) Home() (Home, error) {
 	if err != nil {
 		return Home{}, err
 	}
+	for i := range groups {
+		groups[i].Label = labelFor(vocab, groups[i].Category)
+	}
 	return Home{Categories: cats, Spotlight: spotlight, Groups: groups, Featured: feat}, nil
+}
+
+// presentCategories returns the vocabulary entries for the categories actually
+// present on this surface, in authored order. A category the vocabulary doesn't
+// carry still gets a pill — dropping it would hide a browsable app — with a
+// readable form of its id, appended after the authored ones in sorted order so
+// the result is deterministic.
+func presentCategories(vocab []Category, present map[string]bool) []Category {
+	out := make([]Category, 0, len(present))
+	known := make(map[string]bool, len(vocab))
+	for _, c := range vocab {
+		known[c.ID] = true
+		if present[c.ID] {
+			out = append(out, c)
+		}
+	}
+	var extra []string
+	for id := range present {
+		if !known[id] {
+			extra = append(extra, id)
+		}
+	}
+	sort.Strings(extra)
+	for _, id := range extra {
+		out = append(out, Category{ID: id, Label: readableID(id)})
+	}
+	return out
+}
+
+// labelFor resolves a category id to its authored display label, falling back to a
+// readable form of the id. The fallback should be unreachable for a synced box —
+// the publish flow rejects a category with no label — but it also covers the disk
+// source and a never-synced box, where there is no vocabulary at all.
+func labelFor(vocab []Category, id string) string {
+	for _, c := range vocab {
+		if c.ID == id {
+			return c.Label
+		}
+	}
+	return readableID(id)
+}
+
+// readableID makes a category id presentable ("developer-tools" -> "Developer
+// tools"). Only the label fallbacks use it. The control plane holds the same
+// fallback so the two surfaces agree even when neither has a label.
+func readableID(id string) string {
+	s := strings.ReplaceAll(id, "-", " ")
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // Category returns the apps tagged with cat (case-insensitive), plus the featured
 // row. ErrNotFound when no browsable app carries the category, so an unknown or
 // emptied category is a clean 404 rather than an empty page.
-func (c *Catalog) Category(cat string) (Category, error) {
+func (c *Catalog) Category(cat string) (CategoryPage, error) {
 	apps, err := c.src.List()
 	if err != nil {
-		return Category{}, err
+		return CategoryPage{}, err
 	}
 	var out []Entry
 	for _, a := range apps {
@@ -166,13 +243,17 @@ func (c *Catalog) Category(cat string) (Category, error) {
 		}
 	}
 	if len(out) == 0 {
-		return Category{}, fmt.Errorf("%w: category %q", ErrNotFound, cat)
+		return CategoryPage{}, fmt.Errorf("%w: category %q", ErrNotFound, cat)
 	}
 	feat, err := c.src.featured()
 	if err != nil {
-		return Category{}, err
+		return CategoryPage{}, err
 	}
-	return Category{Category: cat, Apps: out, Featured: feat}, nil
+	vocab, err := c.src.categories()
+	if err != nil {
+		return CategoryPage{}, err
+	}
+	return CategoryPage{Category: cat, Label: labelFor(vocab, cat), Apps: out, Featured: feat}, nil
 }
 
 // Search returns the browsable apps whose name, short description, or categories

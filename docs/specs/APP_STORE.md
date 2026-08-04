@@ -215,7 +215,32 @@ The store's front page — the box's landing view and the control plane's own st
 
 The control plane publishes the block **verbatim** on the snapshot (`CatalogFile.Home`) — carried, not derived, so the curation decision stays with the store curation source, not with a projection the control plane or a box could drift out of step with. Both consumers apply the same one filter at serve time: an app the block names that isn't advertised on the requesting surface (`Environments`, # Catalog schema above) drops out of its slot — the spotlight goes unset, or the app is skipped within its group — and a group left with no advertised apps is dropped entirely rather than rendered empty. The control plane does this once per request for its own store surface; the box does the equivalent projection locally over its synced snapshot (`internal/catalog/remote.go`, mirroring the control plane's `HomePage`/`HomeGroup` wire shapes field-for-field in `internal/catalog/wire.go`), since a box's landing must still render from its last-good cache when offline.
 
-The box derives nothing else from the block: it does not compute rank and does not re-sort groups. It also does not look up the catalog's authored category `label:` for the group headings — that field isn't on the wire — but it does not render the bare id either: both the box and the control plane's own store surface apply the same display-only stopgap (hyphens to spaces, e.g. `developer-tools` → "developer tools") so the two surfaces don't visibly disagree with each other while the real fix (putting the authored category label on the wire) is still a separate follow-up change. If a synced snapshot carries no home block (an older control plane, or a curation publish with an empty `home.yml`), the box's landing has no spotlight and no groups; the view falls back to the flat curated Featured row, and if that's empty too, to a plain "pick a category or search" prompt — the landing is never blank, but an empty home block is not the same as "nothing curated."
+The box derives nothing else from the block: it does not compute rank and does not re-sort groups. Group headings use the authored category label carried on the snapshot (# Category labels), not text derived from the id. If a synced snapshot carries no home block (an older control plane, or a curation publish with an empty `home.yml`), the box's landing has no spotlight and no groups; the view falls back to the flat curated Featured row, and if that's empty too, to a plain "pick a category or search" prompt — the landing is never blank, but an empty home block is not the same as "nothing curated."
+
+## Category labels
+
+An app's `categories:` holds ids (`developer-tools`, `ai`). Ids are not display text, so something has to turn one into a heading — and for a while every surface did that itself. They disagreed: the same category rendered as "Developer-tools" in one store and "developer tools" in the other, and `ai` rendered as "ai" in both. A stopgap made the two agree with each other (hyphens to spaces) without making either correct.
+
+The fix is that the label is **authored once and carried**, never derived. The synced snapshot has a top-level `categories` block — the whole vocabulary, each entry an `id` and the display `label`, in authored order:
+
+```json
+"categories": [
+  { "id": "productivity", "label": "Productivity" },
+  { "id": "developer-tools", "label": "Developer tools" },
+  { "id": "ai", "label": "AI" }
+]
+```
+
+`AI` is the case that shows why deriving cannot work: no rule over the id produces it.
+
+The box renders that label everywhere it names a category — the pills, the landing row headings, the category page heading, and the app detail page's info panel. Two consequences worth stating:
+
+- **The pills follow authored order, not alphabetical.** The vocabulary is a curation artifact, like `home.yml`, so its order is a decision rather than an accident. The box shows only the categories its own surface actually has apps for, in that order.
+- **The box never applies text transforms to a label.** No `capitalize`, no title-casing. "Developer tools" is what was authored, and "Developer Tools" is not.
+
+Two fallbacks remain, and neither is the normal path. A category id the vocabulary does not carry still gets a pill — dropping it would hide a browsable app behind no entry point — labelled with a readable form of the id (`developer-tools` → "Developer tools"), appended after the authored entries in sorted order so the result is deterministic. A box that has never synced, or one reading a disk catalog, has no vocabulary at all and labels everything that way. The control plane holds the same fallback, so even the degraded modes agree.
+
+The vocabulary is not part of the snapshot's integrity digest, which covers the app index only — the same as the home block.
 
 ## Locked decisions
 
@@ -230,6 +255,7 @@ _(Updated for the shipped design — `DECISIONS.md` 2026-07-02, cloud #62. The e
 - **v1 catalog is hand-curated by malmo.** Every manifest is malmo-authored. Third-party authorship (PRs against the store) lands later.
 - **No baked catalog in the box image.** Every box — appliance and hosted — is a control-plane thin client (`DECISIONS.md` 2026-07-02).
 - **Promotion is a PR against the store repo** with a regenerated snapshot. CI validates schema, admission rules, image reachability, and digests; merge is the publish action (the control plane then serves the new snapshot).
+- **Category display text is authored, never derived.** The snapshot carries a `categories` vocabulary (id + `label`, in authored order); the box renders the label on pills, group headings, the category page, and the app detail panel (# Category labels). Deriving display text from the id is what made two store surfaces disagree about the same category.
 - **The landing page (spotlight + category groups) is authored whole in a curated `home.yml`, carried verbatim on the snapshot, and filtered by environment at serve time** — never derived from an app's own `categories:` or computed by either consumer (# Landing page). Both the box and the control plane's own store surface render the same authored shape.
 
 ## Open questions

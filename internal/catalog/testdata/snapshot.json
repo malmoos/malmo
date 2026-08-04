@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-03T22:36:11Z",
-  "store_ref": "5cec23745323d4a81e33edb16b1890c1b41662b7",
+  "generated_at": "2026-08-04T10:59:31Z",
+  "store_ref": "d56c42da7cfe55f7a607013b5ee1834695d61932",
   "os_capabilities_version": 1,
-  "index_sha256": "4cb551ce40871af6b261938cd8ec151e50c01abb1fc2ed06656a5dc4cc307fc3",
+  "index_sha256": "001fe93c6f67277d64af0c678535b78dcfb7fc0e35742523a43bd0e1348712e5",
   "apps": [
     {
       "id": "actual-budget",
@@ -395,6 +395,46 @@
           "digest": "sha256:2824073c61bec3cf89a49d0ab355135c1a70bf2f4457a4f9ce3673724057ae0d",
           "download_bytes": 42452951,
           "disk_bytes": 130386944
+        }
+      }
+    },
+    {
+      "id": "forgejo",
+      "name": "Forgejo",
+      "version": "16.0.2",
+      "short_description": "A self-hosted software forge: your Git repositories, issues, and pull requests, on your own hardware.",
+      "long_description": "## Overview\nForgejo gives you the full code-hosting experience at home: Git repositories\nwith issues, pull requests, a wiki, and releases, served by a single small\nbinary that stays fast on modest hardware. It is a community-run fork of\nGitea, so it works the same way and reads the same data, and it is published\nby the people who maintain it rather than by a company.\n\n## Features\n- Git repositories with issues, pull requests, a wiki, and releases\n- Git LFS, so large files live in the repository like any other file\n- Built-in migrator to bring existing repositories home from GitHub, GitLab,\n  Codeberg, and other providers\n- Repository mirrors that keep a copy of an upstream project in sync\n- API tokens for scripting and automation\n- Fast, small footprint that stays responsive on modest hardware\n\n## Setting up\nOn first visit Forgejo shows its install screen with every setting already\nfilled in: just create your administrator account and finish. That account\nbecomes the administrator. If your box is reachable from the internet, open\nthe install screen's optional settings and tick \"Disable self-registration\"\nfirst, otherwise anyone who finds the address can sign up.\n\n## Good to know\nCloning and pushing work over HTTP at the app's malmo address. Git over SSH\nis switched off because malmo routes web traffic only, so use the HTTP clone\nURLs the app shows. Email (password resets, issue mentions) works once an\nadministrator adds an outgoing email account in malmo and binds Forgejo to\nit. Until then email is silently dropped, and an administrator can still\nreset any account's password from Forgejo's own admin panel.\n",
+      "categories": [
+        "developer-tools"
+      ],
+      "author": {
+        "name": "Forgejo",
+        "url": "https://forgejo.org"
+      },
+      "license": "GPL-3.0-or-later",
+      "links": {
+        "homepage": "https://forgejo.org",
+        "source": "https://codeberg.org/forgejo/forgejo",
+        "support": "https://forgejo.org/docs/latest/"
+      },
+      "changelog_url": "https://codeberg.org/forgejo/forgejo/releases",
+      "footprint": {
+        "image_download_bytes": 77466929,
+        "image_disk_bytes": 184861184,
+        "estimated_state": "3M"
+      },
+      "icon_file": "icon.svg",
+      "environments": [
+        "appliance",
+        "hosted"
+      ],
+      "manifest": "id: forgejo\nmanifest_version: 1\nname: Forgejo\nversion: \"16.0.2\"\ndescription:\n  short: \"A self-hosted software forge: your Git repositories, issues, and pull requests, on your own hardware.\"\n  long: |\n    ## Overview\n    Forgejo gives you the full code-hosting experience at home: Git repositories\n    with issues, pull requests, a wiki, and releases, served by a single small\n    binary that stays fast on modest hardware. It is a community-run fork of\n    Gitea, so it works the same way and reads the same data, and it is published\n    by the people who maintain it rather than by a company.\n\n    ## Features\n    - Git repositories with issues, pull requests, a wiki, and releases\n    - Git LFS, so large files live in the repository like any other file\n    - Built-in migrator to bring existing repositories home from GitHub, GitLab,\n      Codeberg, and other providers\n    - Repository mirrors that keep a copy of an upstream project in sync\n    - API tokens for scripting and automation\n    - Fast, small footprint that stays responsive on modest hardware\n\n    ## Setting up\n    On first visit Forgejo shows its install screen with every setting already\n    filled in: just create your administrator account and finish. That account\n    becomes the administrator. If your box is reachable from the internet, open\n    the install screen's optional settings and tick \"Disable self-registration\"\n    first, otherwise anyone who finds the address can sign up.\n\n    ## Good to know\n    Cloning and pushing work over HTTP at the app's malmo address. Git over SSH\n    is switched off because malmo routes web traffic only, so use the HTTP clone\n    URLs the app shows. Email (password resets, issue mentions) works once an\n    administrator adds an outgoing email account in malmo and binds Forgejo to\n    it. Until then email is silently dropped, and an administrator can still\n    reset any account's password from Forgejo's own admin panel.\nicon: ./icon.svg\ncategories: [developer-tools]\nauthor:\n  name: Forgejo\n  url: https://forgejo.org\nlicense: GPL-3.0-or-later\nlinks:\n  homepage: https://forgejo.org\n  source: https://codeberg.org/forgejo/forgejo\n  support: https://forgejo.org/docs/latest/\nchangelog_url: https://codeberg.org/forgejo/forgejo/releases\n\ncompose_file: compose.yml\nmain_service: forgejo\nmain_port: 3000\npreferred_slugs: [forgejo, forge, git]\n\n# Folderless app: repositories are app-managed content, not use-case-folder\n# files — and a git server shouldn't run as the brain's euid. service_user gives\n# it a dedicated non-root identity with data/ chowned to it; the rootless image\n# is designed for exactly this shape (any UID that owns its dirs works).\nservice_user: true\n\n# /api/healthz is Forgejo's own health endpoint (200 + \"status\":\"pass\" once the\n# DB and cache answer). First boot serves the install screen immediately, so 60s\n# comfortably covers the post-install in-place restart too.\nhealth_probe:\n  path: /api/healthz\n  start_period: 60s\n\n# Idle footprint measured ~95MiB; git operations (clone packing, migrations)\n# spike well above it.\nresources:\n  recommended: { memory: 512M, cpu: 1.0 }\n\n# One bind holds everything Forgejo owns: repositories, LFS objects,\n# attachments, the SQLite database, and app.ini (the Forgejo image keeps its\n# config inside the work dir at custom/conf/app.ini, so there is no second\n# /etc/gitea mount). No separable regenerable cache — back up the whole tree.\n# Measured with `du -sb` on the instance's data/ after the install screen was\n# completed and one small repository pushed: 3,086,684 bytes. An empty Forgejo is\n# tiny; repositories and LFS objects are what grow it.\nstorage:\n  data_volumes: [./data]\n  estimated_size: 3M\n  app_managed_user_content: true\n\n# internet: outbound HTTP for repository migrations and mirrors (bringing repos\n# home from GitHub \u0026 co. is a first-class Forgejo feature) and the release update\n# checker. No LAN egress needed.\npermissions:\n  internet: true\n  lan: false\n\n# Forgejo sends email (password resets, issue/PR mentions, registration\n# confirmations) when bound to an outgoing-mail provider — compose maps the\n# discrete MALMO_MAIL_* fields onto Forgejo's GITEA__mailer__* keys. Unbound, the\n# mailer stays disabled and mail is silently dropped (an admin can still reset\n# passwords from Forgejo's own admin panel).\nmail:\n  optional: true\n\n# Filled by `malmo manifest resolve apps/forgejo/manifest.yml`.\nimages:\n  codeberg.org/forgejo/forgejo:16.0.2-rootless:\n    digest: sha256:23ccc146e6dc2cd1f5c5435909baae64db873201717f1726490dae649283e6cd\n    download_bytes: 77466929\n    disk_bytes: 184861184\n",
+      "compose": "# Forgejo adapted for malmo's Tier-3 sandbox, from upstream's example compose at\n# v16.0.2 (docs/latest/admin/installation/#docker). Forgejo is Gitea's hard fork\n# and still runs Gitea's code (the version string is literally\n# \"16.0.2+gitea-1.22.0\"), so this file is a near-twin of apps/gitea/compose.yml.\n# Read that one too before changing anything here.\n#\n# The rootless image is purpose-built for malmo's sandbox: it ends\n# `USER 1000:1000`, starts a plain non-root process, and honors whatever runtime\n# UID it is given. docker-setup.sh only does mkdir + chmod on paths INSIDE the\n# bind, so there is no startup chown, no gosu, no s6, and no PUID/PGID. It runs\n# clean under the brain-pinned service identity with cap_drop ALL.\n#\n# malmo changes:\n#  - Host `ports:` dropped (upstream published 3000 and 2222). main_port: 3000 is\n#    taken from the container side; the brain routes to it.\n#  - Named volumes -\u003e one relative bind. Unlike the Gitea image, Forgejo keeps\n#    app.ini inside the work dir (GITEA_APP_INI=/var/lib/gitea/custom/conf/app.ini),\n#    so /var/lib/gitea is the only declared volume and ./data/forgejo is the whole\n#    of it. Do NOT add an /etc/gitea bind: nothing writes there.\n#  - image pinned to the immutable 16.0.2-rootless tag.\n#\n# USER=git: the brain-allocated service UID has no /etc/passwd entry, so\n# docker-setup.sh's `RUN_USER=${USER:-\"git\"}` is what keeps app.ini's RUN_USER\n# consistent with the runtime identity. Without it the post-install settings\n# reload fatals with \"Expect user 'git' (RUN_USER in app.ini) but current user\n# is:\". This is upstream's intended arbitrary-UID path.\n#\n# The GITEA__* overrides are re-applied to app.ini on every boot by the image's\n# environment-to-ini, so the platform-owned settings can't drift:\n# - ROOT_URL: Forgejo builds the HTTP clone URLs, redirects, and webhook targets\n#   it shows from this; the brain injects the routed URL.\n# - DISABLE_SSH: git-over-SSH needs a raw TCP port malmo can't route (Caddy\n#   proxies HTTP only and admission drops ports:), so the built-in SSH server\n#   stays off and the UI offers HTTP clone URLs only. Clone and push over HTTP(S)\n#   work fully. This override is required, not cosmetic: the rootless app.ini\n#   template hardcodes START_SSH_SERVER = true.\n# - LFS_START_SERVER: the template renders this from an env var that is normally\n#   unset, which app.ini reads as false, so Git LFS would be off. Turn it on;\n#   large-file support is a core forge feature, LFS rides the same HTTP route as\n#   the clone, and its objects land at $GITEA_WORK_DIR/git/lfs, inside the bind.\n#\n# Outgoing mail (manifest `mail:` block): bound, the brain injects the discrete\n# MALMO_MAIL_* fields and the GITEA__mailer__* keys map onto them; unbound, the\n# vars are absent and the defaults below keep the mailer off.\n# - ENABLED uses ${MALMO_MAIL_HOST:+true}: docker compose's `:+` form yields\n#   \"true\" only when the host var is set and non-empty (bound), and \"\" when it is\n#   absent (unbound) — Forgejo reads an empty ENABLED as false. The boolean\n#   projections (MALMO_MAIL_USE_TLS/_SSL) can't drive this: they are the literal\n#   strings \"true\"/\"false\", always non-empty, so `:+` can't gate on them.\n# - PROTOCOL is left unset on purpose. Forgejo infers it from SMTP_PORT\n#   (modules/setting/mailer.go: 25 -\u003e smtp, 465 -\u003e smtps implicit TLS,\n#   587 -\u003e smtp+starttls), and the brain injects the provider's real port, so the\n#   encryption mode follows the port for the three canonical ports without a\n#   conditional malmo can't express in compose interpolation. Note Forgejo only\n#   sends credentials over an encrypted link (STARTTLS/TLS) or to localhost, so a\n#   plaintext (port-25) provider won't auth. Acceptable: every real provider is\n#   encrypted.\n#   Limitation: a NON-standard port (e.g. 2525, a STARTTLS alt some providers\n#   offer) hits the inference default, which assumes `smtps` (implicit TLS), not\n#   starttls — so the immediate-TLS handshake fails against a STARTTLS-only port\n#   and mail silently breaks. The injected MALMO_MAIL_ENCRYPTION would\n#   disambiguate, but compose `${}` can't translate its value into Forgejo's\n#   PROTOCOL token, so there is no fix here. If a 2525-style provider ever needs\n#   support, pin GITEA__mailer__PROTOCOL explicitly. The standard 587/465/25\n#   ports — what essentially every provider uses — are correct.\nservices:\n  forgejo:\n    image: codeberg.org/forgejo/forgejo:16.0.2-rootless\n    restart: unless-stopped\n    environment:\n      USER: git\n      GITEA__server__ROOT_URL: ${MALMO_APP_URL}\n      GITEA__server__DISABLE_SSH: \"true\"\n      GITEA__server__LFS_START_SERVER: \"true\"\n      GITEA__mailer__ENABLED: \"${MALMO_MAIL_HOST:+true}\"\n      GITEA__mailer__SMTP_ADDR: \"${MALMO_MAIL_HOST:-}\"\n      GITEA__mailer__SMTP_PORT: \"${MALMO_MAIL_PORT:-587}\"\n      GITEA__mailer__USER: \"${MALMO_MAIL_USER:-}\"\n      GITEA__mailer__PASSWD: \"${MALMO_MAIL_PASSWORD:-}\"\n      GITEA__mailer__FROM: \"${MALMO_MAIL_FROM:-}\"\n    volumes:\n      - ./data/forgejo:/var/lib/gitea\n",
+      "images": {
+        "codeberg.org/forgejo/forgejo:16.0.2-rootless": {
+          "digest": "sha256:23ccc146e6dc2cd1f5c5435909baae64db873201717f1726490dae649283e6cd",
+          "download_bytes": 77466929,
+          "disk_bytes": 184861184
         }
       }
     },
@@ -1571,5 +1611,39 @@
         ]
       }
     ]
-  }
+  },
+  "categories": [
+    {
+      "id": "productivity",
+      "label": "Productivity"
+    },
+    {
+      "id": "developer-tools",
+      "label": "Developer tools"
+    },
+    {
+      "id": "media",
+      "label": "Media"
+    },
+    {
+      "id": "documents",
+      "label": "Documents"
+    },
+    {
+      "id": "ai",
+      "label": "AI"
+    },
+    {
+      "id": "personal",
+      "label": "Personal"
+    },
+    {
+      "id": "security",
+      "label": "Security"
+    },
+    {
+      "id": "automation",
+      "label": "Automation"
+    }
+  ]
 }

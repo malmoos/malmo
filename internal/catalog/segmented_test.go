@@ -124,6 +124,16 @@ func syncedCatalogWithHome(t *testing.T, apps []wireApp, home wireHomePage, env 
 	return &Catalog{src: rs}
 }
 
+// catIDs projects the category vocabulary entries to their ids, for assertions
+// about which categories are present rather than how they are labelled.
+func catIDs(cats []Category) []string {
+	out := make([]string, len(cats))
+	for i, c := range cats {
+		out[i] = c.ID
+	}
+	return out
+}
+
 func TestHomeSegmentsByEnv(t *testing.T) {
 	// Appliance: categories are the union over appliance-visible apps (alpha,
 	// gamma); featured is only the appliance-visible featured app (alpha) — beta is
@@ -132,8 +142,8 @@ func TestHomeSegmentsByEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"media", "tools"}; !reflect.DeepEqual(appliance.Categories, want) {
-		t.Fatalf("appliance categories = %v, want %v (sorted union)", appliance.Categories, want)
+	if want := []string{"media", "tools"}; !reflect.DeepEqual(catIDs(appliance.Categories), want) {
+		t.Fatalf("appliance categories = %v, want %v (sorted union)", catIDs(appliance.Categories), want)
 	}
 	if got := ids(appliance.Featured); !reflect.DeepEqual(got, []string{"alpha"}) {
 		t.Fatalf("appliance featured = %v, want [alpha] (beta is hosted-only)", got)
@@ -204,8 +214,8 @@ func TestHomeNoBlockYieldsNoSpotlightOrGroups(t *testing.T) {
 	if len(h.Groups) != 0 {
 		t.Fatalf("groups = %+v, want none with no home block", h.Groups)
 	}
-	if want := []string{"media", "tools"}; !reflect.DeepEqual(h.Categories, want) {
-		t.Fatalf("categories = %v, want %v (unaffected by the absent home block)", h.Categories, want)
+	if want := []string{"media", "tools"}; !reflect.DeepEqual(catIDs(h.Categories), want) {
+		t.Fatalf("categories = %v, want %v (unaffected by the absent home block)", catIDs(h.Categories), want)
 	}
 	if got := ids(h.Featured); !reflect.DeepEqual(got, []string{"alpha"}) {
 		t.Fatalf("featured = %v, want [alpha] (unaffected by the absent home block)", got)
@@ -286,5 +296,115 @@ func TestSegmentedEmptyStoreNoError(t *testing.T) {
 	}
 	if got, _ := c.Search("x"); got != nil {
 		t.Fatalf("empty Search = %v, want nil", got)
+	}
+}
+
+// makeSnapshotFull is makeSnapshotHome plus a category vocabulary — for the
+// label tests, where what the snapshot says a category is called is the subject.
+func makeSnapshotFull(t *testing.T, apps []wireApp, home wireHomePage, cats []wireCategory) (body []byte, etag string) {
+	t.Helper()
+	digest, err := indexDigest(apps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(catalogFile{SchemaVersion: wireSchemaVersion, IndexSHA256: digest, Apps: apps, Home: home, Categories: cats})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b, `"` + digest + `"`
+}
+
+func syncedCatalogWithCats(t *testing.T, apps []wireApp, home wireHomePage, cats []wireCategory, env string) *Catalog {
+	t.Helper()
+	body, etag := makeSnapshotFull(t, apps, home, cats)
+	cp := &fakeCP{body: body, etag: etag, asset: []byte("\x89PNG-fake-bytes")}
+	srv := cp.server()
+	t.Cleanup(srv.Close)
+	rs := newRemote(srv.URL, env, t.TempDir())
+	if err := rs.syncOnce(context.Background()); err != nil {
+		t.Fatalf("syncOnce: %v", err)
+	}
+	return &Catalog{src: rs}
+}
+
+// The authored label reaches every place the box names a category: the pills, the
+// landing row headings, and the category page. Before the vocabulary was on the
+// wire the UI derived display text from the id, and disagreed with the other store
+// surface doing the same ("Developer-tools" against "developer tools").
+func TestCategoryLabelsComeFromTheSnapshot(t *testing.T) {
+	apps := segApps()
+	home := wireHomePage{Spotlight: "alpha", Groups: []wireHomeGroup{{Category: "tools", Apps: []string{"gamma"}}}}
+	cats := []wireCategory{
+		{ID: "tools", Label: "Developer tools"},
+		{ID: "media", Label: "Media"},
+	}
+	c := syncedCatalogWithCats(t, apps, home, cats, "appliance")
+
+	h, err := c.Home()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Authored order, not alphabetical: "tools" is authored before "media", which
+	// sorts the other way, so a sorted result would fail here.
+	if got := catIDs(h.Categories); !reflect.DeepEqual(got, []string{"tools", "media"}) {
+		t.Fatalf("categories = %v, want authored order [tools media]", got)
+	}
+	if h.Categories[0].Label != "Developer tools" {
+		t.Errorf("pill label = %q, want %q (authored, not derived from the id)", h.Categories[0].Label, "Developer tools")
+	}
+	if len(h.Groups) != 1 || h.Groups[0].Label != "Developer tools" {
+		t.Fatalf("group = %+v, want one row labelled %q", h.Groups, "Developer tools")
+	}
+
+	page, err := c.Category("tools")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Label != "Developer tools" {
+		t.Errorf("category page label = %q, want %q", page.Label, "Developer tools")
+	}
+}
+
+// A box with no vocabulary — never synced, or a snapshot published before the
+// field existed — still renders something readable rather than a blank pill, and
+// still shows every browsable category. The fallback matches the control plane's
+// own, so the two surfaces agree even in the degraded case.
+func TestCategoryLabelFallsBackToAReadableID(t *testing.T) {
+	apps := segApps()
+	c := syncedCatalogWithCats(t, apps, wireHomePage{}, nil, "appliance")
+
+	h, err := c.Home()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := catIDs(h.Categories); !reflect.DeepEqual(got, []string{"media", "tools"}) {
+		t.Fatalf("categories = %v, want every browsable category [media tools]", got)
+	}
+	if h.Categories[0].Label != "Media" || h.Categories[1].Label != "Tools" {
+		t.Errorf("fallback labels = %q/%q, want Media/Tools", h.Categories[0].Label, h.Categories[1].Label)
+	}
+}
+
+// A category an app claims but the vocabulary omits must still get a pill: dropping
+// it would hide a browsable app behind no entry point at all.
+func TestCategoryMissingFromVocabularyStillGetsAPill(t *testing.T) {
+	apps := segApps()
+	cats := []wireCategory{{ID: "media", Label: "Photos and video"}}
+	c := syncedCatalogWithCats(t, apps, wireHomePage{}, cats, "appliance")
+
+	h, err := c.Home()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Authored entries first, then the unknown ones sorted — a deterministic order,
+	// not the map's.
+	if got := catIDs(h.Categories); !reflect.DeepEqual(got, []string{"media", "tools"}) {
+		t.Fatalf("categories = %v, want [media tools]", got)
+	}
+	if h.Categories[0].Label != "Photos and video" {
+		t.Errorf("authored label = %q, want %q", h.Categories[0].Label, "Photos and video")
+	}
+	if h.Categories[1].Label != "Tools" {
+		t.Errorf("unknown-category label = %q, want the readable fallback %q", h.Categories[1].Label, "Tools")
 	}
 }

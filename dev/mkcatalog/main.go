@@ -62,6 +62,17 @@ type homeYAML struct {
 	} `yaml:"groups"`
 }
 
+// categoriesYAML is the shape of the store curation source's categories.yml: the
+// closed category vocabulary, each id with the display label the store surfaces
+// render. Parsed straight into catalog.SnapshotCategory via the same field names,
+// for the same reason homeYAML is — the file IS the wire shape here.
+type categoriesYAML struct {
+	Categories []struct {
+		ID    string `yaml:"id"`
+		Label string `yaml:"label"`
+	} `yaml:"categories"`
+}
+
 // pkgList collects one or more -pkg flags, in the order given — flag.Value's Set
 // is called once per occurrence, so a single -pkg (every call site today) behaves
 // exactly as before, and a curated multi-app seed just passes it more than once.
@@ -79,6 +90,7 @@ func main() {
 		envList = flag.String("environments", "appliance,hosted", "comma-separated environments the app(s) are visible in")
 		out     = flag.String("out", "", "output snapshot path (default: stdout)")
 		homeArg = flag.String("home", "", "path to a store home.yml to carry as the snapshot's curated landing page (optional)")
+		catsArg = flag.String("categories", "", "path to a store categories.yml to carry as the snapshot's category vocabulary (optional)")
 	)
 	flag.Var(&pkgs, "pkg", "app package directory (contains manifest.yml + compose file); repeatable")
 	flag.Parse()
@@ -96,8 +108,12 @@ func main() {
 	if *homeArg != "" {
 		home = loadHome(*homeArg, apps)
 	}
+	var cats []catalog.SnapshotCategory
+	if *catsArg != "" {
+		cats = loadCategories(*catsArg)
+	}
 
-	b, err := catalog.BuildSnapshot(apps, home, "")
+	b, err := catalog.BuildSnapshot(apps, home, cats, "")
 	if err != nil {
 		fatal("build snapshot: %v", err)
 	}
@@ -190,6 +206,29 @@ func loadHome(path string, apps []catalog.SnapshotApp) catalog.SnapshotHome {
 		home.Groups = append(home.Groups, catalog.SnapshotHomeGroup{Category: g.Category, Apps: g.Apps})
 	}
 	return home
+}
+
+// loadCategories parses a store categories.yml into the snapshot's vocabulary. It
+// requires a label per entry for the same reason the publish flow does: a category
+// with no label is a pill the store UI renders blank, and the point of seeding
+// locally is to hit that here rather than in a browser.
+func loadCategories(path string) []catalog.SnapshotCategory {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fatal("read categories: %v", err)
+	}
+	var y categoriesYAML
+	if err := yaml.Unmarshal(data, &y); err != nil {
+		fatal("parse categories %q: %v", path, err)
+	}
+	out := make([]catalog.SnapshotCategory, 0, len(y.Categories))
+	for _, c := range y.Categories {
+		if c.ID == "" || c.Label == "" {
+			fatal("categories %q: every entry needs an id and a label (got id=%q label=%q)", path, c.ID, c.Label)
+		}
+		out = append(out, catalog.SnapshotCategory{ID: c.ID, Label: c.Label})
+	}
+	return out
 }
 
 func splitEnvs(s string) []string {

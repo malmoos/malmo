@@ -326,9 +326,11 @@ dev: check-state-owner build caddy
 # curated landing page (docs/specs/APP_STORE.md # Landing page) is clickable
 # locally. mkcatalog fails loudly if home.yml names an app that wasn't also
 # passed in APPS — the point of seeding locally is to catch that before a real
-# publish does. (Named HOMEFILE, not HOME, so it can't collide with the shell's
-# own $HOME.) APP=<id> keeps working unchanged — it is just the single-app case
-# of the same underlying seed-catalog recipe.
+# publish does. The store's categories.yml is picked up automatically when the
+# checkout has one, so the seeded store renders the authored category labels
+# rather than the readable-id fallback. (Named HOMEFILE, not HOME, so it can't
+# collide with the shell's own $HOME.) APP=<id> keeps working unchanged — it is
+# just the single-app case of the same underlying seed-catalog recipe.
 #
 # It uses mkcatalog, NOT cloud's catalog-sync, on purpose: catalog-sync publishes
 # only listed:true records, but an app under curation has no verdict yet — you
@@ -347,9 +349,11 @@ seed-catalog:
 	  done; \
 	  homeflag=""; \
 	  [ -z "$(HOMEFILE)" ] || homeflag="-home $(HOMEFILE)"; \
+	  catsflag=""; \
+	  [ ! -f "$(STORE)/categories.yml" ] || catsflag="-categories $(STORE)/categories.yml"; \
 	  mkdir -p $(DEV_DIR)/catalog-cache && \
-	  $(GO) run ./dev/mkcatalog $$pkgflags -environments appliance,hosted -out $(DEV_DIR)/catalog-cache/catalog.json $$homeflag && \
-	  echo "seeded [$$ids] -> $(DEV_DIR)/catalog-cache/catalog.json (visible on: appliance, hosted)$${homeflag:+, landing from $(HOMEFILE)}"
+	  $(GO) run ./dev/mkcatalog $$pkgflags -environments appliance,hosted -out $(DEV_DIR)/catalog-cache/catalog.json $$homeflag $$catsflag && \
+	  echo "seeded [$$ids] -> $(DEV_DIR)/catalog-cache/catalog.json (visible on: appliance, hosted)$${homeflag:+, landing from $(HOMEFILE)}$${catsflag:+, category labels from $(STORE)/categories.yml}"
 
 # The inert catalog URL is a target-specific, exported variable, so it is in
 # effect for the `dev` prerequisite's recipe too — the brain reads

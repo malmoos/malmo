@@ -403,7 +403,7 @@ func (s *Server) catalogHome(ctx context.Context, _ *struct{}) (*struct{ Body ca
 // semantics — the UI only ever links categories the landing advertised.
 func (s *Server) catalogCategory(ctx context.Context, in *struct {
 	Name string `query:"name"`
-}) (*struct{ Body catalog.Category }, error) {
+}) (*struct{ Body catalog.CategoryPage }, error) {
 	c, err := s.catalog.Category(in.Name)
 	if errors.Is(err, catalog.ErrNotFound) {
 		return nil, huma.Error404NotFound("no such category")
@@ -411,7 +411,7 @@ func (s *Server) catalogCategory(ctx context.Context, in *struct {
 	if err != nil {
 		return nil, huma.Error500InternalServerError("catalog read failed", err)
 	}
-	return &struct{ Body catalog.Category }{Body: c}, nil
+	return &struct{ Body catalog.CategoryPage }{Body: c}, nil
 }
 
 // catalogSearch serves the apps matching ?q= over name, tagline, and categories. A

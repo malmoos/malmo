@@ -81,6 +81,11 @@ func (d *diskSource) featured() ([]Entry, error) { return nil, nil }
 // that exercise it.
 func (d *diskSource) home() (*Entry, []HomeGroupView, error) { return nil, nil, nil }
 
+// categories: the disk source is a plain directory of app packages with no
+// curation alongside it, so there is no authored vocabulary — the facade falls
+// back to a readable form of each id, exactly as it does for a never-synced box.
+func (d *diskSource) categories() ([]Category, error) { return nil, nil }
+
 // Entry returns the grid summary for one app by id, honestly — it does *not*
 // apply the store-visibility filter, so an unlisted-but-installed app still
 // resolves its card metadata. ErrNotFound when the manifest doesn't exist; other
