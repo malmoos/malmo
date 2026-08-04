@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -73,6 +74,56 @@ func ids(entries []Entry) []string {
 	return out
 }
 
+// homeFixture is the authored landing-page fixture for the home-projection
+// tests: a hosted-only spotlight (dropped on appliance) and two groups, one of
+// which (media) empties out entirely on appliance because its only app is
+// hosted-only.
+func homeFixture() wireHomePage {
+	return wireHomePage{
+		Spotlight: "beta",
+		Groups: []wireHomeGroup{
+			{Category: "tools", Apps: []string{"alpha", "gamma"}},
+			{Category: "media", Apps: []string{"beta"}},
+		},
+	}
+}
+
+// makeSnapshotHome is makeSnapshot plus a home block, for the tests that
+// exercise the landing-page projection.
+func makeSnapshotHome(t *testing.T, apps []wireApp, home wireHomePage) (body []byte, etag string) {
+	t.Helper()
+	digest, err := indexDigest(apps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := catalogFile{SchemaVersion: wireSchemaVersion, IndexSHA256: digest, Apps: apps, Home: home}
+	b, err := json.Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b, `"` + digest + `"`
+}
+
+// newFakeCPHome is newFakeCP plus a home block on the served snapshot.
+func newFakeCPHome(t *testing.T, apps []wireApp, home wireHomePage) *fakeCP {
+	body, etag := makeSnapshotHome(t, apps, home)
+	return &fakeCP{body: body, etag: etag, asset: []byte("\x89PNG-fake-bytes")}
+}
+
+// syncedCatalogWithHome is syncedCatalog plus a home block on the served
+// snapshot.
+func syncedCatalogWithHome(t *testing.T, apps []wireApp, home wireHomePage, env string) *Catalog {
+	t.Helper()
+	cp := newFakeCPHome(t, apps, home)
+	srv := cp.server()
+	t.Cleanup(srv.Close)
+	rs := newRemote(srv.URL, env, t.TempDir())
+	if err := rs.syncOnce(context.Background()); err != nil {
+		t.Fatalf("syncOnce: %v", err)
+	}
+	return &Catalog{src: rs}
+}
+
 func TestHomeSegmentsByEnv(t *testing.T) {
 	// Appliance: categories are the union over appliance-visible apps (alpha,
 	// gamma); featured is only the appliance-visible featured app (alpha) — beta is
@@ -96,6 +147,68 @@ func TestHomeSegmentsByEnv(t *testing.T) {
 	}
 	if got := ids(hosted.Featured); !reflect.DeepEqual(got, []string{"beta", "alpha"}) {
 		t.Fatalf("hosted featured = %v, want [beta alpha] (by rank)", got)
+	}
+}
+
+// TestHomeProjectsSpotlightAndGroups covers the authored landing page (store's
+// home.yml, carried on the synced snapshot): the spotlight and each group's
+// apps are filtered to this box's environment exactly like every other
+// projection — an app not advertised here drops out of its slot (the
+// spotlight goes nil, or the app is skipped within its group), and a group
+// left with no advertised apps is dropped entirely rather than rendered empty.
+func TestHomeProjectsSpotlightAndGroups(t *testing.T) {
+	home := homeFixture()
+
+	appliance, err := syncedCatalogWithHome(t, segApps(), home, "appliance").Home()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if appliance.Spotlight != nil {
+		t.Fatalf("appliance spotlight = %+v, want nil (beta is hosted-only)", appliance.Spotlight)
+	}
+	if len(appliance.Groups) != 1 || appliance.Groups[0].Category != "tools" {
+		t.Fatalf("appliance groups = %+v, want just the tools group (media empties out)", appliance.Groups)
+	}
+	if got := ids(appliance.Groups[0].Apps); !reflect.DeepEqual(got, []string{"alpha", "gamma"}) {
+		t.Fatalf("tools group apps = %v, want [alpha gamma]", got)
+	}
+
+	hosted, err := syncedCatalogWithHome(t, segApps(), home, "hosted").Home()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hosted.Spotlight == nil || hosted.Spotlight.ID != "beta" {
+		t.Fatalf("hosted spotlight = %+v, want beta", hosted.Spotlight)
+	}
+	if len(hosted.Groups) != 2 {
+		t.Fatalf("hosted groups = %+v, want both groups (beta is advertised on hosted)", hosted.Groups)
+	}
+	if got := ids(hosted.Groups[1].Apps); !reflect.DeepEqual(got, []string{"beta"}) {
+		t.Fatalf("hosted media group apps = %v, want [beta]", got)
+	}
+}
+
+// TestHomeNoBlockYieldsNoSpotlightOrGroups covers a snapshot with no authored
+// home block (the box has never synced a landing page, or the sync tool
+// published one with an empty home.yml): the landing carries neither a
+// spotlight nor groups, while the categories/featured projections it shares
+// with the home block are unaffected.
+func TestHomeNoBlockYieldsNoSpotlightOrGroups(t *testing.T) {
+	h, err := syncedCatalog(t, segApps(), "appliance").Home()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Spotlight != nil {
+		t.Fatalf("spotlight = %+v, want nil with no home block", h.Spotlight)
+	}
+	if len(h.Groups) != 0 {
+		t.Fatalf("groups = %+v, want none with no home block", h.Groups)
+	}
+	if want := []string{"media", "tools"}; !reflect.DeepEqual(h.Categories, want) {
+		t.Fatalf("categories = %v, want %v (unaffected by the absent home block)", h.Categories, want)
+	}
+	if got := ids(h.Featured); !reflect.DeepEqual(got, []string{"alpha"}) {
+		t.Fatalf("featured = %v, want [alpha] (unaffected by the absent home block)", got)
 	}
 }
 

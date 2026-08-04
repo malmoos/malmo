@@ -3,7 +3,8 @@
 // (issue #63, cloud specs/CATALOG.md # Serve) rather than loading the whole
 // catalog and filtering client-side. The box never pulls the entire catalog up
 // front: the landing asks the brain for /catalog/home (the categories present on
-// this box plus a curated featured row), a category pill asks for
+// this box, the curated spotlight + category groups authored in store's
+// home.yml, and a flat featured row), a category pill asks for
 // /catalog/category?name=…, and typing asks /catalog/search?q=…. Every request
 // stays same-origin on the brain, which serves these from its own synced snapshot
 // (so browse still works offline — step 3's last-good cache), never the public
@@ -12,6 +13,12 @@
 // The three views are mutually exclusive entry points: a non-empty search box wins
 // over a selected category, which wins over the landing. Selecting a pill clears
 // the search, and vice versa, so the grid always reflects exactly one of them.
+//
+// The landing itself falls back in three steps so it is never empty
+// (docs/specs/APP_STORE.md # Landing page): the authored home (spotlight banner +
+// packed category-group rows, mirroring the marketing store's packRows —
+// ../cloud internal/web/static/store.js) → the flat featured row → a plain
+// "pick a category or search" line.
 //
 // Door 2 (custom-container install) is admin-only and sits as a "Custom app" link
 // beside the search, never in the browse grid (DASHBOARD.md # Door-2). Members
@@ -27,7 +34,9 @@ import { Search, SearchX, PackageOpen, Sparkles } from "lucide-vue-next";
 import { useAuth } from "../auth";
 import { api, type CatalogEntry, type CatalogHome, type CatalogCategory } from "../api";
 import StoreAppCard from "../components/StoreAppCard.vue";
+import StoreSpotlight from "../components/StoreSpotlight.vue";
 import Heading from "@/components/ui/Heading.vue";
+import { packRows, groupSpan, groupCols } from "../lib/storeLayout";
 import Button from "@/components/ui/Button.vue";
 
 const { currentUser } = useAuth();
@@ -92,11 +101,25 @@ const search = useQuery({
 // the brain, so a new catalog category appears without a UI change.
 const categories = computed(() => ["all", ...(home.data.value?.categories ?? [])]);
 
-// Featured row: shown on the landing and category pages (both carry it), never on
+// The authored landing (store's home.yml, carried through /catalog/home): a
+// spotlight app and its category groups. Both are already environment-filtered
+// by the brain, so an app not advertised on this box simply doesn't appear.
+// Only meaningful in "home" mode — a category or search view never shows them.
+const spotlight = computed<CatalogEntry | undefined>(() =>
+  mode.value === "home" ? (home.data.value?.spotlight ?? undefined) : undefined,
+);
+const homeGroups = computed(() => (mode.value === "home" ? (home.data.value?.groups ?? []) : []));
+const hasCuratedHome = computed(() => !!spotlight.value || homeGroups.value.length > 0);
+// Packed two-or-more to a row, mirroring the marketing store (lib/storeLayout.ts).
+const packedGroupRows = computed(() => packRows(homeGroups.value));
+
+// Featured row: shown on category pages always, and on the landing only as a
+// fallback when nothing is authored in home.yml (the curated spotlight/groups
+// take its place there — docs/specs/APP_STORE.md # Landing page). Never on
 // search — search is a focused lookup, not a browse surface.
 const featured = computed<CatalogEntry[]>(() => {
   if (mode.value === "category") return category.data.value?.featured ?? [];
-  if (mode.value === "home") return home.data.value?.featured ?? [];
+  if (mode.value === "home" && !hasCuratedHome.value) return home.data.value?.featured ?? [];
   return [];
 });
 
@@ -250,7 +273,7 @@ function clearFilters() {
             <Sparkles class="size-4 text-accent" aria-hidden="true" />
             Featured
           </h3>
-          <div class="grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-4 lg:grid-cols-6">
+          <div class="grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-3 lg:grid-cols-4">
             <StoreAppCard v-for="c in featured" :key="c.id" :app="c" />
           </div>
         </section>
@@ -260,7 +283,7 @@ function clearFilters() {
           <h3 class="text-base font-semibold capitalize text-foreground">{{ activeCategory }}</h3>
           <div
             v-if="browseApps.length"
-            class="grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-4 lg:grid-cols-6"
+            class="grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-3 lg:grid-cols-4"
           >
             <StoreAppCard v-for="c in browseApps" :key="c.id" :app="c" />
           </div>
@@ -275,7 +298,7 @@ function clearFilters() {
         <section v-else-if="mode === 'search'" class="space-y-4">
           <div
             v-if="browseApps.length"
-            class="grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-4 lg:grid-cols-6"
+            class="grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-3 lg:grid-cols-4"
           >
             <StoreAppCard v-for="c in browseApps" :key="c.id" :app="c" />
           </div>
@@ -287,7 +310,28 @@ function clearFilters() {
           </div>
         </section>
 
-        <!-- Landing with no featured row: point the user at the pills / search. -->
+        <!-- Landing, authored home: the spotlight banner, then the category
+             groups from store's home.yml, packed two-or-more to a row
+             (lib/storeLayout.ts packRows). Rows sit in their own container so the
+             gap between two packed rows is wider than the gap between a group's
+             heading and its cards — without it the rows read as one
+             undifferentiated field of icons (mirrors the marketing store). -->
+        <section v-else-if="hasCuratedHome" class="space-y-10">
+          <StoreSpotlight v-if="spotlight" :app="spotlight" />
+          <div v-if="packedGroupRows.length" class="flex flex-col gap-12">
+            <div v-for="(row, i) in packedGroupRows" :key="i" class="grid gap-x-6 gap-y-10 sm:grid-cols-4">
+              <div v-for="g in row" :key="g.category" class="flex flex-col gap-4" :class="groupSpan(g.apps)">
+                <h3 class="text-base font-semibold capitalize text-foreground">{{ g.category }}</h3>
+                <div class="grid grid-cols-2 gap-x-6 gap-y-8" :class="groupCols(g.apps)">
+                  <StoreAppCard v-for="c in g.apps" :key="c.id" :app="c" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Landing with no authored home and no featured row: point the user at
+             the pills / search. -->
         <p v-else-if="!featured.length" class="text-sm text-muted-foreground">
           Pick a category or search to browse apps.
         </p>

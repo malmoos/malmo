@@ -48,6 +48,13 @@ type source interface {
 	// facade can't derive from List: the remote source reads it from the synced
 	// snapshot's Featured/Rank; the disk source has no curation and returns nil.
 	featured() ([]Entry, error)
+	// home returns the authored landing page's spotlight app (nil when unset or
+	// not advertised on this surface) and its category groups (a group left with
+	// no advertised apps is dropped), both already environment-filtered. Like
+	// featured, this can't be derived from List: the remote source reads it from
+	// the synced snapshot's home block; the disk source has no curation and
+	// returns nothing.
+	home() (*Entry, []HomeGroupView, error)
 }
 
 // Catalog is the brain-facing catalog handle. It is a thin facade over a source;
@@ -79,12 +86,27 @@ func (c *Catalog) Load(id string) (*manifest.Manifest, []byte, error) { return c
 // plane. They are computed on the facade (not per-source) because every input but
 // featured is a projection of List; only featured differs by backing.
 
-// Home is the store landing payload: the categories present on this box's surface
-// plus the curated top apps. No per-app grid — the UI drills into a category or
-// search for that. Mirror of cloud catalog.Home.
+// Home is the store landing payload: the categories present on this box's
+// surface, the authored recommended-apps page (a spotlight app plus category
+// groups), and the flat curated top apps for a consumer that just wants the
+// top-apps row. No per-app grid — the UI drills into a category or search for
+// that. Mirror of cloud catalog.Home.
 type Home struct {
 	Categories []string `json:"categories"`
-	Featured   []Entry  `json:"featured,omitempty"`
+	// Spotlight is the banner app, nil when unset or not advertised on this
+	// surface.
+	Spotlight *Entry `json:"spotlight,omitempty"`
+	// Groups are the authored category rows, in authored order. A group whose
+	// apps are all hidden on this surface is dropped rather than rendered empty.
+	Groups   []HomeGroupView `json:"groups,omitempty"`
+	Featured []Entry         `json:"featured,omitempty"`
+}
+
+// HomeGroupView is one rendered category row of the landing page. Mirror of
+// cloud catalog.HomeGroupView.
+type HomeGroupView struct {
+	Category string  `json:"category"`
+	Apps     []Entry `json:"apps"`
 }
 
 // Category is one category's apps plus the curated top apps (so a category page can
@@ -117,7 +139,11 @@ func (c *Catalog) Home() (Home, error) {
 	if err != nil {
 		return Home{}, err
 	}
-	return Home{Categories: cats, Featured: feat}, nil
+	spotlight, groups, err := c.src.home()
+	if err != nil {
+		return Home{}, err
+	}
+	return Home{Categories: cats, Spotlight: spotlight, Groups: groups, Featured: feat}, nil
 }
 
 // Category returns the apps tagged with cat (case-insensitive), plus the featured

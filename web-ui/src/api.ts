@@ -78,6 +78,10 @@ export type SetupResult = Schemas["SetupResponse"];
 export type CatalogEntry = Schemas["Entry"];
 export type CatalogDetail = Schemas["Detail"];
 export type CatalogHome = Schemas["Home"];
+// HomeGroupView is one rendered category row of the landing page (a spotlight
+// app plus ordered groups, authored in store's home.yml). Exported on its own
+// so the packing helper (lib/storeLayout.ts) can type against it directly.
+export type HomeGroupView = Schemas["HomeGroupView"];
 export type CatalogCategory = Schemas["Category"];
 export type Instance = Schemas["InstanceDTO"];
 // Exposure is the per-app access mode (#306, hosted only): "restricted" is the

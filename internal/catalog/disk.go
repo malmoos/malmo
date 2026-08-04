@@ -74,6 +74,13 @@ func (d *diskSource) List() ([]Entry, error) {
 // featured row — honest, and enough for the handler tests that exercise it.
 func (d *diskSource) featured() ([]Entry, error) { return nil, nil }
 
+// home returns nothing: the recommended-apps page is store curation carried on
+// the published snapshot (home.yml via the sync tool), which a disk manifest
+// tree has no notion of. The disk source backs only tests now, so its Home view
+// renders with no spotlight/groups — honest, and enough for the handler tests
+// that exercise it.
+func (d *diskSource) home() (*Entry, []HomeGroupView, error) { return nil, nil, nil }
+
 // Entry returns the grid summary for one app by id, honestly — it does *not*
 // apply the store-visibility filter, so an unlisted-but-installed app still
 // resolves its card metadata. ErrNotFound when the manifest doesn't exist; other

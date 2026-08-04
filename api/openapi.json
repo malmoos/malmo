@@ -866,10 +866,44 @@
               "array",
               "null"
             ]
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/HomeGroupView"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "spotlight": {
+            "$ref": "#/components/schemas/Entry"
           }
         },
         "required": [
           "categories"
+        ],
+        "type": "object"
+      },
+      "HomeGroupView": {
+        "additionalProperties": false,
+        "properties": {
+          "apps": {
+            "items": {
+              "$ref": "#/components/schemas/Entry"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "category": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "apps"
         ],
         "type": "object"
       },
