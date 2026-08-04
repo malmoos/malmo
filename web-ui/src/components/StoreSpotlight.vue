@@ -1,9 +1,9 @@
 <script setup lang="ts">
 // StoreSpotlight — the landing page's banner: the one authored spotlight app
-// (store's home.yml `spotlight:`), rendered wider than a regular card and
+// (a curated home.yml's `spotlight:`), rendered wider than a regular card and
 // carrying its tagline. It is a promotion of an ordinary app, not a different
 // kind of thing, so the whole card is still a RouterLink to the detail page —
-// mirrors the marketing store's banner() (../cloud internal/web/static/store.js).
+// mirrors how the control plane's own store surface renders its banner.
 import { ref } from "vue";
 import { RouterLink } from "vue-router";
 import { Sparkles } from "lucide-vue-next";

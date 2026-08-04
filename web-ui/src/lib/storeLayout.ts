@@ -1,9 +1,9 @@
-// storeLayout packs the store landing's authored category groups (store's
-// home.yml, cloud specs/CATALOG.md # Serve) two-or-more to a row instead of one
-// per line, mirroring the marketing store's packRows (../cloud
-// internal/web/static/store.js) so the box and marketing landings read the same
-// way. Kept as a small pure helper (no Vue) so the packing itself is a plain
-// function the view calls, not logic buried in the template.
+// storeLayout packs the store landing's authored category groups (a curated
+// home.yml, docs/specs/APP_STORE.md # Landing page) two-or-more to a row instead
+// of one per line, mirroring the row-packing the control plane's own store
+// surface does so the box's landing and the control plane's landing read the
+// same way. Kept as a small pure helper (no Vue) so the packing itself is a
+// plain function the view calls, not logic buried in the template.
 import type { CatalogEntry, HomeGroupView } from "../api";
 
 // Group is HomeGroupView with apps normalized to a plain array — the generated
@@ -28,8 +28,9 @@ export const ROW_WIDTH = 4;
 // curator's preference, not a contract (home.yml's groups are not alphabetical
 // either), so this walks the groups in order and pulls forward the first later
 // group that fits the gap; a group that can't be paired stands alone rather
-// than being reordered further. Faithful port of the marketing store's
-// packRows — same algorithm, same reasoning.
+// than being reordered further. Faithful port of the control plane's own
+// row-packing — same algorithm, same reasoning, so the two surfaces lay out the
+// same authored groups identically.
 export function packRows(groups: HomeGroupView[], width = ROW_WIDTH): PackedRow[] {
   const left: Group[] = groups.map((g) => ({ category: g.category, apps: g.apps ?? [] }));
   const rows: PackedRow[] = [];
@@ -54,8 +55,8 @@ export function packRows(groups: HomeGroupView[], width = ROW_WIDTH): PackedRow[
 // spanClasses / colsClasses map a group's app count (1-4, the row width) to the
 // Tailwind classes it needs. Written out as static literals rather than
 // interpolated ("sm:col-span-" + n) because Tailwind's scanner only sees classes
-// that appear verbatim in source — the same reasoning behind the marketing
-// store's groupRow (../cloud internal/web/static/store.js).
+// that appear verbatim in source — the same reasoning behind the control plane's
+// own equivalent layout helper.
 const SPAN_CLASSES: Record<1 | 2 | 3 | 4, string> = {
   1: "sm:col-span-1",
   2: "sm:col-span-2",
@@ -86,16 +87,15 @@ export function groupCols(apps: CatalogEntry[]): string {
 }
 
 // categoryLabel turns a category id into its display label. The wire only ever
-// carries the id (store's categories.yml `label:` field is deliberately not on
-// it — a separate cloud+store change), so this is a display-only stopgap: it
-// replaces hyphens with spaces the same way the marketing store's
-// categoryLabel does (../cloud internal/web/static/store.js), so a group
-// heading, the category-page heading, and the category pills all agree with
-// each other and with the marketing store on the same id (e.g.
+// carries the id (a curated, authored label field is deliberately not on it —
+// a separate follow-up change), so this is a display-only stopgap: it replaces
+// hyphens with spaces the same way the control plane's own store surface does,
+// so a group heading, the category-page heading, and the category pills all
+// agree with each other and with the control plane on the same id (e.g.
 // "developer-tools" -> "developer tools" everywhere, not "Developer-tools" on
-// one surface and "developer tools" on the other). The real fix is putting
-// categories.yml's authored label on the wire; until then this is the least
-// each surface can do to not visibly disagree.
+// one surface and "developer tools" on the other). The real fix is putting the
+// authored label on the wire; until then this is the least each surface can do
+// to not visibly disagree.
 export function categoryLabel(id: string): string {
   return id.replace(/-/g, " ");
 }

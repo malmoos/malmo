@@ -103,18 +103,19 @@ type Home struct {
 }
 
 // HomeGroupView is one rendered category row of the landing page. Mirror of
-// cloud catalog.HomeGroupView.
+// the control plane's own HomeGroupView shape.
 type HomeGroupView struct {
 	Category string  `json:"category"`
 	Apps     []Entry `json:"apps"`
 }
 
 // Category is one category's apps plus the curated top apps. Featured travels on
-// the payload for parity with cloud catalog.Category (which this mirrors), but the
-// box UI's category view does not currently render it — only the landing does,
-// and only as its no-authored-home fallback (docs/specs/APP_STORE.md # Landing
-// page); a category view is a filtered view, and the curated row is a
-// landing-only concept, matching the marketing store's own renderGrid.
+// the payload for parity with the control plane's own Category shape (which this
+// mirrors), but the box UI's category view does not currently render it — only
+// the landing does, and only as its no-authored-home fallback
+// (docs/specs/APP_STORE.md # Landing page); a category view is a filtered view,
+// and the curated row is a landing-only concept, matching how the control
+// plane's own store surface renders a category.
 type Category struct {
 	Category string  `json:"category"`
 	Apps     []Entry `json:"apps"`

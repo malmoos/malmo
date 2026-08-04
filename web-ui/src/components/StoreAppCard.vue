@@ -6,8 +6,7 @@
 // Renders the catalog icon when the manifest declares one, falling back to a
 // generic glyph (icon_url is omitted by the brain when absent, and we also guard
 // against a load error). The tagline (short_description) sits truncated under
-// the name, matching the marketing store's card (../cloud
-// internal/web/static/store.js `card`).
+// the name, matching how the control plane's own store surface renders a card.
 import { ref } from "vue";
 import { RouterLink } from "vue-router";
 import type { CatalogEntry } from "../api";

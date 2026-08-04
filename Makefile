@@ -46,7 +46,7 @@ help:
 	@echo "make control-plane-images - build malmo-brain + malmo-ui images and docker-save the control-plane bundle to .dev/"
 	@echo "make dev         - all three foreground procs in one terminal (recommended)"
 	@echo "make dev-app APP=<id> [STORE=../store] - boot ONE store app under curation: seed its catalog snapshot, then make dev with an inert catalog URL"
-	@echo "make seed-catalog APPS=\"<id> <id> ...\" [HOMEFILE=../store/home.yml] - seed several store apps (+ optionally the curated landing) into the catalog cache, without starting dev"
+	@echo "make seed-catalog APPS=\"<id> <id> ...\" [HOMEFILE=<path/to/home.yml>] - seed several store apps (+ optionally the curated landing) into the catalog cache, without starting dev"
 	@echo "make fmt         - rewrite Go sources into gofmt-canonical form (autofix)"
 	@echo "make host-agent-real-hosted - build the slim hosted-cloud host-agent (-tags hosted; #204/C1c)"
 	@echo "make net         - create the malmo-ingress docker network"
@@ -311,7 +311,7 @@ dev: check-state-owner build caddy
 	  wait
 
 # ---- Curate one or more store apps (+ optionally the landing) against the
-# brain (store #22) -----------------------------------------------------------
+# brain -------------------------------------------------------------------
 # Post-catalog-cutover (cloud #62) there is no baked os/catalog/ to boot from —
 # the brain is a thin HTTP client of the control plane. `make dev-app APP=<id>`
 # restores the inner loop for authoring/curating a store app: it seeds the
@@ -320,15 +320,15 @@ dev: check-state-owner build caddy
 # exactly as it would a synced-then-offline snapshot (internal/catalog/remote.go
 # # loadCache) and installs the app from it.
 #
-# `make seed-catalog APPS="<id> <id> ..." [HOMEFILE=../store/home.yml]` is the
+# `make seed-catalog APPS="<id> <id> ..." [HOMEFILE=<path/to/home.yml>]` is the
 # multi-app form: it seeds every named package into one snapshot and, when
 # HOMEFILE is given, carries that home.yml's spotlight + groups too, so the
 # curated landing page (docs/specs/APP_STORE.md # Landing page) is clickable
 # locally. mkcatalog fails loudly if home.yml names an app that wasn't also
 # passed in APPS — the point of seeding locally is to catch that before a real
-# store publish does. (Named HOMEFILE, not HOME, so it can't collide with the
-# shell's own $HOME.) APP=<id> keeps working unchanged — it is just the
-# single-app case of the same underlying seed-catalog recipe.
+# publish does. (Named HOMEFILE, not HOME, so it can't collide with the shell's
+# own $HOME.) APP=<id> keeps working unchanged — it is just the single-app case
+# of the same underlying seed-catalog recipe.
 #
 # It uses mkcatalog, NOT cloud's catalog-sync, on purpose: catalog-sync publishes
 # only listed:true records, but an app under curation has no verdict yet — you

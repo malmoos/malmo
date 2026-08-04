@@ -11,13 +11,13 @@
 //   - `make dev-app APP=<id>` (single app) / `make seed-catalog APPS="<id> ..."
 //     [HOMEFILE=<path/to/home.yml>]` (several apps, plus an optional curated
 //     landing): the native dev inner loop for authoring/curating store apps
-//     against the brain post-catalog-cutover (cloud #62; store #22). It reads
-//     apps/<id>/manifest.yml + compose straight from a store checkout, so it
-//     needs no verdict on the app (unlike the cloud publish tool, catalog-sync,
-//     which serves only listed: true records) — you boot the app to *decide*
-//     its verdict. The Makefile points MALMO_CATALOG_URL at an inert address so
-//     the background sync can't overwrite the seed with the real published
-//     catalog.
+//     against the brain as a thin client of the control plane. It reads
+//     apps/<id>/manifest.yml + compose straight from a store curation checkout,
+//     so it needs no verdict on the app (unlike the control plane's own publish
+//     tool, which serves only listed: true records) — you boot the app to
+//     *decide* its verdict. The Makefile points MALMO_CATALOG_URL at an inert
+//     address so the background sync can't overwrite the seed with the real
+//     published catalog.
 //
 //   - dev/test-qemu/bootstrap.sh: the air-gapped QEMU full-stack lane, which
 //     can't reach a control plane (restrict=on), seeds a whoami snapshot at
@@ -27,16 +27,16 @@
 // author, license, links, categories, footprint) but not icon_file/screenshots —
 // those are proxied from the control plane, and the seed path has no asset server,
 // so an authored icon renders as its glyph fallback. For full visual QA run a
-// local control plane instead (dev/cloud).
+// local control plane instead.
 //
 // The App / CatalogFile / Home shapes here mirror internal/catalog/wire.go (which
-// itself mirrors the cloud published shape) byte-for-byte: same fields, order, and
-// JSON tags, reusing the internal/manifest display types. That is what makes the
-// integrity digest reproduce — the brain recomputes SHA-256 over json.Marshal of
-// the parsed app index and checks it against IndexSHA256 (the home block plays no
-// part in that digest, matching wire.go). Keep this in sync with wire.go; a drift
-// is caught when the brain rejects the snapshot at boot (and by internal/catalog's
-// TestVerifyRealSnapshot-style guards).
+// itself mirrors the control plane's published shape) byte-for-byte: same fields,
+// order, and JSON tags, reusing the internal/manifest display types. That is what
+// makes the integrity digest reproduce — the brain recomputes SHA-256 over
+// json.Marshal of the parsed app index and checks it against IndexSHA256 (the home
+// block plays no part in that digest, matching wire.go). Keep this in sync with
+// wire.go; a drift is caught when the brain rejects the snapshot at boot (and by
+// internal/catalog's TestVerifyRealSnapshot-style guards).
 package main
 
 import (
@@ -64,8 +64,8 @@ type catalogFile struct {
 }
 
 // wireHomePage / wireHomeGroup mirror internal/catalog/wire.go's wireHomePage /
-// wireHomeGroup (themselves a mirror of cloud's HomePage / HomeGroup), field for
-// field and tag for tag.
+// wireHomeGroup (themselves a mirror of the control plane's own home-page shape),
+// field for field and tag for tag.
 type wireHomePage struct {
 	Spotlight string          `json:"spotlight"`
 	Groups    []wireHomeGroup `json:"groups"`
@@ -76,10 +76,10 @@ type wireHomeGroup struct {
 	Apps     []string `json:"apps"`
 }
 
-// homeYAML is the shape of the store repo's home.yml (store/home.yml): a
-// spotlight app id plus ordered category groups. Parsed straight into
-// wireHomePage via the same field names — home.yml IS the wire shape here (the
-// control plane's sync tool carries it verbatim too).
+// homeYAML is the shape of the store curation source's home.yml: a spotlight app
+// id plus ordered category groups. Parsed straight into wireHomePage via the same
+// field names — home.yml IS the wire shape here (the control plane's sync tool
+// carries it verbatim too).
 type homeYAML struct {
 	Spotlight string `yaml:"spotlight"`
 	Groups    []struct {
@@ -217,7 +217,7 @@ func loadApp(pkgDir string, environments []string) app {
 // loadHome parses a store home.yml and validates it against the seeded apps: any
 // spotlight or group app id that isn't among the packages just seeded is a fatal
 // error, not a silently-dropped slot — the whole point of exercising this locally
-// is to catch that before a real store publish does (a real publish's admission
+// is to catch that before a real publish does (the publish flow's own admission
 // check catches it there; this is the equivalent local guard).
 func loadHome(path string, apps []app) wireHomePage {
 	data, err := os.ReadFile(path)

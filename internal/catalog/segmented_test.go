@@ -150,8 +150,8 @@ func TestHomeSegmentsByEnv(t *testing.T) {
 	}
 }
 
-// TestHomeProjectsSpotlightAndGroups covers the authored landing page (store's
-// home.yml, carried on the synced snapshot): the spotlight and each group's
+// TestHomeProjectsSpotlightAndGroups covers the authored landing page (a
+// curated home.yml, carried on the synced snapshot): the spotlight and each group's
 // apps are filtered to this box's environment exactly like every other
 // projection — an app not advertised here drops out of its slot (the
 // spotlight goes nil, or the app is skipped within its group), and a group

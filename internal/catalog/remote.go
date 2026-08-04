@@ -101,7 +101,7 @@ type snapshot struct {
 	apps []wireApp
 	byID map[string]*wireApp
 	// home is the authored recommended-apps page carried verbatim from the
-	// snapshot (store's home.yml via the sync tool); home() below is what
+	// snapshot (a curated home.yml via the sync tool); home() below is what
 	// applies this box's environment filter to it.
 	home wireHomePage
 }
@@ -367,8 +367,8 @@ func (r *remoteSource) featured() ([]Entry, error) {
 // home block names but this surface doesn't advertise drops out of its slot
 // (the spotlight goes nil, or the app is skipped within its group), and a group
 // left with no advertised apps is dropped entirely rather than rendered empty.
-// Mirror of cloud catalog.Service.Home's spotlight/groups projection. An empty
-// or never-synced store has neither.
+// Mirror of the control plane's own spotlight/groups projection. An empty or
+// never-synced store has neither.
 func (r *remoteSource) home() (*Entry, []HomeGroupView, error) {
 	snap := r.current()
 	if snap == nil {
