@@ -36,7 +36,7 @@ import { api, type CatalogEntry, type CatalogHome, type CatalogCategory } from "
 import StoreAppCard from "../components/StoreAppCard.vue";
 import StoreSpotlight from "../components/StoreSpotlight.vue";
 import Heading from "@/components/ui/Heading.vue";
-import { packRows, groupSpan, groupCols } from "../lib/storeLayout";
+import { packRows, groupSpan, groupCols, categoryLabel } from "../lib/storeLayout";
 import Button from "@/components/ui/Button.vue";
 
 const { currentUser } = useAuth();
@@ -245,7 +245,7 @@ function clearFilters() {
           "
           @click="selectCategory(c)"
         >
-          {{ c === "all" ? "All" : c }}
+          {{ c === "all" ? "All" : categoryLabel(c) }}
         </button>
       </div>
 
@@ -280,7 +280,7 @@ function clearFilters() {
 
         <!-- Category view: that category's apps under a section heading. -->
         <section v-if="mode === 'category'" class="space-y-4">
-          <h3 class="text-base font-semibold capitalize text-foreground">{{ activeCategory }}</h3>
+          <h3 class="text-base font-semibold capitalize text-foreground">{{ categoryLabel(activeCategory) }}</h3>
           <div
             v-if="browseApps.length"
             class="grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-3 lg:grid-cols-4"
@@ -321,7 +321,7 @@ function clearFilters() {
           <div v-if="packedGroupRows.length" class="flex flex-col gap-12">
             <div v-for="(row, i) in packedGroupRows" :key="i" class="grid gap-x-6 gap-y-10 sm:grid-cols-4">
               <div v-for="g in row" :key="g.category" class="flex flex-col gap-4" :class="groupSpan(g.apps)">
-                <h3 class="text-base font-semibold capitalize text-foreground">{{ g.category }}</h3>
+                <h3 class="text-base font-semibold capitalize text-foreground">{{ categoryLabel(g.category) }}</h3>
                 <div class="grid grid-cols-2 gap-x-6 gap-y-8" :class="groupCols(g.apps)">
                   <StoreAppCard v-for="c in g.apps" :key="c.id" :app="c" />
                 </div>
