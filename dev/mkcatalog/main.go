@@ -29,86 +29,37 @@
 // so an authored icon renders as its glyph fallback. For full visual QA run a
 // local control plane instead.
 //
-// The App / CatalogFile / Home shapes here mirror internal/catalog/wire.go (which
-// itself mirrors the control plane's published shape) byte-for-byte: same fields,
-// order, and JSON tags, reusing the internal/manifest display types. That is what
-// makes the integrity digest reproduce — the brain recomputes SHA-256 over
-// json.Marshal of the parsed app index and checks it against IndexSHA256 (the home
-// block plays no part in that digest, matching wire.go). Keep this in sync with
-// wire.go; a drift is caught when the brain rejects the snapshot at boot (and by
-// internal/catalog's TestVerifyRealSnapshot-style guards).
+// The apps + optional home block are built as internal/catalog's own exported
+// SnapshotApp / SnapshotHome types (aliases of its wire shape) and handed to
+// catalog.BuildSnapshot, which stamps the schema version, computes the index
+// digest and marshals — so this tool no longer re-declares the wire shape at
+// all. Keeping the shape in exactly one place (internal/catalog/wire.go) is
+// what makes the digest reproduce: the brain recomputes SHA-256 over
+// json.Marshal of the parsed app index and checks it against IndexSHA256.
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
+	"github.com/malmoos/malmo/internal/catalog"
 	"github.com/malmoos/malmo/internal/manifest"
 	"gopkg.in/yaml.v3"
 )
 
-type catalogFile struct {
-	SchemaVersion int          `json:"schema_version"`
-	GeneratedAt   time.Time    `json:"generated_at"`
-	StoreRef      string       `json:"store_ref,omitempty"`
-	IndexSHA256   string       `json:"index_sha256"`
-	Apps          []app        `json:"apps"`
-	Home          wireHomePage `json:"home"`
-}
-
-// wireHomePage / wireHomeGroup mirror internal/catalog/wire.go's wireHomePage /
-// wireHomeGroup (themselves a mirror of the control plane's own home-page shape),
-// field for field and tag for tag.
-type wireHomePage struct {
-	Spotlight string          `json:"spotlight"`
-	Groups    []wireHomeGroup `json:"groups"`
-}
-
-type wireHomeGroup struct {
-	Category string   `json:"category"`
-	Apps     []string `json:"apps"`
-}
-
 // homeYAML is the shape of the store curation source's home.yml: a spotlight app
-// id plus ordered category groups. Parsed straight into wireHomePage via the same
-// field names — home.yml IS the wire shape here (the control plane's sync tool
-// carries it verbatim too).
+// id plus ordered category groups. Parsed straight into catalog.SnapshotHome via
+// the same field names — home.yml IS the wire shape here (the control plane's
+// sync tool carries it verbatim too).
 type homeYAML struct {
 	Spotlight string `yaml:"spotlight"`
 	Groups    []struct {
 		Category string   `yaml:"category"`
 		Apps     []string `yaml:"apps"`
 	} `yaml:"groups"`
-}
-
-type app struct {
-	ID               string                       `json:"id"`
-	Name             string                       `json:"name"`
-	Version          string                       `json:"version"`
-	ShortDescription string                       `json:"short_description,omitempty"`
-	LongDescription  string                       `json:"long_description,omitempty"`
-	Categories       []string                     `json:"categories,omitempty"`
-	IconGlyph        string                       `json:"icon_glyph,omitempty"`
-	Author           *manifest.Author             `json:"author,omitempty"`
-	License          string                       `json:"license,omitempty"`
-	Links            *manifest.Links              `json:"links,omitempty"`
-	ChangelogURL     string                       `json:"changelog_url,omitempty"`
-	Footprint        manifest.Footprint           `json:"footprint"`
-	IconFile         string                       `json:"icon_file,omitempty"`
-	Screenshots      []string                     `json:"screenshots,omitempty"`
-	Environments     []string                     `json:"environments"`
-	Featured         bool                         `json:"featured,omitempty"`
-	Rank             *int                         `json:"rank,omitempty"`
-	Manifest         string                       `json:"manifest"`
-	Compose          string                       `json:"compose"`
-	Images           map[string]manifest.ImageRef `json:"images,omitempty"`
 }
 
 // pkgList collects one or more -pkg flags, in the order given — flag.Value's Set
@@ -136,30 +87,19 @@ func main() {
 	}
 
 	environments := splitEnvs(*envList)
-	apps := make([]app, 0, len(pkgs))
+	apps := make([]catalog.SnapshotApp, 0, len(pkgs))
 	for _, pkgDir := range pkgs {
 		apps = append(apps, loadApp(pkgDir, environments))
 	}
 
-	var home wireHomePage
+	var home catalog.SnapshotHome
 	if *homeArg != "" {
 		home = loadHome(*homeArg, apps)
 	}
 
-	digest, err := indexDigest(apps)
+	b, err := catalog.BuildSnapshot(apps, home, "")
 	if err != nil {
-		fatal("digest: %v", err)
-	}
-	file := catalogFile{
-		SchemaVersion: 1,
-		GeneratedAt:   time.Now().UTC(),
-		IndexSHA256:   digest,
-		Apps:          apps,
-		Home:          home,
-	}
-	b, err := json.Marshal(file)
-	if err != nil {
-		fatal("marshal snapshot: %v", err)
+		fatal("build snapshot: %v", err)
 	}
 	if *out == "" || *out == "-" {
 		os.Stdout.Write(b)
@@ -176,7 +116,7 @@ func main() {
 // screenshots) are deliberately omitted: the box proxies those from the control
 // plane, and the seed path has no asset server behind the inert URL, so a
 // filename here would only 404 (docs/dev/authoring-apps-with-an-agent.md).
-func loadApp(pkgDir string, environments []string) app {
+func loadApp(pkgDir string, environments []string) catalog.SnapshotApp {
 	manBytes, err := os.ReadFile(filepath.Join(pkgDir, "manifest.yml"))
 	if err != nil {
 		fatal("read manifest: %v", err)
@@ -190,7 +130,7 @@ func loadApp(pkgDir string, environments []string) app {
 		fatal("read compose %q: %v", man.ComposeFile, err)
 	}
 
-	a := app{
+	a := catalog.SnapshotApp{
 		ID:               man.ID,
 		Name:             man.Name,
 		Version:          man.Version,
@@ -219,7 +159,7 @@ func loadApp(pkgDir string, environments []string) app {
 // error, not a silently-dropped slot — the whole point of exercising this locally
 // is to catch that before a real publish does (the publish flow's own admission
 // check catches it there; this is the equivalent local guard).
-func loadHome(path string, apps []app) wireHomePage {
+func loadHome(path string, apps []catalog.SnapshotApp) catalog.SnapshotHome {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		fatal("read home: %v", err)
@@ -239,7 +179,7 @@ func loadHome(path string, apps []app) wireHomePage {
 		}
 	}
 
-	home := wireHomePage{Spotlight: y.Spotlight}
+	home := catalog.SnapshotHome{Spotlight: y.Spotlight}
 	if y.Spotlight != "" {
 		requireSeeded(y.Spotlight)
 	}
@@ -247,18 +187,9 @@ func loadHome(path string, apps []app) wireHomePage {
 		for _, id := range g.Apps {
 			requireSeeded(id)
 		}
-		home.Groups = append(home.Groups, wireHomeGroup{Category: g.Category, Apps: g.Apps})
+		home.Groups = append(home.Groups, catalog.SnapshotHomeGroup{Category: g.Category, Apps: g.Apps})
 	}
 	return home
-}
-
-func indexDigest(apps []app) (string, error) {
-	b, err := json.Marshal(apps)
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:]), nil
 }
 
 func splitEnvs(s string) []string {
