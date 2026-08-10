@@ -1022,12 +1022,12 @@ external_costs:
 	if len(m.ExternalCosts) != 2 {
 		t.Fatalf("external_costs: got %d, want 2", len(m.ExternalCosts))
 	}
-	if got := m.ExternalCosts[0]; got.ID != "model-access" || !got.Required || got.EstimateChecked != "2026-08-10" {
+	if got := m.ExternalCosts[0]; got.ID != "model-access" || !got.IsRequired() || got.EstimateChecked != "2026-08-10" {
 		t.Errorf("external_costs[0] = %+v", got)
 	}
 	// No estimate is a valid authored answer, not a missing field: the second
 	// entry carries the shape in prose instead of inventing a number.
-	if got := m.ExternalCosts[1]; got.Estimate != "" || got.EstimateChecked != "" || got.Required {
+	if got := m.ExternalCosts[1]; got.Estimate != "" || got.EstimateChecked != "" || got.IsRequired() {
 		t.Errorf("external_costs[1] = %+v, want an estimate-less optional cost", got)
 	}
 }
@@ -1066,6 +1066,12 @@ func TestParseRejectsBadExternalCosts(t *testing.T) {
 		"date no estimate":    "- id: model-access\n    title: T\n    description: D\n    required: true\n    estimate_checked: 2026-08-10",
 		"bad date":            "- id: model-access\n    title: T\n    description: D\n    required: true\n    estimate: \"$1 per 1000\"\n    estimate_checked: \"August 2026\"",
 		"estimate too long":   "- id: model-access\n    title: T\n    description: D\n    required: true\n    estimate: \"" + longEstimate + "\"\n    estimate_checked: 2026-08-10",
+		// required has no safe default: a forgotten line must not render a cost
+		// the app cannot work without as optional.
+		"missing required": "- id: model-access\n    title: T\n    description: D",
+		// A blank estimate is a slip. The deliberate "no honest rate" answer
+		// omits the key entirely, which TestParseExternalCostsHappy covers.
+		"blank estimate": "- id: model-access\n    title: T\n    description: D\n    required: true\n    estimate: \"   \"\n    estimate_checked: 2026-08-10",
 	}
 	for label, block := range cases {
 		src := []byte(`

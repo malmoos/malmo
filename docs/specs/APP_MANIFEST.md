@@ -94,8 +94,8 @@ It is deliberately **not** what malmo charges for the app. That is a commercial 
 | `id` | yes | kebab-case, unique within the app. A stable key a surface can hold across versions. |
 | `title` | yes | Two to four words, sentence case, no vendor name (vendors change, the cost does not). |
 | `description` | yes | Who charges, and why the app needs it. |
-| `required` | yes | `true` when the app's main job does not work without paying. |
-| `estimate` | no | A short unit rate. **Empty is always valid** and is the right answer when no honest rate exists. Capped at 100 characters, counted in runes. |
+| `required` | yes | `true` when the app's main job does not work without paying. **No default** — an omitted key is rejected. Defaulting to `false` would let a forgotten line render a cost the app cannot work without as "optional", which is the surprise this whole block exists to prevent. |
+| `estimate` | no | A short unit rate. **Omitting it is always valid** and is the right answer when no honest rate exists. Capped at 100 characters, counted in runes. A present-but-blank value is rejected: that is a slip, not the deliberate answer. |
 | `estimate_checked` | with `estimate` | `YYYY-MM-DD`, the day the estimate was last confirmed. Rejected without an `estimate`. |
 
 `estimate` is a **unit rate, never a monthly total** — a total depends on how one person uses the app, which nobody authoring a manifest can know. The date exists because a free-text price is the one number here that nothing can re-measure: every other figure comes from a real boot (resolved digests, measured storage), while this one is a market observation that goes stale in silence. The full authoring rules — wording, currency, why a per-token rate is never rewritten as per-word — live with the curation source that authors these files (store `docs/app-description.md` # External costs), which also enforces the house style this package does not (no em dashes, no vendor names).

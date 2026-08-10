@@ -157,7 +157,16 @@ type ExternalCost struct {
 	// Required marks a cost the app's main job does not work without. It never
 	// gates install: an app that will not *boot* without a paid thing is a
 	// blocked/blocks-start curation verdict, not an external cost.
-	Required bool `yaml:"required" json:"required"`
+	//
+	// A *bool with no default, because there is no safe one. Defaulting to false
+	// would let a forgotten line render a cost the app cannot work without as
+	// "optional" — the exact surprise this block exists to prevent — and
+	// defaulting to true would overstate every nice-to-have. The author states
+	// it, and validate() rejects the manifest if they did not. The curation
+	// source's own validator already demands the key, so anything looser here
+	// would mean two gates disagreeing about one field. Read it through
+	// IsRequired(), never the raw pointer.
+	Required *bool `yaml:"required" json:"required"`
 	// Estimate is a short unit rate ("$0.20 per 1000 emails (varies by
 	// provider)"), never a monthly total — a total depends on how one person uses
 	// the app, which nobody here can know. Empty is always valid and is the right
@@ -178,6 +187,12 @@ type ExternalCost struct {
 // (store tools/check.py) — two validators that disagree on the limit would let a
 // line pass one gate and fail the other.
 const EstimateMaxChars = 100
+
+// IsRequired reports whether the app's main job depends on paying this cost.
+// validate() rejects a manifest that omits the key, so the nil case here is a
+// cost built in code rather than parsed; it reads as not-required, the same
+// direction ConfigField.Required defaults.
+func (c *ExternalCost) IsRequired() bool { return c.Required != nil && *c.Required }
 
 // Description holds the app's catalog-facing text (APP_MANIFEST.md # A).
 // Both fields are optional; the store surfaces Short as the one-liner and Long
@@ -742,6 +757,16 @@ func (m *Manifest) validateExternalCosts() error {
 		}
 		if strings.TrimSpace(c.Description) == "" {
 			return fmt.Errorf("external_costs[%s]: description is required", c.ID)
+		}
+		if c.Required == nil {
+			return fmt.Errorf("external_costs[%s]: required must be stated true or false; there is no safe default for whether the app works without paying", c.ID)
+		}
+		// A blank-but-present estimate is an authoring slip, not the deliberate
+		// "no honest rate exists" answer — that one omits the key. Rejected rather
+		// than silently treated as absent, because it would render as an empty
+		// line on the cost card and the curation source rejects it too.
+		if c.Estimate != "" && strings.TrimSpace(c.Estimate) == "" {
+			return fmt.Errorf("external_costs[%s]: estimate is blank; omit the key when there is no honest rate to quote", c.ID)
 		}
 		if c.Estimate == "" {
 			if c.EstimateChecked != "" {
