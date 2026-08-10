@@ -1012,6 +1012,7 @@ export interface components {
             author?: components["schemas"]["Author"];
             categories?: string[] | null;
             changelog_url?: string;
+            external_costs?: components["schemas"]["ExternalCost"][] | null;
             footprint: components["schemas"]["Footprint"];
             icon_glyph?: string;
             icon_url?: string;
@@ -1106,6 +1107,14 @@ export interface components {
              * @example https://example.com/errors/example
              */
             type: string;
+        };
+        ExternalCost: {
+            description: string;
+            estimate?: string;
+            estimate_checked?: string;
+            id: string;
+            required: boolean;
+            title: string;
         };
         FolderElection: {
             folder: string;

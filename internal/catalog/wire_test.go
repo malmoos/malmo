@@ -220,15 +220,14 @@ func TestNoUnmodeledFields(t *testing.T) {
 // would still parse and still pass every field-level assertion, and only fail
 // here. That is the failure this test exists to catch.
 func TestExternalCostsSurviveTheDigest(t *testing.T) {
-	required := true
 	apps := []wireApp{{
 		ID: "openclaw", Name: "OpenClaw", Version: "1.0",
 		Environments: []string{"appliance", "hosted"},
-		ExternalCosts: []manifest.ExternalCost{{
+		ExternalCosts: []ExternalCost{{
 			ID:              "model-access",
 			Title:           "Model access",
 			Description:     "You bring your own provider key and the provider bills you.",
-			Required:        &required,
+			Required:        true,
 			Estimate:        "$3 per million tokens (long agent runs use many times more)",
 			EstimateChecked: "2026-08-10",
 		}},
@@ -255,7 +254,7 @@ func TestExternalCostsSurviveTheDigest(t *testing.T) {
 		t.Fatalf("Detail.ExternalCosts = %+v, want the one declared cost", got.ExternalCosts)
 	}
 	c := got.ExternalCosts[0]
-	if c.ID != "model-access" || !c.IsRequired() || c.EstimateChecked != "2026-08-10" {
+	if c.ID != "model-access" || !c.Required || c.EstimateChecked != "2026-08-10" {
 		t.Errorf("Detail.ExternalCosts[0] = %+v", c)
 	}
 	if c.Estimate != "$3 per million tokens (long agent runs use many times more)" {

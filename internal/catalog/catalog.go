@@ -358,7 +358,7 @@ type Detail struct {
 	// before install so a bill from someone else is never a surprise. Detail
 	// only, not Entry: it is a paragraph of reading, so it belongs on the page
 	// where someone decides to install, not on a grid card.
-	ExternalCosts []manifest.ExternalCost `json:"external_costs,omitempty"`
+	ExternalCosts []ExternalCost `json:"external_costs,omitempty"`
 }
 
 // iconURL / screenshotURL are the brain-served asset routes the store loads
