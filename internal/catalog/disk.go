@@ -118,6 +118,7 @@ func (d *diskSource) Detail(manifestID string) (Detail, error) {
 		LongDescription: man.Description.Long,
 		License:         man.License,
 		ChangelogURL:    man.ChangelogURL,
+		ExternalCosts:   externalCostsOf(man.ExternalCosts),
 	}
 	if man.Author != (manifest.Author{}) {
 		det.Author = &man.Author

@@ -318,6 +318,7 @@ func detailOfApp(a *wireApp) Detail {
 		License:         a.License,
 		Links:           a.Links,
 		ChangelogURL:    a.ChangelogURL,
+		ExternalCosts:   a.ExternalCosts,
 	}
 	for i := range a.Screenshots {
 		d.ScreenshotURLs = append(d.ScreenshotURLs, screenshotURL(a.ID, i))

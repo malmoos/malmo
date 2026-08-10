@@ -378,6 +378,12 @@ components:
             - "null"
         changelog_url:
           type: string
+        external_costs:
+          items:
+            $ref: "#/components/schemas/ExternalCost"
+          type:
+            - array
+            - "null"
         footprint:
           $ref: "#/components/schemas/Footprint"
         icon_glyph:
@@ -544,6 +550,27 @@ components:
             - https://example.com/errors/example
           format: uri
           type: string
+      type: object
+    ExternalCost:
+      additionalProperties: false
+      properties:
+        description:
+          type: string
+        estimate:
+          type: string
+        estimate_checked:
+          type: string
+        id:
+          type: string
+        required:
+          type: boolean
+        title:
+          type: string
+      required:
+        - id
+        - title
+        - description
+        - required
       type: object
     FolderElection:
       additionalProperties: false

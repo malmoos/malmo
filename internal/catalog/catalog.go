@@ -353,6 +353,12 @@ type Detail struct {
 	License      string           `json:"license,omitempty"`
 	Links        *manifest.Links  `json:"links,omitempty"`
 	ChangelogURL string           `json:"changelog_url,omitempty"`
+
+	// ExternalCosts is what a third party charges to make the app useful, shown
+	// before install so a bill from someone else is never a surprise. Detail
+	// only, not Entry: it is a paragraph of reading, so it belongs on the page
+	// where someone decides to install, not on a grid card.
+	ExternalCosts []ExternalCost `json:"external_costs,omitempty"`
 }
 
 // iconURL / screenshotURL are the brain-served asset routes the store loads
