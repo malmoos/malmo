@@ -208,3 +208,65 @@ func TestNoUnmodeledFields(t *testing.T) {
 		}
 	}
 }
+
+// TestExternalCostsSurviveTheDigest is the byte-fidelity proof for the newest
+// field on the wire. No published app declares a cost yet, so the pinned fixture
+// cannot exercise it — this builds a snapshot that does, the way the control
+// plane marshals one, and checks the box reproduces the digest over it and
+// projects it onto the detail page.
+//
+// The digest is computed over json.Marshal of the app array, so a mirror that
+// declared ExternalCosts in a different position than the control plane's App
+// would still parse and still pass every field-level assertion, and only fail
+// here. That is the failure this test exists to catch.
+func TestExternalCostsSurviveTheDigest(t *testing.T) {
+	required := true
+	apps := []wireApp{{
+		ID: "openclaw", Name: "OpenClaw", Version: "1.0",
+		Environments: []string{"appliance", "hosted"},
+		ExternalCosts: []manifest.ExternalCost{{
+			ID:              "model-access",
+			Title:           "Model access",
+			Description:     "You bring your own provider key and the provider bills you.",
+			Required:        &required,
+			Estimate:        "$3 per million tokens (long agent runs use many times more)",
+			EstimateChecked: "2026-08-10",
+		}},
+		Manifest: "id: openclaw\n", Compose: "services: {}\n",
+	}}
+	digest, err := indexDigest(apps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(catalogFile{
+		SchemaVersion: wireSchemaVersion,
+		IndexSHA256:   digest,
+		Apps:          apps,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := parseSnapshot(raw)
+	if err != nil {
+		t.Fatalf("snapshot carrying external_costs must parse and verify: %v", err)
+	}
+	got := detailOfApp(&f.Apps[0])
+	if len(got.ExternalCosts) != 1 {
+		t.Fatalf("Detail.ExternalCosts = %+v, want the one declared cost", got.ExternalCosts)
+	}
+	c := got.ExternalCosts[0]
+	if c.ID != "model-access" || !c.IsRequired() || c.EstimateChecked != "2026-08-10" {
+		t.Errorf("Detail.ExternalCosts[0] = %+v", c)
+	}
+	if c.Estimate != "$3 per million tokens (long agent runs use many times more)" {
+		t.Errorf("estimate not carried verbatim: %q", c.Estimate)
+	}
+	// The grid card must stay free of it: a cost is a paragraph of reading.
+	entry, err := json.Marshal(entryOfApp(&f.Apps[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(entry), "external_costs") {
+		t.Errorf("Entry carries external_costs: %s", entry)
+	}
+}

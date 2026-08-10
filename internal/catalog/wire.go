@@ -101,6 +101,16 @@ type wireApp struct {
 	ChangelogURL     string             `json:"changelog_url,omitempty"`
 	Footprint        manifest.Footprint `json:"footprint"`
 
+	// ExternalCosts is money a THIRD PARTY charges to make the app useful (a
+	// model-provider API key, a mail provider). Declaration order is load-bearing
+	// like every field here: it sits between Footprint and IconFile because the
+	// control plane's App declares it there, and the index digest is computed over
+	// json.Marshal of this array.
+	//
+	// It is NOT what malmo charges for the app. That is authored in the curation
+	// source next to listed/environments and is not on this wire.
+	ExternalCosts []manifest.ExternalCost `json:"external_costs,omitempty"`
+
 	// IconFile / Screenshots are the asset filenames under the control plane's
 	// per-app assets tree (e.g. "icon.png", "screenshots/0.png"), which the box
 	// proxies+caches through its own /api/v1/catalog asset routes.
