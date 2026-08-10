@@ -1,11 +1,14 @@
 package catalog
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -267,5 +270,51 @@ func TestExternalCostsSurviveTheDigest(t *testing.T) {
 	}
 	if strings.Contains(string(entry), "external_costs") {
 		t.Errorf("Entry carries external_costs: %s", entry)
+	}
+}
+
+// TestUnknownFieldAsymmetry pins the rule in APP_STORE.md # What the box models:
+// an unknown field OUTSIDE the app array is dropped harmlessly, while an unknown
+// field INSIDE an app rejects the whole snapshot. The two cases behave in
+// opposite ways, and the difference decides whether a publish-side change can
+// ship before the fleet updates or must wait for a release.
+//
+// The reason is that verify() recomputes the digest by re-marshalling what it
+// parsed: a per-app key the box does not model is absent from the re-marshal, so
+// the digest cannot reproduce. This test exists because the spec used to state
+// the harmless half as if it covered both, and a per-app field was added on that
+// reading — the box froze on its last-good cache instead of dropping a field.
+func TestUnknownFieldAsymmetry(t *testing.T) {
+	// The published bytes, as the control plane would marshal them: one app
+	// carrying a per-app key this box does not model.
+	appsJSON := []byte(`[{"id":"alpha","name":"Alpha","version":"1.0",` +
+		`"footprint":{"image_download_bytes":0,"image_disk_bytes":0},` +
+		`"environments":["hosted"],"not_modelled_here":{"any":"shape"},` +
+		`"manifest":"id: alpha\n","compose":"services: {}\n"}]`)
+	sum := sha256.Sum256(appsJSON)
+	stamped := hex.EncodeToString(sum[:])
+
+	perApp := []byte(`{"schema_version":` + strconv.Itoa(wireSchemaVersion) +
+		`,"index_sha256":"` + stamped + `","apps":` + string(appsJSON) + `}`)
+	if _, err := parseSnapshot(perApp); err == nil {
+		t.Error("a per-app field the box does not model was accepted; it must reject the snapshot, " +
+			"which is why adding one is a coordinated release and not a publish-side change")
+	} else {
+		t.Logf("per-app unknown field rejects the snapshot, as documented: %v", err)
+	}
+
+	// Same snapshot without the unmodelled per-app key, plus an unmodelled
+	// TOP-LEVEL key. That one sits outside the digest, so it is dropped and the
+	// snapshot still verifies — the case the publish side may ship ahead of boxes.
+	cleanApps := []byte(`[{"id":"alpha","name":"Alpha","version":"1.0",` +
+		`"footprint":{"image_download_bytes":0,"image_disk_bytes":0},` +
+		`"environments":["hosted"],` +
+		`"manifest":"id: alpha\n","compose":"services: {}\n"}]`)
+	sum = sha256.Sum256(cleanApps)
+	topLevel := []byte(`{"schema_version":` + strconv.Itoa(wireSchemaVersion) +
+		`,"index_sha256":"` + hex.EncodeToString(sum[:]) +
+		`","not_modelled_here":{"any":"shape"},"apps":` + string(cleanApps) + `}`)
+	if _, err := parseSnapshot(topLevel); err != nil {
+		t.Errorf("a top-level field the box does not model must be dropped, not rejected: %v", err)
 	}
 }

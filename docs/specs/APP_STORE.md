@@ -244,11 +244,33 @@ The vocabulary is not part of the snapshot's integrity digest, which covers the 
 
 ## What the box models, and what it drops
 
-The box does not model the whole published snapshot. `internal/catalog/wire.go` declares the fields the box surfaces, and it declares a **subset** on purpose: the publish side can add a field without waiting for every deployed box to update first.
+The box does not model the whole published snapshot. `internal/catalog/wire.go` declares the fields the box surfaces, and it declares a **subset** on purpose.
 
-The price of that choice is silent loss. `encoding/json` ignores any key it has no field for, so a field added upstream reaches the box and vanishes there — no error, no log line, nothing the box could act on even in principle. **A new field is not delivered when the control plane starts serving it. It is delivered when the box models it.** Adding one is a two-side change: the wire struct here, plus the projection into whatever the box surfaces.
+**Where the new field sits decides everything, and the two cases behave in opposite ways.** A field added *outside* the app array is dropped by a box that does not model it. A field added *inside* an app is **rejected** by that box, and it takes the whole catalog with it. Read the next two sections as one rule, not two notes.
 
-The integrity digest cannot catch this. `index_sha256` covers the app index (`apps`) only, so it catches a truncated or corrupted snapshot and says nothing about a dropped top-level field. The landing block (`home`) was added upstream, dropped by the box, and the digest check stayed green throughout.
+### A field outside the app array: dropped, safely
+
+The price of the subset is silent loss. `encoding/json` ignores any key it has no field for, so a field added upstream reaches the box and vanishes there — no error, no log line, nothing the box could act on even in principle. **A new field is not delivered when the control plane starts serving it. It is delivered when the box models it.** Adding one is a two-side change: the wire struct here, plus the projection into whatever the box surfaces.
+
+The integrity digest cannot catch this. `index_sha256` covers the app index (`apps`) only, so it catches a truncated or corrupted snapshot and says nothing about a dropped top-level field. The landing block (`home`) was added upstream, dropped by the box, and the digest check stayed green throughout. Here the publish side really can move first, without waiting for every deployed box.
+
+### A field inside an app: rejected, and it takes the catalog with it
+
+The sentence above — the digest cannot catch a dropped field — is true **only outside `apps`**. Inside an app it is exactly backwards, and this is the trap.
+
+`verify()` recomputes `index_sha256` by **re-marshalling the apps it just parsed**. A box that does not model a per-app field drops that key on parse, so it is absent from the re-marshal, so the digest cannot reproduce. The box rejects the **entire snapshot** — not the field, not that app — and falls back to its last-good cache. It does not look broken: the store still serves the cached catalog. It is frozen. No new app, no version bump, and no curation change reaches that box again until it updates, and the only signal is one log line about a digest mismatch, which reads like corruption or tamper rather than a shape change.
+
+This is not theoretical. It was measured on `external_costs`: a box at `e825e9f` fed a real published snapshot in which one app declared a cost returned `catalog index digest mismatch`, while the same snapshot verified on a box that modelled the field.
+
+So a per-app field is a **coordinated release**, not a publish-side change:
+
+1. Model it on the box and merge it (`wire.go` plus the projection).
+2. Cut a release and let the fleet take it.
+3. **Only then** may the control plane publish data that uses the field.
+
+Authoring the data is safe at any time — a manifest field nothing publishes hurts nobody. The danger begins the moment the sync tool carries it, and the sync tool carries it on the next publish, automatically.
+
+**Bump `wireSchemaVersion` (and the control plane's `SchemaVersion`) in the same change that publishes the data.** It does not prevent the freeze — an older box refuses either way — but it turns a digest mismatch that reads as corruption into `catalog schema version 1, want 2`, which names the real cause. Bump it *with the data*, never ahead of it: the check is exact equality, so raising the version while no app uses the field would reject every snapshot on every deployed box immediately, causing the outage early instead of avoiding it.
 
 What catches it is a pinned copy of a real snapshot at `internal/catalog/testdata/snapshot.json`, plus `TestNoUnmodeledFields` (`internal/catalog/wire_test.go`). The test parses the fixture into a generic map and fails on any top-level or per-app key the box's own types do not declare, including the nested per-app shapes (footprint, author, links, images). A key that shows up is not automatically a bug — it means the published shape moved and the box has a decision to make: model the field, or list it in `ignoredTopLevelKeys` with the reason. An explicit "we looked and said no", never silence.
 
