@@ -72,11 +72,33 @@ links:
   support: https://docs.photoprism.app
 changelog_url: https://github.com/photoprism/photoprism/releases  # optional; used by the "What's new" panel after an update
 listed: true                      # optional, default true; `false` pulls the app from the store (hidden from browse + uninstallable) while keeping its manifest in the catalog
+external_costs:                   # optional; money a THIRD PARTY charges to make the app useful
+  - id: model-access              # kebab-case, unique within the app
+    title: "Model access"         # 2-4 words, no vendor name
+    description: "You bring your own provider key, and the provider bills you for what the assistant reads and writes."
+    required: true                # the app's main job does not work without paying
+    estimate: "a few dollars per million tokens (long agent runs use many times more than chat)"
+    estimate_checked: 2026-08-10  # required whenever `estimate` is set
 ```
 
 **`categories`** is an open-ended list of lowercase kebab-case tags. There is no fixed enum — authors introduce new values as needed (`marketing`, `developer-tools`, `food`, `books`, …). The brain does not validate category values; the store UI uses them for browse filters. Aim for reuse over novelty: check what existing catalog apps already declare before coining a new tag.
 
 **`listed`** controls store visibility. Omitted (or `true`) ⇒ the app appears in the browse grid, has a detail page, and can be installed — the normal case. Setting `listed: false` **pulls the app from the store**: it's hidden from browse, its detail page and install paths return 404, but the manifest stays in the catalog directory — it still parses, lints, and serves its icons/screenshots, and an already-installed instance keeps its dashboard card and stays reconcilable (visibility is resolved by id, not via the filtered browse). This is how a `Blocked` or `Rejected` app is withdrawn without throwing away its adaptation work — e.g. an image that can't yet run under the sandbox, parked until the platform gap or upstream fix lands. It is a curation control, not a per-user or per-role one; there is no "show me unlisted apps" path in v1.
+
+**`external_costs`** names money a **third party** charges to make the app useful: a model-provider API key the assistant cannot answer without, a mail provider an email app sends through. It is display metadata the store surfaces **before install**, so a user is never surprised by a bill from someone else. The brain does not act on it, and it never gates install — an app that will not *boot* without a paid thing is a curation verdict (`blocks-start`), not an external cost. Absent ⇒ the app costs nothing beyond the box.
+
+It is deliberately **not** what malmo charges for the app. That is a commercial decision which changes without the app changing, so it lives in the curation source next to `listed`/`environments` (store `status.yml` `price:`), not in this schema. Neither one is a limitation: a limitation is a broken feature, and paying for something is not a defect.
+
+| field | required | notes |
+|---|---|---|
+| `id` | yes | kebab-case, unique within the app. A stable key a surface can hold across versions. |
+| `title` | yes | Two to four words, sentence case, no vendor name (vendors change, the cost does not). |
+| `description` | yes | Who charges, and why the app needs it. |
+| `required` | yes | `true` when the app's main job does not work without paying. |
+| `estimate` | no | A short unit rate. **Empty is always valid** and is the right answer when no honest rate exists. Capped at 100 characters, counted in runes. |
+| `estimate_checked` | with `estimate` | `YYYY-MM-DD`, the day the estimate was last confirmed. Rejected without an `estimate`. |
+
+`estimate` is a **unit rate, never a monthly total** — a total depends on how one person uses the app, which nobody authoring a manifest can know. The date exists because a free-text price is the one number here that nothing can re-measure: every other figure comes from a real boot (resolved digests, measured storage), while this one is a market observation that goes stale in silence. The full authoring rules — wording, currency, why a per-token rate is never rewritten as per-word — live with the curation source that authors these files (store `docs/app-description.md` # External costs), which also enforces the house style this package does not (no em dashes, no vendor names).
 
 ### B. Runtime
 

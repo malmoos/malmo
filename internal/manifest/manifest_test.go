@@ -993,3 +993,120 @@ func TestHealthProbeRoundTrip(t *testing.T) {
 		t.Fatalf("round-trip changed probe:\n got  %+v\n want %+v", got.HealthProbe, orig.HealthProbe)
 	}
 }
+
+func TestParseExternalCostsHappy(t *testing.T) {
+	src := []byte(`
+id: openclaw
+manifest_version: 1
+name: OpenClaw
+version: "1.0"
+compose_file: compose.yml
+main_service: openclaw
+main_port: 18789
+external_costs:
+  - id: model-access
+    title: "Model access"
+    description: "You bring your own provider key and the provider bills you."
+    required: true
+    estimate: "a few dollars per million tokens (long agent runs use many times more than chat)"
+    estimate_checked: 2026-08-10
+  - id: web-search
+    title: "Web search"
+    description: "Costs vary a lot with how the assistant is used."
+    required: false
+`)
+	m, err := Parse(src)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(m.ExternalCosts) != 2 {
+		t.Fatalf("external_costs: got %d, want 2", len(m.ExternalCosts))
+	}
+	if got := m.ExternalCosts[0]; got.ID != "model-access" || !got.Required || got.EstimateChecked != "2026-08-10" {
+		t.Errorf("external_costs[0] = %+v", got)
+	}
+	// No estimate is a valid authored answer, not a missing field: the second
+	// entry carries the shape in prose instead of inventing a number.
+	if got := m.ExternalCosts[1]; got.Estimate != "" || got.EstimateChecked != "" || got.Required {
+		t.Errorf("external_costs[1] = %+v, want an estimate-less optional cost", got)
+	}
+}
+
+func TestParseExternalCostsAbsent(t *testing.T) {
+	// Back-compatible field add: every manifest authored before this block
+	// existed must keep parsing, with no costs declared.
+	src := []byte(`
+id: whoami
+manifest_version: 1
+name: Whoami
+version: "1.10"
+compose_file: compose.yml
+main_service: whoami
+main_port: 80
+`)
+	m, err := Parse(src)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if m.ExternalCosts != nil {
+		t.Errorf("ExternalCosts = %+v, want nil when the block is absent", m.ExternalCosts)
+	}
+}
+
+func TestParseRejectsBadExternalCosts(t *testing.T) {
+	longEstimate := strings.Repeat("x", EstimateMaxChars+1)
+	cases := map[string]string{
+		"missing id":          "- title: T\n    description: D\n    required: false",
+		"non-kebab id":        "- id: Model_Access\n    title: T\n    description: D\n    required: false",
+		"duplicate id":        "- id: model-access\n    title: T\n    description: D\n    required: true\n  - id: model-access\n    title: T2\n    description: D2\n    required: false",
+		"missing title":       "- id: model-access\n    description: D\n    required: false",
+		"blank title":         "- id: model-access\n    title: \"   \"\n    description: D\n    required: false",
+		"missing description": "- id: model-access\n    title: T\n    required: false",
+		"estimate no date":    "- id: model-access\n    title: T\n    description: D\n    required: true\n    estimate: \"$1 per 1000\"",
+		"date no estimate":    "- id: model-access\n    title: T\n    description: D\n    required: true\n    estimate_checked: 2026-08-10",
+		"bad date":            "- id: model-access\n    title: T\n    description: D\n    required: true\n    estimate: \"$1 per 1000\"\n    estimate_checked: \"August 2026\"",
+		"estimate too long":   "- id: model-access\n    title: T\n    description: D\n    required: true\n    estimate: \"" + longEstimate + "\"\n    estimate_checked: 2026-08-10",
+	}
+	for label, block := range cases {
+		src := []byte(`
+id: openclaw
+manifest_version: 1
+name: OpenClaw
+version: "1.0"
+compose_file: compose.yml
+main_service: openclaw
+main_port: 18789
+external_costs:
+  ` + block + `
+`)
+		if _, err := Parse(src); err == nil {
+			t.Errorf("%s: Parse accepted an invalid external_costs block, want error", label)
+		}
+	}
+}
+
+func TestExternalCostEstimateLengthCountsRunes(t *testing.T) {
+	// The cap is in characters, not bytes, so it agrees with the curation
+	// source's own check (store tools/check.py, which counts Python chars). A
+	// byte-counted cap would reject a line of euro signs the other gate passes.
+	estimate := strings.Repeat("€", EstimateMaxChars)
+	src := []byte(`
+id: openclaw
+manifest_version: 1
+name: OpenClaw
+version: "1.0"
+compose_file: compose.yml
+main_service: openclaw
+main_port: 18789
+external_costs:
+  - id: model-access
+    title: T
+    description: D
+    required: true
+    estimate: "` + estimate + `"
+    estimate_checked: 2026-08-10
+`)
+	if _, err := Parse(src); err != nil {
+		t.Fatalf("parse: %v (a %d-rune estimate is exactly at the cap)", err, EstimateMaxChars)
+	}
+}
