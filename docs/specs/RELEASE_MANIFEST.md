@@ -4,6 +4,8 @@
 
 The scope here is brain + UI only. Debian base updates flow through `unattended-upgrades`; `host-agent` flows through our apt repo; both are described in `UPDATES.md` and `BUILD.md` and do not use this manifest.
 
+> **Appliance only.** Everything in this doc — the static JSON file, the CDN, the minisign signature, the hourly poll, and the `rollback_to` kill switch — applies to boxes malmo does **not** operate. A **hosted** box (`ENVIRONMENT.md`) never fetches this manifest. Its target version is held per-box by the cloud control plane and the box asks for it directly, because on hosted we have an authenticated channel to each box and do not need a signed broadcast to reach machines we cannot otherwise address. See `UPDATES.md` # 8.1. The two profiles share the apply-and-rollback transaction; they differ only in what triggers it.
+
 ## What the manifest is
 
 A static JSON file served at:
@@ -155,6 +157,7 @@ Beta channel reactivation, telemetry-gated halts, and per-region rollouts are in
 
 ## Locked decisions
 
+- **This manifest is the appliance trigger only.** Hosted boxes get their target version per-box from the cloud control plane and never fetch `stable.json` (`UPDATES.md` # 8.1).
 - **One static JSON manifest per channel**, served from a CDN backed by a git repo. v1 has one channel: `stable`.
 - **Signed with minisign (Ed25519).** Pubkey baked into host-agent at build time. **Verifier accepts a list of pubkeys** for forward-compatible key rotation.
 - **Schema is intentionally small** (`manifest_version`, `channel`, `brain`, `ui`, `minimum_host_agent`, `released_at`, `rollback_to`). No phased rollout, no cohort fields in v1.

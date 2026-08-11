@@ -184,6 +184,15 @@ Restoring the bundle onto a fresh malmo install of **either** profile reproduces
 
 This section is the one candidate to split into its own spec if it outgrows this doc — the bundle format and the restore transaction are a real surface in their own right. Call that at write time; for now it is specified here as an OS capability, distinct from the deferred commercial layer.
 
+## Updates (hosted)
+
+Owned by `UPDATES.md` # 8; indexed here because it is a hosted delta. The shape:
+
+- **The target version is per-box, held by the cloud control plane.** A hosted box never fetches the signed release manifest (`RELEASE_MANIFEST.md` is appliance-only). It asks the cloud what it should be running, on its existing **outbound** path — the cloud never connects in, consistent with the rest of the hosted network posture (# Networking & discovery, # Provisioning's metadata-egress block).
+- **Updates are pushed, not prompted.** We operate the box, so it patches itself in the window and the tenant admin is notified afterwards. The **app permission-expansion prompt is the carve-out** and still goes to the instance owner: operating someone's box does not transfer their data-access decisions to us.
+- **Everything else is shared with appliance** — both update streams, the apply transaction, the snapshots, the health-check-then-revert, the retention window.
+- **Auth for the box↔cloud channel is not designed yet.** The `enrollment` block in `seed.json` (# Admin bootstrap — as built) is scoped to acme-dns, not to a general control-plane API. Tracked in `NEXT.md`.
+
 ## Per-instance resource limits
 
 A hosted tenant pays for the resources their apps consume, which requires the lifecycle owner to be able to **bound** an app's consumption. The mechanism is in scope; the pricing/metering pipeline is not.

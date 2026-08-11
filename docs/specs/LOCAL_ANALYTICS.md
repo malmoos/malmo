@@ -48,7 +48,7 @@ Append-only, one row per discrete event. Sibling to `audit_events` from `LOGGING
 | `signin_succeeded` / `signin_failed` | user (or attempted username on fail) | n/a | Source: brain login endpoint, SSH (via PAM hook), SMB. `source` field disambiguates. LAN IP recorded. |
 | `app_installed` / `app_uninstalled` | app slug + version | user | Already audit-event-shaped per `LOGGING.md`. |
 | `app_update_applied` | app slug | user | |
-| `stream_update_applied` | stream name | n/a (system) | One of the five streams from `UPDATES.md`. Includes from→to version and outcome. |
+| `stream_update_applied` | stream name | n/a (system) | `box` or `containers` — the two streams from `UPDATES.md`. Carries the component that moved (`debian`, `host-agent`, `brain`, `ui`, managed-service name), from→to version, and outcome. App updates have their own row above. |
 | `health_issue_opened` / `health_issue_closed` | issue kind | n/a (system) | From `HEALTH.md` typed set. |
 | `backup_completed` / `backup_failed` | n/a | n/a | Deferred — pairs with the backup feature in `NEXT.md`. |
 

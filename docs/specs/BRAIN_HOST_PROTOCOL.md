@@ -361,7 +361,7 @@ Brain and host-agent ship as part of the same OS release. Brain version N talks 
 
 **Why lockstep:**
 
-- The OS update is one atomic unit (per `UPDATES.md` v1 — Debian base + brain + host-agent + Caddy + Tier-2 packages). Both binaries are upgraded together.
+- The box is one atomic unit (`UPDATES.md` # What this doc covers — stream A: Debian base + kernel + firmware + host-agent). Both binaries ship in that unit and are upgraded together. Note this covers `host-agent`, not the brain: the brain is a container and rides stream B, so lockstep here is a **compat floor** the brain declares (`minimumAgentVersion`), not a guarantee that the two moved in the same transaction.
 - No version-negotiation code to maintain or get wrong.
 - A crashed brain ↔ healthy host-agent imbalance is the only transient case; both binaries are tiny and can be upgraded together cheaply.
 

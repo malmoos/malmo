@@ -77,9 +77,9 @@ These are same-origin dashboard routes, not separate apps — the `malmo_session
 
 ## Locked: Updates lives in Settings, not the Store
 
-The Store is a discovery / install surface; **Settings → Updates** is the maintenance surface. They answer different questions — "what can I add?" versus "what's stale on my box, and can I roll it back?" — and the decisive fact is that a box has **five independent update streams** (`UPDATES.md` # What this doc covers): Debian base, host-agent, control plane (brain + UI), apps, and managed services. Only one of the five is app-related, so the Store has nothing to say about four of them. Settings → Updates is the only place that can be the box-wide "everything stale" roll-up, and it is the home of the **rollback affordance** (the kept-for-7-days image + snapshot), which has no conceivable home in a catalog.
+The Store is a discovery / install surface; **Settings → Updates** is the maintenance surface. They answer different questions — "what can I add?" versus "what's stale on my box, and can I roll it back?" — and the decisive fact is that apps are only one part of what goes stale on a box. `UPDATES.md` # What this doc covers splits updates into **stream A (the box:** Debian base, kernel, firmware, host-agent**)** and **stream B (the containers:** brain + UI, apps, managed services**)**. The Store has nothing to say about stream A at all, and within stream B it can speak only for apps. Settings → Updates is the only place that can be the box-wide "everything stale" roll-up, and it is the home of the **rollback affordance** (the kept-for-7-days image + snapshot), which has no conceivable home in a catalog.
 
-Even for the one app stream, `UPDATES.md` # 6 locks three surfaces — none of which is the Store catalog:
+Even for apps alone, `UPDATES.md` # 6 locks three surfaces — none of which is the Store catalog:
 
 - **Per-app tile badge** on the dashboard — the contextual "this app moved" nudge, with a "what's new" panel.
 - **Settings → Updates** — the aggregate view ("X updated last night, Y waiting on you, Z failed") and the rollback affordance.
