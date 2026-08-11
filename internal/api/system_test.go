@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -202,5 +204,58 @@ func TestSystemVersion_MemberAllowed(t *testing.T) {
 	resp := h.do("GET", "/api/v1/system/version", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("member GET /api/v1/system/version: want 200, got %d", resp.StatusCode)
+	}
+}
+
+// TestSystemVersion_HostStalls_DegradesPromptly: a host-agent that accepts the
+// connection but never answers must not hold this endpoint for the host
+// client's full 30s timeout. The whole design is "degrade instead of failing",
+// and degrading only after half a minute defeats it. Uses a socket that accepts
+// and hangs — a dead socket fails fast and would not exercise the timeout.
+func TestSystemVersion_HostStalls_DegradesPromptly(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "stalled.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			// Hold the connection open without replying.
+			go func() { <-stop; _ = c.Close() }()
+		}
+	}()
+
+	prev := hostVersionReadTimeout
+	hostVersionReadTimeout = 50 * time.Millisecond
+	defer func() { hostVersionReadTimeout = prev }()
+
+	s := &Server{host: hostclient.New(sock)}
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{
+		User: store.User{ID: "u_x", Role: store.RoleMember},
+	})
+
+	start := time.Now()
+	out, err := s.systemVersion(ctx, nil)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("stalled host: want a 200 answer, got %v", err)
+	}
+	if out.Body.Version != version.Version {
+		t.Errorf("stalled host: brain version lost, got %q", out.Body.Version)
+	}
+	if out.Body.HostAgentVersion != "" {
+		t.Errorf("stalled host: want host-agent version omitted, got %q", out.Body.HostAgentVersion)
+	}
+	// Generous bound: the point is "bounded by our timeout", not "bounded by
+	// the host client's 30s".
+	if elapsed > 5*time.Second {
+		t.Errorf("stalled host: took %s, want prompt degradation", elapsed)
 	}
 }

@@ -19,6 +19,8 @@ The slice was planned as "expose the running versions over the API — nothing d
 
 **The endpoint degrades instead of failing whole**, which is deliberately not `systemStorage`'s posture (a host read failure there is a 502). The two answer different questions. An empty storage panel is a lie — it renders as "no disks". A version report missing one of three components is self-describing: the field is absent and the caller can see which one could not be read. Failing the whole read would throw away the brain's version, which is compiled in, always true, and the first thing an updater needs. Both new fields are `omitempty`, and **absent means "could not read it", never "not installed"** — a caller distinguishing "unknown" from "old" checks presence, which empty strings could not support.
 
+**The host leg is bounded at 3s**, well under the host client's shared 30s timeout. Without that bound, "degrade instead of failing" degrades only after the caller has waited half a minute on a component that is optional in the answer — the opposite of the point. A healthy host-agent answers off a local unix socket in milliseconds. The timeout is a `var` so a test can shrink it and assert prompt degradation against a socket that accepts and then hangs (a dead socket fails fast and would not exercise it).
+
 `BRAIN_UI_PROTOCOL.md` documents the endpoint for the first time; it had prose for `/system/storage` but never for `/system/version`.
 
 ## How it maps to the specs
@@ -34,6 +36,7 @@ The slice was planned as "expose the running versions over the API — nothing d
 - **No dashboard surface.** Out of scope by design; the endpoint is the read a later slice will render.
 - **Not exercised on a real box.** The API tests run the real hostclient against a real `hostagent` over a real unix socket, so the host leg is the production wire rather than a mock, and one test parses the actual committed staged compose so a service rename or a switch to interpolation fails in CI. But no VM boot ran, so the `MALMO_CONTROL_PLANE_DIR`-set path is proven against a temp dir, not against a booted box.
 - **The planning error is worth remembering.** "Nothing exposes this" was asserted from an incomplete grep and repeated into the slice plan and a merged progress entry. Route surveys on this repo have to cover `huma.Register`, not just `mux.HandleFunc`.
+- **Two tests were destroyed and restored during this slice.** `internal/lifecycle/controlplane_test.go` already existed, holding the only coverage of `EnsureControlPlane`'s directory/project-name forwarding and its error propagation. Creating the new image-reader suite overwrote the file, and the suite still passed — deleted tests do not fail. Automated review caught it and both are restored alongside the new ones. The lesson generalises: a file listing that filters out `_test.go` hides the file you are about to overwrite, and a green suite is no evidence that coverage survived. Check the diff's deletion count, not the test result.
 
 ## What's next
 

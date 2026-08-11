@@ -1,11 +1,45 @@
 package lifecycle
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// --- EnsureControlPlane: the startup wiring. Predates the image reader below
+// and is unrelated to it; both live here because both are the control plane.
+
+func TestEnsureControlPlaneUpsTheStack(t *testing.T) {
+	docker := newFakeDocker()
+	m := &Manager{docker: docker}
+
+	if err := m.EnsureControlPlane(context.Background(), "/var/lib/malmo/control-plane"); err != nil {
+		t.Fatalf("EnsureControlPlane: %v", err)
+	}
+	if !docker.called("ControlPlaneUp") {
+		t.Fatalf("ControlPlaneUp not invoked: %v", docker.methods())
+	}
+	// The fixed project name is what makes the stack idempotent across reboots.
+	c := docker.Calls()[0]
+	if c.args[0] != "/var/lib/malmo/control-plane" || c.args[1] != controlPlaneProject {
+		t.Errorf("ControlPlaneUp args = %v, want [dir %s]", c.args, controlPlaneProject)
+	}
+}
+
+func TestEnsureControlPlaneErrorPropagates(t *testing.T) {
+	docker := newFakeDocker()
+	docker.controlPlaneUpErr = errors.New("compose boom")
+	m := &Manager{docker: docker}
+
+	if err := m.EnsureControlPlane(context.Background(), "/var/lib/malmo/control-plane"); err == nil {
+		t.Fatal("want error when the control-plane compose up fails")
+	}
+}
+
+// --- ControlPlaneUIImage: reading the staged compose (#374).
 
 // writeCompose stages a control-plane compose in a temp dir the way the image
 // build does, and returns the dir.

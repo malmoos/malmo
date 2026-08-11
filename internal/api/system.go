@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -53,6 +54,11 @@ type SystemVersionDTO struct {
 	UIImage          string `json:"ui_image,omitempty"`
 }
 
+// hostVersionReadTimeout bounds the host-agent leg of the version read. A var,
+// not a const, so a test can shrink it and assert the degrade path is prompt
+// without sleeping for real.
+var hostVersionReadTimeout = 3 * time.Second
+
 // systemVersion answers "what is this box running" from three sources with
 // three different failure modes, and deliberately degrades rather than failing
 // whole. The brain's own identity is compiled into this binary. The host-agent's
@@ -78,7 +84,16 @@ func (s *Server) systemVersion(ctx context.Context, _ *struct{}) (*struct{ Body 
 		Commit:  version.Commit,
 	}
 
-	if status, err := s.host.SystemStatus(ctx); err != nil {
+	// Bound the host round trip well under the host client's shared 30s timeout
+	// (hostclient.New). Without this, "degrade instead of failing" degrades only
+	// after the caller has already waited 30 seconds for a component that is
+	// optional in the answer — which is the opposite of the point. A healthy
+	// host-agent answers this off a local unix socket in milliseconds, so a
+	// short bound costs nothing and a stalled one is reported as unknown
+	// promptly.
+	hostCtx, cancel := context.WithTimeout(ctx, hostVersionReadTimeout)
+	defer cancel()
+	if status, err := s.host.SystemStatus(hostCtx); err != nil {
 		// Warn, not Error: the caller still gets a useful answer, and the
 		// host-agent being unreachable already raises its own health issue
 		// (HEALTH.md locus B). Logging this at Error would double-report a
