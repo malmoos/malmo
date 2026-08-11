@@ -33,7 +33,7 @@ control-plane stack up failed; continuing
 
 `UPDATES.md` # 3 step 3c specified the racing order in as many words — *"Recreate the changed containers in order: brain first (if changed), then UI"* — so the spec is corrected in this change, with the reason. The # 8.3 handoff makes the two actors agree on *what* should be running; it says nothing about *when* either may act, and concurrent compose on one project is what falls out of that gap.
 
-**Only a real Docker daemon could surface this.** The transaction's fake Docker records calls in order, and both orders are equally valid to it — there is no second actor in a unit test, because the second actor is a brain container booting. Two new tests now pin the order on both paths (`TestComposeIsUpBeforeTheBrainIsStarted`, `TestRevertBringsComposeUpBeforeStartingTheOldBrain`); both were mutation-checked by restoring the old order and watching them go red.
+**Only a real Docker daemon could surface this.** The transaction's fake Docker records calls in order, and both orders are equally valid to it — there is no second actor in a unit test, because the second actor is a brain container booting. Two new tests now pin the order on both paths (`TestComposeIsUpBeforeTheBrainIsStarted`, `TestRevertBringsComposeUpBeforeStartingTheOldBrain`); both were mutation-checked by restoring the old order and watching them go red — once here, and once independently by the maintainer in a separate worktree.
 
 Two things worth recording from that red run, because they are results and not decoration:
 
@@ -79,6 +79,14 @@ Two things kept the cost low. The registry image lands in the **test-only** tree
 - `UPDATES.md` # 8.4 step 3: pull by digest, on a hosted box, air-gapped except for a registry inside it.
 - `TESTING.md` # Hosted cloud variant: one more scenario in the same serial-verdict lane, same conventions (`fail`/`ok`, the SMBIOS `malmo.assert` credential, one boot per scenario).
 
+## Proven for the first time
+
+With the fix in, the lane is green — all five boots, `unseeded seeded bios access update` ([run 31544941206](https://github.com/malmoos/malmo/actions/runs/31544941206), `publish=false`, nothing published). Three things are proven on a booted box that had never been proven anywhere:
+
+1. **host-agent recreates the brain while the brain is serving the request that asked for it**, and the box comes back — new container, new image, routes re-installed, `/healthz` answering.
+2. **A real pull by digest from a real registry.** The target images are removed from the local store first and their absence is asserted, so the pull is a fetch, not a lookup.
+3. **A real revert**: a failed health check restores both refs, the two-file declaration, and the SQLite snapshot, and the box serves again on the old pair with the same session.
+
 ## Known gaps & deviations
 
 - **The recreate-order fix is proven by this lane and by two unit tests, not by a longer soak.** A UI-only update still runs `ComposeUp` while the brain is up; that is safe today only because the brain reconciles the control-plane project **once, at startup**, and never on a timer. If that ever becomes periodic, the race comes back in a form this ordering does not fix.
@@ -88,6 +96,9 @@ Two things kept the cost low. The registry image lands in the **test-only** tree
 - **The 7-day GC never runs**, since both generations are minutes old.
 - **The registry runs as a plain HTTP localhost registry**, so nothing about TLS, auth or a remote registry's failure modes is covered.
 - **One boot, two updates, sequentially.** Nothing here tests a second update arriving while one is running (the 409) on a real box.
+- **The registry is in-guest and the box is air-gapped**, so no network failure is exercised: no slow or unreachable registry, no partial transfer, no auth, no TLS, no rate limit. A `pull` failure is still only covered by a unit test.
+- **The pull moves one layer, not an image.** The derived images share every base layer with what the box already has, so the pull is a manifest plus a tiny diff. Nothing here says what a full multi-hundred-megabyte pull does to the 60s health budget or to disk on a small box.
+- **This lane does not run on every PR.** It runs on the `CI / Cloud image` workflow's own triggers — a tag push, a manual `workflow_dispatch`, or the release call. A change that breaks the updater can land on `dev` and stay green until someone runs this workflow.
 - This lane cannot be run locally without root + KVM + mkosi; per `CLAUDE.md` it is driven through the `CI / Cloud image` workflow with `publish=false`.
 
 ## What's next
