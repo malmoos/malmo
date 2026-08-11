@@ -61,6 +61,13 @@ type Server struct {
 	boxID        string
 	assertionKey ed25519.PublicKey
 
+	// Staged control-plane compose dir (MALMO_CONTROL_PLANE_DIR), set once at
+	// startup via SetControlPlaneDir. Read by GET /api/v1/system/version to
+	// report the UI image the box is pinned to. Empty in dev, where the UI is
+	// Vite and no compose exists — the version read then omits the UI field
+	// rather than erroring.
+	controlPlaneDir string
+
 	// Proxies whose X-Forwarded-For the brain reads when deriving the client IP
 	// the per-IP throttles key on (clientip.go, #329). Set once at startup via
 	// SetTrustedProxies; nil means "trust nothing", so every request keys on its
@@ -88,6 +95,17 @@ func NewServer(
 		limiter: newRateLimiter(time.Now),
 		jobs:    newJobs(),
 	}
+}
+
+// SetControlPlaneDir records where the staged control-plane compose lives
+// (MALMO_CONTROL_PLANE_DIR), so GET /api/v1/system/version can report the UI
+// image the box is pinned to. cmd/brain passes the same value it hands
+// lifecycle.EnsureControlPlane, which is what makes the reported UI image the
+// one the box actually reconciles to. Empty in dev — the version read then omits
+// the UI field. Not concurrency-guarded: called before the server starts
+// serving, same as SetEnvironment.
+func (s *Server) SetControlPlaneDir(dir string) {
+	s.controlPlaneDir = dir
 }
 
 // SetEnvironment records the resolved environment profile and, on a hosted box,

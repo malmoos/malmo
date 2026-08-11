@@ -1691,6 +1691,10 @@ components:
           type: string
         commit:
           type: string
+        host_agent_version:
+          type: string
+        ui_image:
+          type: string
         version:
           type: string
       required:
@@ -2911,7 +2915,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
-      summary: The running malmo-brain build's version and git commit
+      summary: "What this box is running: brain version and commit, host-agent version, UI image"
   /api/v1/users:
     get:
       operationId: list-users

@@ -293,6 +293,9 @@ func main() {
 	srv := api.NewServer(st, cat, life, bus, authMgr, host, auditor, healthMgr, live, applogs)
 	srv.SetEnvironment(prof, boxID, assertionKey)
 	srv.SetTrustedProxies(trustedProxies(cfg.trustedProxies))
+	// Same dir EnsureControlPlane reconciles from (above), so the UI image
+	// GET /api/v1/system/version reports is the one the box converges to.
+	srv.SetControlPlaneDir(cfg.controlPlaneDir)
 	httpSrv := &http.Server{Handler: srv.Handler()}
 
 	// Bind the listener before advertising the dashboard route to Caddy. Once the
