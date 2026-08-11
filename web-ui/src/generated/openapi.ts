@@ -782,7 +782,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The running malmo-brain build's version and git commit */
+        /** What this box is running: brain version and commit, host-agent version, UI image */
         get: operations["get-system-version"];
         put?: never;
         post?: never;
@@ -1644,6 +1644,8 @@ export interface components {
              */
             readonly $schema?: string;
             commit: string;
+            host_agent_version?: string;
+            ui_image?: string;
             version: string;
         };
         "Test-mail-providerRequest": {

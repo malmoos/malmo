@@ -38,6 +38,13 @@ import (
 // free_bytes flows through (≈412 GiB).
 const harnessFreeBytes = 412 << 30
 
+// harnessAgentVersion is the version the mocked host-agent self-reports on
+// GET /v1/system/status, so TestSystemVersion_* can assert it reaches the
+// caller rather than being silently dropped. Deliberately not the brain's own
+// version: a test that used the same string either side could pass while the
+// handler reported the brain's version twice.
+const harnessAgentVersion = "9.9.9-agent"
+
 type harness struct {
 	srv  *httptest.Server
 	jar  http.CookieJar // shared cookie jar across helpers
@@ -148,6 +155,7 @@ func newHarness(t *testing.T, opts ...func(*Server)) *harness {
 	// endpoint test (TestSystemStorage_*).
 	mux.HandleFunc("GET /v1/system/status", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(protocol.SystemStatus{
+			AgentVersion:       harnessAgentVersion,
 			DataDiskFreeBytes:  harnessFreeBytes,
 			DataDiskTotalBytes: 1 << 40,
 			Disks: []protocol.DiskSpace{
