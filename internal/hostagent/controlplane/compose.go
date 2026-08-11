@@ -95,7 +95,7 @@ func uiImageLine(lines []string, path string) (idx int, ref string, err error) {
 				break
 			}
 			if v, found := strings.CutPrefix(trimmed, "image:"); found {
-				return i, strings.TrimSpace(v), nil
+				return i, stripInlineComment(v), nil
 			}
 			continue
 		}
@@ -111,6 +111,28 @@ func uiImageLine(lines []string, path string) (idx int, ref string, err error) {
 		return 0, "", fmt.Errorf("control-plane compose %s has no %q service", path, UIServiceName)
 	}
 	return 0, "", fmt.Errorf("control-plane compose %s pins no image for %q", path, UIServiceName)
+}
+
+// stripInlineComment removes a trailing YAML comment from a scalar value, so
+// `malmo-ui:dev # baked at build` reads as the ref and not as the whole line.
+//
+// This matters more than the tidiness suggests: the ref returned by
+// uiImageLine is the one a caller records as the **previous** generation, which
+// is what a revert pins. A ref carrying a comment is not an image reference, so
+// the revert would try to run one and fail at the moment the box most needs it
+// to work. The `${` guard reads the same value, so it too would have been
+// testing the wrong string.
+//
+// YAML starts a comment only at a `#` preceded by whitespace, which is why this
+// does not cut at the first `#` it sees.
+func stripInlineComment(v string) string {
+	v = strings.TrimSpace(v)
+	for i := 1; i < len(v); i++ {
+		if v[i] == '#' && (v[i-1] == ' ' || v[i-1] == '\t') {
+			return strings.TrimSpace(v[:i])
+		}
+	}
+	return v
 }
 
 // verifyUIImage parses the rewritten compose the same narrow way the brain does

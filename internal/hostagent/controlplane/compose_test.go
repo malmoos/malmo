@@ -158,6 +158,47 @@ func TestRewriteUIImageRefusalsLeaveTheFileUntouched(t *testing.T) {
 	}
 }
 
+// The ref this returns is recorded as the *previous* generation, which is what
+// a revert pins — so a trailing comment must not ride along with it. A revert
+// that tries to run `malmo-ui:dev # baked at build` as an image fails at the
+// one moment the box most needs it to work. The rewrite also drops the comment
+// from the line, which is correct: a comment about the old ref is wrong the
+// moment the ref changes.
+func TestRewriteUIImageIgnoresAnInlineComment(t *testing.T) {
+	dir := t.TempDir()
+	const compose = `services:
+  malmo-ui:
+    image: malmo-ui:dev # baked into the disk image at build time
+`
+	if err := os.WriteFile(filepath.Join(dir, ComposeFile), []byte(compose), 0o644); err != nil {
+		t.Fatalf("stage compose: %v", err)
+	}
+	old, err := RewriteUIImage(dir, "malmo-ui:v2")
+	if err != nil {
+		t.Fatalf("RewriteUIImage: %v", err)
+	}
+	if old != "malmo-ui:dev" {
+		t.Errorf("old ref = %q, want malmo-ui:dev with the comment stripped — this string is what a revert pins", old)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, ComposeFile))
+	if got := strings.TrimSpace(string(b)); !strings.HasSuffix(got, "image: malmo-ui:v2") {
+		t.Errorf("rewritten file ends %q, want the image line with no stale comment", got)
+	}
+}
+
+// The ${VAR} guard reads the same value the previous-ref does, so a commented
+// interpolation must still be refused rather than half-read.
+func TestRewriteUIImageRefusesCommentedInterpolation(t *testing.T) {
+	dir := t.TempDir()
+	const compose = "services:\n  malmo-ui:\n    image: ${MALMO_UI_IMAGE:-malmo-ui:dev} # overridable\n"
+	if err := os.WriteFile(filepath.Join(dir, ComposeFile), []byte(compose), 0o644); err != nil {
+		t.Fatalf("stage compose: %v", err)
+	}
+	if _, err := RewriteUIImage(dir, "malmo-ui:v2"); err == nil || !strings.Contains(err.Error(), "does not resolve") {
+		t.Errorf("err = %v, want a refusal to resolve the interpolated ref", err)
+	}
+}
+
 // A ref that is not a service key must not be mistaken for one. `image:` under
 // caddy comes first in the real file, so a scan that ignores service boundaries
 // would rewrite Caddy's image and leave the UI alone — the box would then serve
