@@ -298,6 +298,16 @@ func proxyRunSpec(cfg Config) RunSpec {
 	}
 }
 
+// RunSpecFor exposes the brain's `docker run` invocation for cfg.
+//
+// The control-plane updater recreates the brain on a new image and must produce
+// a container **identical to a first-boot one except for the image** — same
+// mounts, same env, same network, same restart policy. Rebuilding that spec
+// there would be a second copy of the brain's launch contract, and the two
+// would drift the first time a mount is added: the box would boot fine and only
+// diverge after an update, which is the worst possible time to find out.
+func RunSpecFor(cfg Config) RunSpec { return runSpec(cfg) }
+
 // runSpec assembles the brain's `docker run` invocation from cfg. The brain
 // mounts the host-agent socket directory (to reach host-agent) and the data
 // root (SQLite state lives under it), reads its config from MALMO_* env, and
