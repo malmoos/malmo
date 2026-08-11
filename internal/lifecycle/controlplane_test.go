@@ -89,13 +89,19 @@ networks:
 }
 
 // TestControlPlaneUIImage_RealStagedCompose guards against this reader drifting
-// from the compose the image actually ships. It parses the committed production
-// file rather than a hand-written fixture, so renaming the service or switching
-// it to an interpolated ref fails here instead of on a box.
+// from the compose the image actually ships. It parses the committed source
+// file (dev/control-plane/compose.yml — stage-control-plane.sh copies this
+// verbatim into the gitignored dev/cloud/mkosi.extra.wiring/ tree that a real
+// box gets, so this is the same content, just at the path git actually tracks)
+// rather than a hand-written fixture, so renaming the service or switching it
+// to an interpolated ref fails here in CI instead of on a box. The previous
+// version of this test pointed at the gitignored staged copy, which does not
+// exist in a fresh checkout, so it always skipped in CI — the "fails in CI"
+// claim was untested.
 func TestControlPlaneUIImage_RealStagedCompose(t *testing.T) {
-	const staged = "../../dev/cloud/mkosi.extra.wiring/var/lib/malmo/control-plane"
+	const staged = "../../dev/control-plane"
 	if _, err := os.Stat(filepath.Join(staged, controlPlaneComposeFile)); err != nil {
-		t.Skipf("staged compose not present: %v", err)
+		t.Skipf("committed control-plane compose not present: %v", err)
 	}
 	img, err := ControlPlaneUIImage(staged)
 	if err != nil {
