@@ -72,6 +72,22 @@ func RewriteUIImage(dir, ref string) (old string, err error) {
 	return old, nil
 }
 
+// ReadUIImage reports the image ref the staged compose currently pins for the
+// dashboard service.
+//
+// The updater needs this even when the UI is not the thing moving: a brain-only
+// update still records the **pair** in the ledger, and half a pair is not
+// something a revert can act on.
+func ReadUIImage(dir string) (string, error) {
+	p := filepath.Join(dir, ComposeFile)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return "", fmt.Errorf("read control-plane compose: %w", err)
+	}
+	_, ref, err := uiImageLine(strings.Split(string(b), "\n"), p)
+	return ref, err
+}
+
 // uiImageLine finds the index of the malmo-ui service's `image:` line and the
 // ref it currently pins.
 //
