@@ -345,6 +345,18 @@ type Agent struct {
 	// host /proc.
 	System SystemSampler
 
+	// Updater, when non-nil, backs POST /v1/jobs/system-update — the
+	// control-plane update transaction (UPDATES.md # 3, jobs.go). Swapped per
+	// binary: cpupdate.Runner (real `docker` + HTTP probe) in
+	// cmd/host-agent-real vs nil in the fake binary, where the endpoint returns
+	// 501: the dev loop has no control plane to update, and a fake success
+	// would tell the brain a box moved when it did not.
+	Updater SystemUpdater
+
+	// jobs holds the in-memory job records and the one global job lock
+	// (jobs.go). Always non-nil — New builds it.
+	jobs *jobRegistry
+
 	// Net, when non-nil, backs the interfaces field of GET /v1/discovery/state
 	// with the LAN set. Swapped per binary: netstate.NMProvider (NetworkManager
 	// over DBus) vs FakeNetState. When nil, interfaces reports empty — "not
@@ -371,6 +383,7 @@ func New(v PasswordVerifier, pub Publisher) *Agent {
 		passwords: map[string][]byte{},
 		roles:     map[string]string{},
 		startedAt: time.Now(),
+		jobs:      newJobRegistry(),
 		Verifier:  v,
 		Publisher: pub,
 	}
@@ -391,6 +404,8 @@ func (a *Agent) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/system/set-timezone", a.setTimezone)
 	mux.HandleFunc("GET /v1/health/system", a.systemHealth)
 	mux.HandleFunc("GET /v1/journal/follow", a.journalFollow)
+	mux.HandleFunc("POST /v1/jobs/system-update", a.startSystemUpdate)
+	mux.HandleFunc("GET /v1/jobs/{id}", a.jobStatus)
 	mux.HandleFunc("GET /v1/users/{username}/home", a.resolveHome)
 	mux.HandleFunc("GET /v1/identity/well-known", a.wellKnownIdentity)
 	mux.HandleFunc("POST /v1/identity/app-service", a.allocateAppService)

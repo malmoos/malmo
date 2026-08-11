@@ -290,6 +290,22 @@ When `completed`, the response carries a `result` field with the operation's out
 
 **Why not "everything is a job":** read-only / fast routes don't need the cognitive overhead of "is this done? where's the result?" and the extra JSON nesting. The dividing line is explicit per route and documented in the API contract.
 
+**As built (#381): one kind, and a subset of the machinery.** `system-update` is the only job kind that exists today (`internal/hostagent/jobs.go`). The framework above — a kind registry with typed attributes, resource-class serialization with queue positions, cancel, and the SSE log stream of Pattern C — is **not built**, because it would be an abstraction with a single consumer (`CLAUDE.md` # Go code discipline). What is built is the part one dangerous job needs:
+
+- `POST /v1/jobs/system-update` with `{ "brain_image"?, "ui_image"? }` → `202` `{job_id, status, kind, started_at}`. An empty ref means "leave that component alone"; both empty is a `400`. `501` when this host-agent has no updater wired (the fake binary), the same degrade as `journal_follow`.
+- `GET /v1/jobs/{id}` → the record: `status`, `started_at`, `finished_at`, plus `error` `{code, message}` and a `result` `{brain_changed, ui_changed, reverted, failure_mode, revert_error}` once it ends. `404` for an unknown id.
+- **`MaxDuration` = 30m**, enforced by cancelling the run's context.
+- **One global lock**, which is `Dangerous: true` ("never run two destructive ops concurrently") realized for a single kind. A second update while one runs is **refused with `409`**, not queued — an admin who clicks Update twice wants one update, and there is no second kind to serialize against.
+
+Two deliberate differences from the text above:
+
+- **No `stalled` status.** A run that passes `MaxDuration` is cancelled, and the transaction rolls the box back on a context of its own, so it lands on a known outcome. The job ends `failed` with `error.code = "job-timeout"`, which says both what happened and that it was the bound that fired. `stalled` ("we're not sure") describes a job with no rollback, which this one is not.
+- **No cancel route, and no job log stream.** Nothing calls them yet. The dashboard surface for updates is not built either (#381 ships the API only).
+
+Job records live in host-agent memory and are lost on restart — matching "Dangerous: crash mid-flight = no auto-resume". That is also the right side of the socket for them: a control-plane update replaces the **brain** container, so a brain-side record would die halfway through the operation it was tracking.
+
+**What would make us build the rest:** a second job kind. `enroll-drive` is the likely one, and it is the case that needs resource classes (`disk` vs `apt`), the cross-class dangerous lock, and queueing rather than a flat refusal. Generalize then, not before.
+
 ### Pattern C — SSE (streaming log/progress output)
 
 For one-way streams from host-agent to brain:

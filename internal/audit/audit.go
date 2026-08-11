@@ -68,6 +68,13 @@ const (
 	// between owner-only (restricted) and public alters who can reach it, so it is
 	// elevation-class and audits success and failure.
 	ActionAppExposureSet = "app.exposure.set"
+
+	// Control-plane update start (UPDATES.md # 3). Starting an update replaces
+	// the brain and UI containers on the box, so it is elevation-class: it
+	// audits the start and every refusal. It does not audit the outcome — the
+	// brain that accepted the update is the container being replaced, so it may
+	// not be alive to see how the job ended (internal/api/systemupdate.go).
+	ActionSystemUpdate = "system.update"
 )
 
 // Target describes the object the action acts on. Both fields are optional.

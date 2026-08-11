@@ -144,9 +144,18 @@ So this doc isn't read as a claim about the finished product:
 - **Storage subsystem.** No `/srv/malmo`, no mergerfs, no LUKS-unlock flow,
   no `malmo-storage-ready.target`. Apps write to wherever Docker puts volumes.
 - **Boot, install ISO, updates.** The `mkosi` image build (`BUILD.md` # 2;
-  proven in the test lane, not yet the production ISO), the release manifest,
-  and both update streams (`UPDATES.md`) are all spec-only. Nothing on a
-  running box can fetch, apply, or roll back a new version today.
+  proven in the test lane, not yet the production ISO) and stream A
+  (`unattended-upgrades` + the apt repo) are spec-only. **Stream B — the
+  control-plane update — is half built.** A box declares its brain/UI pair in
+  two files (`internal/hostagent/controlplane`: the staged compose plus an
+  `images.json` ledger), the apply/health-check/revert transaction exists
+  (`internal/hostagent/cpupdate`), and an admin can start one:
+  `POST /api/v1/system/update` with two explicit image refs → the
+  `system-update` job on the host socket (`internal/hostagent/jobs.go`), polled
+  via `GET /api/v1/system/update/{job_id}`. What is missing is everything that
+  would pick the refs *for* the box — no release manifest, no cloud target
+  poll, no update notification, and no dashboard surface — plus a real-box
+  proof (the transaction is covered against a fake Docker only, #382).
 - **Health / notifications / telemetry / time / discovery beyond stubs.** The
   brain doesn't surface health issues, the bell doesn't exist, no telemetry
   client, no chrony integration.

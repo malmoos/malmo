@@ -2368,6 +2368,111 @@
         ],
         "type": "object"
       },
+      "SystemUpdateErrorDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "SystemUpdateJobDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/SystemUpdateJobDTO.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "error": {
+            "$ref": "#/components/schemas/SystemUpdateErrorDTO"
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/SystemUpdateResultDTO"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "kind",
+          "status",
+          "started_at"
+        ],
+        "type": "object"
+      },
+      "SystemUpdateRequestDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/SystemUpdateRequestDTO.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "brain_image": {
+            "type": "string"
+          },
+          "ui_image": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SystemUpdateResultDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "brain_changed": {
+            "type": "boolean"
+          },
+          "failure_mode": {
+            "type": "string"
+          },
+          "revert_error": {
+            "type": "string"
+          },
+          "reverted": {
+            "type": "boolean"
+          },
+          "ui_changed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "brain_changed",
+          "ui_changed",
+          "reverted"
+        ],
+        "type": "object"
+      },
       "SystemVersionDTO": {
         "additionalProperties": false,
         "properties": {
@@ -4341,6 +4446,82 @@
           }
         },
         "summary": "Set the system time zone via host-agent timedatectl (admin)"
+      }
+    },
+    "/api/v1/system/update": {
+      "post": {
+        "operationId": "start-system-update",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SystemUpdateRequestDTO"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemUpdateJobDTO"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Move the control plane to the given brain/UI image pair (admin only)"
+      }
+    },
+    "/api/v1/system/update/{job_id}": {
+      "get": {
+        "operationId": "get-system-update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemUpdateJobDTO"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Status of a control-plane update job (admin only)"
       }
     },
     "/api/v1/system/version": {

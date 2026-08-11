@@ -200,6 +200,7 @@ func (s *Server) registerAll(api huma.API) {
 	s.registerNotifications(api)
 	s.registerMail(api)
 	s.registerSystem(api)
+	s.registerSystemUpdate(api)
 	s.registerFirstRun(api)
 	s.registerAppSecrets(api)
 	s.registerAppConfig(api)

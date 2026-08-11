@@ -199,9 +199,11 @@ func Apply(ctx context.Context, d Docker, p Prober, o Options) (Result, error) {
 		}
 		if err := snapshotBrainDB(o.BrainCfg.StateDir, snapDir); err != nil {
 			// The brain is down and its image has not changed: put it back on
-			// the ref it was already running before giving up.
+			// the ref it was already running before giving up. Nothing has been
+			// declared yet, so this is the whole recovery — but it runs on the
+			// same detached context revert() uses, for the same reason.
 			r := failed(res, "snapshot")
-			r.Reverted, r.RevertErr = true, d.Run(ctx, brainSpec(o, before.Current.Brain))
+			r.Reverted, r.RevertErr = true, restoreBrainContainer(ctx, d, o, before.Current.Brain)
 			return r, fmt.Errorf("snapshot brain database: %w", err)
 		}
 	}
@@ -347,13 +349,7 @@ func revert(ctx context.Context, d Docker, p Prober, o Options, before controlpl
 	r.Reverted = true
 	slog.Warn("control-plane update failed; reverting", "step", mode, "image", before.Current.Brain)
 
-	// The revert must outlive whatever ended the apply. If it inherited the
-	// caller's context — a job that hit its MaxDuration, a client that hung up,
-	// host-agent shutting down — every `docker` call here would fail instantly
-	// on a dead context, and the box would be left running the new brain
-	// against a ledger naming the old pair, or with no brain container at all.
-	// A cancelled apply is exactly when the rollback matters most.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), revertBudget)
+	ctx, cancel := detached(ctx)
 	defer cancel()
 
 	if err := declare(o, before, res); err != nil {
@@ -447,6 +443,34 @@ func checkProtocolMajor(ctx context.Context, d Docker, ref string) error {
 			brainlaunch.ErrProtocolMismatch, ref, got, want)
 	}
 	return nil
+}
+
+// detached returns the context every recovery path runs on: the caller's
+// values, none of its cancellation, and a budget of its own.
+//
+// Recovery must outlive whatever ended the apply. If it inherited the caller's
+// context — a job that hit its MaxDuration, a client that hung up, host-agent
+// shutting down — every `docker` call in it would fail instantly on a dead
+// context, and the box would be left running the new brain against a ledger
+// naming the old pair, or with no brain container at all. **A cancelled apply
+// is exactly when recovery matters most.**
+//
+// It is one function so the two recovery paths cannot drift apart. They did:
+// revert() was detached in #380 and the snapshot-failure branch was missed,
+// which left a real hole once #381 started calling Apply with a cancellable
+// context and a Docker that honours it.
+func detached(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), revertBudget)
+}
+
+// restoreBrainContainer puts the brain back on ref. It is the whole recovery
+// for a failure between "the old brain was removed for the snapshot" and "the
+// declaration was written": nothing else on the box has changed yet, so the
+// container is the only thing to put back.
+func restoreBrainContainer(ctx context.Context, d Docker, o Options, ref string) error {
+	ctx, cancel := detached(ctx)
+	defer cancel()
+	return d.Run(ctx, brainSpec(o, ref))
 }
 
 func brainSpec(o Options, ref string) brainlaunch.RunSpec {
