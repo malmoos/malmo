@@ -395,7 +395,14 @@ One actor runs the stream-B control-plane transaction: `host-agent` pulls and re
 
 This has a real cost worth naming: `CONTROL_PLANE.md` locks the **brain** as the launcher of `malmo-ui` and Caddy, so `host-agent` is here reaching past the brain to containers the brain reconciles. Left alone, the brain would come back up and reconcile the UI straight back to the version it knew about.
 
-**The staged control-plane compose file is the handoff point.** `host-agent` writes the new image references into the staged compose (`MALMO_CONTROL_PLANE_DIR`, the same file `lifecycle.EnsureControlPlane` reconciles from) *before* recreating anything. The brain restarts, reads that file, and reconciles to the versions already running. The two actors never disagree because they are reading the same declaration — host-agent is the one that writes it, the brain is the one that maintains it. Rollback writes the old references back the same way.
+**The staged control-plane compose file is the handoff point.** `host-agent` writes the new UI image reference into the staged compose (`MALMO_CONTROL_PLANE_DIR`, the same file `lifecycle.EnsureControlPlane` reconciles from) *before* recreating anything. The brain restarts, reads that file, and reconciles to the version already running. The two actors never disagree because they are reading the same declaration — host-agent is the one that writes it, the brain is the one that maintains it. Rollback writes the old reference back the same way.
+
+**The brain's own reference lives in a second file, because the brain is not in that compose.** It cannot be: a process cannot bring itself up, so `host-agent` launches the brain with `docker run` (`CONTROL_PLANE.md` # host-agent launches the brain container) rather than as a compose service. So the box declares its pair across two files in the same directory, both written before anything is recreated:
+
+- **`compose.yml`** — the UI's image. Read by the **brain**, which reconciles the stack to it.
+- **`images.json`** — a small ledger: the pair the box should be running, the pair it was running before, and when each was applied. Read by **host-agent** at boot to decide which brain to launch, and by the update transaction to know what to revert to.
+
+The ledger is not bookkeeping. `host-agent` leaves an existing brain container alone, so it only chooses an image when there is no container to leave — a first boot, or a box whose brain container was removed or pruned. Without the ledger that second case relaunches the reference baked into the disk image at build time, and an applied update silently goes backwards. The ledger is also where the previous pair is recorded, which is what the revert path and the 7-day retention window (# 3) both read. Every failure to read it falls back to the baked reference rather than refusing to launch: the brain is how anyone finds out what is wrong with the box, so it has to come up.
 
 ### 8.4 Mechanics
 
@@ -434,7 +441,7 @@ Step 5 is what the whole design is for. On appliance our visibility into a bad r
 - **Hosted: the target version is per-box, held by the cloud control plane** (# 8.1). No `stable.json`, no minisign, no hourly manifest poll — that path is appliance-only (`RELEASE_MANIFEST.md`). The box polls outbound; the cloud never connects in.
 - **Hosted: updates are pushed, not prompted** (# 8.2). They apply in the window and the tenant admin is notified afterwards. **The app permission-expansion prompt is the one carve-out** — it still goes to the instance owner, because widening access to a user's data is their decision even on a box we operate.
 - **Hosted and appliance share the apply/rollback mechanics** (# 8). Only the trigger differs. The signed-manifest trigger and the cloud-target trigger are two thin paths onto one transaction.
-- **`host-agent` recreates both `malmo-brain` and `malmo-ui`** as one transaction (# 8.3). It writes the new image references into the staged control-plane compose first, so the brain reconciles to the same versions on restart instead of fighting them back.
+- **`host-agent` recreates both `malmo-brain` and `malmo-ui`** as one transaction (# 8.3). It writes the new image references first, so the brain reconciles to the same versions on restart instead of fighting them back. **Two files carry that declaration**, both in `MALMO_CONTROL_PLANE_DIR`: the staged `compose.yml` holds the UI's reference (the brain reads it), and `images.json` — a ledger of the current pair, the previous pair, and when each was applied — holds the brain's (host-agent reads it at boot). The brain is not in the compose because a process cannot bring itself up; without the ledger, a box that lost its brain container would relaunch the reference baked at build time and silently undo an applied update.
 
 ## Open questions
 

@@ -38,6 +38,7 @@ import (
 
 	"github.com/malmoos/malmo/internal/hostagent"
 	"github.com/malmoos/malmo/internal/hostagent/brainlaunch"
+	"github.com/malmoos/malmo/internal/hostagent/controlplane"
 	"github.com/malmoos/malmo/internal/profile"
 	"github.com/malmoos/malmo/internal/protocol"
 	"github.com/malmoos/malmo/internal/version"
@@ -139,8 +140,22 @@ func brainLaunchConfig(sockPath string) brainlaunch.Config {
 	if fi, err := os.Stat(profileMarker); err != nil || !fi.Mode().IsRegular() {
 		profileMarker = ""
 	}
+	// Which brain to launch is the ledger's call when it has one: it records the
+	// pair this box last *applied*, while the env default records what it last
+	// *shipped with* — older by definition once an update has landed
+	// (internal/hostagent/controlplane). brainlaunch leaves an existing brain
+	// container alone, so this only decides the case where there is none to
+	// leave: a first boot, or a box whose brain container was removed. Without
+	// it, that second case silently rolls an updated box back to the baked image.
+	brainImage, fromLedger := controlplane.ResolveBrainImage(controlPlaneDir, env("MALMO_BRAIN_IMAGE", "malmo-brain:latest"))
+	// from_ledger, not src: CLAUDE.md reserves src for a source filesystem path.
+	// Logged either way so the fallback is visible rather than silent — "which
+	// brain did this box decide to run, and did an applied update decide it" is
+	// the first question a bad update raises.
+	slog.Info("resolved brain image", "image", brainImage, "from_ledger", fromLedger)
+
 	return brainlaunch.Config{
-		Image:         env("MALMO_BRAIN_IMAGE", "malmo-brain:latest"),
+		Image:         brainImage,
 		ImageTar:      env("MALMO_BRAIN_IMAGE_TAR", filepath.Join(dataDir, "brain-image.tar")),
 		ContainerName: "malmo-brain",
 		DataDir:       dataDir,
