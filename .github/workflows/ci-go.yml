@@ -80,6 +80,15 @@ jobs:
         run: |
           set -euo pipefail
           skips="$(grep -E '^\s*--- SKIP' /tmp/gotest.log || true)"
+          # Also to stdout: the job summary is only readable in the web UI, so
+          # without this the guard's finding cannot be grepped from the log or
+          # seen by anything reading the run programmatically.
+          if [ -z "$skips" ]; then
+            echo "no skipped tests"
+          else
+            echo "skipped tests:"
+            echo "$skips"
+          fi
           {
             echo "### Skipped tests"
             if [ -z "$skips" ]; then
