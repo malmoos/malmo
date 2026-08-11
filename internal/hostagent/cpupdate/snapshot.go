@@ -38,6 +38,16 @@ func snapshotBrainDB(stateDir, dstDir string) error {
 	} else if err != nil {
 		return fmt.Errorf("stat brain database: %w", err)
 	}
+	// Clear first. The dir is named after the brain ref, so the same one is
+	// reused whenever the same pre-update ref comes round again — a retried
+	// update after a failed one, most obviously. Writing into it would leave a
+	// `-wal` from the earlier attempt beside a database that has since been
+	// checkpointed and no longer has one, and the restore would then put back a
+	// merge of two generations, which is exactly what restoreBrainDB exists to
+	// prevent.
+	if err := os.RemoveAll(dstDir); err != nil {
+		return fmt.Errorf("clear snapshot dir: %w", err)
+	}
 	if err := os.MkdirAll(dstDir, 0o700); err != nil {
 		return fmt.Errorf("create snapshot dir: %w", err)
 	}
@@ -50,7 +60,7 @@ func snapshotBrainDB(stateDir, dstDir string) error {
 			return err
 		}
 	}
-	return nil
+	return syncDir(dstDir)
 }
 
 // restoreBrainDB copies a snapshot back over the brain's state directory. Like
@@ -84,6 +94,23 @@ func restoreBrainDB(srcDir, stateDir string) error {
 		if err := copyFile(from, to); err != nil {
 			return err
 		}
+	}
+	return syncDir(stateDir)
+}
+
+// syncDir fsyncs a directory so the entries created in it survive a power cut.
+// copyFile syncs each file's contents, but a directory entry is its own write —
+// without this a snapshot can come back empty, and restoreBrainDB reads a
+// missing malmo.db as "nothing to put back" rather than as a lost backup. The
+// same reasoning as controlplane.writeFileAtomic.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open %s to sync: %w", dir, err)
+	}
+	defer d.Close()
+	if err := d.Sync(); err != nil {
+		return fmt.Errorf("sync %s: %w", dir, err)
 	}
 	return nil
 }

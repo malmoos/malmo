@@ -28,10 +28,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/malmoos/malmo/internal/hostagent/brainlaunch"
 	"github.com/malmoos/malmo/internal/hostagent/controlplane"
+	"github.com/malmoos/malmo/internal/protocol"
 )
 
 // controlPlaneProject is the compose project the staged control-plane stack
@@ -48,6 +50,12 @@ const brainPort = 8080
 // uiPort is the port the malmo-ui container serves the dashboard bundle on.
 const uiPort = 80
 
+// revertBudget bounds the rollback. It is deliberately generous and wholly
+// separate from the apply's budget: the rollback runs on a context that no
+// longer answers to the caller (see revert), so this is the only thing keeping
+// it from hanging host-agent.
+const revertBudget = 5 * time.Minute
+
 // defaultHealthTimeout bounds the wait for both components to answer after a
 // recreate — UPDATES.md # 3 step 3d: "wait up to 60s".
 const defaultHealthTimeout = 60 * time.Second
@@ -62,6 +70,10 @@ type Docker interface {
 	// RemoveContainer stops and removes a container by name, treating "no such
 	// container" as success so a retry after a partial failure is safe.
 	RemoveContainer(ctx context.Context, name string) error
+	// ImageLabel reads one OCI label off an image, or "" when the image does
+	// not carry it. The transaction uses it for the brain's protocol-major
+	// lockstep check, the same guard brainlaunch applies at boot.
+	ImageLabel(ctx context.Context, ref, label string) (string, error)
 	// Run starts a detached container from the brain's launch spec.
 	Run(ctx context.Context, spec brainlaunch.RunSpec) error
 	// ComposeUp reconciles the staged control-plane project (Caddy + malmo-ui)
@@ -87,10 +99,15 @@ type Prober interface {
 type Options struct {
 	// ControlPlaneDir holds the staged compose and the ledger.
 	ControlPlaneDir string
-	// BrainCfg is the brain's launch config. Its Image field is ignored — the
-	// target below decides which image runs — but every other field (mounts,
-	// env, network, container name, state dir) is what makes the recreated
-	// brain identical to a first-boot one.
+	// BrainCfg is the brain's launch config: mounts, env, network, container
+	// name and state dir, which are what make a recreated brain identical to a
+	// first-boot one.
+	//
+	// Image must be set, and is **not** ignored. On a box that has never
+	// updated there is no ledger, so it is the only record of which brain the
+	// box is running — the ref a revert has to go back to. Leaving it empty
+	// would produce a ledger whose previous pair has no brain, and the failure
+	// would land at the moment the rollback is needed.
 	BrainCfg brainlaunch.Config
 	// SnapshotRoot is where pre-update SQLite snapshots are kept
 	// (UPDATES.md # 3 step 3b).
@@ -146,7 +163,9 @@ func Apply(ctx context.Context, d Docker, p Prober, o Options) (Result, error) {
 
 	before, err := currentPair(o)
 	if err != nil {
-		return Result{FailureMode: "declare"}, err
+		// Nothing has been declared yet; naming this step "declare" would point
+		// an operator at the wrong place.
+		return Result{FailureMode: "read"}, err
 	}
 	target := controlplane.Pair{
 		Brain:     firstNonEmpty(o.BrainRef, before.Current.Brain),
@@ -174,7 +193,9 @@ func Apply(ctx context.Context, d Docker, p Prober, o Options) (Result, error) {
 	snapDir := snapshotDirFor(o.SnapshotRoot, before.Current.Brain)
 	if res.BrainChanged {
 		if err := d.RemoveContainer(ctx, o.BrainCfg.ContainerName); err != nil {
-			return failed(res, "recreate"), fmt.Errorf("remove brain container: %w", err)
+			// Part of the snapshot step: the brain is stopped *so that* the
+			// database can be copied consistently.
+			return failed(res, "snapshot"), fmt.Errorf("remove brain container: %w", err)
 		}
 		if err := snapshotBrainDB(o.BrainCfg.StateDir, snapDir); err != nil {
 			// The brain is down and its image has not changed: put it back on
@@ -198,7 +219,7 @@ func Apply(ctx context.Context, d Docker, p Prober, o Options) (Result, error) {
 		r := revert(ctx, d, p, o, before, res, "recreate", snapDir, timeout)
 		return r, err
 	}
-	if err := waitHealthy(ctx, d, p, o, timeout); err != nil {
+	if err := waitHealthy(ctx, d, p, o, res, timeout); err != nil {
 		r := revert(ctx, d, p, o, before, res, "health", snapDir, timeout)
 		return r, err
 	}
@@ -223,6 +244,11 @@ func currentPair(o Options) (controlplane.Ledger, error) {
 	ui, err := controlplane.ReadUIImage(o.ControlPlaneDir)
 	if err != nil {
 		return controlplane.Ledger{}, err
+	}
+	if o.BrainCfg.Image == "" {
+		// Fail before anything is touched rather than writing a ledger whose
+		// previous pair cannot be rolled back to.
+		return controlplane.Ledger{}, errors.New("no current brain image: neither the ledger nor BrainCfg.Image names one")
 	}
 	return controlplane.Ledger{Current: controlplane.Pair{Brain: o.BrainCfg.Image, UI: ui}}, nil
 }
@@ -255,6 +281,9 @@ func recreate(ctx context.Context, d Docker, o Options, target controlplane.Pair
 		if err := d.RemoveContainer(ctx, o.BrainCfg.ContainerName); err != nil {
 			return fmt.Errorf("remove brain container: %w", err)
 		}
+		if err := checkProtocolMajor(ctx, d, target.Brain); err != nil {
+			return err
+		}
 		if err := d.Run(ctx, brainSpec(o, target.Brain)); err != nil {
 			return fmt.Errorf("run brain on %s: %w", target.Brain, err)
 		}
@@ -267,32 +296,41 @@ func recreate(ctx context.Context, d Docker, o Options, target controlplane.Pair
 	return nil
 }
 
-// waitHealthy probes both components, not only the one that moved. A UI-only
-// ship still runs `compose up` on a project the brain is reconciling, and a
-// brain-only ship restarts the process the dashboard talks to — "the component
-// I touched is fine" is not the same claim as "the box is fine", and the second
-// is the one worth committing on.
-func waitHealthy(ctx context.Context, d Docker, p Prober, o Options, timeout time.Duration) error {
+// waitHealthy probes the components this transaction actually recreated.
+//
+// It deliberately does **not** probe a component that did not move. A UI-only
+// ship never touches the brain container and a brain-only ship never touches
+// the UI, so a failure there says nothing about this update — but it would
+// still trigger a revert, undoing a good change because of an outage that
+// predates it and that the revert cannot fix. That is the same reasoning that
+// makes a 500 count as "serving" (cli.go): the question is whether what we just
+// started came up, not whether the whole box is well. Box-wide health has its
+// own surface in the brain (HEALTH.md).
+func waitHealthy(ctx context.Context, d Docker, p Prober, o Options, res Result, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	brainIP, err := d.ContainerIP(ctx, o.BrainCfg.ContainerName)
-	if err != nil {
-		return fmt.Errorf("resolve brain address: %w", err)
+	if res.BrainChanged {
+		brainIP, err := d.ContainerIP(ctx, o.BrainCfg.ContainerName)
+		if err != nil {
+			return fmt.Errorf("resolve brain address: %w", err)
+		}
+		if err := p.WaitServing(ctx, fmt.Sprintf("http://%s:%d/healthz", brainIP, brainPort)); err != nil {
+			return fmt.Errorf("brain health check: %w", err)
+		}
 	}
-	if err := p.WaitServing(ctx, fmt.Sprintf("http://%s:%d/healthz", brainIP, brainPort)); err != nil {
-		return fmt.Errorf("brain health check: %w", err)
-	}
-	uiName := o.UIContainerName
-	if uiName == "" {
-		uiName = controlplane.UIServiceName
-	}
-	uiIP, err := d.ContainerIP(ctx, uiName)
-	if err != nil {
-		return fmt.Errorf("resolve ui address: %w", err)
-	}
-	if err := p.WaitServing(ctx, fmt.Sprintf("http://%s:%d/", uiIP, uiPort)); err != nil {
-		return fmt.Errorf("ui health check: %w", err)
+	if res.UIChanged {
+		uiName := o.UIContainerName
+		if uiName == "" {
+			uiName = controlplane.UIServiceName
+		}
+		uiIP, err := d.ContainerIP(ctx, uiName)
+		if err != nil {
+			return fmt.Errorf("resolve ui address: %w", err)
+		}
+		if err := p.WaitServing(ctx, fmt.Sprintf("http://%s:%d/", uiIP, uiPort)); err != nil {
+			return fmt.Errorf("ui health check: %w", err)
+		}
 	}
 	return nil
 }
@@ -308,6 +346,15 @@ func revert(ctx context.Context, d Docker, p Prober, o Options, before controlpl
 	r := failed(res, mode)
 	r.Reverted = true
 	slog.Warn("control-plane update failed; reverting", "step", mode, "image", before.Current.Brain)
+
+	// The revert must outlive whatever ended the apply. If it inherited the
+	// caller's context — a job that hit its MaxDuration, a client that hung up,
+	// host-agent shutting down — every `docker` call here would fail instantly
+	// on a dead context, and the box would be left running the new brain
+	// against a ledger naming the old pair, or with no brain container at all.
+	// A cancelled apply is exactly when the rollback matters most.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), revertBudget)
+	defer cancel()
 
 	if err := declare(o, before, res); err != nil {
 		r.RevertErr = fmt.Errorf("restore declaration: %w", err)
@@ -338,7 +385,7 @@ func revert(ctx context.Context, d Docker, p Prober, o Options, before controlpl
 	}
 	// Whether the restored pair answers is worth knowing, but it does not
 	// change what happens next: there is no third generation to fall back to.
-	if err := waitHealthy(ctx, d, p, o, timeout); err != nil {
+	if err := waitHealthy(ctx, d, p, o, res, timeout); err != nil {
 		slog.Error("reverted control plane is not answering", "err", err)
 	}
 	return r
@@ -366,9 +413,40 @@ func gc(ctx context.Context, d Docker, o Options, before controlplane.Ledger, no
 			slog.Warn("could not remove expired control-plane image", "image", ref, "err", err)
 		}
 	}
-	if err := removeSnapshotDir(snapshotDirFor(o.SnapshotRoot, old.Brain)); err != nil {
-		slog.Warn("could not remove expired brain snapshot", "err", err)
+	// The snapshot dir is keyed by brain ref, so when the expired generation and
+	// the retained one share a brain ref (the previous update moved only the
+	// UI), this path is the snapshot this very transaction just took for the
+	// rollback target. Deleting it would leave the kept pair with images and no
+	// database — and restoreBrainDB reports a missing snapshot as success, so
+	// the future rollback would silently restore nothing.
+	if !keep[old.Brain] {
+		if err := removeSnapshotDir(snapshotDirFor(o.SnapshotRoot, old.Brain)); err != nil {
+			slog.Warn("could not remove expired brain snapshot", "err", err)
+		}
 	}
+}
+
+// checkProtocolMajor refuses to start a brain whose declared wire-protocol
+// major this host-agent does not speak — the same guard brainlaunch.Launch
+// applies on the first-boot path (BRAIN_HOST_PROTOCOL.md # Versioning).
+//
+// Skipping it here would be worse than skipping it at boot. The mismatched
+// brain **starts and answers /healthz**, because the brain serves HTTP before
+// it needs host-agent for anything, so the health check passes and the update
+// commits. The box then looks fine until its next reboot, when brainlaunch
+// reads the committed ref out of the ledger, applies the guard, and refuses —
+// leaving the box with no brain at all, and no failed update to point at.
+func checkProtocolMajor(ctx context.Context, d Docker, ref string) error {
+	want := strconv.Itoa(protocol.Major)
+	got, err := d.ImageLabel(ctx, ref, protocol.ImageProtocolMajorLabel)
+	if err != nil {
+		return fmt.Errorf("read brain protocol label: %w", err)
+	}
+	if got != want {
+		return fmt.Errorf("%w: brain image %q declares protocol major %q, host-agent speaks %q",
+			brainlaunch.ErrProtocolMismatch, ref, got, want)
+	}
+	return nil
 }
 
 func brainSpec(o Options, ref string) brainlaunch.RunSpec {

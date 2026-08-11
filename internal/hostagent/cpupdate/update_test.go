@@ -3,14 +3,17 @@ package cpupdate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/malmoos/malmo/internal/hostagent/brainlaunch"
 	"github.com/malmoos/malmo/internal/hostagent/controlplane"
+	"github.com/malmoos/malmo/internal/protocol"
 )
 
 const (
@@ -29,6 +32,7 @@ type fakeDocker struct {
 	// failures, keyed by "verb:arg". A test sets one to make that step break.
 	failOn map[string]error
 	ips    map[string]string
+	labels map[string]string
 	// onRun lets a test simulate what a started container does to the box —
 	// notably a new brain migrating the SQLite database on boot, which is the
 	// case image rollback alone cannot undo.
@@ -39,10 +43,16 @@ type fakeDocker struct {
 }
 
 func newFakeDocker() *fakeDocker {
-	return &fakeDocker{failOn: map[string]error{}, ips: map[string]string{}}
+	return &fakeDocker{failOn: map[string]error{}, ips: map[string]string{}, labels: map[string]string{}}
 }
 
-func (f *fakeDocker) record(call string) error {
+// record fails on a dead context, the way exec.CommandContext does. Without
+// this the fake would happily "run docker" after cancellation and the
+// revert-survives-cancellation test would prove nothing.
+func (f *fakeDocker) record(ctx context.Context, call string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%s: %w", call, err)
+	}
 	if f.beforeCall != nil {
 		f.beforeCall(call)
 	}
@@ -50,21 +60,35 @@ func (f *fakeDocker) record(call string) error {
 	return f.failOn[call]
 }
 
-func (f *fakeDocker) Pull(_ context.Context, ref string) error { return f.record("pull:" + ref) }
-func (f *fakeDocker) RemoveContainer(_ context.Context, name string) error {
-	return f.record("rm:" + name)
+func (f *fakeDocker) Pull(ctx context.Context, ref string) error { return f.record(ctx, "pull:"+ref) }
+func (f *fakeDocker) RemoveContainer(ctx context.Context, name string) error {
+	return f.record(ctx, "rm:"+name)
 }
-func (f *fakeDocker) Run(_ context.Context, spec brainlaunch.RunSpec) error {
+
+// ImageLabel answers with the protocol major this host-agent speaks unless a
+// test overrides it, so the lockstep guard is satisfied by default and can be
+// made to fail on demand.
+func (f *fakeDocker) ImageLabel(ctx context.Context, ref, _ string) (string, error) {
+	if err := f.record(ctx, "label:"+ref); err != nil {
+		return "", err
+	}
+	if v, ok := f.labels[ref]; ok {
+		return v, nil
+	}
+	return strconv.Itoa(protocol.Major), nil
+}
+
+func (f *fakeDocker) Run(ctx context.Context, spec brainlaunch.RunSpec) error {
 	if f.onRun != nil {
 		f.onRun(spec.Image)
 	}
-	return f.record("run:" + spec.Image)
+	return f.record(ctx, "run:"+spec.Image)
 }
-func (f *fakeDocker) ComposeUp(_ context.Context, dir, project string) (string, error) {
-	return "", f.record("compose:" + project)
+func (f *fakeDocker) ComposeUp(ctx context.Context, dir, project string) (string, error) {
+	return "", f.record(ctx, "compose:"+project)
 }
-func (f *fakeDocker) ContainerIP(_ context.Context, name string) (string, error) {
-	if err := f.record("ip:" + name); err != nil {
+func (f *fakeDocker) ContainerIP(ctx context.Context, name string) (string, error) {
+	if err := f.record(ctx, "ip:"+name); err != nil {
 		return "", err
 	}
 	if ip, ok := f.ips[name]; ok {
@@ -72,7 +96,9 @@ func (f *fakeDocker) ContainerIP(_ context.Context, name string) (string, error)
 	}
 	return "10.0.0.1", nil
 }
-func (f *fakeDocker) RemoveImage(_ context.Context, ref string) error { return f.record("rmi:" + ref) }
+func (f *fakeDocker) RemoveImage(ctx context.Context, ref string) error {
+	return f.record(ctx, "rmi:"+ref)
+}
 
 func (f *fakeDocker) indexOf(t *testing.T, call string) int {
 	t.Helper()
@@ -100,8 +126,11 @@ type fakeProber struct {
 	seen     []string
 }
 
-func (p *fakeProber) WaitServing(_ context.Context, url string) error {
+func (p *fakeProber) WaitServing(ctx context.Context, url string) error {
 	p.seen = append(p.seen, url)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return p.failURLs[url]
 }
 
@@ -487,5 +516,129 @@ func TestApplyDerivesTheCurrentPairWithoutALedger(t *testing.T) {
 	prev := ledgerOf(t, o).Previous
 	if prev == nil || prev.Brain != oldBrain || prev.UI != oldUI {
 		t.Errorf("previous = %+v, want the baked brain ref and the compose's UI ref", prev)
+	}
+}
+
+// A brain image declaring a protocol major this host-agent does not speak must
+// never be committed. Skipping this guard is worse than skipping it at boot:
+// the mismatched brain starts and answers /healthz (it serves HTTP before it
+// needs host-agent), so the update commits and the box looks fine — until the
+// next reboot, when brainlaunch reads that ref out of the ledger, applies the
+// guard, and refuses, leaving the box with no brain and no failed update to
+// point at.
+func TestApplyRefusesABrainWithTheWrongProtocolMajor(t *testing.T) {
+	o := setup(t)
+	o.BrainRef = newBrain
+	d := newFakeDocker()
+	d.labels[newBrain] = "99"
+
+	res, err := Apply(context.Background(), d, &fakeProber{failURLs: map[string]error{}}, o)
+	if err == nil {
+		t.Fatal("Apply succeeded on a protocol-major mismatch")
+	}
+	if !errors.Is(err, brainlaunch.ErrProtocolMismatch) {
+		t.Errorf("err = %v, want it to wrap ErrProtocolMismatch", err)
+	}
+	if res.FailureMode != "recreate" || !res.Reverted {
+		t.Fatalf("result = %+v, want a reverted recreate failure", res)
+	}
+	if d.has("run:" + newBrain) {
+		t.Error("the mismatched brain was started")
+	}
+	if got := ledgerOf(t, o).Current.Brain; got != oldBrain {
+		t.Errorf("ledger brain = %q after revert, want %q", got, oldBrain)
+	}
+}
+
+// The revert has to survive whatever ended the apply. If it inherited the
+// caller's context — a job past its deadline, a client that hung up, host-agent
+// shutting down — every docker call in the rollback would fail instantly and
+// the box would be left on the new brain with a ledger naming the old pair.
+func TestRevertRunsEvenWhenTheCallersContextIsCancelled(t *testing.T) {
+	o := setup(t)
+	o.BrainRef, o.UIRef = newBrain, newUI
+	d := newFakeDocker()
+	p := &fakeProber{failURLs: map[string]error{}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel the moment the new brain starts, so the health check and
+	// everything after it runs under a dead context.
+	d.onRun = func(image string) {
+		if image == newBrain {
+			cancel()
+		}
+	}
+	defer cancel()
+	// Fail the health check too, so the revert is what we are watching rather
+	// than the cancellation racing a success.
+	p.failURLs["http://10.0.0.1:8080/healthz"] = errors.New("connection refused")
+
+	res, err := Apply(ctx, d, p, o)
+	if err == nil {
+		t.Fatal("Apply succeeded, want a failure")
+	}
+	if !res.Reverted {
+		t.Fatalf("result = %+v, want a revert", res)
+	}
+	if res.RevertErr != nil {
+		t.Errorf("RevertErr = %v, want the revert to complete despite the cancelled context", res.RevertErr)
+	}
+	if !d.has("run:" + oldBrain) {
+		t.Errorf("the old brain was not restarted; calls were %v", d.calls)
+	}
+	if got := ledgerOf(t, o).Current; got.Brain != oldBrain || got.UI != oldUI {
+		t.Errorf("ledger current = %+v, want the old pair restored", got)
+	}
+}
+
+// A component that did not move is not probed. Probing it would revert a good
+// update because of an outage that predates it and that the revert cannot fix.
+func TestApplyDoesNotProbeAComponentThatDidNotMove(t *testing.T) {
+	o := setup(t)
+	o.BrainRef = newBrain // brain-only
+	d := newFakeDocker()
+	// The UI has been down since before this update started.
+	d.failOn["ip:malmo-ui"] = errors.New("no such container")
+
+	res, err := Apply(context.Background(), d, &fakeProber{failURLs: map[string]error{}}, o)
+	if err != nil {
+		t.Fatalf("Apply: %v — a pre-existing UI outage must not fail a brain-only update", err)
+	}
+	if res.Reverted {
+		t.Error("a brain-only update was reverted because of the UI")
+	}
+	if d.has("ip:malmo-ui") {
+		t.Error("the UI was probed although it did not move")
+	}
+}
+
+// The snapshot kept for the rollback target must survive GC. When the previous
+// generation moved only the UI, the expired generation and the retained one
+// share a brain ref — and so share a snapshot directory. Deleting it would
+// leave the kept pair with images and no database, and restoreBrainDB reports a
+// missing snapshot as success, so the rollback would silently restore nothing.
+func TestGCKeepsTheSnapshotTheRollbackTargetNeeds(t *testing.T) {
+	o := setup(t)
+	o.BrainRef = newBrain
+	now := time.Now()
+	o.Now = func() time.Time { return now }
+	// Last update moved only the UI, so both generations name the same brain.
+	if err := controlplane.WriteLedger(o.ControlPlaneDir, controlplane.Ledger{
+		Current:  controlplane.Pair{Brain: oldBrain, UI: oldUI, AppliedAt: now.Add(-9 * 24 * time.Hour)},
+		Previous: &controlplane.Pair{Brain: oldBrain, UI: "malmo-ui:ancient", AppliedAt: now.Add(-9 * 24 * time.Hour)},
+	}); err != nil {
+		t.Fatalf("seed ledger: %v", err)
+	}
+	d := newFakeDocker()
+
+	if _, err := Apply(context.Background(), d, &fakeProber{failURLs: map[string]error{}}, o); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	snap := filepath.Join(snapshotDirFor(o.SnapshotRoot, oldBrain), "malmo.db")
+	if _, err := os.Stat(snap); err != nil {
+		t.Errorf("the retained pair's snapshot was collected: %v", err)
+	}
+	if d.has("rmi:" + oldBrain) {
+		t.Error("the brain image the rollback target needs was collected")
 	}
 }

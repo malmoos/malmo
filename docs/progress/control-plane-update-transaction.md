@@ -33,10 +33,21 @@ The transaction:
 - `UPDATES.md` # 8.3 / # 8.4 step 3 — one actor, declaration-before-recreate, and the same transaction under both triggers.
 - `CLAUDE.md` # Go code discipline — consumer-side `Docker` and `Prober` interfaces, `slog` with `image`/`step`/`err`.
 
+## What review found
+
+Eight findings on the PR, all fixed in it. Two were correctness bugs worth naming:
+
+- **The recreate skipped `brainlaunch`'s protocol-major lockstep check.** A brain image declaring a major this host-agent does not speak would have started, answered `/healthz` (the brain serves HTTP before it needs host-agent), and **committed** — then failed at the next reboot, when `brainlaunch` reads that ref out of the ledger, applies the guard, and refuses. The box would have had no brain and no failed update to point at. The check now runs before the start, and a mismatch is a `recreate` failure, so the revert fires.
+- **The revert ran on the caller's context.** A cancelled or expired context — a job past its deadline, a client that hung up, host-agent shutting down — would have made every `docker` call in the rollback fail instantly, leaving the box on the new brain with a ledger naming the old pair. The revert now runs on `context.WithoutCancel` with its own 5-minute budget: a cancelled apply is exactly when the rollback matters most.
+
+Also fixed: the snapshot dir is cleared before reuse (a retried update could otherwise carry a stale `-wal` from the earlier attempt into the new snapshot); GC no longer deletes the snapshot the retained rollback target needs when both generations name the same brain; `waitHealthy` probes only what moved, so a pre-existing UI outage cannot revert a good brain-only update; two `FailureMode` values were pointing at the wrong step; `BrainCfg.Image`'s doc contradicted the code in a way that would have produced an unrollbackable ledger; and the snapshot now fsyncs its directory, not just its files.
+
+**The first cancellation test was vacuous** and a mutation check caught it: the Docker fake ignored the context entirely, so it kept "running docker" after cancellation and the test passed with the fix removed. The fake now fails on a dead context the way `exec.CommandContext` does. Both Block fixes are mutation-checked.
+
 ## Known gaps & deviations
 
 - **Nothing calls `Apply` yet.** The trigger (#381) is the next slice: this ships the transaction and no way to start one.
-- **Proven against a fake Docker only.** Eleven transaction tests plus three snapshot tests cover both-changed, UI-only, brain-only, declaration ordering, declaration restore, health-failure revert with a simulated schema migration, pull failure, no-op, GC in and out of the window, and the no-ledger derivation — but no real daemon, no real registry, no real brain restart. That is #382, and it is the gap that matters most here.
+- **Proven against a fake Docker only.** Fifteen transaction tests plus four snapshot tests cover both-changed, UI-only, brain-only, declaration ordering, declaration restore, health-failure revert with a simulated schema migration, pull failure, no-op, GC in and out of the window, and the no-ledger derivation — but no real daemon, no real registry, no real brain restart. That is #382, and it is the gap that matters most here.
 - **The health probe reaches containers by IP** (`docker inspect`), because the control-plane containers publish no ports. That works from the host, where host-agent runs, and is not a path anything else uses today.
 - **`brainPort` and `uiPort` are constants.** The brain's port is `cmd/brain`'s `MALMO_LISTEN` default; a box that overrode it would be probed on the wrong port. Nothing overrides it today, and threading the value through would mean host-agent reading the brain's environment.
 - **No retry, and no "three consecutive failures then pin"** (# 3 step 5). One attempt, one revert. The counter belongs with the trigger that decides when to try again.

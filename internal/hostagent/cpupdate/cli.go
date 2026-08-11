@@ -44,6 +44,12 @@ func (CLIDocker) RemoveContainer(ctx context.Context, name string) error {
 	return nil
 }
 
+// ImageLabel delegates to brainlaunch's CLI so the lockstep check reads the
+// label exactly the way the first-boot path reads it.
+func (CLIDocker) ImageLabel(ctx context.Context, ref, label string) (string, error) {
+	return brainlaunch.NewCLIDocker().ImageLabel(ctx, ref, label)
+}
+
 // Run delegates to brainlaunch's own CLI, so an updated brain is started by
 // exactly the code that starts it at boot rather than by a second `docker run`
 // builder that could drift from it.

@@ -82,3 +82,34 @@ func read(t *testing.T, dir, name string) string {
 	}
 	return string(b)
 }
+
+// The snapshot dir is named after the brain ref, so a retried update reuses it.
+// A `-wal` left by an earlier attempt must not survive into the new snapshot:
+// the database has since been checkpointed and no longer has one, so restoring
+// the pair would put back a merge of two generations — the exact thing
+// restoreBrainDB refuses to do.
+func TestSnapshotClearsAnEarlierAttemptsFiles(t *testing.T) {
+	stateDir, snapDir := t.TempDir(), filepath.Join(t.TempDir(), "snap")
+	write(t, stateDir, "malmo.db", "DB-v1")
+	write(t, stateDir, "malmo.db-wal", "WAL-FROM-THE-FIRST-ATTEMPT")
+	if err := snapshotBrainDB(stateDir, snapDir); err != nil {
+		t.Fatalf("first snapshot: %v", err)
+	}
+
+	// The update failed and reverted; the brain ran on, checkpointed, and no
+	// longer has a WAL. The admin retries.
+	if err := os.Remove(filepath.Join(stateDir, "malmo.db-wal")); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	write(t, stateDir, "malmo.db", "DB-v1-plus-more-writes")
+	if err := snapshotBrainDB(stateDir, snapDir); err != nil {
+		t.Fatalf("second snapshot: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(snapDir, "malmo.db-wal")); !os.IsNotExist(err) {
+		t.Error("a WAL from the earlier attempt survived into the new snapshot")
+	}
+	if got := read(t, snapDir, "malmo.db"); got != "DB-v1-plus-more-writes" {
+		t.Errorf("snapshot database = %q, want the current one", got)
+	}
+}
