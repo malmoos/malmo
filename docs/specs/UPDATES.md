@@ -6,21 +6,28 @@ This doc is **draft / option-survey**. Most sections present alternatives with a
 
 ## What this doc covers
 
-A box has **five independent update streams**, each with its own cadence, risk profile, and delivery mechanism:
+A box has **two update streams**. The split is not by component, it is by **what the thing runs on**:
 
-1. **Debian base** — kernel, system libraries, firmware. Slow.
-2. **`host-agent`** — Debian package from our apt repo. Rare.
-3. **Control plane (`malmo-brain` + `malmo-ui`)** — two container images sharing one release manifest. Frequent. UI usually moves more often than brain; only what changed recreates.
-4. **Apps** — Docker images + manifest versions, per app. Frequent and varied.
-5. **Managed services** — Postgres/Redis container versions. Triggered by app manifests, not by us.
+- **Stream A — the box.** Debian base, kernel, firmware, and `host-agent`. This is the machine itself. It is slow, it sometimes needs a reboot, and it is **one atomic unit**: you do not get to have a new kernel with an old `host-agent`. Today that unit is realized by `apt` (# 1, # 2); the end state is an A/B image, deferred to v2 (`SPEC.md`).
+- **Stream B — the containers.** `malmo-brain`, `malmo-ui`, apps, and managed services. These are images. They are frequent, they need no reboot, and each one already carries its own rollback story, because "keep the old image" is what a container registry is for.
 
-This doc spells out the policy for each, plus the cross-cutting concerns: scheduling, rollback, dependency ordering, failure handling.
+Within stream B the components still have their own policies — the control plane is admin-triggered or cloud-pushed, apps auto-apply unless permissions expand, managed services are invisible infrastructure. Those policies are in # 3, # 4, and # 5 below and are unchanged by the two-stream framing. What the framing fixes is the **unit of testing and the unit of rollback**: two streams means we ship and verify two combinations, not the cross-product of five.
+
+This doc spells out the policy for each component, plus the cross-cutting concerns: scheduling, rollback, dependency ordering, failure handling. Sections # 1 to # 7 describe the **appliance** profile — a box malmo does not operate. The **hosted** profile (`ENVIRONMENT.md`) keeps both streams and all the apply/rollback mechanics, but moves the update *decision* from the box admin to the cloud control plane. That delta is # 8.
 
 It does **not** cover the eventual A/B immutable migration mechanics — that's a v2 design once the product has traction (`SPEC.md`).
 
+### Why two and not five
+
+This doc used to describe five independent streams (Debian base, `host-agent`, control plane, apps, managed services). The flip to two is recorded in `DECISIONS.md` 2026-08-11. The short reason: five independent streams means the fleet holds a cross-product of versions that we can never enumerate, let alone test. Two streams means a box is described by two numbers.
+
+The comparable products agree, and the one that disagrees is the cautionary tale. umbrelOS ships whole-system A/B images (Rugix for the image, Mender for the OTA), with apps updating separately from a git-backed store. ZimaOS ships A/B slots via RAUC. Both converged on "the box is one atomic thing, the apps are not." CasaOS is the counter-example: a shell script that downloads per-component binaries (Gateway, MessageBus, UserService, LocalStorage, AppManagement, CLI) from GitHub releases, independently — and per-component drift is a recurring source of broken installs.
+
+We are not copying their mechanism (they are image-based appliances; our stream B is containers, which are already atomic and already versioned). We are copying the **boundary**.
+
 ---
 
-## 1. Debian base
+## 1. Debian base *(stream A — the box)*
 
 The OS underneath us — kernel, libc, OpenSSL, firmware, Docker itself.
 
@@ -47,7 +54,7 @@ Cons:
 
 ---
 
-## 2. `host-agent`
+## 2. `host-agent` *(stream A — the box)*
 
 Tiny native binary, supervises the brain (`CONTROL_PLANE.md`). Updates are rare — anything that changes often lives in the brain instead.
 
@@ -72,7 +79,7 @@ Cons:
 
 ---
 
-## 3. Control plane — `malmo-brain` + `malmo-ui`
+## 3. Control plane — `malmo-brain` + `malmo-ui` *(stream B — containers)*
 
 The control plane ships as **two container images** on **one release manifest**: `malmo-brain` (the daemon) and `malmo-ui` (the dashboard, per `WEB_UI.md`). Most weeks the UI moves and the brain doesn't; occasionally the brain moves and the UI doesn't; occasionally they move together (coordinated change requiring a new brain endpoint that the UI consumes).
 
@@ -138,7 +145,7 @@ Impact at apply time depends on what moved:
 
 ---
 
-## 4. Apps
+## 4. Apps *(stream B — containers)*
 
 `SPEC.md` locked: **automatic by default, per-app toggle off.** This section spells out what "automatic" means concretely and the one carve-out where we prompt.
 
@@ -211,7 +218,7 @@ When hooks return, `pre_update` (author-provided, app-aware) replaces the tar fo
 
 ---
 
-## 5. Managed services
+## 5. Managed services *(stream B — containers)*
 
 Postgres, Redis, etc. Per `SERVICE_PROVISIONING.md`, brain owns lifecycle.
 
@@ -290,16 +297,19 @@ No other UX-driven manifest fields in v1.
 
 ### Update ordering
 
-When multiple streams have updates pending in the same window:
+**Stream B before stream A**, and within stream B, control plane before apps:
 
 ```
-host-agent  →  malmo-brain  →  apps & managed services  →  Debian base
+stream B:  malmo-brain + malmo-ui  →  apps & managed services
+stream A:  Debian base + host-agent  (last; may reboot)
 ```
 
 Reasoning:
-- host-agent must support whatever brain version comes next (declared in the release manifest).
-- Brain must support the manifest_version of any app coming next.
-- Debian base updates last because they often want a reboot, and we'd rather reboot once at the end of the window than mid-flight.
+- Brain must support the manifest_version of any app coming next, so the control plane moves before the apps that depend on it.
+- Stream A goes last because it often wants a reboot, and we'd rather reboot once at the end of the window than mid-flight.
+- Stream A is internally ordered by `apt`, not by us. Debian base and `host-agent` are one transaction (# What this doc covers); asking which of the two goes first is asking about apt's dependency solver, not about malmo policy.
+
+The one ordering constraint that crosses the streams is the **`host-agent` ↔ brain compat floor**: a brain build declares the oldest `host-agent` it will talk to (`minimumAgentVersion` in `cmd/brain/main.go`, surfaced as a health issue per `HEALTH.md`). If a stream-B update would land a brain that needs a newer `host-agent` than stream A has delivered, the update parks with a clear reason rather than proceeding — see # Compatibility matrix.
 
 ### Reboots
 
@@ -336,22 +346,77 @@ Telemetry is a **signal that accelerates our reaction time**, not a gate. Boxes 
 
 ### Rollback summary
 
-| Stream | Rollback mechanism |
-|---|---|
-| Debian base | None in v1; A/B images later |
-| `host-agent` | apt revert (manual, rare path) |
-| `malmo-brain` + `malmo-ui` | Previous image pair + SQLite snapshot; revert as a pair, automatic on health-check fail of either |
-| App | Previous image + pre-update tar of `data_volumes` (+ `pg_dump` of managed-service DB if any), automatic on health-check fail; keep 7 days |
-| Managed service (patch) | Previous image; data is shared so this is a tag-flip |
-| Managed service (major migration) | Pre-migration dump, automatic on app-update fail |
+| Stream | Component | Rollback mechanism |
+|---|---|---|
+| A — the box | Debian base | None in v1; A/B images later |
+| A — the box | `host-agent` | apt revert (manual, rare path) |
+| B — containers | `malmo-brain` + `malmo-ui` | Previous image pair + SQLite snapshot; revert as a pair, automatic on health-check fail of either |
+| B — containers | App | Previous image + pre-update tar of `data_volumes` (+ `pg_dump` of managed-service DB if any), automatic on health-check fail; keep 7 days |
+| B — containers | Managed service (patch) | Previous image; data is shared so this is a tag-flip |
+| B — containers | Managed service (major migration) | Pre-migration dump, automatic on app-update fail |
 
-The Debian-base "no rollback" is the v1 hole we accept. Everything else has a defined revert path.
+The table shows the asymmetry that motivates the two-stream split: **every rollback in stream B is automatic and mechanical, and neither rollback in stream A is.** Containers keep their previous image by construction; a box that has run `apt upgrade` has no previous state to return to. Stream A's "no real rollback" is the v1 hole we accept, and A/B images are how it closes.
+
+---
+
+## 8. Hosted boxes
+
+On the `hosted` profile (`ENVIRONMENT.md`) malmo operates the box. That single fact changes who decides and how the box finds out. It changes almost nothing about what actually happens on disk.
+
+**What is identical to appliance:** both streams, the apply transaction, the pre-update SQLite snapshot, the per-app `data_volumes` tar, the health-check-then-revert path, the 7-day retention, the 03:00–04:00 window, and the stream-B-before-stream-A ordering. All of # 1 to # 7 still applies. The expensive half of the update machinery is shared, and we only build it once.
+
+**What is different:** three things, below.
+
+### 8.1 The target version lives in the cloud, per box
+
+The cloud control plane (`malmoos/cloud`, private) holds a **target version per `box_id`**. It does not serve `stable.json`, and a hosted box does not poll `releases.malmo.network` or verify a minisign signature. That whole mechanism (`RELEASE_MANIFEST.md`) is appliance-only.
+
+Why per-box rather than one fleet-wide value, or reusing the signed manifest:
+
+- **We already have the identity.** Every hosted box was provisioned with a `box_id` and enrollment credentials (`ENVIRONMENT.md` # Provisioning), and the brain persists the `box_id` as frozen identity. A per-box target version is one more column next to facts the control plane already keeps.
+- **It gives us staged rollout and pinning for free**, with no schema. `RELEASE_MANIFEST.md` # Future work defers cohorts behind a deterministic `hash(machine_id || version)` bucket precisely because a static file cannot address one box. A per-box target can: move 5 boxes, watch, move the rest; pin one troubled tenant to an old version while we debug; halt everything by not advancing.
+- **The kill switch gets cheaper.** On appliance, `rollback_to` exists because we cannot reach the boxes. On hosted we can. A bad release is fixed by setting a new target, and it lands on the next window rather than needing a retraction protocol.
+
+**The box polls the cloud; the cloud never connects in.** The box asks "what should I be running?" on its existing outbound path. No inbound port, no listener, nothing new in the firewall. This matches the rest of the hosted posture — outbound-only is why `malmo-metadata-firewall.service` can be as strict as it is (`ENVIRONMENT.md` # Provisioning, #251).
+
+The box authenticates to the cloud with its enrollment credentials. **The concrete auth for this channel is not designed yet** — the enrollment credentials in `seed.json` today are scoped to acme-dns, not to a general box↔cloud API. Parked in `NEXT.md`.
+
+### 8.2 We push; the tenant is told, not asked
+
+There is no "Update available — click to install" prompt on hosted. The update applies in the window and the tenant admin gets a notification afterwards (`NOTIFICATIONS.md`, routed to admins).
+
+The reasoning is ownership, not convenience. We run the machine, so an unpatched hosted box is our liability, not the tenant's oversight. A box sitting on a known-bad version because nobody logged in to click is a failure mode we would be choosing on purpose. Every hosted product patches this way.
+
+**The one carve-out that survives: the app permission-expansion prompt (# 4) still prompts the instance owner.** We push *infrastructure* — a new brain, a new UI, a patched Debian. We do not push a *new grant of access to someone's data*. If Photos 2.0 wants read-write on the owner's Movies folder, that is a trust decision belonging to the person whose folder it is, and hosting their box does not transfer it to us. So on hosted, the box updates itself without asking, and an app that wants more permission still waits for its owner. That asymmetry is deliberate.
+
+### 8.3 `host-agent` applies both brain and UI
+
+One actor runs the stream-B control-plane transaction: `host-agent` pulls and recreates **both** `malmo-brain` and `malmo-ui`. One transaction, one health check, one rollback. The brain cannot recreate itself, and splitting the job so that host-agent does the brain and the brain does the UI would mean two actors, two rollback paths, and a coordinated brain+UI ship that needs them to agree mid-flight.
+
+This has a real cost worth naming: `CONTROL_PLANE.md` locks the **brain** as the launcher of `malmo-ui` and Caddy, so `host-agent` is here reaching past the brain to containers the brain reconciles. Left alone, the brain would come back up and reconcile the UI straight back to the version it knew about.
+
+**The staged control-plane compose file is the handoff point.** `host-agent` writes the new image references into the staged compose (`MALMO_CONTROL_PLANE_DIR`, the same file `lifecycle.EnsureControlPlane` reconciles from) *before* recreating anything. The brain restarts, reads that file, and reconciles to the versions already running. The two actors never disagree because they are reading the same declaration — host-agent is the one that writes it, the brain is the one that maintains it. Rollback writes the old references back the same way.
+
+### 8.4 Mechanics
+
+1. `host-agent` polls the cloud for this box's target version.
+2. If the target differs from what is running, it applies in the next window — no prompt.
+3. **Stream B:** pull by digest, snapshot the brain's SQLite, write the staged compose, recreate the changed containers, health-check, revert both on failure of either (# 3).
+4. **Stream A:** unchanged from # 1 and # 2 — `unattended-upgrades` security-only plus our apt repo, last in the window, reboot opportunistically. A hosted VM reboot is cheaper than an appliance one: no user is physically waiting, and the window is ours.
+5. The box reports the outcome back to the cloud: version now running, success or failure, and the failure mode if it rolled back.
+
+Step 5 is what the whole design is for. On appliance our visibility into a bad release is "GitHub issues and the forum, hours to days" (# 3). On hosted it is a fleet view that tells us a version is failing before the second box tries it.
+
+### 8.5 Deferred on hosted
+
+- **Per-box targeting UI and cohort management** are cloud-side concerns (`malmoos/cloud`), not box-side. This doc specifies what the box asks for and obeys; how an operator sets it is the other repo's problem.
+- **Auto-rollback triggered by the fleet**, rather than by the box's own health check. If three boxes fail the same target, the cloud should stop handing that target out. Sensible, cloud-side, not v1.
 
 ---
 
 ## Locked decisions
 
-- **Five independent update streams**, each with its own policy.
+- **Two update streams, split by what the thing runs on:** stream A is **the box** (Debian base + kernel + firmware + `host-agent`) — one atomic unit, may reboot, realized by `apt` today and by an A/B image later. Stream B is **the containers** (brain, UI, apps, managed services) — per-image, no reboot, rollback by keeping the previous image. Flipped from the earlier five-stream model in `DECISIONS.md` 2026-08-11.
 - **Two-track posture, modeled after Android:** silent auto-apply for security patches; admin-prompted for anything that changes meaningful surface (brain, app permissions, OS major upgrades).
 - **Debian base: `unattended-upgrades` security-only.** Full upgrades and Debian point-releases stay admin-triggered until A/B images.
 - **`host-agent`: `unattended-upgrades` from our apt repo.**
@@ -362,10 +427,14 @@ The Debian-base "no rollback" is the v1 hole we accept. Everything else has a de
 - **Update surfaces in the dashboard:** per-app tile badge for available/applied/failed; Settings → Updates for the aggregate view and rollback affordance; auto-dismissing toast for overnight batches.
 - **Managed services: brain-owned, no user toggle.** Patches in update window; cross-major migrations triggered transparently by app updates with a pre-migration backup.
 - **Update window: 03:00–04:00 local** for apps, managed services, Debian base, reboots. Configurable, advanced setting. Brain has no fixed window — it's admin-triggered.
-- **Update ordering: host-agent → brain → apps & managed services → Debian base.**
+- **Update ordering: stream B before stream A** — brain + UI → apps & managed services → the box (which may reboot). Stream A's internal order is apt's business, not ours.
 - **Reboots: opportunistic in window only.** Surface a dashboard nag after 7 days; never force.
 - **Rollback: previous image + state snapshot kept for 7 days** for brain, apps, and managed-service patches. Debian base has no rollback in v1.
 - **All updates require internet; offline boxes stay current at their last-applied versions.**
+- **Hosted: the target version is per-box, held by the cloud control plane** (# 8.1). No `stable.json`, no minisign, no hourly manifest poll — that path is appliance-only (`RELEASE_MANIFEST.md`). The box polls outbound; the cloud never connects in.
+- **Hosted: updates are pushed, not prompted** (# 8.2). They apply in the window and the tenant admin is notified afterwards. **The app permission-expansion prompt is the one carve-out** — it still goes to the instance owner, because widening access to a user's data is their decision even on a box we operate.
+- **Hosted and appliance share the apply/rollback mechanics** (# 8). Only the trigger differs. The signed-manifest trigger and the cloud-target trigger are two thin paths onto one transaction.
+- **`host-agent` recreates both `malmo-brain` and `malmo-ui`** as one transaction (# 8.3). It writes the new image references into the staged control-plane compose first, so the brain reconciles to the same versions on restart instead of fighting them back.
 
 ## Open questions
 

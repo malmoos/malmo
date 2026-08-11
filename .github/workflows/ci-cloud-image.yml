@@ -85,10 +85,12 @@ on:
         default: true
 
 # contents: write is the minimum grant for `gh release upload`/`gh release
-# create` in the release-asset step below; nothing else in this workflow
-# needs write access.
+# create` in the release-asset step below. packages: write is what lets the
+# job's own GITHUB_TOKEN push the control-plane images to ghcr (# 370) — still
+# no long-lived registry credential anywhere in this lane.
 permissions:
   contents: write
+  packages: write
 
 # Cancel superseded runs on the same ref.
 concurrency:
@@ -343,3 +345,91 @@ jobs:
           # "already exists".
           gh release upload "$tag" "$asset" "$checksum" --clobber
           echo "attached $asset + $checksum to release $tag"
+
+      # ---- publish the control-plane images to ghcr (only when requested) ----
+
+      # Stream B — the containers — needs somewhere to pull from (UPDATES.md
+      # # 8). Until this step existed, malmo-brain and malmo-ui lived ONLY as
+      # `docker save` tarballs baked inside the disk image, so a running box had
+      # no way to obtain a newer control plane: the only path to new malmo was
+      # reprovisioning from a fresh image.
+      #
+      # Why this lane and not a separate, faster workflow: the images pushed
+      # here are the SAME local images `make build-cloud-image` already built
+      # and baked into the disk image that the seeded-boot proof just booted.
+      # Re-building them in a standalone job would publish artifacts that are
+      # merely equivalent, not identical, and would let a red boot proof
+      # coexist with a green publish. Gating on SHOULD_PUBLISH *after* the boot
+      # steps means we can only ever publish a control plane that was proven to
+      # boot. The cost — publish waits on a ~10 min build plus three QEMU boots
+      # — is accepted deliberately.
+      #
+      # ORDERING: this step runs LAST, after the Release-asset attach above.
+      # Every step in this job is a hard sequential gate (nothing here sets
+      # continue-on-error), so whatever runs first can block what comes after.
+      # The disk image on the Release is the artifact that actually gets
+      # consumed today; these ghcr images have no consumer until the updater
+      # lands. Pushing to ghcr first would mean a transient registry failure —
+      # auth, rate limit, network — leaves a release with a tag, a Release
+      # object, and NO downloadable image, which is strictly worse than the
+      # state before this step existed. Last means a ghcr failure turns the job
+      # red and is retried on its own, while the release still carries its
+      # image.
+      #
+      # Images are PUBLIC by design (BUILD.md # 6): the brain and UI are built
+      # from this public repo, and every secret a box holds is per-box and
+      # seeded at provision time, never baked into an image. A private registry
+      # would buy no confidentiality and would put a pull credential on every
+      # box. NOTE: ghcr packages are created PRIVATE on first push — flipping
+      # them to public is a one-time manual change in the package settings and
+      # cannot be done from here.
+      - name: Publish control-plane images to ghcr
+        if: ${{ env.SHOULD_PUBLISH == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          malmo_version="$(cat VERSION)"
+          tag="v${malmo_version}"
+          registry="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}"
+
+          # Same guard as the Release-asset step below, and duplicated rather
+          # than shared on purpose: SHOULD_PUBLISH is also true for a manual
+          # workflow_dispatch, which can run against ANY commit while VERSION
+          # still names an already-shipped release. Pushing then would overwrite
+          # a released version's images with ones built from another source.
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          tag_commit="$(curl -sS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "${api}/commits/${tag}" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("sha","") if isinstance(d,dict) else "")')"
+          if [ -n "$tag_commit" ] && [ "$tag_commit" != "$GITHUB_SHA" ]; then
+            echo "::notice::tag ${tag} points at ${tag_commit}, not this build (${GITHUB_SHA}); skipping ghcr push to avoid clobbering released images"
+            exit 0
+          fi
+
+          echo "${GH_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+
+          # `latest` advances on the stable channel per BUILD.md # 6. Boxes pull
+          # by digest, not by either tag; the tags are for humans and for the
+          # offline `docker load` path.
+          echo "### Control-plane images" >> "$GITHUB_STEP_SUMMARY"
+          for spec in "malmo-brain:dev=brain" "malmo-ui:dev=ui"; do
+            local_img="${spec%%=*}"
+            remote="${registry}/${spec##*=}"
+
+            docker tag "$local_img" "${remote}:${tag}"
+            docker tag "$local_img" "${remote}:latest"
+
+            # Read the digest out of the push output rather than from
+            # `docker inspect .RepoDigests`: after pushing two tags of the same
+            # image, RepoDigests holds an entry per tag and index 0 is not
+            # guaranteed to be the one we want. The push line is authoritative.
+            push_log="$(docker push "${remote}:${tag}" | tee /dev/stderr)"
+            docker push "${remote}:latest"
+
+            digest="$(printf '%s\n' "$push_log" | grep -oE 'sha256:[0-9a-f]{64}' | tail -n1)"
+            [ -n "$digest" ] || { echo "::error::could not resolve pushed digest for ${remote}:${tag}"; exit 1; }
+
+            echo "pushed ${remote}:${tag} -> ${digest}"
+            echo "- \`${remote}:${tag}\` — \`${digest}\`" >> "$GITHUB_STEP_SUMMARY"
+          done

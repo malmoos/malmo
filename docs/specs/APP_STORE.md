@@ -209,6 +209,75 @@ As shipped (cloud #62; the live wire shape is cloud `specs/CATALOG.md`), end-to-
 
 Trust is **TLS to the control plane + the snapshot's sha256 integrity digest** — there is no signing keypair and no pubkey baked into the brain image. The publish flow is git-driven (a store PR regenerates the snapshot the API serves); the box-side flow is fetch-verify-cache.
 
+## Landing page
+
+The store's front page — the box's landing view and the control plane's own store surface at `store.malmo.network` alike — is authored whole in a curated `home.yml`, not derived from any app's own metadata: a single `spotlight:` app id rendered as a banner, plus an ordered list of `groups:` (a `category:` id from the catalog's category list and 1-4 app ids) rendered as packed rows below it. Editing the front page is editing that one file; importing a new app or reordering a manifest's `categories:` never reshuffles it, because the page's shape isn't computed from categories at all.
+
+The control plane publishes the block **verbatim** on the snapshot (`CatalogFile.Home`) — carried, not derived, so the curation decision stays with the store curation source, not with a projection the control plane or a box could drift out of step with. Both consumers apply the same one filter at serve time: an app the block names that isn't advertised on the requesting surface (`Environments`, # Catalog schema above) drops out of its slot — the spotlight goes unset, or the app is skipped within its group — and a group left with no advertised apps is dropped entirely rather than rendered empty. The control plane does this once per request for its own store surface; the box does the equivalent projection locally over its synced snapshot (`internal/catalog/remote.go`, mirroring the control plane's `HomePage`/`HomeGroup` wire shapes field-for-field in `internal/catalog/wire.go`), since a box's landing must still render from its last-good cache when offline.
+
+The box derives nothing else from the block: it does not compute rank and does not re-sort groups. Group headings use the authored category label carried on the snapshot (# Category labels), not text derived from the id. If a synced snapshot carries no home block (an older control plane, or a curation publish with an empty `home.yml`), the box's landing has no spotlight and no groups; the view falls back to the flat curated Featured row, and if that's empty too, to a plain "pick a category or search" prompt — the landing is never blank, but an empty home block is not the same as "nothing curated."
+
+## Category labels
+
+An app's `categories:` holds ids (`developer-tools`, `ai`). Ids are not display text, so something has to turn one into a heading — and for a while every surface did that itself. They disagreed: the same category rendered as "Developer-tools" in one store and "developer tools" in the other, and `ai` rendered as "ai" in both. A stopgap made the two agree with each other (hyphens to spaces) without making either correct.
+
+The fix is that the label is **authored once and carried**, never derived. The synced snapshot has a top-level `categories` block — the whole vocabulary, each entry an `id` and the display `label`, in authored order:
+
+```json
+"categories": [
+  { "id": "productivity", "label": "Productivity" },
+  { "id": "developer-tools", "label": "Developer tools" },
+  { "id": "ai", "label": "AI" }
+]
+```
+
+`AI` is the case that shows why deriving cannot work: no rule over the id produces it.
+
+The box renders that label everywhere it names a category — the pills, the landing row headings, the category page heading, and the app detail page's info panel. Two consequences worth stating:
+
+- **The pills follow authored order, not alphabetical.** The vocabulary is a curation artifact, like `home.yml`, so its order is a decision rather than an accident. The box shows only the categories its own surface actually has apps for, in that order.
+- **The box never applies text transforms to a label.** No `capitalize`, no title-casing. "Developer tools" is what was authored, and "Developer Tools" is not.
+
+Two fallbacks remain, and neither is the normal path. A category id the vocabulary does not carry still gets a pill — dropping it would hide a browsable app behind no entry point — labelled with a readable form of the id (`developer-tools` → "Developer tools"), appended after the authored entries in sorted order so the result is deterministic. A box that has never synced, or one reading a disk catalog, has no vocabulary at all and labels everything that way. The control plane holds the same fallback, so even the degraded modes agree.
+
+The vocabulary is not part of the snapshot's integrity digest, which covers the app index only — the same as the home block.
+
+## What the box models, and what it drops
+
+The box does not model the whole published snapshot. `internal/catalog/wire.go` declares the fields the box surfaces, and it declares a **subset** on purpose.
+
+**Where the new field sits decides everything, and the two cases behave in opposite ways.** A field added *outside* the app array is dropped by a box that does not model it. A field added *inside* an app is **rejected** by that box, and it takes the whole catalog with it. Read the next two sections as one rule, not two notes.
+
+### A field outside the app array: dropped, safely
+
+The price of the subset is silent loss. `encoding/json` ignores any key it has no field for, so a field added upstream reaches the box and vanishes there — no error, no log line, nothing the box could act on even in principle. **A new field is not delivered when the control plane starts serving it. It is delivered when the box models it.** Adding one is a two-side change: the wire struct here, plus the projection into whatever the box surfaces.
+
+The integrity digest cannot catch this. `index_sha256` covers the app index (`apps`) only, so it catches a truncated or corrupted snapshot and says nothing about a dropped top-level field. The landing block (`home`) was added upstream, dropped by the box, and the digest check stayed green throughout. Here the publish side really can move first, without waiting for every deployed box.
+
+### A field inside an app: rejected, and it takes the catalog with it
+
+The sentence above — the digest cannot catch a dropped field — is true **only outside `apps`**. Inside an app it is exactly backwards, and this is the trap.
+
+`verify()` recomputes `index_sha256` by **re-marshalling the apps it just parsed**. A box that does not model a per-app field drops that key on parse, so it is absent from the re-marshal, so the digest cannot reproduce. The box rejects the **entire snapshot** — not the field, not that app — and falls back to its last-good cache. It does not look broken: the store still serves the cached catalog. It is frozen. No new app, no version bump, and no curation change reaches that box again until it updates, and the only signal is one log line about a digest mismatch, which reads like corruption or tamper rather than a shape change.
+
+This is not theoretical. It was measured on `external_costs`: a box at `e825e9f` fed a real published snapshot in which one app declared a cost returned `catalog index digest mismatch`, while the same snapshot verified on a box that modelled the field.
+
+So a per-app field is a **coordinated release**, not a publish-side change:
+
+1. Model it on the box and merge it (`wire.go` plus the projection).
+2. Cut a release and let the fleet take it.
+3. **Only then** may the control plane publish data that uses the field.
+
+Authoring the data is safe at any time — a manifest field nothing publishes hurts nobody. The danger begins the moment the sync tool carries it, and the sync tool carries it on the next publish, automatically.
+
+**Bump `wireSchemaVersion` (and the control plane's `SchemaVersion`) in the same change that publishes the data.** It does not prevent the freeze — an older box refuses either way — but it turns a digest mismatch that reads as corruption into `catalog schema version 1, want 2`, which names the real cause. Bump it *with the data*, never ahead of it: the check is exact equality, so raising the version while no app uses the field would reject every snapshot on every deployed box immediately, causing the outage early instead of avoiding it.
+
+What catches it is a pinned copy of a real snapshot at `internal/catalog/testdata/snapshot.json`, plus `TestNoUnmodeledFields` (`internal/catalog/wire_test.go`). The test parses the fixture into a generic map and fails on any top-level or per-app key the box's own types do not declare, including the nested per-app shapes (footprint, author, links, images). A key that shows up is not automatically a bug — it means the published shape moved and the box has a decision to make: model the field, or list it in `ignoredTopLevelKeys` with the reason. An explicit "we looked and said no", never silence.
+
+That guard only ever reads the copy it is pinned to, so **it is armed by refreshing that copy** from a snapshot the control plane really serves, in the same unit of work as the shape change. A stale fixture means the test never sees the new field, the box drops it in production, and every test stays green — the exact failure the guard exists to stop.
+
+Modelling a field is per-consumer work: this same subset-and-drop rule holds for any other surface that consumes the published shape, so a field one surface starts showing does not appear on another until that surface models it too.
+
 ## Locked decisions
 
 _(Updated for the shipped design — `DECISIONS.md` 2026-07-02, cloud #62. The earlier signed-static-CDN calls are superseded; the digest-pinning and don't-host-images calls carry over.)_
@@ -222,6 +291,8 @@ _(Updated for the shipped design — `DECISIONS.md` 2026-07-02, cloud #62. The e
 - **v1 catalog is hand-curated by malmo.** Every manifest is malmo-authored. Third-party authorship (PRs against the store) lands later.
 - **No baked catalog in the box image.** Every box — appliance and hosted — is a control-plane thin client (`DECISIONS.md` 2026-07-02).
 - **Promotion is a PR against the store repo** with a regenerated snapshot. CI validates schema, admission rules, image reachability, and digests; merge is the publish action (the control plane then serves the new snapshot).
+- **Category display text is authored, never derived.** The snapshot carries a `categories` vocabulary (id + `label`, in authored order); the box renders the label on pills, group headings, the category page, and the app detail panel (# Category labels). Deriving display text from the id is what made two store surfaces disagree about the same category.
+- **The landing page (spotlight + category groups) is authored whole in a curated `home.yml`, carried verbatim on the snapshot, and filtered by environment at serve time** — never derived from an app's own `categories:` or computed by either consumer (# Landing page). Both the box and the control plane's own store surface render the same authored shape.
 
 ## Open questions
 

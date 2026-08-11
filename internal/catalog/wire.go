@@ -43,6 +43,43 @@ type catalogFile struct {
 	// fetch, so there is no separate signature (owner decision, cloud #62).
 	IndexSHA256 string    `json:"index_sha256"`
 	Apps        []wireApp `json:"apps"`
+	// Home is the authored recommended-apps page (a curated home.yml): a
+	// spotlight app plus ordered category groups. Carried verbatim, not derived —
+	// the landing page's shape is a curation decision the store curation source
+	// owns. It plays no part in IndexSHA256 (that digest covers Apps only), so
+	// adding this field does not change the box's index-digest contract with the
+	// control plane. Mirror of the control plane's own CatalogFile.Home.
+	Home wireHomePage `json:"home"`
+	// Categories is the authored category vocabulary: every category id an app may
+	// claim, with the display label the store surfaces render and the order they
+	// are authored in. Carried, never derived — before it was on the wire the box
+	// invented display text from the id ("developer-tools" -> "developer tools",
+	// "ai" -> "ai") and disagreed with the other store surface doing the same. Like
+	// Home it plays no part in IndexSHA256 (that digest covers Apps only).
+	Categories []wireCategory `json:"categories"`
+}
+
+// wireCategory is one entry of the authored category vocabulary. Mirror of the
+// control plane's own Category shape.
+type wireCategory struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+// wireHomePage / wireHomeGroup mirror the control plane's own HomePage / HomeGroup
+// shapes, field-for-field and json-tag-for-json-tag, for the same reason the rest
+// of this file mirrors the control plane's shapes: the box re-parses exactly what
+// the sync tool published.
+type wireHomePage struct {
+	Spotlight string          `json:"spotlight"`
+	Groups    []wireHomeGroup `json:"groups"`
+}
+
+// wireHomeGroup is one category's row on the landing page, in authored order.
+// Category is a catalog category id; Apps are app ids resolving within Apps.
+type wireHomeGroup struct {
+	Category string   `json:"category"`
+	Apps     []string `json:"apps"`
 }
 
 // wireApp is one published app: the display metadata the box store surfaces plus
@@ -64,6 +101,16 @@ type wireApp struct {
 	ChangelogURL     string             `json:"changelog_url,omitempty"`
 	Footprint        manifest.Footprint `json:"footprint"`
 
+	// ExternalCosts is money a THIRD PARTY charges to make the app useful (a
+	// model-provider API key, a mail provider). Declaration order is load-bearing
+	// like every field here: it sits between Footprint and IconFile because the
+	// control plane's App declares it there, and the index digest is computed over
+	// json.Marshal of this array.
+	//
+	// It is NOT what malmo charges for the app. That is authored in the curation
+	// source next to listed/environments and is not on this wire.
+	ExternalCosts []ExternalCost `json:"external_costs,omitempty"`
+
 	// IconFile / Screenshots are the asset filenames under the control plane's
 	// per-app assets tree (e.g. "icon.png", "screenshots/0.png"), which the box
 	// proxies+caches through its own /api/v1/catalog asset routes.
@@ -82,6 +129,48 @@ type wireApp struct {
 	Manifest string                       `json:"manifest"`
 	Compose  string                       `json:"compose"`
 	Images   map[string]manifest.ImageRef `json:"images,omitempty"`
+}
+
+// ExternalCost is one third-party charge an app depends on: what someone OTHER
+// than malmo bills the user to make the app useful (a model-provider API key, a
+// mail provider). Mirror of cloud catalog.ExternalCost, so it is both a wire
+// shape and the shape Detail exposes.
+//
+// Required is a plain bool, matching the control plane's, NOT the *bool of
+// manifest.ExternalCost. The pointer exists in the manifest to reject an author
+// who never states the field; by the time a record is published it has been
+// stated, so keeping the pointer here would put a nullable boolean on the box's
+// public API where the control plane's identical endpoint returns a plain one —
+// two store surfaces disagreeing about one field.
+type ExternalCost struct {
+	ID              string `json:"id"`
+	Title           string `json:"title"`
+	Description     string `json:"description"`
+	Required        bool   `json:"required"`
+	Estimate        string `json:"estimate,omitempty"`
+	EstimateChecked string `json:"estimate_checked,omitempty"`
+}
+
+// externalCostsOf converts the manifest's authored costs to the published shape,
+// collapsing the manifest's tri-state Required to the plain bool every consumer
+// sees. Used by the disk source, which reads manifests directly.
+func externalCostsOf(costs []manifest.ExternalCost) []ExternalCost {
+	if len(costs) == 0 {
+		return nil
+	}
+	out := make([]ExternalCost, 0, len(costs))
+	for i := range costs {
+		c := &costs[i]
+		out = append(out, ExternalCost{
+			ID:              c.ID,
+			Title:           c.Title,
+			Description:     c.Description,
+			Required:        c.IsRequired(),
+			Estimate:        c.Estimate,
+			EstimateChecked: c.EstimateChecked,
+		})
+	}
+	return out
 }
 
 // indexDigest is the hex SHA-256 over the canonical JSON of the app index — the
@@ -130,4 +219,47 @@ func parseSnapshot(data []byte) (catalogFile, error) {
 		return catalogFile{}, err
 	}
 	return f, nil
+}
+
+// SnapshotApp, SnapshotHome and SnapshotHomeGroup are exported aliases of this
+// file's own wire types, for tooling that builds a snapshot from on-disk app
+// packages (dev/mkcatalog) rather than parsing one. They are aliases, not
+// copies, so there is exactly one App/Home shape in this box, visible under a
+// second name to a second audience — a snapshot builder can never drift from
+// the parser the way a hand-copied struct in another package did before.
+type (
+	SnapshotApp       = wireApp
+	SnapshotHome      = wireHomePage
+	SnapshotHomeGroup = wireHomeGroup
+	SnapshotCategory  = wireCategory
+)
+
+// BuildSnapshot assembles a /catalog/sync-shaped snapshot from already-built
+// apps (and an optional curated landing page) and marshals it to the exact
+// bytes a box can parse and verify: it stamps SchemaVersion, GeneratedAt and
+// StoreRef, computes IndexSHA256 over the apps array (parseSnapshot / verify
+// recompute the same digest on the read side), and marshals the whole thing.
+// This is the one seam a snapshot-building tool needs — it builds SnapshotApp
+// values from its own source (a manifest+compose pair, a home.yml) and calls
+// this once, instead of re-declaring the wire shape to do its own digest +
+// marshal.
+func BuildSnapshot(apps []SnapshotApp, home SnapshotHome, cats []SnapshotCategory, storeRef string) ([]byte, error) {
+	digest, err := indexDigest(apps)
+	if err != nil {
+		return nil, err
+	}
+	f := catalogFile{
+		SchemaVersion: wireSchemaVersion,
+		GeneratedAt:   time.Now().UTC(),
+		StoreRef:      storeRef,
+		IndexSHA256:   digest,
+		Apps:          apps,
+		Home:          home,
+		Categories:    cats,
+	}
+	b, err := json.Marshal(f)
+	if err != nil {
+		return nil, fmt.Errorf("marshal catalog snapshot: %w", err)
+	}
+	return b, nil
 }

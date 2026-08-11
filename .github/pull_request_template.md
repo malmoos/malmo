@@ -26,6 +26,8 @@
 - [ ] Behavior works in the inner loop (`make dev`), and integration-tested against the real system if it touches one.
 - [ ] Tests added at the right layer; `make check` green (frontend changes: `make check-web` too).
 - [ ] Progress entry written (`docs/progress/NNNN-…`); indexes in both READMEs updated; Up-next re-ordered if needed.
+- [ ] Catalog change: if this touches the box's catalog wire (`internal/catalog/wire.go`) or the store views, said whether malmo's other store surface needs the same change (`docs/specs/APP_STORE.md` # What the box models, and what it drops).
+- [ ] Catalog change, **per-app** field: if this adds a field *inside* an app on the wire, said how deployed boxes are handled. They reject the whole snapshot and freeze on their last-good cache until they update, so the data may only be published after a release ships — and the schema version bumps with the data, not ahead of it.
 - [ ] Spec doc updated if behavior realized/diverged; `DECISIONS.md` entry if a locked decision flipped.
 - [ ] No section-sign symbol (write `#` instead), no hard-wrapped markdown, `log/slog` only, conventions per `CLAUDE.md`.
 - [ ] Branch off `dev`, PR into `dev` with `Closes #<N>` (do not delete this line — GitHub will not auto-close the issue otherwise); any dependent issue un-`blocked`.

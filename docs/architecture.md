@@ -81,7 +81,7 @@ are stated below.
 | `api` | HTTP handlers (huma), auth middleware, request/response shapes. The only package that knows about HTTP. | `cmd/brain` |
 | `lifecycle` | The install transaction: door-1 (catalog) and door-2 (paste-a-compose), digest pinning, reconcile pass, health-wait, Caddy timing, uninstall. Owns the **one central route builder** (`buildRouteConfig`) that resolves each app's `caddy.RouteConfig` from profile + per-instance `exposure` (hosted owner-only default, `SetExposure` toggle, #306). Defines `DockerDriver` consumer-side. | `api`, `cmd/brain` |
 | `store` | SQLite schema + queries. Sole persistence boundary. `ErrNotFound` is the only typed error. | `api`, `lifecycle`, `auth`, `audit`, `cmd/brain` |
-| `catalog` | Door-1 source behind a fixed six-method facade. Production (every profile) uses the control-plane thin client (`NewRemote`, `MALMO_CATALOG_URL`): fetches `GET /catalog/sync`, integrity-digest-verifies, last-good on-disk cache, proxies+caches assets. The disk reader (`New`) is retained only as a test constructor; no catalog is baked into the image. | `lifecycle`, `api`, `cmd/brain` |
+| `catalog` | Door-1 source behind a fixed six-method facade. Production (every profile) uses the control-plane thin client (`NewRemote`, `MALMO_CATALOG_URL`): fetches `GET /catalog/sync`, integrity-digest-verifies, last-good on-disk cache, proxies+caches assets. The snapshot also carries the store's authored landing page (a spotlight app + category groups, authored in `home.yml`) and the authored category vocabulary (id + display `label`, in authored order) verbatim; `Home()` projects both filtered to the box's environment, mirroring the control plane's own projection (`docs/specs/APP_STORE.md` # Landing page, # Category labels). Category display text is always the authored label, never derived from the id. The disk reader (`New`) is retained only as a test constructor; no catalog is baked into the image. | `lifecycle`, `api`, `cmd/brain` |
 | `manifest` | `manifest.yml` schema (parse + validate), and the synthesizer that wraps a pasted compose into a door-2 manifest. | `catalog`, `lifecycle`, `api` |
 | `admission` | The single compose admission policy applied to both doors (image pinning rules, forbidden constructs, etc.). | `lifecycle` |
 | `caddy` | Client for Caddy's admin API. Site-block JSON generation lives here (per-app route via `AddRoute(RouteConfig)` — optional hosted `forward_auth` gate + a strip of the single `RouteConfig.StripCookieName` cookie from the `Cookie` header, never the whole header, #306/#335), plus the hosted wildcard-TLS automation policy (`EnsureWildcardTLS`: ACME DNS-01 via the `acmedns` provider for `*.<box-id>.malmo.network`). Profile-agnostic: the strip/gate policy is resolved by the caller. | `lifecycle`, `cmd/brain` |
@@ -145,7 +145,8 @@ So this doc isn't read as a claim about the finished product:
   no `malmo-storage-ready.target`. Apps write to wherever Docker puts volumes.
 - **Boot, install ISO, updates.** The `mkosi` image build (`BUILD.md` # 2;
   proven in the test lane, not yet the production ISO), the release manifest,
-  and the five update streams are all spec-only.
+  and both update streams (`UPDATES.md`) are all spec-only. Nothing on a
+  running box can fetch, apply, or roll back a new version today.
 - **Health / notifications / telemetry / time / discovery beyond stubs.** The
   brain doesn't surface health issues, the bell doesn't exist, no telemetry
   client, no chrony integration.

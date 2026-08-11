@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -366,5 +367,78 @@ func TestRateLimit_WiredIntoChain(t *testing.T) {
 	body := decodeJSON[rateLimitedBody](t, resp)
 	if body.Code != "rate-limited" || body.Details.Scope != "session" {
 		t.Fatalf("429 body: want code=rate-limited scope=session, got code=%q scope=%q", body.Code, body.Details.Scope)
+	}
+}
+
+// --- forged X-Forwarded-For (#329) ----------------------------------------
+
+// TestRateLimit_ForgedForwardedForSharesOneBucket is the regression test for
+// #329: the per-IP plane keyed on the *first* X-Forwarded-For hop, which the
+// caller writes, so rotating the header minted a fresh bucket per request and
+// the throttle protected nothing. Driving the real chain (authMiddleware →
+// rateLimit) with N distinct forged values from one peer must still exhaust one
+// bucket.
+func TestRateLimit_ForgedForwardedForSharesOneBucket(t *testing.T) {
+	clk := newFixedClock()
+	const cap = 3
+	srv := probeLimiterServer(5, cap, clk.now)
+	var hits int
+	h := srv.authMiddleware(srv.rateLimit(countingNext(&hits)))
+
+	forged := func(n int) *http.Request {
+		r := httptest.NewRequest("GET", "/api/v1/auth/state", nil)
+		r.RemoteAddr = "203.0.113.7:5555"
+		r.Header.Set("X-Forwarded-For", fmt.Sprintf("10.9.%d.%d", n/256, n%256))
+		return r
+	}
+	for i := 0; i < cap; i++ {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, forged(i))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("request %d within one peer's budget: want 200, got %d", i, rr.Code)
+		}
+	}
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, forged(cap))
+	if rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("a fresh forged X-Forwarded-For minted a new bucket: want 429, got %d", rr.Code)
+	}
+	if hits != cap {
+		t.Fatalf("throttled request reached the handler: want %d hits, got %d", cap, hits)
+	}
+}
+
+// TestRateLimit_TrustedProxyForwardedForIsHonoured is the other half of #329:
+// once the peer *is* the box's Caddy, the header it appends is the only thing
+// that can distinguish two LAN clients, so each still gets its own bucket. A fix
+// that simply ignored X-Forwarded-For would pool the whole LAN behind Caddy's
+// address and let one attacker throttle everyone.
+func TestRateLimit_TrustedProxyForwardedForIsHonoured(t *testing.T) {
+	clk := newFixedClock()
+	srv := probeLimiterServer(5, 1, clk.now)
+	srv.SetTrustedProxies(DefaultTrustedProxies()) // the shipped set, not a set tailored to this test
+	var hits int
+	h := srv.authMiddleware(srv.rateLimit(countingNext(&hits)))
+
+	viaCaddy := func(client string) *http.Request {
+		r := httptest.NewRequest("GET", "/api/v1/auth/state", nil)
+		r.RemoteAddr = "172.18.0.3:5555"
+		r.Header.Set("X-Forwarded-For", client)
+		return r
+	}
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, viaCaddy("192.168.1.20"))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("first request from LAN client: want 200, got %d", rr.Code)
+	}
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, viaCaddy("192.168.1.20"))
+	if rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request from the same LAN client: want 429, got %d", rr.Code)
+	}
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, viaCaddy("192.168.1.21"))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("a different LAN client behind the same proxy must keep its own budget: got %d", rr.Code)
 	}
 }

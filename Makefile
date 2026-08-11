@@ -46,6 +46,7 @@ help:
 	@echo "make control-plane-images - build malmo-brain + malmo-ui images and docker-save the control-plane bundle to .dev/"
 	@echo "make dev         - all three foreground procs in one terminal (recommended)"
 	@echo "make dev-app APP=<id> [STORE=../store] - boot ONE store app under curation: seed its catalog snapshot, then make dev with an inert catalog URL"
+	@echo "make seed-catalog APPS=\"<id> <id> ...\" [HOMEFILE=<path/to/home.yml>] - seed several store apps (+ optionally the curated landing) into the catalog cache, without starting dev"
 	@echo "make fmt         - rewrite Go sources into gofmt-canonical form (autofix)"
 	@echo "make host-agent-real-hosted - build the slim hosted-cloud host-agent (-tags hosted; #204/C1c)"
 	@echo "make net         - create the malmo-ingress docker network"
@@ -309,7 +310,8 @@ dev: check-state-owner build caddy
 	  (cd web-ui && npm run dev 2>&1 | sed -u 's/^/[ui]    /') & \
 	  wait
 
-# ---- Curate one store app against the brain (store #22) --------------------
+# ---- Curate one or more store apps (+ optionally the landing) against the
+# brain -------------------------------------------------------------------
 # Post-catalog-cutover (cloud #62) there is no baked os/catalog/ to boot from —
 # the brain is a thin HTTP client of the control plane. `make dev-app APP=<id>`
 # restores the inner loop for authoring/curating a store app: it seeds the
@@ -317,6 +319,18 @@ dev: check-state-owner build caddy
 # mkcatalog, then runs the normal dev stack. The brain loads that cache at boot
 # exactly as it would a synced-then-offline snapshot (internal/catalog/remote.go
 # # loadCache) and installs the app from it.
+#
+# `make seed-catalog APPS="<id> <id> ..." [HOMEFILE=<path/to/home.yml>]` is the
+# multi-app form: it seeds every named package into one snapshot and, when
+# HOMEFILE is given, carries that home.yml's spotlight + groups too, so the
+# curated landing page (docs/specs/APP_STORE.md # Landing page) is clickable
+# locally. mkcatalog fails loudly if home.yml names an app that wasn't also
+# passed in APPS — the point of seeding locally is to catch that before a real
+# publish does. The store's categories.yml is picked up automatically when the
+# checkout has one, so the seeded store renders the authored category labels
+# rather than the readable-id fallback. (Named HOMEFILE, not HOME, so it can't
+# collide with the shell's own $HOME.) APP=<id> keeps working unchanged — it is
+# just the single-app case of the same underlying seed-catalog recipe.
 #
 # It uses mkcatalog, NOT cloud's catalog-sync, on purpose: catalog-sync publishes
 # only listed:true records, but an app under curation has no verdict yet — you
@@ -326,20 +340,30 @@ dev: check-state-owner build caddy
 STORE ?= ../store
 
 seed-catalog:
-	@[ -n "$(APP)" ] || { echo "usage: make dev-app APP=<id> [STORE=../store]" >&2; exit 2; }
-	@[ -d "$(STORE)/apps/$(APP)" ] || { echo "error: no app package at $(STORE)/apps/$(APP)" >&2; exit 2; }
-	@mkdir -p $(DEV_DIR)/catalog-cache
-	@$(GO) run ./dev/mkcatalog -pkg "$(STORE)/apps/$(APP)" -environments appliance,hosted -out $(DEV_DIR)/catalog-cache/catalog.json
-	@echo "seeded $(APP) -> $(DEV_DIR)/catalog-cache/catalog.json (visible on: appliance, hosted)"
+	@ids="$(APPS)"; [ -n "$$ids" ] || ids="$(APP)"; \
+	  [ -n "$$ids" ] || { echo "usage: make seed-catalog APP=<id> | APPS=\"<id> <id> ...\" [STORE=../store] [HOMEFILE=path/to/home.yml]" >&2; exit 2; }; \
+	  pkgflags=""; \
+	  for id in $$ids; do \
+	    [ -d "$(STORE)/apps/$$id" ] || { echo "error: no app package at $(STORE)/apps/$$id" >&2; exit 2; }; \
+	    pkgflags="$$pkgflags -pkg $(STORE)/apps/$$id"; \
+	  done; \
+	  homeflag=""; \
+	  [ -z "$(HOMEFILE)" ] || homeflag="-home $(HOMEFILE)"; \
+	  catsflag=""; \
+	  [ ! -f "$(STORE)/categories.yml" ] || catsflag="-categories $(STORE)/categories.yml"; \
+	  mkdir -p $(DEV_DIR)/catalog-cache && \
+	  $(GO) run ./dev/mkcatalog $$pkgflags -environments appliance,hosted -out $(DEV_DIR)/catalog-cache/catalog.json $$homeflag $$catsflag && \
+	  echo "seeded [$$ids] -> $(DEV_DIR)/catalog-cache/catalog.json (visible on: appliance, hosted)$${homeflag:+, landing from $(HOMEFILE)}$${catsflag:+, category labels from $(STORE)/categories.yml}"
 
 # The inert catalog URL is a target-specific, exported variable, so it is in
 # effect for the `dev` prerequisite's recipe too — the brain reads
 # MALMO_CATALOG_URL from the env, and cmd/brain defaults it to the real apex
 # (https://malmo.network). Without the override the first background sync would
 # succeed and overwrite the seed with the published catalog, silently dropping
-# the app under test. Port 1 has nothing listening, so the sync fails fast (same
-# inert-URL trick as dev/test-health.sh). seed-catalog runs first and aborts the
-# whole target if APP is missing, so `dev` never starts against a bad seed.
+# the app(s) under test. Port 1 has nothing listening, so the sync fails fast
+# (same inert-URL trick as dev/test-health.sh). seed-catalog runs first and
+# aborts the whole target if no app was given, so `dev` never starts against a
+# bad seed. Accepts APP or APPS (+ optional HOMEFILE) exactly like seed-catalog.
 dev-app: export MALMO_CATALOG_URL := http://127.0.0.1:1
 dev-app: seed-catalog dev
 

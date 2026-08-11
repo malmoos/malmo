@@ -5,6 +5,7 @@
       "servers": {
         "malmo": {
           "listen": [":80"],
+          "trusted_proxies": { "source": "static", "ranges": [] },
           "routes": [
             {
               "@id": "malmo-catchall",

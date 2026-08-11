@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -291,6 +292,7 @@ func main() {
 	// leaves them empty and keeps its open-on-empty-box /setup.
 	srv := api.NewServer(st, cat, life, bus, authMgr, host, auditor, healthMgr, live, applogs)
 	srv.SetEnvironment(prof, boxID, assertionKey)
+	srv.SetTrustedProxies(trustedProxies(cfg.trustedProxies))
 	httpSrv := &http.Server{Handler: srv.Handler()}
 
 	// Bind the listener before advertising the dashboard route to Caddy. Once the
@@ -527,6 +529,7 @@ type config struct {
 	profilePath            string
 	seedPath               string
 	acmeDNSEndpoint        string
+	trustedProxies         string
 }
 
 func loadConfig() config {
@@ -579,7 +582,35 @@ func loadConfig() config {
 		// acme-dns face is deployed (cloud issue tracking it); overridable here so
 		// the box can be pointed at staging or a self-hosted acme-dns.
 		acmeDNSEndpoint: env("MALMO_ACMEDNS_ENDPOINT", "https://auth.malmo.network"),
+		// Proxies the brain will read an X-Forwarded-For from when deriving the
+		// client IP its per-IP throttles key on (#329). Comma-separated IPs/CIDRs.
+		// Unset ⇒ the private ranges (see api.DefaultTrustedProxies), which is every
+		// address a peer on the box's own Docker network can have. Set it empty to
+		// pin the brain to the peer address alone.
+		trustedProxies: envRaw("MALMO_TRUSTED_PROXIES", defaultTrustedProxiesSentinel),
 	}
+}
+
+// defaultTrustedProxiesSentinel marks "MALMO_TRUSTED_PROXIES was not set", so an
+// operator can still set it to the empty string to mean "trust no proxy" — a
+// distinction a plain default string would erase.
+const defaultTrustedProxiesSentinel = "\x00default"
+
+// trustedProxies resolves the configured trusted-proxy spec into prefixes. An
+// unparseable value is fatal rather than silently ignored: falling back to a
+// wider default would be a security downgrade the operator never asked for, and
+// falling back to none would lock every LAN client into one shared login-throttle
+// bucket. Both are worse than refusing to start with a clear message.
+func trustedProxies(spec string) []netip.Prefix {
+	if spec == defaultTrustedProxiesSentinel {
+		return api.DefaultTrustedProxies()
+	}
+	prefixes, err := api.ParseTrustedProxies(spec)
+	if err != nil {
+		fatal("parse MALMO_TRUSTED_PROXIES", "err", err)
+	}
+	slog.Info("trusted proxies configured", "trusted_proxies", spec)
+	return prefixes
 }
 
 // probeBaseURL turns the Caddy site-listener address (the same value passed to
@@ -606,6 +637,15 @@ func envDuration(k string, def time.Duration) time.Duration {
 			return d
 		}
 		slog.Warn("invalid duration, using default", "var", k, "value", v, "default", def)
+	}
+	return def
+}
+
+// envRaw is env() for a var whose empty value is meaningful: it distinguishes
+// "unset" (def) from "set to the empty string" (""), which env() collapses.
+func envRaw(k, def string) string {
+	if v, ok := os.LookupEnv(k); ok {
+		return v
 	}
 	return def
 }
@@ -770,8 +810,9 @@ const minimumAgentVersion = "0.4.0"
 
 // agentVersionAcceptable reports whether reportedVersion is new enough to
 // satisfy minimum — i.e. NOT older than it. A newer agent is always
-// acceptable (UPDATES.md # 1 update ordering: host-agent updates before
-// brain); only an older agent is a mismatch. Comparison is on the release core
+// acceptable (the brain declares a compat floor, not an exact pair —
+// UPDATES.md # Compatibility matrix); only an older agent is a mismatch.
+// Comparison is on the release core
 // (MAJOR.MINOR.PATCH) only: a build/prerelease suffix (e.g. the fake
 // host-agent's "-fake", DECISIONS.md 2026-07-16) must not make an
 // otherwise-current agent look older — semver's prerelease-sorts-before-release
@@ -810,8 +851,11 @@ type agentStatusReader interface {
 // # Detector catalog, locus C). It reads host-agent's reported agent_version
 // and reconciles the version-mismatch issue against a **compatible range**,
 // not exact equality: raise only when the agent is older than
-// minimumAgentVersion, clear otherwise (a newer agent is fine — UPDATES.md # 1
-// update ordering puts host-agent first). There is no dedicated handshake RPC,
+// minimumAgentVersion, clear otherwise (a newer agent is fine — the brain
+// declares a floor, not an exact pair). The older-agent case is reachable:
+// stream B (this brain) updates before stream A (host-agent), so a new brain
+// can land ahead of the host-agent it needs — UPDATES.md # Update ordering.
+// There is no dedicated handshake RPC,
 // so each successful status read is the handshake (HEALTH.md: "each
 // handshake"). A version string is deterministic and authoritative — it cannot
 // flap like a threshold sample — so the check is 1-shot (no debounce): it

@@ -1,10 +1,18 @@
 package catalog
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
 	"testing"
+
+	"github.com/malmoos/malmo/internal/manifest"
 )
 
 // TestVerifyRealSnapshot is the box side of the box↔cloud digest contract: a
@@ -76,4 +84,237 @@ func TestVerifyRejects(t *testing.T) {
 			t.Fatal("want error for truncated snapshot body")
 		}
 	})
+}
+
+// jsonKeys returns the set of JSON object keys a struct type will unmarshal
+// into, derived from its own `json:"..."` tags rather than hand-listed — a
+// hand-list is one more place for the wire shape to drift out of sync with
+// the actual struct. Fields tagged "-" are skipped.
+func jsonKeys(t reflect.Type) map[string]bool {
+	keys := make(map[string]bool, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		tag := t.Field(i).Tag.Get("json")
+		if tag == "" || tag == "-" {
+			continue
+		}
+		name := tag
+		if idx := strings.IndexByte(tag, ','); idx >= 0 {
+			name = tag[:idx]
+		}
+		if name != "" {
+			keys[name] = true
+		}
+	}
+	return keys
+}
+
+// ignoredTopLevelKeys are published-catalog top-level fields the box
+// deliberately does not model. Each entry records why, so widening this list
+// is a decision on record, not a silent bypass of TestNoUnmodeledFields.
+var ignoredTopLevelKeys = map[string]string{
+	// os_capabilities_version is a publish-side provenance stamp: which
+	// capability set the control plane admitted apps against when it built this
+	// snapshot. It has no box-side meaning — the box enforces admission against
+	// its own manifest.Version each time it parses one, not against a
+	// catalog-wide stamp — so there is nothing for the box to do with it.
+	"os_capabilities_version": "publish-side provenance stamp, no box-side meaning",
+}
+
+// TestNoUnmodeledFields is the guard for the exact failure mode that let a new
+// top-level field (the curated landing page, "home") reach the box silently:
+// verify() only checks the schema version and the apps-array digest, so a
+// wire struct that has fallen behind the real published shape stays green
+// forever unless something asserts the two key sets match. This test parses
+// the pinned fixture into a generic map[string]any and fails on any top-level
+// or per-app key that the box's own wire types (catalogFile / wireApp, plus
+// the nested footprint/author/links/images shapes) do not declare a json tag
+// for.
+//
+// A field showing up here is not automatically a bug — it means the
+// published shape moved and this box needs to make a decision: model the
+// field (in wire.go, and in dev/mkcatalog if mkcatalog should emit it too),
+// or add it to ignoredTopLevelKeys with a comment saying why the box doesn't
+// need it. Don't delete or weaken this test to make it pass.
+func TestNoUnmodeledFields(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "snapshot.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+
+	knownTop := jsonKeys(reflect.TypeOf(catalogFile{}))
+	for key := range raw {
+		if knownTop[key] || ignoredTopLevelKeys[key] != "" {
+			continue
+		}
+		t.Errorf("testdata/snapshot.json has top-level key %q that catalogFile (internal/catalog/wire.go) does not model: "+
+			"either add a field for it there (and in dev/mkcatalog if mkcatalog should emit it too), or add it to "+
+			"ignoredTopLevelKeys with a comment explaining why the box doesn't need it", key)
+	}
+
+	appsRaw, ok := raw["apps"].([]any)
+	if !ok {
+		t.Fatal("testdata/snapshot.json: \"apps\" is missing or not an array")
+	}
+	if len(appsRaw) == 0 {
+		t.Fatal("testdata/snapshot.json: \"apps\" is empty, guard has nothing to check")
+	}
+
+	knownApp := jsonKeys(reflect.TypeOf(wireApp{}))
+	knownFootprint := jsonKeys(reflect.TypeOf(manifest.Footprint{}))
+	knownAuthor := jsonKeys(reflect.TypeOf(manifest.Author{}))
+	knownLinks := jsonKeys(reflect.TypeOf(manifest.Links{}))
+	knownImageRef := jsonKeys(reflect.TypeOf(manifest.ImageRef{}))
+
+	checkNested := func(id, label string, obj map[string]any, known map[string]bool) {
+		for key := range obj {
+			if known[key] {
+				continue
+			}
+			t.Errorf("app %q: %s has key %q that its wire type (internal/catalog/wire.go / internal/manifest) does not "+
+				"model: add the field, or record why it's ignored", id, label, key)
+		}
+	}
+
+	for _, a := range appsRaw {
+		app, ok := a.(map[string]any)
+		if !ok {
+			t.Fatal("testdata/snapshot.json: an \"apps\" entry is not an object")
+		}
+		id, _ := app["id"].(string)
+		for key := range app {
+			if knownApp[key] {
+				continue
+			}
+			t.Errorf("app %q has key %q that wireApp (internal/catalog/wire.go) does not model: "+
+				"either add a field for it there (and in dev/mkcatalog if mkcatalog should emit it too), or record it as a "+
+				"deliberate omission with a comment", id, key)
+		}
+		if fp, ok := app["footprint"].(map[string]any); ok {
+			checkNested(id, "footprint", fp, knownFootprint)
+		}
+		if au, ok := app["author"].(map[string]any); ok {
+			checkNested(id, "author", au, knownAuthor)
+		}
+		if li, ok := app["links"].(map[string]any); ok {
+			checkNested(id, "links", li, knownLinks)
+		}
+		if images, ok := app["images"].(map[string]any); ok {
+			for imgRef, v := range images {
+				if ir, ok := v.(map[string]any); ok {
+					checkNested(id, fmt.Sprintf("images[%q]", imgRef), ir, knownImageRef)
+				}
+			}
+		}
+	}
+}
+
+// TestExternalCostsSurviveTheDigest is the byte-fidelity proof for the newest
+// field on the wire. No published app declares a cost yet, so the pinned fixture
+// cannot exercise it — this builds a snapshot that does, the way the control
+// plane marshals one, and checks the box reproduces the digest over it and
+// projects it onto the detail page.
+//
+// The digest is computed over json.Marshal of the app array, so a mirror that
+// declared ExternalCosts in a different position than the control plane's App
+// would still parse and still pass every field-level assertion, and only fail
+// here. That is the failure this test exists to catch.
+func TestExternalCostsSurviveTheDigest(t *testing.T) {
+	apps := []wireApp{{
+		ID: "openclaw", Name: "OpenClaw", Version: "1.0",
+		Environments: []string{"appliance", "hosted"},
+		ExternalCosts: []ExternalCost{{
+			ID:              "model-access",
+			Title:           "Model access",
+			Description:     "You bring your own provider key and the provider bills you.",
+			Required:        true,
+			Estimate:        "$3 per million tokens (long agent runs use many times more)",
+			EstimateChecked: "2026-08-10",
+		}},
+		Manifest: "id: openclaw\n", Compose: "services: {}\n",
+	}}
+	digest, err := indexDigest(apps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(catalogFile{
+		SchemaVersion: wireSchemaVersion,
+		IndexSHA256:   digest,
+		Apps:          apps,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := parseSnapshot(raw)
+	if err != nil {
+		t.Fatalf("snapshot carrying external_costs must parse and verify: %v", err)
+	}
+	got := detailOfApp(&f.Apps[0])
+	if len(got.ExternalCosts) != 1 {
+		t.Fatalf("Detail.ExternalCosts = %+v, want the one declared cost", got.ExternalCosts)
+	}
+	c := got.ExternalCosts[0]
+	if c.ID != "model-access" || !c.Required || c.EstimateChecked != "2026-08-10" {
+		t.Errorf("Detail.ExternalCosts[0] = %+v", c)
+	}
+	if c.Estimate != "$3 per million tokens (long agent runs use many times more)" {
+		t.Errorf("estimate not carried verbatim: %q", c.Estimate)
+	}
+	// The grid card must stay free of it: a cost is a paragraph of reading.
+	entry, err := json.Marshal(entryOfApp(&f.Apps[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(entry), "external_costs") {
+		t.Errorf("Entry carries external_costs: %s", entry)
+	}
+}
+
+// TestUnknownFieldAsymmetry pins the rule in APP_STORE.md # What the box models:
+// an unknown field OUTSIDE the app array is dropped harmlessly, while an unknown
+// field INSIDE an app rejects the whole snapshot. The two cases behave in
+// opposite ways, and the difference decides whether a publish-side change can
+// ship before the fleet updates or must wait for a release.
+//
+// The reason is that verify() recomputes the digest by re-marshalling what it
+// parsed: a per-app key the box does not model is absent from the re-marshal, so
+// the digest cannot reproduce. This test exists because the spec used to state
+// the harmless half as if it covered both, and a per-app field was added on that
+// reading — the box froze on its last-good cache instead of dropping a field.
+func TestUnknownFieldAsymmetry(t *testing.T) {
+	// The published bytes, as the control plane would marshal them: one app
+	// carrying a per-app key this box does not model.
+	appsJSON := []byte(`[{"id":"alpha","name":"Alpha","version":"1.0",` +
+		`"footprint":{"image_download_bytes":0,"image_disk_bytes":0},` +
+		`"environments":["hosted"],"not_modelled_here":{"any":"shape"},` +
+		`"manifest":"id: alpha\n","compose":"services: {}\n"}]`)
+	sum := sha256.Sum256(appsJSON)
+	stamped := hex.EncodeToString(sum[:])
+
+	perApp := []byte(`{"schema_version":` + strconv.Itoa(wireSchemaVersion) +
+		`,"index_sha256":"` + stamped + `","apps":` + string(appsJSON) + `}`)
+	if _, err := parseSnapshot(perApp); err == nil {
+		t.Error("a per-app field the box does not model was accepted; it must reject the snapshot, " +
+			"which is why adding one is a coordinated release and not a publish-side change")
+	} else {
+		t.Logf("per-app unknown field rejects the snapshot, as documented: %v", err)
+	}
+
+	// Same snapshot without the unmodelled per-app key, plus an unmodelled
+	// TOP-LEVEL key. That one sits outside the digest, so it is dropped and the
+	// snapshot still verifies — the case the publish side may ship ahead of boxes.
+	cleanApps := []byte(`[{"id":"alpha","name":"Alpha","version":"1.0",` +
+		`"footprint":{"image_download_bytes":0,"image_disk_bytes":0},` +
+		`"environments":["hosted"],` +
+		`"manifest":"id: alpha\n","compose":"services: {}\n"}]`)
+	sum = sha256.Sum256(cleanApps)
+	topLevel := []byte(`{"schema_version":` + strconv.Itoa(wireSchemaVersion) +
+		`,"index_sha256":"` + hex.EncodeToString(sum[:]) +
+		`","not_modelled_here":{"any":"shape"},"apps":` + string(cleanApps) + `}`)
+	if _, err := parseSnapshot(topLevel); err != nil {
+		t.Errorf("a top-level field the box does not model must be dropped, not rejected: %v", err)
+	}
 }

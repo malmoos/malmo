@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -123,7 +124,75 @@ type Manifest struct {
 	// must adapt to. The brain renders a form at install (required fields gate the
 	// install button) and on the app detail page after. Absent ⇒ no form.
 	Config []ConfigField `yaml:"config,omitempty"`
+
+	// ExternalCosts names money a THIRD PARTY charges to make the app useful: a
+	// model-provider API key the assistant cannot answer without, a mail provider
+	// an email app sends through. The brain does not act on it — it is display
+	// metadata the store surfaces before install, so the user is not surprised by
+	// a bill from someone else. Absent ⇒ the app costs nothing beyond the box.
+	//
+	// It is deliberately NOT what malmo charges for the app. That is a commercial
+	// decision that changes without the app changing, so it lives in the curation
+	// source next to `listed`/`environments` (store `status.yml` `price:`), not in
+	// this schema. Nor is either one a limitation: a limitation is a broken
+	// feature, and paying for something is not a defect.
+	ExternalCosts []ExternalCost `yaml:"external_costs,omitempty"`
 }
+
+// ExternalCost is one third-party charge the app depends on (APP_MANIFEST.md #
+// A). Authoring rules — the wording, and how to write an honest Estimate — live
+// with the curation source (store `docs/app-description.md` # External costs),
+// which enforces the house style this package does not: no em dashes, no vendor
+// names, the provider's currency. What is enforced here is the shape every
+// consumer depends on.
+type ExternalCost struct {
+	// ID is a stable kebab-case key, unique within the app, so a surface can key
+	// on one cost across versions and translations.
+	ID string `yaml:"id" json:"id"`
+	// Title is what the money is for, in two to four words ("Sending email",
+	// "Model access"). No vendor name: vendors change, the cost does not.
+	Title string `yaml:"title" json:"title"`
+	// Description says who charges and why the app needs it.
+	Description string `yaml:"description" json:"description"`
+	// Required marks a cost the app's main job does not work without. It never
+	// gates install: an app that will not *boot* without a paid thing is a
+	// blocked/blocks-start curation verdict, not an external cost.
+	//
+	// A *bool with no default, because there is no safe one. Defaulting to false
+	// would let a forgotten line render a cost the app cannot work without as
+	// "optional" — the exact surprise this block exists to prevent — and
+	// defaulting to true would overstate every nice-to-have. The author states
+	// it, and validate() rejects the manifest if they did not. The curation
+	// source's own validator already demands the key, so anything looser here
+	// would mean two gates disagreeing about one field. Read it through
+	// IsRequired(), never the raw pointer.
+	Required *bool `yaml:"required" json:"required"`
+	// Estimate is a short unit rate ("$0.20 per 1000 emails (varies by
+	// provider)"), never a monthly total — a total depends on how one person uses
+	// the app, which nobody here can know. Empty is always valid and is the right
+	// answer when no honest unit rate exists; the Description then carries the
+	// shape in prose. Capped at EstimateMaxChars so it stays one glanceable line.
+	Estimate string `yaml:"estimate,omitempty" json:"estimate,omitempty"`
+	// EstimateChecked (YYYY-MM-DD) is the day the Estimate was last confirmed.
+	// Required whenever Estimate is set, because a free-text price is the one
+	// thing in this manifest nothing can re-measure: every other number is taken
+	// from a real boot (resolved digests, measured storage), while this one is a
+	// market observation that goes stale in silence. The date is what lets the
+	// curation source flag an estimate nobody has re-checked.
+	EstimateChecked string `yaml:"estimate_checked,omitempty" json:"estimate_checked,omitempty"`
+}
+
+// EstimateMaxChars caps ExternalCost.Estimate. Counted in runes, not bytes, so a
+// currency sign costs one character here and in the curation source's own check
+// (store tools/check.py) — two validators that disagree on the limit would let a
+// line pass one gate and fail the other.
+const EstimateMaxChars = 100
+
+// IsRequired reports whether the app's main job depends on paying this cost.
+// validate() rejects a manifest that omits the key, so the nil case here is a
+// cost built in code rather than parsed; it reads as not-required, the same
+// direction ConfigField.Required defaults.
+func (c *ExternalCost) IsRequired() bool { return c.Required != nil && *c.Required }
 
 // Description holds the app's catalog-facing text (APP_MANIFEST.md # A).
 // Both fields are optional; the store surfaces Short as the one-liner and Long
@@ -570,6 +639,9 @@ func (m *Manifest) validate() error {
 	if err := m.validateConfig(); err != nil {
 		return err
 	}
+	if err := m.validateExternalCosts(); err != nil {
+		return err
+	}
 	if err := m.validateServices(); err != nil {
 		return err
 	}
@@ -660,6 +732,56 @@ func (m *Manifest) validateConfig() error {
 		}
 		if c.Type == "enum" && c.Default != "" && !slices.Contains(c.Options, c.Default) {
 			return fmt.Errorf("config[%s]: default %q is not one of the options", c.AppEnv, c.Default)
+		}
+	}
+	return nil
+}
+
+// validateExternalCosts checks the third-party-cost block (APP_MANIFEST.md # A).
+// Absent ⇒ no-op. The pairing that matters is Estimate ⇄ EstimateChecked: a
+// price with no date cannot be re-checked, and a date with no price describes
+// nothing.
+func (m *Manifest) validateExternalCosts() error {
+	seen := make(map[string]bool, len(m.ExternalCosts))
+	for i := range m.ExternalCosts {
+		c := &m.ExternalCosts[i]
+		if !kebabSlug.MatchString(c.ID) {
+			return fmt.Errorf("external_costs[%d]: id %q must be kebab-case (e.g. model-access)", i, c.ID)
+		}
+		if seen[c.ID] {
+			return fmt.Errorf("external_costs: duplicate id %q", c.ID)
+		}
+		seen[c.ID] = true
+		if strings.TrimSpace(c.Title) == "" {
+			return fmt.Errorf("external_costs[%s]: title is required", c.ID)
+		}
+		if strings.TrimSpace(c.Description) == "" {
+			return fmt.Errorf("external_costs[%s]: description is required", c.ID)
+		}
+		if c.Required == nil {
+			return fmt.Errorf("external_costs[%s]: required must be stated true or false; there is no safe default for whether the app works without paying", c.ID)
+		}
+		// A blank-but-present estimate is an authoring slip, not the deliberate
+		// "no honest rate exists" answer — that one omits the key. Rejected rather
+		// than silently treated as absent, because it would render as an empty
+		// line on the cost card and the curation source rejects it too.
+		if c.Estimate != "" && strings.TrimSpace(c.Estimate) == "" {
+			return fmt.Errorf("external_costs[%s]: estimate is blank; omit the key when there is no honest rate to quote", c.ID)
+		}
+		if c.Estimate == "" {
+			if c.EstimateChecked != "" {
+				return fmt.Errorf("external_costs[%s]: estimate_checked is set but there is no estimate to date", c.ID)
+			}
+			continue
+		}
+		if n := utf8.RuneCountInString(c.Estimate); n > EstimateMaxChars {
+			return fmt.Errorf("external_costs[%s]: estimate is %d characters, max %d; quote the rate and move the rest to description", c.ID, n, EstimateMaxChars)
+		}
+		if c.EstimateChecked == "" {
+			return fmt.Errorf("external_costs[%s]: an estimate needs estimate_checked (YYYY-MM-DD) so a stale price can be found", c.ID)
+		}
+		if _, err := time.Parse(time.DateOnly, c.EstimateChecked); err != nil {
+			return fmt.Errorf("external_costs[%s]: estimate_checked %q must be a YYYY-MM-DD date", c.ID, c.EstimateChecked)
 		}
 	}
 	return nil

@@ -100,12 +100,21 @@ type remoteSource struct {
 type snapshot struct {
 	apps []wireApp
 	byID map[string]*wireApp
+	// home is the authored recommended-apps page carried verbatim from the
+	// snapshot (a curated home.yml via the sync tool); home() below is what
+	// applies this box's environment filter to it.
+	home wireHomePage
+	// cats is the authored category vocabulary carried verbatim from the snapshot
+	// (a curated categories.yml via the sync tool), in authored order.
+	cats []wireCategory
 }
 
 func newSnapshot(f catalogFile) *snapshot {
 	s := &snapshot{
 		apps: append([]wireApp(nil), f.Apps...),
 		byID: make(map[string]*wireApp, len(f.Apps)),
+		home: f.Home,
+		cats: f.Categories,
 	}
 	sort.Slice(s.apps, func(i, j int) bool { return s.apps[i].Name < s.apps[j].Name })
 	for i := range s.apps {
@@ -309,6 +318,7 @@ func detailOfApp(a *wireApp) Detail {
 		License:         a.License,
 		Links:           a.Links,
 		ChangelogURL:    a.ChangelogURL,
+		ExternalCosts:   a.ExternalCosts,
 	}
 	for i := range a.Screenshots {
 		d.ScreenshotURLs = append(d.ScreenshotURLs, screenshotURL(a.ID, i))
@@ -353,6 +363,55 @@ func (r *remoteSource) featured() ([]Entry, error) {
 	out := make([]Entry, len(top))
 	for i, a := range top {
 		out[i] = entryOfApp(a)
+	}
+	return out, nil
+}
+
+// home returns the landing page's spotlight app and category groups, filtered
+// to this box's environment exactly like List/featured: an app the snapshot's
+// home block names but this surface doesn't advertise drops out of its slot
+// (the spotlight goes nil, or the app is skipped within its group), and a group
+// left with no advertised apps is dropped entirely rather than rendered empty.
+// Mirror of the control plane's own spotlight/groups projection. An empty or
+// never-synced store has neither.
+func (r *remoteSource) home() (*Entry, []HomeGroupView, error) {
+	snap := r.current()
+	if snap == nil {
+		return nil, nil, nil
+	}
+	var spotlight *Entry
+	if a, ok := snap.byID[snap.home.Spotlight]; ok && a.visibleIn(r.env) {
+		e := entryOfApp(a)
+		spotlight = &e
+	}
+	var groups []HomeGroupView
+	for _, g := range snap.home.Groups {
+		var apps []Entry
+		for _, id := range g.Apps {
+			if a, ok := snap.byID[id]; ok && a.visibleIn(r.env) {
+				apps = append(apps, entryOfApp(a))
+			}
+		}
+		if len(apps) > 0 {
+			groups = append(groups, HomeGroupView{Category: g.Category, Apps: apps})
+		}
+	}
+	return spotlight, groups, nil
+}
+
+// categories returns the snapshot's authored category vocabulary in authored
+// order. Unlike the app projections it is not environment-filtered here: the
+// facade only ever renders the entries whose categories are actually present on
+// this surface, so filtering twice would just be a second place to get it wrong.
+// A never-synced box has no snapshot and so no vocabulary.
+func (r *remoteSource) categories() ([]Category, error) {
+	snap := r.current()
+	if snap == nil {
+		return nil, nil
+	}
+	out := make([]Category, 0, len(snap.cats))
+	for _, c := range snap.cats {
+		out = append(out, Category{ID: c.ID, Label: c.Label})
 	}
 	return out, nil
 }

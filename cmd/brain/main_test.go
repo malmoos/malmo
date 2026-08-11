@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/malmoos/malmo/internal/api"
 	"github.com/malmoos/malmo/internal/audit"
 	"github.com/malmoos/malmo/internal/events"
 	"github.com/malmoos/malmo/internal/health"
@@ -1288,4 +1290,39 @@ func TestProbeBaseURL(t *testing.T) {
 			t.Errorf("probeBaseURL(%q) = %q, want %q", c.listen, got, c.want)
 		}
 	}
+}
+
+// TestTrustedProxiesConfig covers the env-var wiring behind the brain's client-IP
+// trust boundary (#329): the sentinel distinguishes an unset MALMO_TRUSTED_PROXIES
+// (⇒ the private-range default) from one deliberately set to empty (⇒ trust no
+// proxy at all, key every per-IP bucket on the peer address). Collapsing the two
+// would silently hand back the default to an operator who asked for the opposite.
+// The unparseable case is deliberately not covered: it calls fatal(), which exits
+// the process.
+func TestTrustedProxiesConfig(t *testing.T) {
+	t.Run("unset falls back to the private-range default", func(t *testing.T) {
+		t.Setenv("MALMO_TRUSTED_PROXIES", "")
+		if err := os.Unsetenv("MALMO_TRUSTED_PROXIES"); err != nil {
+			t.Fatalf("unsetenv: %v", err)
+		}
+		got := trustedProxies(loadConfig().trustedProxies)
+		if want := api.DefaultTrustedProxies(); len(got) != len(want) {
+			t.Fatalf("prefixes = %v, want the %d defaults", got, len(want))
+		}
+	})
+
+	t.Run("explicitly empty trusts nothing", func(t *testing.T) {
+		t.Setenv("MALMO_TRUSTED_PROXIES", "")
+		if got := trustedProxies(loadConfig().trustedProxies); len(got) != 0 {
+			t.Fatalf("prefixes = %v, want none", got)
+		}
+	})
+
+	t.Run("explicit spec is parsed", func(t *testing.T) {
+		t.Setenv("MALMO_TRUSTED_PROXIES", "172.18.0.0/16")
+		got := trustedProxies(loadConfig().trustedProxies)
+		if len(got) != 1 || got[0].String() != "172.18.0.0/16" {
+			t.Fatalf("prefixes = %v, want [172.18.0.0/16]", got)
+		}
+	})
 }

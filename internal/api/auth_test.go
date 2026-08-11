@@ -685,32 +685,6 @@ func TestListAuditRequiresAuth(t *testing.T) {
 	}
 }
 
-func TestClientIP(t *testing.T) {
-	cases := []struct {
-		remoteAddr string
-		xff        string
-		want       string
-	}{
-		{"192.168.1.1:54321", "", "192.168.1.1"},
-		{"192.168.1.1:54321", "10.0.0.5", "10.0.0.5"},
-		{"192.168.1.1:54321", "10.0.0.5, 172.16.0.1", "10.0.0.5"},
-		{"[::1]:54321", "", "::1"},
-	}
-	for _, tc := range cases {
-		r := &http.Request{
-			RemoteAddr: tc.remoteAddr,
-			Header:     http.Header{},
-		}
-		if tc.xff != "" {
-			r.Header.Set("X-Forwarded-For", tc.xff)
-		}
-		got := clientIP(r)
-		if got != tc.want {
-			t.Errorf("remoteAddr=%q xff=%q: got %q, want %q", tc.remoteAddr, tc.xff, got, tc.want)
-		}
-	}
-}
-
 // elevate calls POST /api/v1/auth/elevate with the given password, asserting
 // success. Call after setupAdmin or loginAs to enter the elevation window.
 func (h *harness) elevate(password string) {
@@ -1287,4 +1261,56 @@ func TestUserCRUDRequiresElevation(t *testing.T) {
 		t.Fatalf("POST /users after elevate = %d; want 200", resp.StatusCode)
 	}
 	resp.Body.Close()
+}
+
+// TestLoginThrottleIgnoresForgedForwardedFor is the login half of #329. The
+// per-IP login bucket (10 attempts/min, AUTH.md # Rate limiting) is the only
+// gate that slows a username spray, because each fresh username starts with no
+// per-username backoff. It used to key on the first X-Forwarded-For hop, so an
+// attacker rotating that header got a fresh 10-attempt budget per request. Now
+// the header is inert unless the peer is a trusted proxy — a spray from one
+// source drains one bucket however it labels itself.
+func TestLoginThrottleIgnoresForgedForwardedFor(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("admin", "correct-horse-battery")
+
+	// A distinct username per attempt so only the per-IP gate can fire, and a
+	// distinct forged X-Forwarded-For per attempt so a spoofable key would hand
+	// out a fresh bucket every time.
+	attempt := func(i int) *http.Response {
+		body, _ := json.Marshal(map[string]string{
+			"username": fmt.Sprintf("victim%d", i),
+			"password": "guess",
+		})
+		req, err := http.NewRequest("POST", h.srv.URL+"/api/v1/login", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("10.9.%d.%d", i/256, i%256))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("do: %v", err)
+		}
+		return resp
+	}
+
+	// ipBucketCapacity (10) attempts are spent, then the gate must fire. The loop
+	// runs one past capacity and asserts the throttle showed up by then.
+	throttledAt := -1
+	for i := 0; i < 11; i++ {
+		resp := attempt(i)
+		code := resp.StatusCode
+		resp.Body.Close()
+		if code == http.StatusTooManyRequests {
+			throttledAt = i
+			break
+		}
+		if code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: want 401 (bad credentials) or 429, got %d", i, code)
+		}
+	}
+	if throttledAt < 0 {
+		t.Fatal("rotating a forged X-Forwarded-For defeated the per-IP login throttle: no 429 in 11 attempts")
+	}
 }

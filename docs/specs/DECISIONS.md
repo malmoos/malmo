@@ -21,6 +21,51 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-08-11 — Hosted updates are cloud-decided per box and pushed, not manifest-driven and prompted
+
+**Previously:** `UPDATES.md` and `RELEASE_MANIFEST.md` described one update model for every box: a signed static `stable.json` on a CDN, polled hourly, verified with minisign, surfacing an "Update available" prompt that an admin clicks. That model was written before the `hosted` profile existed and was silently assumed to cover it.
+
+**Now:** hosted and appliance share the **apply and rollback transaction** and differ only in the **trigger**.
+
+- **Appliance** keeps `RELEASE_MANIFEST.md` exactly as specced — signed manifest, hourly poll, admin-prompted, `rollback_to` as the kill switch. That doc is now explicitly scoped to appliance.
+- **Hosted** gets a **per-box target version held by the cloud control plane**. No manifest, no signature, no prompt. The box polls outbound, applies in the window, and reports the outcome back.
+- **`host-agent` recreates both `malmo-brain` and `malmo-ui`** as one transaction, writing the new image references into the staged control-plane compose before recreating so the brain reconciles to them instead of reverting them.
+
+**Why:**
+
+- **A signed broadcast exists to reach machines you cannot address.** That is the appliance's situation and the manifest is the right answer to it. On hosted we provisioned the box, we hold its `box_id`, and we have a channel to it — so paying for a CDN, a signing key, an offline signing ritual, and a `rollback_to` retraction protocol buys nothing we do not already have.
+- **Per-box beats a fleet-wide value, and both beat the manifest.** `RELEASE_MANIFEST.md` # Future work defers phased rollout behind a deterministic cohort hash *because a static file cannot address one box*. A per-box target has staged rollout, single-tenant pinning, and instant halt as properties rather than as features to build. It also narrowed the existing cohort/beta entry in `NEXT.md` down to appliance-only.
+- **We operate the box, so prompting is the wrong default.** A hosted box left on a known-bad version because nobody logged in to click is a failure we would be choosing. Pushing is what every hosted product does, and it is the honest posture for a machine whose uptime is our responsibility.
+- **But operating a box does not transfer the user's data decisions to us.** The app permission-expansion prompt (`UPDATES.md` # 4) survives unchanged on hosted and still goes to the instance owner. We push infrastructure; we do not push a new grant of access to someone's folders. This asymmetry is the point, not an oversight.
+- **One actor for the control-plane transaction.** The brain cannot recreate itself, and splitting the work (host-agent does the brain, brain does the UI) would give a coordinated brain+UI ship two rollback paths that have to agree mid-flight. The cost — host-agent reaching past the brain to containers `CONTROL_PLANE.md` says the brain owns — is paid by making the staged compose file the handoff point rather than by having the two actors negotiate.
+
+**What this doesn't change:** both update streams, the pre-update SQLite snapshot, the per-app `data_volumes` tar, health-check-then-revert, 7-day retention, the 03:00–04:00 window, and the ordering. The expensive half of the machinery is shared and gets built once.
+
+**Known gap this opens:** the hosted trigger has no designed credential. The `enrollment` block in `seed.json` is an acme-dns account, not a control-plane API identity. Filed as a **Tier 1** entry in `NEXT.md` (# Box ↔ cloud API authentication) because it blocks the first implementation slice.
+
+**Affected docs:** `UPDATES.md` (# 8 added, # What this doc covers, # Locked decisions); `RELEASE_MANIFEST.md` (scoped to appliance — header note + locked decisions); `BUILD.md` # 6 (control-plane images published publicly, pulled by digest); `ENVIRONMENT.md` # Updates (hosted); `NEXT.md` (Tier-1 entry added, cohort/beta entry narrowed to appliance).
+
+---
+
+## 2026-08-11 — Two update streams (the box, the containers), not five
+
+**Previously:** `UPDATES.md` opened with "a box has **five independent update streams**, each with its own cadence, risk profile, and delivery mechanism" — Debian base, `host-agent`, control plane (brain + UI), apps, managed services. Each got its own policy section, its own row in the rollback table, and its own place in a four-arrow ordering chain. `SETTINGS.md` and `LOCAL_ANALYTICS.md` both built on the number five.
+
+**Now:** **two streams, split by what the thing runs on.** Stream A is **the box** — Debian base, kernel, firmware, `host-agent` — one atomic unit that may reboot, realized by `apt` today and by an A/B image later. Stream B is **the containers** — brain, UI, apps, managed services — per-image, no reboot, rollback by keeping the previous image. The per-component policies inside each stream are unchanged; what changed is the unit of testing and the unit of rollback.
+
+**Why:**
+
+- **Combinatorics.** Five independent streams means a box in the field is a point in a five-dimensional version space, and we can only ever test the handful of combinations we thought to enumerate. Two streams means a box is described by two numbers, and "what is this box running" has an answer that fits in a sentence.
+- **The rollback table was already telling us.** Every stream-B rollback is automatic and mechanical (keep the previous image); neither stream-A rollback is (Debian base has none in v1, `host-agent` is a manual apt revert). That is not five things with five policies, it is two things with two very different physics. The old table's five rows obscured a split that the two-row grouping makes obvious.
+- **The comparable products converged here.** umbrelOS ships whole-system A/B images (Rugix + Mender) with apps updating separately from a git-backed store. ZimaOS ships A/B slots via RAUC. Both landed on "the box is one atomic thing, the apps are not." CasaOS is the counter-example — a shell script pulling per-component binaries (Gateway, MessageBus, UserService, LocalStorage, AppManagement, CLI) independently from GitHub releases — and per-component drift is a recurring source of broken installs there. We are not copying the image-based mechanism (our stream B is containers, which are already atomic and already versioned); we are copying the boundary.
+- **It resolves a live contradiction.** `BRAIN_HOST_PROTOCOL.md` # Versioning asserted "the OS update is one atomic unit (per `UPDATES.md` v1 — Debian base + brain + host-agent + Caddy + Tier-2 packages)" while `UPDATES.md` asserted five independent streams. Both were half right: the box *is* atomic, the containers are *not* part of that atom. Under two streams each sentence becomes true about its own stream.
+
+**What this doesn't change:** every locked policy inside the streams survives — `unattended-upgrades` security-only for the Debian base, apt for `host-agent`, release-manifest-driven and admin-prompted for the control plane, auto-apply-unless-permissions-expand for apps, invisible-infrastructure for managed services, the 03:00–04:00 window, the pre-update snapshot, and the 7-day retention. A/B images stay deferred to v2.
+
+**Affected docs:** `UPDATES.md` (# What this doc covers rewritten, # Why two and not five added, section headings labelled by stream, # Update ordering, # Rollback summary, # Locked decisions); `BRAIN_HOST_PROTOCOL.md` # Versioning; `SETTINGS.md` # Locked: Updates lives in Settings, not the Store; `LOCAL_ANALYTICS.md` (`stream_update_applied`); `NEXT.md` # OS major-version upgrade commitment.
+
+---
+
 ## 2026-07-16 — One repo version, not independent per-component SemVer
 
 **Previously:** `BUILD.md` # Versioning locked "SemVer for `host-agent` and `brain`" — each component carrying its own independently-incrementing `vMAJOR.MINOR.PATCH`, with `malmo-ui` called out explicitly as "versioned independently of the brain" in the same doc's artifact list and locked-decisions section.

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"time"
 
@@ -59,6 +60,12 @@ type Server struct {
 	profile      profile.Profile
 	boxID        string
 	assertionKey ed25519.PublicKey
+
+	// Proxies whose X-Forwarded-For the brain reads when deriving the client IP
+	// the per-IP throttles key on (clientip.go, #329). Set once at startup via
+	// SetTrustedProxies; nil means "trust nothing", so every request keys on its
+	// peer address.
+	trustedProxies []netip.Prefix
 }
 
 func NewServer(
@@ -396,7 +403,7 @@ func (s *Server) catalogHome(ctx context.Context, _ *struct{}) (*struct{ Body ca
 // semantics — the UI only ever links categories the landing advertised.
 func (s *Server) catalogCategory(ctx context.Context, in *struct {
 	Name string `query:"name"`
-}) (*struct{ Body catalog.Category }, error) {
+}) (*struct{ Body catalog.CategoryPage }, error) {
 	c, err := s.catalog.Category(in.Name)
 	if errors.Is(err, catalog.ErrNotFound) {
 		return nil, huma.Error404NotFound("no such category")
@@ -404,7 +411,7 @@ func (s *Server) catalogCategory(ctx context.Context, in *struct {
 	if err != nil {
 		return nil, huma.Error500InternalServerError("catalog read failed", err)
 	}
-	return &struct{ Body catalog.Category }{Body: c}, nil
+	return &struct{ Body catalog.CategoryPage }{Body: c}, nil
 }
 
 // catalogSearch serves the apps matching ?q= over name, tagline, and categories. A

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -51,7 +50,7 @@ var publicPaths = map[string]bool{
 // client IP to the request context.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := audit.WithClientIP(r.Context(), clientIP(r))
+		ctx := audit.WithClientIP(r.Context(), s.clientIP(r))
 		if isPublic(r) {
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
@@ -65,25 +64,6 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		ctx = auth.WithIdentity(ctx, id)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
-}
-
-// clientIP extracts the request's originating IP. X-Forwarded-For first hop
-// takes precedence (set by Caddy in production); falls back to RemoteAddr.
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// X-Forwarded-For may be "client, proxy1, proxy2"; take the first token.
-		if idx := strings.IndexByte(xff, ','); idx >= 0 {
-			xff = xff[:idx]
-		}
-		if ip := strings.TrimSpace(xff); ip != "" {
-			return ip
-		}
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }
 
 func isPublic(r *http.Request) bool {

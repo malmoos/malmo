@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/malmoos/malmo/internal/audit"
 	"github.com/malmoos/malmo/internal/auth"
 	"github.com/malmoos/malmo/internal/profile"
 )
@@ -140,12 +141,12 @@ func newRateLimiter(now func() time.Time) *rateLimiter {
 // unthrottled path can no longer be used to drive anonymous DB load through the
 // brain's single SQLite connection.
 //
-// Keying a bucket on the client IP instead would not hold this line: for a verify
-// subrequest the IP the brain sees is either Caddy's own (one bucket for every
-// legitimate user of the box) or the first X-Forwarded-For hop, which is
-// caller-supplied since Caddy runs without trusted_proxies — a spoofable key
-// gives an attacker a fresh bucket per forged IP. The syntax gate, not the
-// bucket, is what protects the store here.
+// The original reason not to key a bucket on the client IP here — that the key
+// was caller-supplied and so gave an attacker a fresh bucket per forged IP — no
+// longer holds: clientIP now reads X-Forwarded-For only from a trusted proxy
+// (clientip.go, #329). Whether the verify path should carry a per-IP bucket
+// again is a separate call than this exemption's; today the syntax gate, not a
+// bucket, is what protects the store.
 //
 // Hosted-scoped: on the appliance the handler always 404s, so it keeps the
 // normal throttle rather than widening the unthrottled surface for no benefit.
@@ -179,7 +180,14 @@ func (s *Server) rateLimit(next http.Handler) http.Handler {
 		// Plane 2: the unauthenticated allowlist (publicPaths), keyed on client IP.
 		// authMiddleware has already rejected any non-public request that lacks a
 		// session, so reaching here means a public path: log the IP, never ban.
-		ip := clientIP(r)
+		// The key is the IP authMiddleware already derived and put on the context
+		// (clientip.go): reading it back means the throttle and the audit log can
+		// never disagree about who a request came from. The fallback covers a
+		// handler chain assembled without that middleware.
+		ip, ok := audit.ClientIPFromContext(r.Context())
+		if !ok {
+			ip = s.clientIP(r)
+		}
 		if ok, retry := s.limiter.ip.allow(ip); !ok {
 			slog.Warn("rate limited", "scope", "ip", "host", ip, "retry_after_s", retryAfterSeconds(retry))
 			writeRateLimited(w, "ip", retry)

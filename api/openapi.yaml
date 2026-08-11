@@ -188,10 +188,21 @@ components:
     Category:
       additionalProperties: false
       properties:
+        id:
+          type: string
+        label:
+          type: string
+      required:
+        - id
+        - label
+      type: object
+    CategoryPage:
+      additionalProperties: false
+      properties:
         $schema:
           description: A URL to the JSON Schema for this object.
           examples:
-            - https://example.com/schemas/Category.json
+            - https://example.com/schemas/CategoryPage.json
           format: uri
           readOnly: true
           type: string
@@ -209,8 +220,11 @@ components:
           type:
             - array
             - "null"
+        label:
+          type: string
       required:
         - category
+        - label
         - apps
       type: object
     Change-my-passwordRequest:
@@ -364,6 +378,12 @@ components:
             - "null"
         changelog_url:
           type: string
+        external_costs:
+          items:
+            $ref: "#/components/schemas/ExternalCost"
+          type:
+            - array
+            - "null"
         footprint:
           $ref: "#/components/schemas/Footprint"
         icon_glyph:
@@ -531,6 +551,27 @@ components:
           format: uri
           type: string
       type: object
+    ExternalCost:
+      additionalProperties: false
+      properties:
+        description:
+          type: string
+        estimate:
+          type: string
+        estimate_checked:
+          type: string
+        id:
+          type: string
+        required:
+          type: boolean
+        title:
+          type: string
+      required:
+        - id
+        - title
+        - description
+        - required
+      type: object
     FolderElection:
       additionalProperties: false
       properties:
@@ -600,7 +641,7 @@ components:
           type: string
         categories:
           items:
-            type: string
+            $ref: "#/components/schemas/Category"
           type:
             - array
             - "null"
@@ -610,8 +651,34 @@ components:
           type:
             - array
             - "null"
+        groups:
+          items:
+            $ref: "#/components/schemas/HomeGroupView"
+          type:
+            - array
+            - "null"
+        spotlight:
+          $ref: "#/components/schemas/Entry"
       required:
         - categories
+      type: object
+    HomeGroupView:
+      additionalProperties: false
+      properties:
+        apps:
+          items:
+            $ref: "#/components/schemas/Entry"
+          type:
+            - array
+            - "null"
+        category:
+          type: string
+        label:
+          type: string
+      required:
+        - category
+        - label
+        - apps
       type: object
     Inspect-custom-appRequest:
       additionalProperties: false
@@ -2200,7 +2267,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Category"
+                $ref: "#/components/schemas/CategoryPage"
           description: OK
         default:
           content:
