@@ -152,6 +152,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/system/live", s.systemLive)
 	mux.HandleFunc("GET /api/v1/apps/{id}/log", s.appLog)
 
+	// Liveness probe for the control-plane updater (healthz.go). Raw, public,
+	// and outside /api/v1 — an operational probe, not part of the versioned API
+	// surface, so it is absent from the OpenAPI document and the TS client.
+	mux.HandleFunc("GET "+healthzPath, s.healthz)
+
 	// Catalog assets (icon/screenshots) serve raw image bytes, not JSON, so they
 	// bypass huma and stay out of the OpenAPI surface — the store loads them
 	// directly in <img> tags (APP_STORE.md # Catalog schema).
