@@ -39,6 +39,7 @@ import (
 	"github.com/malmoos/malmo/internal/hostagent"
 	"github.com/malmoos/malmo/internal/hostagent/brainlaunch"
 	"github.com/malmoos/malmo/internal/hostagent/controlplane"
+	"github.com/malmoos/malmo/internal/hostagent/cpupdate"
 	"github.com/malmoos/malmo/internal/profile"
 	"github.com/malmoos/malmo/internal/protocol"
 	"github.com/malmoos/malmo/internal/version"
@@ -78,6 +79,24 @@ func main() {
 	a, cleanup := buildAgent()
 	defer cleanup()
 
+	// The brain's launch config is built once and used twice: to launch the
+	// brain at boot, and as the base of every control-plane update. Reusing it
+	// is the point — an updated brain has to be identical to a first-boot one
+	// except for the image, and a second builder would drift the first time a
+	// mount or env var is added here (docs/progress/control-plane-update-transaction.md).
+	brainCfg := brainLaunchConfig(sockPath)
+	// POST /v1/jobs/system-update. Wired in both build profiles: UPDATES.md # 8
+	// makes the stream-B transaction shared by appliance and hosted.
+	a.Updater = cpupdate.Runner{
+		Docker: cpupdate.NewCLIDocker(),
+		Prober: cpupdate.HTTPProber{},
+		Base: cpupdate.Options{
+			ControlPlaneDir: brainCfg.ControlPlaneDir,
+			BrainCfg:        brainCfg,
+			SnapshotRoot:    filepath.Join(brainCfg.DataDir, "brain-snapshots"),
+		},
+	}
+
 	mux := http.NewServeMux()
 	a.Mount(mux)
 
@@ -89,7 +108,6 @@ func main() {
 	// host-agent serving its socket so the box stays diagnosable; it does not
 	// tear host-agent down.
 	brainCtx, brainCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	brainCfg := brainLaunchConfig(sockPath)
 	// Seed the brain's Docker transport (ingress network + socket-proxy) before
 	// launching the brain — the brain reaches Docker only through this proxy
 	// (CONTROL_PLANE.md # Docker socket exposure), and the brain then reconciles

@@ -265,11 +265,92 @@ func (c *Client) JournalFollow(ctx context.Context, container string) (<-chan pr
 	return ch, nil
 }
 
+// ErrUpdateInProgress is returned by StartSystemUpdate when host-agent already
+// has a job running (409). The brain maps it to a 409 of its own rather than a
+// generic host error: "an update is already running" is a state the admin can
+// act on, and it is the one refusal that is not a bug.
+var ErrUpdateInProgress = errors.New("a control-plane update is already running")
+
+// ErrJobNotFound is returned by Job when host-agent has never seen the id
+// (404) — including every id from before a host-agent restart, since job
+// records are in memory. The brain maps it to 404.
+var ErrJobNotFound = errors.New("no such job")
+
+// StartSystemUpdate asks host-agent to move the control plane to the given
+// pair (POST /v1/jobs/system-update, UPDATES.md # 3). An empty ref leaves that
+// component alone. Returns the accepted job, which the caller polls with Job.
+//
+// The refs come from the caller. host-agent does not fetch a target from
+// anywhere — see protocol.SystemUpdateRequest for why.
+//
+// Does not go through do, because the 409 must survive to the caller as a
+// typed sentinel instead of an opaque string.
+func (c *Client) StartSystemUpdate(ctx context.Context, brainRef, uiRef string) (protocol.Job, error) {
+	resp, err := c.request(ctx, "POST", "/v1/jobs/system-update",
+		protocol.SystemUpdateRequest{BrainImage: brainRef, UIImage: uiRef})
+	if err != nil {
+		return protocol.Job{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusConflict {
+		return protocol.Job{}, ErrUpdateInProgress
+	}
+	if resp.StatusCode >= 300 {
+		return protocol.Job{}, statusErr("/v1/jobs/system-update", resp)
+	}
+	var out protocol.Job
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return protocol.Job{}, err
+	}
+	return out, nil
+}
+
+// Job reads one host-agent job record (GET /v1/jobs/{id}). Returns
+// ErrJobNotFound (checkable with errors.Is) when host-agent does not know the
+// id; any other non-200 is a generic host error.
+func (c *Client) Job(ctx context.Context, id string) (protocol.Job, error) {
+	path := "/v1/jobs/" + url.PathEscape(id)
+	resp, err := c.request(ctx, "GET", path, nil)
+	if err != nil {
+		return protocol.Job{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return protocol.Job{}, ErrJobNotFound
+	}
+	if resp.StatusCode >= 300 {
+		return protocol.Job{}, statusErr(path, resp)
+	}
+	var out protocol.Job
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return protocol.Job{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
+	resp, err := c.request(ctx, method, path, body)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return statusErr(path, resp)
+	}
+	if out != nil {
+		return json.NewDecoder(resp.Body).Decode(out)
+	}
+	return nil
+}
+
+// request sends one call and returns the response. It fails only on transport
+// errors; what a non-2xx means is the caller's call, which is what lets the job
+// routes discriminate 404 and 409 while everything else stays on do.
+func (c *Client) request(ctx context.Context, method, path string, body any) (*http.Response, error) {
 	var buf bytes.Buffer
 	if body != nil {
 		if err := json.NewEncoder(&buf).Encode(body); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	var reqBody io.Reader = http.NoBody
@@ -278,27 +359,26 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	}
 	req, err := http.NewRequestWithContext(ctx, method, "http://agent"+path, reqBody)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("host-agent unreachable: %w", err)
+		return nil, fmt.Errorf("host-agent unreachable: %w", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		var e protocol.Error
-		_ = json.NewDecoder(resp.Body).Decode(&e)
-		if e.Code == "" {
-			e.Code = "host-agent-error"
-			e.Message = resp.Status
-		}
-		return fmt.Errorf("host-agent %s: %s (%s)", path, e.Message, e.Code)
+	return resp, nil
+}
+
+// statusErr turns a non-2xx response into the standard host-agent error string.
+// It consumes the body; the caller still owns closing it.
+func statusErr(path string, resp *http.Response) error {
+	var e protocol.Error
+	_ = json.NewDecoder(resp.Body).Decode(&e)
+	if e.Code == "" {
+		e.Code = "host-agent-error"
+		e.Message = resp.Status
 	}
-	if out != nil {
-		return json.NewDecoder(resp.Body).Decode(out)
-	}
-	return nil
+	return fmt.Errorf("host-agent %s: %s (%s)", path, e.Message, e.Code)
 }
