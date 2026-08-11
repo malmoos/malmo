@@ -168,12 +168,15 @@ control-plane-images: brain-image ui-image
 	@echo "saved control-plane image bundle to $(CP_IMAGE_DIR)/"
 
 # Run the full suite. Requires libpam0g-dev for the pamverifier package.
+# GOTESTFLAGS passes extra flags through to `go test` — CI sets it to -v so
+# skipped tests are visible (a skip prints nothing without it, so a test that
+# never runs reads exactly like one that passed). See .github/workflows/ci-go.yml.
 test:
-	$(GO) test ./...
+	$(GO) test $(GOTESTFLAGS) ./...
 
 # Skip the pamverifier package (no libpam0g-dev required).
 test-nopam:
-	$(GO) test $$($(GO) list ./... | grep -v pamverifier)
+	$(GO) test $(GOTESTFLAGS) $$($(GO) list ./... | grep -v pamverifier)
 
 # Integration tests for the Avahi DBus publisher. Requires avahi-daemon
 # running on the host. No sudo needed (default DBus policy allows it).

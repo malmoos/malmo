@@ -25,6 +25,7 @@
 
 - [ ] Behavior works in the inner loop (`make dev`), and integration-tested against the real system if it touches one.
 - [ ] Tests added at the right layer; `make check` green (frontend changes: `make check-web` too).
+- [ ] No test deleted or newly skipped: checked the deletion count on `*_test.go` in the diff, and confirmed any new environment-gated test actually runs in CI (it is not in the job summary's skip list). A green suite cannot tell you this — deleted and skipped tests both report green.
 - [ ] Progress entry written (`docs/progress/NNNN-…`); indexes in both READMEs updated; Up-next re-ordered if needed.
 - [ ] Catalog change: if this touches the box's catalog wire (`internal/catalog/wire.go`) or the store views, said whether malmo's other store surface needs the same change (`docs/specs/APP_STORE.md` # What the box models, and what it drops).
 - [ ] Catalog change, **per-app** field: if this adds a field *inside* an app on the wire, said how deployed boxes are handled. They reject the whole snapshot and freeze on their last-good cache until they update, so the data may only be published after a release ships — and the schema version bumps with the data, not ahead of it.

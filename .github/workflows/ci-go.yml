@@ -62,5 +62,36 @@ jobs:
       - name: OpenAPI spec freshness
         run: make openapi-check
 
+      # -v so skipped tests are visible. `go test` without it prints nothing for
+      # a skip, which means a test gated on a file/binary/env that CI lacks can
+      # skip on every run forever and read as green — indistinguishable from one
+      # that passed. That happened in #375: a drift guard pointed at a gitignored
+      # path, so it never ran in CI while the PR claimed it did. The verbose log
+      # is kept out of the summary; only the skip list below is surfaced.
       - name: Test (full suite incl. pamverifier)
-        run: make test
+        run: set -o pipefail && make test GOTESTFLAGS=-v 2>&1 | tee /tmp/gotest.log
+
+      # Surface skips, don't fail on them: 22 are legitimate here (root, avahi,
+      # NetworkManager, bash). The point is that a NEW silent skip is visible to
+      # a reviewer instead of hiding in a green check. Never fails the job —
+      # `|| true` on the grep, since no skips at all is a valid outcome.
+      - name: List skipped tests
+        if: always()
+        run: |
+          set -euo pipefail
+          skips="$(grep -E '^\s*--- SKIP' /tmp/gotest.log || true)"
+          {
+            echo "### Skipped tests"
+            if [ -z "$skips" ]; then
+              echo "None."
+            else
+              echo ""
+              echo '```'
+              echo "$skips"
+              echo '```'
+              echo ""
+              echo "A skip is fine when it guards a real environment gap (root, avahi, NetworkManager, bash)."
+              echo "A skip guarding something that always exists — a tracked file — is a no-op, not coverage."
+              echo "See docs/dev/code-review.md # 6."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
