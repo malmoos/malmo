@@ -16,7 +16,7 @@ The transaction:
 2. **If the brain moved: stop it, then snapshot its SQLite.** In that order, because the brain opens the database with `journal_mode=WAL` and a copy taken under a live writer restores into a corrupt database — a safety net that only fails when used.
 3. **Write the declaration — ledger and staged compose — before starting anything.** The # 8.3 handoff.
 4. **Recreate only what moved**, the brain from `brainlaunch`'s own run spec.
-5. **Health-check both** — the brain on `/healthz`, the UI on `/`, bounded at 60s.
+5. **Health-check what moved** — the brain on `/healthz`, the UI on `/`, bounded at 60s.
 6. **On any failure from step 2 on: revert both refs, restore the snapshot, put the containers back**, and report which step failed.
 
 **Both refs revert even when only one moved.** A coordinated ship is tested as a pair, so a box left running half of one is in a combination nobody has ever run.
