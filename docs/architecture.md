@@ -145,7 +145,8 @@ So this doc isn't read as a claim about the finished product:
   no `malmo-storage-ready.target`. Apps write to wherever Docker puts volumes.
 - **Boot, install ISO, updates.** The `mkosi` image build (`BUILD.md` # 2;
   proven in the test lane, not yet the production ISO), the release manifest,
-  and the five update streams are all spec-only.
+  and both update streams (`UPDATES.md`) are all spec-only. Nothing on a
+  running box can fetch, apply, or roll back a new version today.
 - **Health / notifications / telemetry / time / discovery beyond stubs.** The
   brain doesn't surface health issues, the bell doesn't exist, no telemetry
   client, no chrony integration.

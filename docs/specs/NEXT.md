@@ -17,9 +17,18 @@ Each entry: one-sentence shape, the doc it touches, and *why this tier*. The doc
 
 ## Tier 1 — Blocking
 
-*(Last audit: 2026-05-31 — Tier 1 is **clear of product-surface gaps**. The dashboard-shell gap was resolved by `DASHBOARD.md` (logged-in IA + owner-scoped apps model; `DECISIONS.md` 2026-05-29), and the in-dashboard file-manager gap is now resolved by `FILES.md` (ops execute as the user's UID in host-agent; own + Shared scope; `DECISIONS.md` 2026-05-31). The infrastructure spine (boot/storage/health/updates/auth) is well-specified. Remaining work is implementation, not design — slice queue lives in [`../progress/README.md`](../progress/README.md) # Up next. Promote an item here into Tier 1 if a new blocking design gap appears.)*
+*(Last audit: 2026-05-31 — Tier 1 is **clear of product-surface gaps**. The dashboard-shell gap was resolved by `DASHBOARD.md` (logged-in IA + owner-scoped apps model; `DECISIONS.md` 2026-05-29), and the in-dashboard file-manager gap is now resolved by `FILES.md` (ops execute as the user's UID in host-agent; own + Shared scope; `DECISIONS.md` 2026-05-31). The infrastructure spine (boot/storage/health/updates/auth) is well-specified. Remaining work is largely implementation, not design — slice queue lives in [`../progress/README.md`](../progress/README.md) # Up next. Promote an item here into Tier 1 if a new blocking design gap appears. **2026-08-11:** one did — the hosted update path (`UPDATES.md` # 8) landed with a designed trigger and no designed credential to authenticate it; see below.)*
 
-*(No open Tier-1 design topics. Items resolved out of this tier are recorded in `DECISIONS.md` — including the 2026-06-17 #199 resolution that mkosi emits no `.iso` and malmo ships disk images instead, cloud VM image first.)*
+*(Items resolved out of this tier are recorded in `DECISIONS.md` — including the 2026-06-17 #199 resolution that mkosi emits no `.iso` and malmo ships disk images instead, cloud VM image first.)*
+
+### Box ↔ cloud API authentication (hosted)
+
+`UPDATES.md` # 8 locks the hosted update trigger: the box polls the cloud control plane for its per-box target version, outbound-only. **What authenticates that call is undesigned.** The `enrollment` block the box receives in `seed.json` (`ENVIRONMENT.md` # Admin bootstrap — as built) is an acme-dns account — scoped to writing one DNS TXT record, not to a general control-plane API. So the hosted update path has a designed trigger and no credential to make the call with.
+
+Shape to decide: does the box get a second, separate credential at provision time (simple, one more secret to seed and rotate), or does the `box_id` + a control-plane-issued token become a general-purpose box identity that later features (metering, suspend/restore, fleet management — `ENVIRONMENT.md` # Deferred) also use? The second is more work now and is almost certainly what we end up needing, which is the argument for not designing the first one twice. Also open: rotation, and what a box does when its credential is rejected (keep running and keep serving, is the obvious answer — an auth failure must never take a tenant's apps down).
+
+**Context:** `UPDATES.md` # 8.1, `ENVIRONMENT.md` # Updates (hosted) + # Provisioning, `malmoos/cloud` (the other half lives there).
+**Why Tier 1:** it blocks implementing the hosted update trigger, which is the first slice of the update work. The apply/rollback half can be built without it; the "what should I be running" half cannot.
 
 ---
 
@@ -127,7 +136,7 @@ App-level and managed-service migration are well-specced (`SERVICE_PROVISIONING.
 
 ### OS major-version upgrade commitment
 
-`UPDATES.md` covers the five streams under one Debian release. What about Debian 12 → 13? Options: in-place `do-release-upgrade` (Debian's blessed path, sometimes brittle), image-based A/B (HexOS / ChromeOS shape — clean rollback, doubles OS-drive footprint), or "reinstall + import data" (cheap to ship, terrible UX). The *commitment* (will we ever expect users to reinstall to get a new Debian major?) is a position to take now; the mechanism can wait.
+`UPDATES.md` covers both streams under one Debian release. What about Debian 12 → 13? Options: in-place `do-release-upgrade` (Debian's blessed path, sometimes brittle), image-based A/B (HexOS / ChromeOS shape — clean rollback, doubles OS-drive footprint), or "reinstall + import data" (cheap to ship, terrible UX). The *commitment* (will we ever expect users to reinstall to get a new Debian major?) is a position to take now; the mechanism can wait.
 
 **Context:** `UPDATES.md`, `STORAGE.md` (system dataset vs. data drive split makes image-based A/B more feasible), `BUILD.md`.
 **Why Tier 3:** doesn't bite until Debian cuts the next stable (~2027). Pin the commitment now so design choices don't accidentally foreclose A/B.
@@ -257,7 +266,9 @@ When a box has been offline long enough that `.malmo.network` certs expired: ser
 
 Both deferred from v1 (`DECISIONS.md` 2026-05-15). Shape is pinned in `RELEASE_MANIFEST.md` # Future work + # Channels — schema is additive, hash formula is `hash(machine_id || canonical(brain, ui))`, beta is a sibling `beta.json` file. What's still open: the **trigger conditions** in concrete terms (what fleet-size threshold, what auto-apply milestone, what bad-release detection latency forces our hand). Pre-decide so we don't dither when one of them fires.
 
-**Context:** `RELEASE_MANIFEST.md`, `UPDATES.md` # 3.
+**Narrowed to appliance (2026-08-11).** Hosted no longer needs any of this: a per-box target version in the cloud control plane gives staged rollout, per-box pinning, and halt without a cohort hash or a second channel file (`UPDATES.md` # 8.1). This entry is now only about boxes we cannot address individually.
+
+**Context:** `RELEASE_MANIFEST.md`, `UPDATES.md` # 3, # 8.1.
 
 ### Settings → Storage UX (Level-1 walk-through, design pass)
 

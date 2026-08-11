@@ -810,8 +810,9 @@ const minimumAgentVersion = "0.4.0"
 
 // agentVersionAcceptable reports whether reportedVersion is new enough to
 // satisfy minimum — i.e. NOT older than it. A newer agent is always
-// acceptable (UPDATES.md # 1 update ordering: host-agent updates before
-// brain); only an older agent is a mismatch. Comparison is on the release core
+// acceptable (the brain declares a compat floor, not an exact pair —
+// UPDATES.md # Compatibility matrix); only an older agent is a mismatch.
+// Comparison is on the release core
 // (MAJOR.MINOR.PATCH) only: a build/prerelease suffix (e.g. the fake
 // host-agent's "-fake", DECISIONS.md 2026-07-16) must not make an
 // otherwise-current agent look older — semver's prerelease-sorts-before-release
@@ -850,8 +851,11 @@ type agentStatusReader interface {
 // # Detector catalog, locus C). It reads host-agent's reported agent_version
 // and reconciles the version-mismatch issue against a **compatible range**,
 // not exact equality: raise only when the agent is older than
-// minimumAgentVersion, clear otherwise (a newer agent is fine — UPDATES.md # 1
-// update ordering puts host-agent first). There is no dedicated handshake RPC,
+// minimumAgentVersion, clear otherwise (a newer agent is fine — the brain
+// declares a floor, not an exact pair). The older-agent case is reachable:
+// stream B (this brain) updates before stream A (host-agent), so a new brain
+// can land ahead of the host-agent it needs — UPDATES.md # Update ordering.
+// There is no dedicated handshake RPC,
 // so each successful status read is the handshake (HEALTH.md: "each
 // handshake"). A version string is deterministic and authoritative — it cannot
 // flap like a threshold sample — so the check is 1-shot (no debounce): it
