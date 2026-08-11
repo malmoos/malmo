@@ -80,8 +80,10 @@ type SystemUpdateJobDTO struct {
 }
 
 // startSystemUpdate starts the update job. Elevation-class per CLAUDE.md, so it
-// audits the start **and** every refusal: a member trying to update the box is
-// exactly the kind of thing the Activity view exists to show.
+// audits the start **and** the refusals that carry information about who tried
+// what: the 403, the 409, and a host failure. A member trying to update the box
+// is exactly the kind of thing the Activity view exists to show. The two
+// validation 422s do not audit — CLAUDE.md exempts them.
 //
 // success=true here means "the update started", not "the update worked". The
 // brain cannot audit the outcome, because the brain is what the update
@@ -99,8 +101,11 @@ func (s *Server) startSystemUpdate(ctx context.Context, in *struct {
 		fail()
 		return nil, err
 	}
+	// The two 422s below do not audit. CLAUDE.md # Go code discipline:
+	// "Pure reads and validation 422s don't audit." A malformed ref from an
+	// admin who is already allowed to do this is not the question the audit
+	// trail answers ("did someone unauthorized try to mutate this box").
 	if brainRef == "" && uiRef == "" {
-		fail()
 		return nil, huma.Error422UnprocessableEntity("brain_image or ui_image is required")
 	}
 	// Refs travel into a compose file and onto a `docker pull` argument list.
@@ -110,7 +115,6 @@ func (s *Server) startSystemUpdate(ctx context.Context, in *struct {
 	// of the box's declaration entirely.
 	for _, ref := range []string{brainRef, uiRef} {
 		if strings.ContainsFunc(ref, func(r rune) bool { return r <= ' ' || r == 0x7f }) {
-			fail()
 			return nil, huma.Error422UnprocessableEntity("image refs may not contain whitespace or control characters")
 		}
 	}

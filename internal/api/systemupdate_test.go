@@ -156,9 +156,10 @@ func TestStartUpdate_MemberForbidden(t *testing.T) {
 	}
 }
 
-// TestStartUpdate_NoRefs_422: an update with no target is refused, and the
-// refusal is audited — this endpoint audits every observable failure path, not
-// only the interesting ones.
+// TestStartUpdate_NoRefs_422: an update with no target is refused before it
+// reaches host-agent. It does **not** audit: CLAUDE.md exempts validation 422s,
+// and an admin sending a malformed body is not the question the audit trail
+// answers.
 func TestStartUpdate_NoRefs_422(t *testing.T) {
 	h := newUpdateHarness(t)
 	_, err := h.start(adminCtx("u_admin"), "  ", "")
@@ -166,8 +167,8 @@ func TestStartUpdate_NoRefs_422(t *testing.T) {
 	if len(h.requests) != 0 {
 		t.Fatalf("an empty update reached host-agent: %+v", h.requests)
 	}
-	if rows := h.auditRows(t); len(rows) != 1 || rows[0].Success {
-		t.Fatalf("audit rows = %+v, want one failed attempt", rows)
+	if rows := h.auditRows(t); len(rows) != 0 {
+		t.Fatalf("a validation 422 audited: %+v", rows)
 	}
 }
 
@@ -180,8 +181,8 @@ func TestStartUpdate_ControlCharRef_422(t *testing.T) {
 	if len(h.requests) != 0 {
 		t.Fatalf("a malformed ref reached host-agent: %+v", h.requests)
 	}
-	if rows := h.auditRows(t); len(rows) != 1 || rows[0].Success {
-		t.Fatalf("audit rows = %+v, want one failed attempt", rows)
+	if rows := h.auditRows(t); len(rows) != 0 {
+		t.Fatalf("a validation 422 audited: %+v", rows)
 	}
 }
 

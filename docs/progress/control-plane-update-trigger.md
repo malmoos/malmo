@@ -26,14 +26,24 @@ The trigger. An admin can now move the box's control plane, and watch it succeed
 
 **The job record lives in host-agent, and the brain does not wrap it in a job of its own.** The brain already has a Pattern B registry (`internal/api/jobs.go`), and using it here would have been the obvious move. It is also wrong: a brain-side record dies the moment the update recreates the brain, halfway through the operation it tracks. host-agent is the process that stays up, so the host job id is the handle, and a poll still answers after the brain has been replaced.
 
-**Audit covers the start and every refusal.** `system.update` is a new elevation-class action: 403 for a member, 422 for no refs or a malformed one, 409 for the conflict, 502 for an unreachable host — each records `success=false`, and the accepted start records `success=true`. **`success=true` means "the update started", not "it worked"**: the brain cannot audit the outcome of an operation that replaces the brain. The outcome lives on the job record.
+## The bug this slice found in the merged transaction
+
+**`cpupdate.Apply` had one recovery path that ran on the caller's context, and this slice is what made it dangerous.** In the snapshot step the old brain container is removed *before* its database is copied. If the copy then failed, the code put the container back with `d.Run(ctx, ...)` — the caller's `ctx`. Every other failure path routes recovery through `revert()`, which detaches with `context.WithoutCancel` and a budget of its own.
+
+Nothing called `Apply` before this slice, so nothing had ever passed it a context that could die. This slice passes exactly that: `context.WithTimeout(context.Background(), systemUpdateMaxDuration)`, plus the production `Docker` whose `exec.CommandContext` honours it. The 30-minute bound expiring during a snapshot — or host-agent shutting down, or any other cancellation — would have made the recovery `docker run` fail instantly and left the box **with no brain container at all**, and no automatic way back.
+
+The fix extracts the detach into `detached(ctx)` and routes both recovery paths through it (`restoreBrainContainer` for the snapshot case, `revert()` for the rest). One function, so the two cannot drift apart again — the drift *was* the bug. `TestSnapshotFailureRestoresBrainOnDeadContext` drives the branch with a context that dies at the container removal and asserts the old brain is started again; with the fix reverted it fails with `run:malmo-brain:latest: context canceled`.
+
+Found by the review of this PR. The slice that introduced it is [control-plane-update-transaction.md](control-plane-update-transaction.md), whose own entry records the sibling fix to `revert()` — that fix missed this early return.
+
+**Audit covers the start and the refusals that say who tried what.** `system.update` is a new elevation-class action: 403 for a member, 409 for the conflict, and 502 for an unreachable host each record `success=false`, and the accepted start records `success=true`. The two validation 422s (no refs, a ref with control characters) do **not** audit — `CLAUDE.md` # Go code discipline exempts them, and an admin who is already allowed to do this sending a malformed body is not the question the audit trail answers. **`success=true` means "the update started", not "it worked"**: the brain cannot audit the outcome of an operation that replaces the brain. The outcome lives on the job record.
 
 ## How it maps to the specs
 
 - `BRAIN_HOST_PROTOCOL.md` # Pattern B — `POST /v1/jobs/system-update` and `GET /v1/jobs/{id}` in the specified shapes; the as-built block records the subset.
 - `BRAIN_HOST_PROTOCOL.md` # Failure semantics A — `MaxDuration` enforced uniformly by host-agent; `Dangerous: true` realized as one global lock.
 - `UPDATES.md` # 3 (admin-triggered) and # 8.4 step 3 — one actor runs the transaction, and the trigger passes it a target pair.
-- `CLAUDE.md` # Go code discipline — consumer-side `SystemUpdater` in `internal/hostagent`, concrete `cpupdate.Runner` in the provider; `slog` with `image`, `step`, `err`; elevation-class auditing on success and failure.
+- `CLAUDE.md` # Go code discipline — consumer-side `SystemUpdater` in `internal/hostagent`, concrete `cpupdate.Runner` in the provider; `slog` with `image`, `step`, `err`; elevation-class auditing on the start and on the refusals the rule covers, with validation 422s exempt.
 
 ## Known gaps & deviations
 
@@ -43,7 +53,8 @@ The trigger. An admin can now move the box's control plane, and watch it succeed
 - **Job records are in memory and never evicted.** They are lost on host-agent restart, which matches "Dangerous: crash mid-flight = no auto-resume" — but it also means an admin who loses the job id has no way to ask "how did the last update go" apart from the ledger and the journal. A box runs a handful of updates in its life, so the map that only grows is not the problem; the missing "last update" read is the gap.
 - **No elevation re-prompt.** The endpoint is admin-only, per the issue. `USERS_AND_GROUPS.md` # Elevation in the UI asks for a 5-minute re-prompt window on destructive UI operations, and replacing the control plane arguably qualifies. `requireElevated` was not added because the issue specified admin-only and there is no UI gesture yet to elevate from — it is a question for the maintainer, not a decision made here.
 - **The `409` carries no `retry_after` and no running job id in a typed field.** The message names the running job; a caller that wants to follow it has to parse prose. Nothing needs it yet.
-- **Proven against fakes on both sides of the socket.** The host tests drive a stub updater; the brain tests drive a canned host-agent (and a real one, over a real UNIX socket, in `internal/hostclient/jobs_test.go`). No test starts a real update on a real box — that is #382, and it stays the biggest gap in this whole stream.
+- **Proven against fakes on both sides of the socket.** The host tests drive a stub updater; the brain tests drive a canned host-agent (and a real one, over a real UNIX socket, in `internal/hostclient/jobs_test.go`). No test starts a real update on a real box — that is #382, and it stays the biggest gap in this whole stream. The context bug above is a good example of what that gap hides: it was invisible while nothing called `Apply` for real.
+- **Only one of the two recovery paths is covered against a dead context.** The new test drives the snapshot branch; `revert()`'s own detach is covered by the cancellation test from the previous slice. Neither runs against a real Docker, so "the rollback works when the context is dead" is proven at the seam, not on a box.
 - **`cmd/host-agent-real` was not compiled locally.** The PAM cgo dependency does not build on this machine (pre-existing on `dev`). The wiring was type-checked with `CGO_ENABLED=0 go build ./cmd/host-agent-real/`; CI does the real build.
 
 ## What's next
