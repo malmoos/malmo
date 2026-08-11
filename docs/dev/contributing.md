@@ -83,6 +83,11 @@ make test-nopam               # skip the PAM-cgo target
 
 Lane-specific targets exist too (`make test-health`, `make test-caddy`, `make test-usermgr-nspawn`, `make test-boot-chain-nspawn`, `make test-medium-qemu`, …); `make help` lists them. Put unit/store/API tests **in the same package** by default (CLAUDE.md # Go code discipline).
 
+**A green suite is not evidence that your coverage exists.** Both a deleted test and a skipped one report green, so "tests pass" cannot tell you they ran. Two things to check before you push, neither of which the suite will tell you:
+
+- **Did you remove a test?** Look at the deletion count on `*_test.go` in your own diff. Overwriting a test file whole is the usual accident — a directory listing that filters out `_test.go` hides the file you are about to replace.
+- **Does your new test run where it matters?** If it is gated on a file, a binary, or an environment, confirm it executes in CI and not just on your machine. CI lists every skipped test in the job summary; if yours is there, it is not coverage. A skip is right when it guards a real environment gap (root, avahi, NetworkManager); it is wrong when it guards something that always exists, like a git-tracked file — that skip will never fire, so the test never runs.
+
 For slices that integrate with a real external system (Docker, PAM, systemd, Caddy, a real VM boot), **unit tests aren't enough** — exercise it against the real thing before you call it done, and say so in the progress entry. Don't rabbit-hole on test scaffolding: if verification keeps failing on the harness rather than the feature, step back and test the feature.
 
 ## Step 5 — Document it

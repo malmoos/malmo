@@ -83,6 +83,8 @@ Pure reads and 422 validation failures do not audit.
 - Store tests: multi-user isolation — one user's data not visible to another.
 - API tests: 401 fence on every route, audience scoping over the wire.
 - No test that passes vacuously: assertion on a zero value that was never populated, or an error check that can never fail.
+- **Did the PR delete or disable a test?** Read the deletion count on `*_test.go` in the diff, not the suite result. Deleted tests never fail, so removing coverage — by accident or otherwise — leaves the check green. Overwriting a test file wholesale is the common accident: a directory listing that filters out `_test.go` hides the file about to be replaced.
+- **Does every new test actually execute in CI?** A test gated on a file, binary, or environment that CI lacks skips on every run and reads exactly like a passing one. Skips are legitimate on this repo (root, `avahi-resolve`, NetworkManager, `bash`) — what is not legitimate is a skip guarding something that always exists, such as a git-tracked file, because that is a no-op dressed as coverage. CI lists every skipped test in the job summary (`ci-go.yml` # List skipped tests); check the new test is not in it.
 
 ### 7. Documentation honesty
 
