@@ -170,6 +170,22 @@ jobs:
     name: Build + publish hosted cloud image
     needs: tag
     if: needs.tag.outputs.created == 'true'
+    # A called reusable workflow can only NARROW the permissions its caller
+    # grants, never widen them. This workflow's top-level `permissions:` is
+    # `contents: write` only, which sets every other scope — including
+    # `packages` — to `none` for all jobs. So `ci-cloud-image.yml` asking for
+    # `packages: write` to push the control-plane images to ghcr (#370) is not
+    # enough on its own: without this job-level grant the token it receives
+    # here has `packages: none` and the push 403s on every real release.
+    #
+    # This is the ONLY path a release takes, and it is also the path least
+    # likely to be exercised by hand — running `ci-cloud-image.yml` directly
+    # via workflow_dispatch works fine, because that run has no caller
+    # narrowing it. Granting at the job level rather than workflow level keeps
+    # the `tag` job on `contents: write` alone.
+    permissions:
+      contents: write
+      packages: write
     uses: ./.github/workflows/ci-cloud-image.yml
     with:
       publish: true
