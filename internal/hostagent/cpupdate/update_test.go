@@ -111,6 +111,21 @@ func (f *fakeDocker) indexOf(t *testing.T, call string) int {
 	return -1
 }
 
+// lastIndexOf is indexOf's mirror, for a call that happens on both the apply
+// and the revert path: "compose:" appears once when the update runs and again
+// when it is undone, and only the second one says anything about the revert's
+// ordering.
+func (f *fakeDocker) lastIndexOf(t *testing.T, call string) int {
+	t.Helper()
+	for i := len(f.calls) - 1; i >= 0; i-- {
+		if f.calls[i] == call {
+			return i
+		}
+	}
+	t.Fatalf("call %q never happened; calls were %v", call, f.calls)
+	return -1
+}
+
 func (f *fakeDocker) has(call string) bool {
 	for _, c := range f.calls {
 		if c == call {
@@ -640,5 +655,58 @@ func TestGCKeepsTheSnapshotTheRollbackTargetNeeds(t *testing.T) {
 	}
 	if d.has("rmi:" + oldBrain) {
 		t.Error("the brain image the rollback target needs was collected")
+	}
+}
+
+// The compose stack must be up BEFORE the brain is started, on a coordinated
+// ship. This is not a style preference — it is the fix for a real failure the
+// booted-box lane caught on its first run (#382).
+//
+// The brain runs `docker compose up -d` on this same project at every startup
+// (lifecycle.EnsureControlPlane). Started first, it boots straight into the
+// compose run host-agent is in the middle of; the two interleave the rename
+// dance compose does to recreate a service, collide on the backup name, and
+// leave the box with **no container named malmo-ui at all**. The health check
+// then cannot resolve the UI's address and reverts a perfectly good update.
+//
+// UPDATES.md # 3 step 3c used to specify the racing order ("brain first, then
+// UI") and was corrected with this change.
+func TestComposeIsUpBeforeTheBrainIsStarted(t *testing.T) {
+	o := setup(t)
+	o.BrainRef, o.UIRef = newBrain, newUI
+	d := newFakeDocker()
+
+	if _, err := Apply(context.Background(), d, &fakeProber{failURLs: map[string]error{}}, o); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	compose := d.indexOf(t, "compose:"+controlPlaneProject)
+	brain := d.indexOf(t, "run:"+newBrain)
+	if compose > brain {
+		t.Errorf("the brain was started before the compose stack was up (compose at %d, run at %d); calls were %v — the brain's own startup reconcile then runs a second compose on the same project", compose, brain, d.calls)
+	}
+}
+
+// Same ordering on the revert path. It is asserted separately, and not assumed
+// from the apply path, because these two functions have already drifted apart
+// once in this package: #380 detached the revert's context and missed the
+// snapshot-failure branch, and #381 is where that became a real hole.
+func TestRevertBringsComposeUpBeforeStartingTheOldBrain(t *testing.T) {
+	o := setup(t)
+	o.BrainRef, o.UIRef = newBrain, newUI
+	d := newFakeDocker()
+	p := &fakeProber{failURLs: map[string]error{"http://10.0.0.1:8080/healthz": errors.New("connection refused")}}
+
+	res, err := Apply(context.Background(), d, p, o)
+	if err == nil {
+		t.Fatal("Apply succeeded, want the health-check failure that triggers the revert")
+	}
+	if !res.Reverted {
+		t.Fatalf("result = %+v, want a revert", res)
+	}
+	// The revert's compose is the LAST one; the apply's came earlier.
+	compose := d.lastIndexOf(t, "compose:"+controlPlaneProject)
+	brain := d.indexOf(t, "run:"+oldBrain) // only the revert starts the old brain
+	if compose > brain {
+		t.Errorf("the revert started the old brain before putting the compose stack back (compose at %d, run at %d); calls were %v", compose, brain, d.calls)
 	}
 }

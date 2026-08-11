@@ -4,7 +4,41 @@
 - **Date:** 2026-08-11
 - **Specs touched:** docs/specs/UPDATES.md (# 3, # 8.4), docs/specs/TESTING.md
 
+**It found a real bug on its first run, in merged code, and the spec's stated order is what was wrong.** That is the headline; the rest of this entry is the lane that found it.
+
 Closes #382. It closes the gap the four merged updater slices all named in their own "what's next": [brain-healthz-probe.md](brain-healthz-probe.md), [control-plane-image-ledger.md](control-plane-image-ledger.md), [control-plane-update-transaction.md](control-plane-update-transaction.md) and [control-plane-update-trigger.md](control-plane-update-trigger.md) shipped the whole update path, and every one of them was proven only against a fake Docker. No real daemon, no real registry, no real brain restart, no real revert.
+
+## The bug: two `docker compose up` on one project, at the same time
+
+The first CI run of the new boot failed the happy path like this:
+
+```
+status "failed", error "resolve ui address: docker inspect malmo-ui: exit status 1"
+result {brain_changed:true, ui_changed:true, reverted:true, failure_mode:"health"}
+```
+
+and one second earlier, in the guest's serial log, the newly started brain said:
+
+```
+control-plane stack up failed; continuing
+  err="control-plane compose up: exit status 1
+   Container 10490be176d1_malmo-ui Recreate
+   Error response from daemon: Conflict. The container name "/4ded74550f8c_malmo-ui"
+   is already in use by container 143d1be7..."
+```
+
+`cpupdate.recreate` started the new brain and **then** ran `ComposeUp`. But the brain runs `docker compose up -d` on that same `malmo-control-plane` project at every startup (`lifecycle.EnsureControlPlane`). So host-agent's compose and the brain's compose ran **at the same time, on one project**. Compose recreates a service by renaming the old container out of the way, creating the new one, then dropping the backup. Two of those interleaved, collided on the backup name, and left the box with **no container named `malmo-ui` at all**. The transaction's own health check then could not resolve the UI's address, called the update unhealthy, and reverted a change that was otherwise fine.
+
+**The fix is the order: compose first, brain last** — on the apply path and on the revert path, which had the same order and the same race. Starting the brain last removes the concurrency rather than narrowing it: host-agent's compose runs while no brain exists, and the brain then boots into a stack that already matches the declaration, so its own reconcile is a no-op.
+
+`UPDATES.md` # 3 step 3c specified the racing order in as many words — *"Recreate the changed containers in order: brain first (if changed), then UI"* — so the spec is corrected in this change, with the reason. The # 8.3 handoff makes the two actors agree on *what* should be running; it says nothing about *when* either may act, and concurrent compose on one project is what falls out of that gap.
+
+**Only a real Docker daemon could surface this.** The transaction's fake Docker records calls in order, and both orders are equally valid to it — there is no second actor in a unit test, because the second actor is a brain container booting. Two new tests now pin the order on both paths (`TestComposeIsUpBeforeTheBrainIsStarted`, `TestRevertBringsComposeUpBeforeStartingTheOldBrain`); both were mutation-checked by restoring the old order and watching them go red.
+
+Two things worth recording from that red run, because they are results and not decoration:
+
+- **The revert worked on a real box, under a real failure it was not designed for.** The job reported `reverted: true` with no `revert_error`, which means every revert step succeeded — including the `ComposeUp` that recreated the `malmo-ui` container the collision had destroyed. The box was put back on the old pair after a genuinely damaged intermediate state.
+- **The failure was diagnosable straight from the serial log**, with no debugger and no second run: the job's error, the brain's compose error and the restored ledger were all in the captured output.
 
 ## What was done
 
@@ -39,6 +73,7 @@ Two things kept the cost low. The registry image lands in the **test-only** tree
 ## How it maps to the specs
 
 - `UPDATES.md` # 3 step 3: pull, snapshot, declare, recreate only what moved, health-check — all four now run against a real Docker daemon.
+- `UPDATES.md` # 3 step 3c: **corrected** by this change. The recreate order is now UI first, brain last, with the race written down.
 - `UPDATES.md` # 3 step 3d and step 4: the 60s health wait actually expires, and the revert of **both** refs plus the SQLite restore actually runs.
 - `UPDATES.md` # 8.3: the two-file declaration is asserted on disk after the update, which is what makes the brain reconcile to the running version instead of reverting it.
 - `UPDATES.md` # 8.4 step 3: pull by digest, on a hosted box, air-gapped except for a registry inside it.
@@ -46,7 +81,7 @@ Two things kept the cost low. The registry image lands in the **test-only** tree
 
 ## Known gaps & deviations
 
-- **No bug was found in the merged updater.** The proof passed against `cpupdate`, `controlplane` and the trigger as merged, so this PR changes no Go code. That is a real result, but it is worth saying plainly rather than implying the lane found something.
+- **The recreate-order fix is proven by this lane and by two unit tests, not by a longer soak.** A UI-only update still runs `ComposeUp` while the brain is up; that is safe today only because the brain reconciles the control-plane project **once, at startup**, and never on a timer. If that ever becomes periodic, the race comes back in a form this ordering does not fix.
 - **The images are derived, not rebuilt.** The gen-2 brain is `docker commit` of the running brain with one added label, so it is byte-similar to the old one. That proves the recreate, the declaration and the pull; it does **not** prove a genuine schema migration, a brain with a different `internal/version` stamp, or a protocol-major bump being refused. `checkProtocolMajor` is exercised only on its passing path.
 - **The snapshot restore is proven against a clobbered file, not a migrated one.** The broken brain truncates the database rather than migrating it, so what is proven is "the restore really overwrote what the new brain wrote and the result is a usable database". A rollback across a real forward migration is not exercised here.
 - **Only the `health` failure mode is exercised.** `pull`, `snapshot`, `declare` and `recreate` failures still have unit coverage only.
