@@ -247,20 +247,27 @@ jobs:
       #     invariant whose only net runs when a developer remembers to run it by hand
       #     is not a net, so a box that leaks its forward-auth cookie to an app
       #     upstream must fail HERE and never publish.
+      #   - update (#382): the ONLY proof of the control-plane updater against a real
+      #     Docker daemon, a real registry, a real brain restart and a real revert.
+      #     It applies a real update (pull by digest from a registry inside the guest,
+      #     the brain recreating itself through host-agent) and then a real failed
+      #     update that must revert both refs and restore the SQLite snapshot. An
+      #     image whose updater cannot replace the brain, or cannot put the box back
+      #     when the new brain does not serve, must never be published.
       #
       # The frozen-identity boot stays out: it is orthogonal (it checks a re-delivered
       # seed is ignored on a later boot) and has shown a flaky false "re-ingested"
       # verdict whose root cause is still open, so it is left to the full local run
       # (MALMO_CLOUD_BOOTS default = all) rather than blocking publish.
       #
-      # GO: the access boot mints its test-portal owner assertion on the HOST
+      # GO: the access and update boots mint their test-portal owner assertion on the HOST
       # (dev/cloud/mkassertion — the private key never enters the VM). The lane runs
       # under `sudo -E`, and sudo's secure_path resets PATH, so `go` on the runner's
       # PATH is invisible to the script; pass it explicitly (run-cloud-tests.sh
       # honours ${GO:-}, and -E preserves it).
-      - name: Boot test (seed schema + BIOS/UEFI + per-app access modes through real Caddy)
+      - name: Boot test (seed schema + BIOS/UEFI + access modes + control-plane update)
         env:
-          MALMO_CLOUD_BOOTS: "unseeded seeded bios access"
+          MALMO_CLOUD_BOOTS: "unseeded seeded bios access update"
           GO: ${{ steps.go.outputs.go-bin }}
         run: make test-cloud-qemu
 

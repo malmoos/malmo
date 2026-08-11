@@ -25,13 +25,21 @@
 #     frozen:<box-id>  reboot with a DIFFERENT seed → the dashboard + /api still
 #                      serve under the ORIGINAL <box-id> (Caddy route unchanged ⇒
 #                      identity frozen), and the brain does NOT re-ingest the seed
+#     access           a valid owner assertion → session → per-app forward-auth
+#                      access modes end-to-end through real Caddy (#308)
+#     update           a real control-plane update and a real failed-update-then-
+#                      revert, pulled by digest from a registry inside the guest
+#                      (#382). The only scenario that changes the box's images.
 #
 # On PASS the script powers the box off cleanly (the serial-only analogue of the
 # medium lane's SSH `systemctl poweroff`) so the brain's SQLite box-id write flushes
 # to the persisted overlay before the harness boots the next scenario.
 #
-# -u + pipefail but NOT -e: every check is `... || fail`. All checks are reads or
-# rejected probes — no admin is created in this lane.
+# -u + pipefail but NOT -e: every check is `... || fail`. The unseeded/seeded/frozen
+# scenarios only read or probe. The access and update scenarios do change the box —
+# each on its own throwaway overlay — because the thing under test is a mutation:
+# an owner session plus an app install (access), and the box's own control-plane
+# images (update).
 set -uo pipefail
 
 SENTINEL=/dev/console
@@ -104,6 +112,17 @@ diag() {
         docker inspect malmo-brain --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}' 2>&1
         echo "-- host-agent journal (tail 15) --"
         journalctl -u host-agent.service -b --no-pager 2>&1 | tail -15
+        # The update boot (#382) fails on state that lives in files and in
+        # host-agent's log, neither of which the blocks above show. A red update
+        # boot has to be diagnosable from this serial dump alone.
+        echo "-- control-plane declaration (images.json) --"
+        cat /var/lib/malmo/control-plane/images.json 2>&1 || true
+        echo "-- control-plane compose (image lines) --"
+        grep -n 'image:' /var/lib/malmo/control-plane/compose.yml 2>&1 || true
+        echo "-- brain snapshots --"
+        ls -la /var/lib/malmo/brain-snapshots 2>&1 || true
+        echo "-- host-agent update lines --"
+        journalctl -u host-agent.service -b --no-pager 2>&1 | grep -iE 'system-update|control plane|revert|pull|snapshot' | tail -25
         echo "=== END MALMO_CLOUD_DIAG ==="
     } > "$SENTINEL" 2>&1 || true
 }
@@ -292,12 +311,58 @@ http_post_status() { # PATH HOST JSON -> status line
     head -1 <&3
     exec 3>&- 3<&-
 }
+# Full-response HTTP helpers (headers + body) over Caddy :80 — the status-only
+# helpers above can't see Set-Cookie / Location / a response body. Used by the
+# access boot (cookies, the whoami echo) and the update boot (the job id and the
+# job's JSON status). ${N:-} keeps them safe under `set -u` when a cookie arg is
+# omitted.
+full_get() { # PATH HOST [COOKIE] -> full response
+    exec 3<>/dev/tcp/127.0.0.1/80 || return 1
+    if [ -n "${3:-}" ]; then
+        printf 'GET %s HTTP/1.0\r\nHost: %s\r\nCookie: %s\r\nConnection: close\r\n\r\n' "$1" "$2" "$3" >&3
+    else
+        printf 'GET %s HTTP/1.0\r\nHost: %s\r\nConnection: close\r\n\r\n' "$1" "$2" >&3
+    fi
+    cat <&3
+    exec 3>&- 3<&-
+}
+full_send() { # METHOD PATH HOST COOKIE JSON -> full response
+    local len; len="$(printf '%s' "$5" | wc -c | tr -d ' ')"
+    exec 3<>/dev/tcp/127.0.0.1/80 || return 1
+    printf '%s %s HTTP/1.0\r\nHost: %s\r\nCookie: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' \
+        "$1" "$2" "$3" "$4" "$len" "$5" >&3
+    cat <&3
+    exec 3>&- 3<&-
+}
+status_of() { head -1 <<<"$1" | tr -d '\r'; }
+# Extract NAME=VALUE from the first Set-Cookie carrying NAME (drops attributes).
+cookie_val() { grep -i '^Set-Cookie:' <<<"$1" | grep -oE "$2=[^;[:space:]]+" | head -1; }
+# The WHOLE raw Set-Cookie line for NAME, attributes included — cookie_val above
+# deliberately drops them, but the Domain attribute is exactly what the two-cookie
+# safety model rests on, so it has to be asserted, not just carried.
+cookie_line() { grep -i '^Set-Cookie: *'"$2"'=' <<<"$1" | head -1 | tr -d '\r'; }
+
+# Status line from an arbitrary address, not just Caddy on :80 — the update boot
+# probes the brain container's own /healthz and the in-guest registry, neither of
+# which is reachable through Caddy.
+http_status_addr() { # IP PORT PATH -> status line
+    exec 3<>"/dev/tcp/$1/$2" || return 1
+    printf 'GET %s HTTP/1.0\r\nHost: %s\r\nConnection: close\r\n\r\n' "$3" "$1" >&3
+    head -1 <&3
+    exec 3>&- 3<&-
+}
+
 # Extract a JSON string field's value from a compact one-line document. The seed
 # the harness generates is compact and its fields (box_id, assertion_verification_key)
 # are plain strings with no embedded quotes, so a targeted sed is sufficient (no
 # jq in the lean image).
 json_str() { # FILE KEY -> value
     sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$1" | head -1
+}
+# Same, over a document already in a variable — an HTTP response, headers and all.
+# The update boot reads the job id out of the trigger's 202 body this way.
+json_str_of() { # DOC KEY -> value
+    sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" <<<"$1" | head -1
 }
 
 # Wait for a line matching a fixed pattern in the brain's container log. The brain
@@ -332,6 +397,7 @@ case "$MODE" in
 seeded)   DASH_HOST="$(json_str "$SEED" box_id).malmo.network" ;;
 frozen:*) DASH_HOST="${MODE#frozen:}.malmo.network" ;;
 access)   DASH_HOST="$(json_str "$SEED" box_id).malmo.network" ;;
+update)   DASH_HOST="$(json_str "$SEED" box_id).malmo.network" ;;
 esac
 echo "cloud-assertions: probing control plane at Host=$DASH_HOST (mode=$MODE)"
 
@@ -518,34 +584,9 @@ access)
     sso_token="$(tr -d '\r\n' < "${CREDENTIALS_DIRECTORY:-/nonexistent}/malmo.sso_token" 2>/dev/null || true)"
     [ -n "$sso_token" ] || fail "access mode: malmo.sso_token credential missing (harness did not mint/deliver the owner assertion)"
 
-    # Full-response HTTP helpers (headers + body) over Caddy :80 — the status-only
-    # helpers above can't see Set-Cookie / Location / the whoami echo body. Scoped to
-    # this mode; ${N:-} keeps them safe under `set -u` when a cookie arg is omitted.
-    full_get() { # PATH HOST [COOKIE] -> full response
-        exec 3<>/dev/tcp/127.0.0.1/80 || return 1
-        if [ -n "${3:-}" ]; then
-            printf 'GET %s HTTP/1.0\r\nHost: %s\r\nCookie: %s\r\nConnection: close\r\n\r\n' "$1" "$2" "$3" >&3
-        else
-            printf 'GET %s HTTP/1.0\r\nHost: %s\r\nConnection: close\r\n\r\n' "$1" "$2" >&3
-        fi
-        cat <&3
-        exec 3>&- 3<&-
-    }
-    full_send() { # METHOD PATH HOST COOKIE JSON -> full response
-        local len; len="$(printf '%s' "$5" | wc -c | tr -d ' ')"
-        exec 3<>/dev/tcp/127.0.0.1/80 || return 1
-        printf '%s %s HTTP/1.0\r\nHost: %s\r\nCookie: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' \
-            "$1" "$2" "$3" "$4" "$len" "$5" >&3
-        cat <&3
-        exec 3>&- 3<&-
-    }
-    status_of() { head -1 <<<"$1" | tr -d '\r'; }
-    # Extract NAME=VALUE from the first Set-Cookie carrying NAME (drops attributes).
-    cookie_val() { grep -i '^Set-Cookie:' <<<"$1" | grep -oE "$2=[^;[:space:]]+" | head -1; }
-    # The WHOLE raw Set-Cookie line for NAME, attributes included — cookie_val above
-    # deliberately drops them, but the Domain attribute is exactly what the two-cookie
-    # safety model rests on, so it has to be asserted, not just carried.
-    cookie_line() { grep -i '^Set-Cookie: *'"$2"'=' <<<"$1" | head -1 | tr -d '\r'; }
+    # The full-response HTTP + cookie helpers this scenario needs (full_get,
+    # full_send, status_of, cookie_val, cookie_line) are defined once above, beside
+    # the status-only helpers — the update boot (#382) drives the same SSO landing.
 
     # 1. portal-to-box SSO, driven ONCE (the jti is single-use — a retry replays and
     #    401s). Steps 7-9 already proved the control plane up + the verifier armed, so
@@ -664,6 +705,260 @@ access)
     echo "cloud-assertions: public app also strips only malmo_forward_auth (no forward-auth cookie leaks to a public upstream, app's own cookie intact)"
 
     echo "cloud-assertions: hosted per-app access modes verified end-to-end (restricted gate + owner proxy-through, public reachability, per-cookie strip in both modes)"
+    ;;
+update)
+    # Control-plane update proof (#382): a REAL update and a REAL failed-update-
+    # then-revert, on a booted box, driven through the real admin trigger
+    # (POST /api/v1/system/update → host-agent's system-update job → internal/
+    # hostagent/cpupdate). Everything under that endpoint was proven only against a
+    # fake Docker: no real daemon, no real registry, no real brain restart, no real
+    # revert. This scenario is where those meet.
+    #
+    # The riskiest step in the whole design is here: **host-agent recreates the
+    # brain while the brain is what served the request that asked for it.** So the
+    # happy-path assertions are written to make a failure there unmistakable — the
+    # brain container id must change, the running brain must carry the marker label
+    # only the new image has, and the box must answer again on the new pair.
+    #
+    # Pull-by-digest is proven, not simulated: the guest runs its own registry on
+    # 127.0.0.1:5000, the target images are pushed into it and then DROPPED from the
+    # local image store, so the updater's `docker pull <ref>@sha256:…` has to fetch
+    # them back. Docker treats a localhost registry as insecure by default, so this
+    # needs no daemon config.
+    [ -f "$SEED" ] || fail "update mode but $SEED absent (seed materializer did not run?)"
+    box_id="$(json_str "$SEED" box_id)"
+    [ -n "$box_id" ] || fail "update mode: could not read box_id from $SEED"
+    apex="${box_id}.malmo.network"
+
+    # 1. owner session. The trigger is admin-only, so this boot is seeded with the
+    #    test-portal key and given a signed owner assertion, exactly as the access
+    #    boot is (dev/cloud/mkassertion). Driven once — the jti is single-use.
+    sso_token="$(tr -d '\r\n' < "${CREDENTIALS_DIRECTORY:-/nonexistent}/malmo.sso_token" 2>/dev/null || true)"
+    [ -n "$sso_token" ] || fail "update mode: malmo.sso_token credential missing (harness did not mint/deliver the owner assertion)"
+    sso_resp="$(full_get "/_malmo/sso?token=${sso_token}" "$apex" 2>/dev/null || true)"
+    grep -q ' 303' <<<"$(status_of "$sso_resp")" \
+        || fail "update: SSO landing did not 303 to the dashboard: status='$(status_of "$sso_resp")'"
+    session_cookie="$(cookie_val "$sso_resp" malmo_session)"
+    [ -n "$session_cookie" ] || fail "update: no malmo_session cookie from the SSO landing"
+    echo "cloud-assertions: update — owner session established (box_id=$box_id)"
+
+    # 2. the in-guest registry. Loaded from the test-only tarball (the production
+    #    image ships none of this) and run on the host loopback, where the Docker
+    #    daemon that does the pulling can reach it.
+    docker load -i /var/lib/malmo/test-images/registry.tar >/dev/null 2>&1 \
+        || fail "update: could not docker-load the test registry image (/var/lib/malmo/test-images/registry.tar missing from the boot-proof image?)"
+    docker rm -f malmo-test-registry >/dev/null 2>&1 || true
+    docker run -d --name malmo-test-registry -p 127.0.0.1:5000:5000 registry:2 >/dev/null 2>&1 \
+        || fail "update: could not start the in-guest registry container"
+    reg=""
+    for _i in $(seq 1 90); do
+        reg="$(http_status_addr 127.0.0.1 5000 /v2/ 2>/dev/null || true)"
+        grep -qE ' (200|401)' <<<"$reg" && break
+        sleep 1
+    done
+    grep -qE ' (200|401)' <<<"$reg" || fail "update: in-guest registry never answered on 127.0.0.1:5000 (last status='$reg'): $(docker logs malmo-test-registry 2>&1 | tail -5)"
+    echo "cloud-assertions: update — in-guest registry serving on 127.0.0.1:5000"
+
+    # 3. publish a new generation of an image and print the digest ref to update to.
+    #    `docker commit`, not `docker build`: the guest is air-gapped and has no Go
+    #    toolchain, and commit derives from the image the box is ALREADY running, so
+    #    the new brain is the real brain plus one changed thing. Labels merge on
+    #    commit, so the derived brain keeps malmo.protocol.major and passes the
+    #    lockstep guard the way a real release would.
+    #
+    #    Both local references are dropped after the push. That is what makes the
+    #    updater's pull a genuine fetch instead of a no-op over an image that never
+    #    left the box — and it is asserted, not assumed.
+    publish_gen() { # BASE_REF REPO_TAG [dockerfile-change...] -> prints the digest ref
+        local base="$1" repotag="$2"; shift 2
+        local tmp=malmo-cpupdate-src target="127.0.0.1:5000/${repotag}" args=(commit) c digest
+        docker rm -f "$tmp" >/dev/null 2>&1 || true
+        docker create --name "$tmp" "$base" >/dev/null 2>&1 || return 1
+        for c in "$@"; do args+=(--change "$c"); done
+        args+=("$tmp" "$target")
+        docker "${args[@]}" >/dev/null 2>&1 || { docker rm -f "$tmp" >/dev/null 2>&1; return 1; }
+        docker rm -f "$tmp" >/dev/null 2>&1 || true
+        docker push "$target" >/dev/null 2>&1 || return 1
+        digest="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$target" 2>/dev/null | grep '^127\.0\.0\.1:5000/' | head -1)"
+        [ -n "$digest" ] || return 1
+        docker rmi "$target" >/dev/null 2>&1 || true
+        docker rmi "$digest" >/dev/null 2>&1 || true
+        printf '%s' "$digest"
+    }
+
+    brain_before_id="$(docker inspect -f '{{.Id}}' malmo-brain 2>/dev/null || true)"
+    brain_before_ref="$(docker inspect -f '{{.Config.Image}}' malmo-brain 2>/dev/null || true)"
+    ui_before_ref="$(docker inspect -f '{{.Config.Image}}' malmo-ui 2>/dev/null || true)"
+    [ -n "$brain_before_id" ] && [ -n "$brain_before_ref" ] && [ -n "$ui_before_ref" ] \
+        || fail "update: could not read the running control-plane pair (brain id='$brain_before_id' brain='$brain_before_ref' ui='$ui_before_ref')"
+
+    brain_v2="$(publish_gen "$brain_before_ref" malmo-brain:v2 'LABEL malmo.test.generation=v2')" \
+        || fail "update: could not publish the gen-2 brain image to the in-guest registry"
+    ui_v2="$(publish_gen "$ui_before_ref" malmo-ui:v2 'LABEL malmo.test.generation=v2')" \
+        || fail "update: could not publish the gen-2 ui image to the in-guest registry"
+    # The pull has to be real. If either image is still in the local store the
+    # digest pull would be satisfied without the registry, and this whole scenario
+    # would prove recreate/revert while quietly skipping what production does.
+    for r in "$brain_v2" "$ui_v2"; do
+        docker image inspect "$r" >/dev/null 2>&1 \
+            && fail "update: $r is still in the local image store before the update — the updater's pull would not be a real registry fetch"
+    done
+    echo "cloud-assertions: update — gen-2 pair published by digest and dropped locally (brain=$brain_v2 ui=$ui_v2)"
+
+    # Poll one update job to a terminal state. The brain is recreated in the middle
+    # of this, so /api is briefly gone: ride through every non-200 rather than
+    # treating it as a verdict. The job record lives in host-agent, which stays up,
+    # which is the whole reason the job id is host-agent's and not the brain's.
+    JOB_RESP=""
+    poll_job() { # JOB_ID TIMEOUT_S -> 0 when the job reached completed/failed
+        local id="$1" timeout="$2" _i resp=""
+        for _i in $(seq 1 "$timeout"); do
+            resp="$(full_get "/api/v1/system/update/${id}" "$apex" "$session_cookie" 2>/dev/null || true)"
+            if grep -q ' 200' <<<"$(status_of "$resp")" \
+                && grep -qE '"status"[[:space:]]*:[[:space:]]*"(completed|failed)"' <<<"$resp"; then
+                JOB_RESP="$resp"
+                return 0
+            fi
+            sleep 1
+        done
+        JOB_RESP="$resp"
+        return 1
+    }
+
+    # 4. THE HAPPY PATH. Both refs move, so this is the coordinated ship: pull both,
+    #    snapshot, declare, recreate both, health-check both, commit.
+    up_resp="$(full_send POST /api/v1/system/update "$apex" "$session_cookie" \
+        "{\"brain_image\":\"${brain_v2}\",\"ui_image\":\"${ui_v2}\"}" 2>/dev/null || true)"
+    grep -q ' 202' <<<"$(status_of "$up_resp")" \
+        || fail "update: POST /api/v1/system/update was not accepted: status='$(status_of "$up_resp")'"
+    job_id="$(json_str_of "$up_resp" job_id)"
+    [ -n "$job_id" ] || fail "update: no job_id in the accepted update response: $(tail -1 <<<"$up_resp")"
+    echo "cloud-assertions: update — update job ${job_id} accepted (the brain is now replacing itself)"
+
+    poll_job "$job_id" 420 || fail "update: job $job_id never reached a terminal state (last: $(status_of "$JOB_RESP")) — is the box serving at all after the brain was recreated? $(docker ps --format '{{.Names}} {{.Status}}' | tr '\n' ';')"
+    grep -qE '"status"[[:space:]]*:[[:space:]]*"completed"' <<<"$JOB_RESP" \
+        || fail "update: the happy-path job did not complete: $(tail -1 <<<"$JOB_RESP")"
+    grep -qE '"brain_changed"[[:space:]]*:[[:space:]]*true' <<<"$JOB_RESP" \
+        || fail "update: job reports brain_changed=false on a moved brain ref: $(tail -1 <<<"$JOB_RESP")"
+    grep -qE '"ui_changed"[[:space:]]*:[[:space:]]*true' <<<"$JOB_RESP" \
+        || fail "update: job reports ui_changed=false on a moved ui ref: $(tail -1 <<<"$JOB_RESP")"
+    grep -qE '"reverted"[[:space:]]*:[[:space:]]*true' <<<"$JOB_RESP" \
+        && fail "update: the happy-path update reverted: $(tail -1 <<<"$JOB_RESP")"
+
+    # 4a. the brain really was replaced — not left running and merely re-declared.
+    brain_after_id="$(docker inspect -f '{{.Id}}' malmo-brain 2>/dev/null || true)"
+    [ -n "$brain_after_id" ] || fail "update: no malmo-brain container after the update"
+    [ "$brain_after_id" != "$brain_before_id" ] \
+        || fail "update: the brain container was NEVER recreated (same id $brain_before_id) — the update reported success without replacing the brain"
+    brain_after_ref="$(docker inspect -f '{{.Config.Image}}' malmo-brain 2>/dev/null || true)"
+    [ "$brain_after_ref" = "$brain_v2" ] \
+        || fail "update: the running brain is on '$brain_after_ref', not the target '$brain_v2'"
+    gen="$(docker inspect -f '{{index .Config.Labels "malmo.test.generation"}}' malmo-brain 2>/dev/null || true)"
+    [ "$gen" = v2 ] \
+        || fail "update: the running brain does not carry the gen-2 marker label (got '$gen') — it is not the image this update targeted"
+    ui_after_ref="$(docker inspect -f '{{.Config.Image}}' malmo-ui 2>/dev/null || true)"
+    [ "$ui_after_ref" = "$ui_v2" ] \
+        || fail "update: the running ui is on '$ui_after_ref', not the target '$ui_v2'"
+    echo "cloud-assertions: update — both containers recreated on the new pair (brain id $brain_before_id -> $brain_after_id)"
+
+    # 4b. the declaration, in BOTH files (UPDATES.md # 8.3): images.json is what
+    #     host-agent reads at the next boot, compose.yml is what the brain
+    #     reconciles to. A box whose containers moved but whose declaration did not
+    #     silently rolls back on its next reboot.
+    ledger=/var/lib/malmo/control-plane/images.json
+    [ -f "$ledger" ] || fail "update: no ledger at $ledger after a successful update"
+    grep -qF "$brain_v2" "$ledger" || fail "update: ledger does not name the new brain ref: $(tr -d '\n' < "$ledger")"
+    grep -qF "$ui_v2" "$ledger" || fail "update: ledger does not name the new ui ref: $(tr -d '\n' < "$ledger")"
+    grep -qF "$brain_before_ref" "$ledger" \
+        || fail "update: ledger does not record the previous brain ref '$brain_before_ref' — there is nothing to roll back to: $(tr -d '\n' < "$ledger")"
+    grep -qE "^[[:space:]]*image:[[:space:]]*${ui_v2}\$" /var/lib/malmo/control-plane/compose.yml \
+        || fail "update: the staged compose does not pin the new ui ref '$ui_v2': $(grep -n 'image:' /var/lib/malmo/control-plane/compose.yml | tr '\n' ' ')"
+    echo "cloud-assertions: update — declaration written in both files (images.json current+previous, compose.yml ui image)"
+
+    # 4c. the new brain is really serving: /healthz on the container itself (the
+    #     same probe the updater uses), and the box answering through Caddy again.
+    brain_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' malmo-brain 2>/dev/null | awk '{print $1}')"
+    [ -n "$brain_ip" ] || fail "update: the recreated brain has no address on the ingress network"
+    hz=""
+    for _i in $(seq 1 60); do
+        hz="$(http_status_addr "$brain_ip" 8080 /healthz 2>/dev/null || true)"
+        grep -q ' 200' <<<"$hz" && break
+        sleep 1
+    done
+    grep -q ' 200' <<<"$hz" || fail "update: the updated brain does not answer /healthz on $brain_ip:8080 (status='$hz')"
+    ver_resp="$(full_get /api/v1/system/version "$apex" "$session_cookie" 2>/dev/null || true)"
+    grep -q ' 200' <<<"$(status_of "$ver_resp")" \
+        || fail "update: GET /api/v1/system/version after the update: status='$(status_of "$ver_resp")'"
+    grep -qF "$ui_v2" <<<"$ver_resp" \
+        || fail "update: system/version does not report the new ui image '$ui_v2': $(tail -1 <<<"$ver_resp")"
+    echo "cloud-assertions: update — HAPPY PATH OK (brain replaced itself, /healthz 200 on the new image, system/version reports the new pair)"
+
+    # 5. THE REVERT. Point an update at a brain that starts but never serves, and
+    #    make it do damage on the way: it truncates the brain's SQLite database and
+    #    leaves a marker file. That turns two silent claims into observable facts —
+    #    the bad brain really ran (marker present) and the snapshot really came back
+    #    (the database is a valid SQLite file again, and the owner session still
+    #    works). A revert that restored nothing would leave the clobbered file.
+    broken_marker=/var/lib/malmo/broken-brain-ran
+    rm -f "$broken_marker"
+    brain_bad="$(publish_gen "$brain_v2" malmo-brain:bad \
+        'ENTRYPOINT ["/bin/sh","-c","echo BROKEN > /var/lib/malmo/state/malmo.db; touch /var/lib/malmo/broken-brain-ran; sleep 900"]')" \
+        || fail "update: could not publish the deliberately-broken brain image"
+
+    bad_resp="$(full_send POST /api/v1/system/update "$apex" "$session_cookie" \
+        "{\"brain_image\":\"${brain_bad}\"}" 2>/dev/null || true)"
+    grep -q ' 202' <<<"$(status_of "$bad_resp")" \
+        || fail "update: POST of the failing update was not accepted: status='$(status_of "$bad_resp")'"
+    bad_job="$(json_str_of "$bad_resp" job_id)"
+    [ -n "$bad_job" ] || fail "update: no job_id for the failing update: $(tail -1 <<<"$bad_resp")"
+
+    # The health wait is 60s (UPDATES.md # 3 step 3d) and the revert runs after it,
+    # so this window is deliberately wide.
+    poll_job "$bad_job" 420 || fail "update: the failing job $bad_job never reached a terminal state (last: $(status_of "$JOB_RESP")) — the box may not have come back from the revert: $(docker ps --format '{{.Names}} {{.Status}}' | tr '\n' ';')"
+    grep -qE '"status"[[:space:]]*:[[:space:]]*"failed"' <<<"$JOB_RESP" \
+        || fail "update: an update to a brain that never serves was reported as success: $(tail -1 <<<"$JOB_RESP")"
+    grep -qE '"reverted"[[:space:]]*:[[:space:]]*true' <<<"$JOB_RESP" \
+        || fail "update: the failed update did not revert: $(tail -1 <<<"$JOB_RESP")"
+    grep -qE '"failure_mode"[[:space:]]*:[[:space:]]*"health"' <<<"$JOB_RESP" \
+        || fail "update: the failed update blames the wrong step (want failure_mode=health): $(tail -1 <<<"$JOB_RESP")"
+    grep -q '"revert_error"' <<<"$JOB_RESP" \
+        && fail "update: the revert itself failed: $(tail -1 <<<"$JOB_RESP")"
+
+    # 5a. the bad brain really ran. Without this the whole revert half could pass on
+    #     a box where the broken image never started, which would prove nothing.
+    [ -f "$broken_marker" ] \
+        || fail "update: the broken brain never started (no $broken_marker) — the revert proof would be vacuous"
+
+    # 5b. images and declaration are back on the good pair.
+    brain_reverted_ref="$(docker inspect -f '{{.Config.Image}}' malmo-brain 2>/dev/null || true)"
+    [ "$brain_reverted_ref" = "$brain_v2" ] \
+        || fail "update: after the revert the brain is on '$brain_reverted_ref', not the previous good ref '$brain_v2'"
+    grep -qF "$brain_v2" "$ledger" \
+        || fail "update: after the revert the ledger does not name the good brain ref again: $(tr -d '\n' < "$ledger")"
+    grep -qF "$brain_bad" "$ledger" \
+        && fail "update: after the revert the ledger still names the failed brain ref '$brain_bad' — the next boot would launch it: $(tr -d '\n' < "$ledger")"
+
+    # 5c. the SQLite snapshot was restored over what the bad brain wrote.
+    ls -d /var/lib/malmo/brain-snapshots/* >/dev/null 2>&1 \
+        || fail "update: no pre-update snapshot under /var/lib/malmo/brain-snapshots (UPDATES.md # 3 step 3b)"
+    db_head="$(head -c 15 /var/lib/malmo/state/malmo.db 2>/dev/null || true)"
+    [ "$db_head" = "SQLite format 3" ] \
+        || fail "update: the brain database was NOT restored after the revert (starts with '$db_head', the broken brain's write is still there)"
+
+    # 5d. the box is serving again on the restored pair, with the SAME session — a
+    #     restored database that could not answer a signed-in request would be a
+    #     restore in name only.
+    me=""
+    for _i in $(seq 1 90); do
+        me="$(status_of "$(full_get /api/v1/me "$apex" "$session_cookie" 2>/dev/null || true)")"
+        grep -q ' 200' <<<"$me" && break
+        sleep 1
+    done
+    grep -q ' 200' <<<"$me" \
+        || fail "update: after the revert the box does not answer an authenticated /api/v1/me (status='$me') — the restored database or the restored brain is not serving"
+    spa_after="$(http_status / "$DASH_HOST" 2>/dev/null || true)"
+    grep -q ' 200' <<<"$spa_after" || fail "update: after the revert the dashboard does not answer: status='$spa_after'"
+    echo "cloud-assertions: update — REVERT OK (health failure detected, both refs and the SQLite snapshot restored, box serving on the old pair with the same session)"
     ;;
 *)
     fail "unknown assert mode '$MODE'"
