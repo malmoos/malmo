@@ -100,8 +100,12 @@ networks:
 // claim was untested.
 func TestControlPlaneUIImage_RealStagedCompose(t *testing.T) {
 	const staged = "../../dev/control-plane"
+	// Fatal, not Skip: this file is tracked by git, so it is always present in
+	// any checkout. Absent means it was deleted or moved, which is precisely the
+	// drift this test exists to catch — skipping there would repeat the bug that
+	// made the earlier version of this test a no-op.
 	if _, err := os.Stat(filepath.Join(staged, controlPlaneComposeFile)); err != nil {
-		t.Skipf("committed control-plane compose not present: %v", err)
+		t.Fatalf("committed control-plane compose missing (moved or deleted?): %v", err)
 	}
 	img, err := ControlPlaneUIImage(staged)
 	if err != nil {
