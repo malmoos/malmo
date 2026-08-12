@@ -152,10 +152,18 @@ So this doc isn't read as a claim about the finished product:
   (`internal/hostagent/cpupdate`), and an admin can start one:
   `POST /api/v1/system/update` with two explicit image refs → the
   `system-update` job on the host socket (`internal/hostagent/jobs.go`), polled
-  via `GET /api/v1/system/update/{job_id}`. What is missing is everything that
-  would pick the refs *for* the box — no release manifest, no cloud target
-  poll, no update notification, and no dashboard surface — plus a real-box
-  proof (the transaction is covered against a fake Docker only, #382).
+  via `GET /api/v1/system/update/{job_id}`. That path **is proven on a booted
+  box**: the hosted cloud lane's `update` boot drives a real update and a real
+  failed-update-then-revert against a real Docker daemon and a registry inside
+  the guest (#382/#388), and it runs on PRs that touch the updater (#389).
+  The appliance trigger is **half built**: `internal/hostagent/relmanifest`
+  verifies, parses and caches the signed release manifest and polls it hourly
+  (#395/#397). What is still missing is the rest of picking a target: **no
+  signing key and no `releases.malmo.network`** (so every build refuses every
+  manifest and does not poll — the deliberate inert state), no cloud target poll
+  for hosted (blocked on the box↔cloud credential, `NEXT.md` Tier 1), no
+  version → image-digest step, no update notification, and no dashboard surface
+  beyond Settings → About reporting the running versions (#393).
 - **Health / notifications / telemetry / time / discovery beyond stubs.** The
   brain doesn't surface health issues, the bell doesn't exist, no telemetry
   client, no chrony integration.

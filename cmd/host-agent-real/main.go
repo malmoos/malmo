@@ -122,11 +122,21 @@ func main() {
 	}
 	brainCancel()
 
+	// The appliance release-manifest poll (RELEASE_MANIFEST.md), started last
+	// and on purpose: it tells the box which version it *could* run, and nothing
+	// about booting depends on it, so a slow or unreachable CDN must not sit in
+	// front of anything above. A hosted box has a no-op here — its target comes
+	// from the cloud, not from a signed broadcast (UPDATES.md # 8.1). A build
+	// with no baked signing key does not poll at all.
+	stopPoll := startReleasePoll(brainCfg.DataDir)
+	defer stopPoll()
+
 	slog.Info("host-agent-real listening", "sock", sockPath)
 	srv := &http.Server{Handler: hostagent.LogRequests(mux)}
 	if err := srv.Serve(ln); err != nil {
 		slog.Error("serve", "err", err)
 		// os.Exit skips the deferred cleanup; run it by hand first.
+		stopPoll()
 		cleanup()
 		os.Exit(1)
 	}
