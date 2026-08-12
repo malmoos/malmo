@@ -100,9 +100,11 @@ type Loop struct {
 	Now   func() time.Time
 	After func(time.Duration) <-chan time.Time
 
-	// lastQuiet dedupes the steady-state messages. The overwhelmingly common
-	// tick is "the target is what I am already running", and that must cost
-	// nothing and say nothing.
+	// lastQuiet dedupes the repeated messages. The overwhelmingly common tick is
+	// "the target is what I am already running", and that must cost nothing and
+	// say nothing. The same applies to a state that persists: a box whose source
+	// has been down for a week, or whose appliance manifest can never be pinned,
+	// says so once per change and not four times an hour forever.
 	lastQuiet string
 	// attempted is the target version this loop last started an update for, and
 	// the window occurrence it did it in. One attempt per window per version: a
@@ -163,13 +165,13 @@ func (l *Loop) nextDelay() time.Duration {
 	return d
 }
 
-// quiet logs msg only when this tick's steady state differs from the last one.
-func (l *Loop) quiet(key, msg string, args ...any) {
+// quiet logs msg only when this tick's state differs from the last one.
+func (l *Loop) quiet(level slog.Level, key, msg string, args ...any) {
 	if l.lastQuiet == key {
 		return
 	}
 	l.lastQuiet = key
-	slog.Info(msg, args...)
+	slog.Log(context.Background(), level, msg, args...)
 }
 
 // Tick runs one cycle: ask, compare, and apply if everything lines up. It never
@@ -183,12 +185,19 @@ func (l *Loop) Tick(ctx context.Context) {
 		// A source with nothing to offer is not a broken source, and it is
 		// certainly not "there is nothing to run". Distinguishable from the
 		// unreachable case below, which is the point.
-		l.quiet("no-target", "update target: the source has no target; staying on the current version")
+		l.quiet(slog.LevelInfo, "no-target", "update target: the source has no target; staying on the current version")
 		return
 	case err != nil:
-		// Unreachable, a 500, an unparseable answer. Log it and carry on: a box
-		// must never degrade because it could not ask.
-		slog.Warn("update target: could not read the source; staying on the current version", "err", err)
+		// Unreachable, a 500, an unparseable answer, or an appliance manifest that
+		// can never be pinned. Log it and carry on: a box must never degrade
+		// because it could not ask.
+		//
+		// Deduped by the error text, because these states persist. A box behind a
+		// dead link, or an appliance whose manifest names versions, would otherwise
+		// write the same warning four times an hour for as long as it runs, and
+		// bury the tick where something actually changed.
+		l.quiet(slog.LevelWarn, "err:"+err.Error(),
+			"update target: could not read the source; staying on the current version", "err", err)
 		return
 	}
 
@@ -197,20 +206,26 @@ func (l *Loop) Tick(ctx context.Context) {
 	// target since Tuesday, and a source stuck on a bad answer is a fleet-wide
 	// problem, not a quiet one.
 	if err := t.Validate(l.repos()); err != nil {
-		slog.Error("update target: refusing the answer; nothing pulled, box unchanged",
+		// Deduped on the answer, not silenced: a source stuck on a bad answer says
+		// so once, and says so again the moment the answer changes. Error level,
+		// because unlike an unreachable source this is a box being handed
+		// something it must not act on.
+		l.quiet(slog.LevelError, "refused:"+t.Version+":"+t.BrainImage+":"+t.UIImage,
+			"update target: refusing the answer; nothing pulled, box unchanged",
 			"err", err, "brain", t.Version, "image", t.BrainImage)
 		return
 	}
 
 	brain, ui, err := l.Current.Running()
 	if err != nil {
-		slog.Warn("update target: cannot read what this box is running", "err", err)
+		l.quiet(slog.LevelWarn, "running-err:"+err.Error(),
+			"update target: cannot read what this box is running", "err", err)
 		return
 	}
 	if brain == t.BrainImage && ui == t.UIImage {
 		// The overwhelmingly common case. No pull, no work, and one line the
 		// first time it is true.
-		l.quiet("current:"+t.Version, "update target: already on the target version", "brain", t.Version)
+		l.quiet(slog.LevelInfo, "current:"+t.Version, "update target: already on the target version", "brain", t.Version)
 		return
 	}
 
@@ -218,7 +233,7 @@ func (l *Loop) Tick(ctx context.Context) {
 		// Appliance: the box now knows its target and an admin decides
 		// (UPDATES.md # 3). Surfacing that as a dashboard prompt is a separate
 		// slice; this is where the fact enters the box.
-		l.quiet("available:"+t.Version, "update target: a different control plane is available",
+		l.quiet(slog.LevelInfo, "available:"+t.Version, "update target: a different control plane is available",
 			"brain", t.Version, "image", t.BrainImage)
 		return
 	}
@@ -226,7 +241,7 @@ func (l *Loop) Tick(ctx context.Context) {
 	now := l.now()
 	w := l.window()
 	if !w.Contains(now) {
-		l.quiet("holding:"+t.Version, "update target: holding a new version for the update window",
+		l.quiet(slog.LevelInfo, "holding:"+t.Version, "update target: holding a new version for the update window",
 			"brain", t.Version, "step", "waiting", "zone", now.Location().String())
 		return
 	}

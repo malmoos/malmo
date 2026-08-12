@@ -40,6 +40,13 @@ Closes #401. [control-plane-update-transaction.md](control-plane-update-transact
 
 `RELEASE_MANIFEST.md` gains a note that the manifest's version-only schema is what stops the appliance updater, with the fix parked in `NEXT.md`.
 
+## Review
+
+Self-review (`/code-review low`) raised two, both fixed on the branch:
+
+- **A persistent failure was logged every tick.** The `ErrNoTarget` and steady-state paths were deduped and the failure path was not, so a box behind a dead link — or an appliance whose manifest can never be pinned, which is the permanent state of that source — would write the same warning four times an hour forever. Failures and refusals now dedupe on their own content: said once, said again the moment the answer or the error changes. Two tests hold it, including that a corrected answer is applied on the very next tick.
+- **The handler mapped any `StartUpdate` error to 501.** Only the missing-updater case should be, and it now matches its own sentinel; anything else is a 500. Nothing reaches either branch today (the nil check is above), which is exactly why it was worth pinning before a later refusal quietly reached admins as "update not supported".
+
 ## Known gaps & deviations
 
 - **The appliance source cannot produce a target.** It reads the verified manifest and refuses it as unpinned, because the manifest names versions and the box will not resolve a tag. This was a deliberate choice over two alternatives: composing `registry.malmo.network/malmo/brain:v1.4.2` (breaks the digest rule the whole issue rests on) and adding pinned-reference fields to the manifest now (designs the appliance publisher before one exists, and bakes the registry host into every signed file, which `RELEASE_MANIFEST.md` explicitly avoids). So the seam has two implementations and only one of them can currently answer. It is masked today — no signing key is baked into any build, so no appliance verifies a manifest at all — and it is written up in `NEXT.md`.

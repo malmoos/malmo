@@ -1,9 +1,11 @@
 package updatetarget
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -505,5 +507,58 @@ func TestWindowOccurrence(t *testing.T) {
 	wrap := Window{Start: 23 * time.Hour, End: time.Hour}
 	if a, b := wrap.Occurrence(at(12, 23, 30)), wrap.Occurrence(at(13, 0, 30)); !a.Equal(b) {
 		t.Errorf("across midnight gave %v and %v, want one occurrence", a, b)
+	}
+}
+
+// --- logging ---------------------------------------------------------------
+
+// A state that persists must be said once, not on every tick. An appliance whose
+// manifest can never be pinned, or a box behind a dead link, ticks four times an
+// hour for as long as it runs.
+func TestTick_APersistentFailureIsLoggedOnce(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prev)
+
+	src := &fakeSource{err: errors.New("dial tcp: connection refused")}
+	l := newLoop(src, fakeRunning{brain: oldBrain, ui: oldUI}, &fakeApplier{}, ptr(at(12, 3, 30)))
+	for range 5 {
+		l.Tick(context.Background())
+	}
+	if got := strings.Count(buf.String(), "could not read the source"); got != 1 {
+		t.Errorf("logged the same unreachable source %d times, want 1", got)
+	}
+
+	// A different failure is news, and says so.
+	src.err = errors.New("HTTP 500")
+	l.Tick(context.Background())
+	if got := strings.Count(buf.String(), "could not read the source"); got != 2 {
+		t.Errorf("a changed failure logged %d lines in total, want 2", got)
+	}
+}
+
+func TestTick_ARefusalIsLoggedPerAnswer(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prev)
+
+	bad := goodTarget()
+	bad.BrainImage, bad.BrainDigest = "ghcr.io/malmoos/brain:v0.7.0", ""
+	src := &fakeSource{target: bad}
+	l := newLoop(src, fakeRunning{brain: oldBrain, ui: oldUI}, &fakeApplier{}, ptr(at(12, 3, 30)))
+	for range 3 {
+		l.Tick(context.Background())
+	}
+	if got := strings.Count(buf.String(), "refusing the answer"); got != 1 {
+		t.Errorf("logged the same refusal %d times, want 1", got)
+	}
+
+	// The source is fixed. The box must notice on the very next tick.
+	src.target = goodTarget()
+	l.Tick(context.Background())
+	if !strings.Contains(buf.String(), "applying") {
+		t.Errorf("a corrected answer was not applied after a refusal:\n%s", buf.String())
 	}
 }

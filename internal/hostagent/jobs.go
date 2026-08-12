@@ -64,6 +64,10 @@ type SystemUpdater interface {
 // flight. The handler maps it to 409.
 var errJobRunning = errors.New("a job is already running")
 
+// errNoUpdater is what StartUpdate returns on a binary with no control-plane
+// updater wired (the fake agent, tests). The handler maps it to 501.
+var errNoUpdater = errors.New("this host-agent has no control-plane updater")
+
 // jobRegistry holds the in-memory job records and the one global lock.
 //
 // Records are never evicted. A box runs a handful of control-plane updates in
@@ -158,12 +162,19 @@ func (a *Agent) startSystemUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	job, err := a.StartUpdate(req.BrainImage, req.UIImage)
-	if err != nil {
-		if errors.Is(err, errJobRunning) {
-			writeErr(w, http.StatusConflict, "job-running", err.Error())
-			return
-		}
+	switch {
+	case errors.Is(err, errJobRunning):
+		writeErr(w, http.StatusConflict, "job-running", err.Error())
+		return
+	case errors.Is(err, errNoUpdater):
+		// Unreachable behind the nil check above, and matched by its own sentinel
+		// rather than as "anything else": a later refusal added inside StartUpdate
+		// would otherwise reach an admin as "update not supported", which is a
+		// different and wrong thing to tell them.
 		writeErr(w, http.StatusNotImplemented, "update-unsupported", err.Error())
+		return
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, "update-failed", "could not start the update")
 		return
 	}
 	writeJSON(w, http.StatusAccepted, job)
@@ -181,7 +192,7 @@ func (a *Agent) startSystemUpdate(w http.ResponseWriter, r *http.Request) {
 // that lock, and the two updates would fight over the brain container.
 func (a *Agent) StartUpdate(brainRef, uiRef string) (protocol.Job, error) {
 	if a.Updater == nil {
-		return protocol.Job{}, errors.New("this host-agent has no control-plane updater")
+		return protocol.Job{}, errNoUpdater
 	}
 	job, err := a.jobs.start(protocol.JobKindSystemUpdate)
 	if err != nil {
