@@ -93,6 +93,10 @@ on:
   #   - dev/cloud/**               the lane and its in-guest assertions
   #   - this workflow
   pull_request:
+    # `ready_for_review` is not in the default set and is needed here: the job
+    # skips draft PRs (see the job's `if`), so marking one ready has to be what
+    # starts the run. Without it a PR opened as a draft would never build.
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [dev, main]
     paths:
       - "internal/hostagent/**"
@@ -134,6 +138,12 @@ concurrency:
 jobs:
   cloud-image:
     name: Build + seeded-boot test + publish hosted cloud image
+    # Skip draft PRs. This job builds a whole OS image, so every push to a draft
+    # would spend ~12-15 min of runner on work nobody is reading yet. Marking the
+    # PR ready fires `ready_for_review` and the run starts then. Only affects
+    # pull_request runs — a tag push, a dispatch or the release call has no draft
+    # field and passes the first half of the condition.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     # Single source of truth for "should this run publish", computed once and
     # read by the release-asset step below.
     # A real tag push always publishes (that's the point of tagging a release);
@@ -166,7 +176,19 @@ jobs:
     # generous ceiling so a one-off slow runner is never killed mid-build.
     timeout-minutes: 120
     steps:
+      # persist-credentials: false matters more now that a PR can start this job.
+      # The job holds `packages: write` (the ghcr push below needs it), and by
+      # default checkout writes the token into .git/config as an auth header,
+      # where every later step can read it — the mkosi build, the QEMU lane, any
+      # script under dev/cloud/. Those steps run on a PR while the publish steps
+      # do not, so SHOULD_PUBLISH does not cover this: the gate stops the publish
+      # steps, not the credential. A fork PR is already safe (GitHub forces a
+      # read-only token there), but a same-repo branch PR — how every PR on this
+      # project is opened — is not. Nothing here needs git credentials after the
+      # checkout: both publish steps pass ${{ github.token }} explicitly.
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       # A PR run must never publish. That already falls out of SHOULD_PUBLISH
       # (a pull_request event has no tag ref and no `publish` input, so both
