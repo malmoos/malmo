@@ -22,6 +22,15 @@ RestartSec=2s
 User=root
 RuntimeDirectory=malmo
 RuntimeDirectoryMode=0755
+# Per-box update settings, delivered at provision time down the same credential
+# path malmo.seed uses (UPDATES.md # 8.4, ENVIRONMENT.md # Provisioning). Both
+# are optional: a box that gets neither behaves exactly as it did before, and a
+# box that gets one is pinned to it over MALMO_UPDATE_TARGET_URL /
+# MALMO_UPDATE_WINDOW. This is why a provisioned box can be moved to a candidate
+# release at all: there is no SSH on the hosted image to edit a drop-in after
+# boot. Production capability, so it lives in the shipped unit, not a test drop-in.
+ImportCredential=malmo.update_target_url
+ImportCredential=malmo.update_window
 
 [Install]
 WantedBy=multi-user.target
