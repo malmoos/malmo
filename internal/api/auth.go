@@ -39,6 +39,10 @@ var publicPaths = map[string]bool{
 	// the admin-session middleware must let it through — it does its own
 	// forward-auth validation (forwardauth.go). Hosted-only at the handler.
 	forwardAuthVerifyPath: true,
+	// The liveness probe (healthz.go): host-agent drives the box and has no
+	// session to present, and the answer discloses nothing a caller who can
+	// open the connection does not already know.
+	healthzPath: true,
 	// huma exposes these by default; leave them public so curl/devtools work.
 	"/openapi.json": true,
 	"/openapi.yaml": true,

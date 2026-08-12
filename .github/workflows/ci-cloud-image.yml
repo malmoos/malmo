@@ -30,8 +30,18 @@
 #   - `workflow_dispatch` — manual, on-demand, ad hoc ref. The `publish` input
 #     still governs whether the run publishes (default true); `publish=false`
 #     gives a build-only smoke run. Unchanged from before tags existed.
+#   - `pull_request` (path-filtered, #389) — the UPDATER GUARD. A PR that touches
+#     the control-plane updater runs this lane automatically and boots ONLY the
+#     `update` scenario (see the boot-test step). It publishes nothing: no tag
+#     ref and no `publish` input means `SHOULD_PUBLISH` is false, and the step
+#     below asserts that rather than trusting it. Why a whole image build on a
+#     PR: the `update` boot is the only net under the updater that meets a real
+#     Docker daemon, a real registry, a real brain restart and a real revert —
+#     everything else is a fake Docker. Left to the publish gate alone, a broken
+#     updater lands on `dev` and stays green until someone runs this workflow by
+#     hand (the same argument that put the `access` boot in the gate).
 #
-# All three share one `publish` input name/shape (`workflow_dispatch` and
+# The three publish-capable triggers share one `publish` input name/shape (`workflow_dispatch` and
 # `workflow_call` inputs both surface as the same `inputs.*` context), which
 # is why `SHOULD_PUBLISH` below needs no per-trigger special-casing for the
 # call path: `inputs.publish` already carries the right value regardless of
@@ -71,6 +81,31 @@ name: CI / Cloud image
 on:
   push:
     tags: ["v*"]
+  # The updater guard (#389). Path-filtered to the code the `update` boot
+  # proves, so an ordinary PR never starts a full image build (~12–15 min):
+  #   - internal/hostagent/**      the ledger + the update transaction
+  #   - cmd/host-agent-real/**     the job endpoints that run it on the box
+  #   - internal/lifecycle/controlplane* + lifecycle.go
+  #                                the brain's own compose reconcile, the second
+  #                                actor on the control-plane project (#390)
+  #   - internal/api/system*.go    POST /api/v1/system/update, the trigger the
+  #                                boot drives
+  #   - dev/cloud/**               the lane and its in-guest assertions
+  #   - this workflow
+  pull_request:
+    # `ready_for_review` is not in the default set and is needed here: the job
+    # skips draft PRs (see the job's `if`), so marking one ready has to be what
+    # starts the run. Without it a PR opened as a draft would never build.
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [dev, main]
+    paths:
+      - "internal/hostagent/**"
+      - "cmd/host-agent-real/**"
+      - "internal/lifecycle/controlplane*.go"
+      - "internal/lifecycle/lifecycle.go"
+      - "internal/api/system*.go"
+      - "dev/cloud/**"
+      - ".github/workflows/ci-cloud-image.yml"
   workflow_dispatch:
     inputs:
       publish:
@@ -87,7 +122,10 @@ on:
 # contents: write is the minimum grant for `gh release upload`/`gh release
 # create` in the release-asset step below. packages: write is what lets the
 # job's own GITHUB_TOKEN push the control-plane images to ghcr (# 370) — still
-# no long-lived registry credential anywhere in this lane.
+# no long-lived registry credential anywhere in this lane. Neither grant is
+# used on a pull_request run: both steps that need them are gated on
+# SHOULD_PUBLISH, which is false there (and asserted so, below). A PR from a
+# fork gets a read-only token regardless — it still builds and boots.
 permissions:
   contents: write
   packages: write
@@ -100,6 +138,12 @@ concurrency:
 jobs:
   cloud-image:
     name: Build + seeded-boot test + publish hosted cloud image
+    # Skip draft PRs. This job builds a whole OS image, so every push to a draft
+    # would spend ~12-15 min of runner on work nobody is reading yet. Marking the
+    # PR ready fires `ready_for_review` and the run starts then. Only affects
+    # pull_request runs — a tag push, a dispatch or the release call has no draft
+    # field and passes the first half of the condition.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     # Single source of truth for "should this run publish", computed once and
     # read by the release-asset step below.
     # A real tag push always publishes (that's the point of tagging a release);
@@ -132,7 +176,35 @@ jobs:
     # generous ceiling so a one-off slow runner is never killed mid-build.
     timeout-minutes: 120
     steps:
+      # persist-credentials: false matters more now that a PR can start this job.
+      # The job holds `packages: write` (the ghcr push below needs it), and by
+      # default checkout writes the token into .git/config as an auth header,
+      # where every later step can read it — the mkosi build, the QEMU lane, any
+      # script under dev/cloud/. Those steps run on a PR while the publish steps
+      # do not, so SHOULD_PUBLISH does not cover this: the gate stops the publish
+      # steps, not the credential. A fork PR is already safe (GitHub forces a
+      # read-only token there), but a same-repo branch PR — how every PR on this
+      # project is opened — is not. Nothing here needs git credentials after the
+      # checkout: both publish steps pass ${{ github.token }} explicitly.
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      # A PR run must never publish. That already falls out of SHOULD_PUBLISH
+      # (a pull_request event has no tag ref and no `publish` input, so both
+      # halves are false), but "falls out of" is exactly the kind of claim that
+      # rots when someone adds a trigger or edits that expression. Read the
+      # value and fail on it instead of trusting it. Costs nothing, and it fails
+      # before the ~10 min build rather than at the upload.
+      - name: Assert a pull_request run publishes nothing
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          set -euo pipefail
+          if [ "${SHOULD_PUBLISH}" = "true" ]; then
+            echo "::error::SHOULD_PUBLISH is true on a pull_request run — a PR must never publish an image or push to ghcr."
+            exit 1
+          fi
+          echo "SHOULD_PUBLISH=${SHOULD_PUBLISH} — nothing will be published"
 
       # Fail FAST on a mistagged release, before the ~10min build below runs.
       # VERSION (repo root) is the single source of truth for the monorepo's
@@ -247,20 +319,38 @@ jobs:
       #     invariant whose only net runs when a developer remembers to run it by hand
       #     is not a net, so a box that leaks its forward-auth cookie to an app
       #     upstream must fail HERE and never publish.
+      #   - update (#382, #401): the ONLY proof of the control-plane updater against a
+      #     real Docker daemon, a real registry, a real brain restart and a real
+      #     revert. It applies a real update (pull by digest from a registry inside
+      #     the guest, the brain recreating itself through host-agent), then a real
+      #     failed update that must revert both refs and restore the SQLite snapshot,
+      #     then the same thing again with NO admin in the loop: host-agent reads an
+      #     update-target source and applies what it is handed, after refusing an
+      #     answer that names tags instead of digests. An image whose updater cannot
+      #     replace the brain, cannot put the box back when the new brain does not
+      #     serve, or acts on an unpinned target, must never be published.
       #
       # The frozen-identity boot stays out: it is orthogonal (it checks a re-delivered
       # seed is ignored on a later boot) and has shown a flaky false "re-ingested"
       # verdict whose root cause is still open, so it is left to the full local run
       # (MALMO_CLOUD_BOOTS default = all) rather than blocking publish.
       #
-      # GO: the access boot mints its test-portal owner assertion on the HOST
+      # ON A PULL REQUEST the list narrows to `update` alone (#389). That boot is
+      # standalone — its own fresh overlay and its own box-id — so it needs none
+      # of the others, and the four it drops each guard a publish-time regression
+      # that a PR cannot ship. One boot keeps the PR cost close to the build cost
+      # (the build dominates), while still failing a PR that breaks the updater.
+      # A PR that wants the whole list can still get it: `gh workflow run
+      # "CI / Cloud image" --ref <branch> -f publish=false`.
+      #
+      # GO: the access and update boots mint their test-portal owner assertion on the HOST
       # (dev/cloud/mkassertion — the private key never enters the VM). The lane runs
       # under `sudo -E`, and sudo's secure_path resets PATH, so `go` on the runner's
       # PATH is invisible to the script; pass it explicitly (run-cloud-tests.sh
       # honours ${GO:-}, and -E preserves it).
-      - name: Boot test (seed schema + BIOS/UEFI + per-app access modes through real Caddy)
+      - name: Boot test (${{ github.event_name == 'pull_request' && 'control-plane update only' || 'seed schema + BIOS/UEFI + access modes + control-plane update' }})
         env:
-          MALMO_CLOUD_BOOTS: "unseeded seeded bios access"
+          MALMO_CLOUD_BOOTS: ${{ github.event_name == 'pull_request' && 'update' || 'unseeded seeded bios access update' }}
           GO: ${{ steps.go.outputs.go-bin }}
         run: make test-cloud-qemu
 

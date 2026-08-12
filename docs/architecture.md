@@ -144,9 +144,38 @@ So this doc isn't read as a claim about the finished product:
 - **Storage subsystem.** No `/srv/malmo`, no mergerfs, no LUKS-unlock flow,
   no `malmo-storage-ready.target`. Apps write to wherever Docker puts volumes.
 - **Boot, install ISO, updates.** The `mkosi` image build (`BUILD.md` # 2;
-  proven in the test lane, not yet the production ISO), the release manifest,
-  and both update streams (`UPDATES.md`) are all spec-only. Nothing on a
-  running box can fetch, apply, or roll back a new version today.
+  proven in the test lane, not yet the production ISO) and stream A
+  (`unattended-upgrades` + the apt repo) are spec-only. **Stream B — the
+  control-plane update — is half built.** A box declares its brain/UI pair in
+  two files (`internal/hostagent/controlplane`: the staged compose plus an
+  `images.json` ledger), the apply/health-check/revert transaction exists
+  (`internal/hostagent/cpupdate`), and an admin can start one:
+  `POST /api/v1/system/update` with two explicit image refs → the
+  `system-update` job on the host socket (`internal/hostagent/jobs.go`), polled
+  via `GET /api/v1/system/update/{job_id}`. That path **is proven on a booted
+  box**: the hosted cloud lane's `update` boot drives a real update and a real
+  failed-update-then-revert against a real Docker daemon and a registry inside
+  the guest (#382/#388), and it runs on PRs that touch the updater (#389).
+  **What picks the target is one seam** (`internal/hostagent/updatetarget`,
+  #401), consumed once by host-agent: it asks a source, validates the answer,
+  compares it with the pair the box declares, and starts the same job an admin
+  would. On **hosted** the source is the control plane's public update-target
+  URL and the box applies without a prompt, inside the 03:00–04:00 window; on
+  **appliance** the source is the signed release manifest and the box only
+  learns its target, because the control plane there is admin-prompted. Every
+  answer must name both images pinned to a digest in an expected repository, or
+  it is refused with nothing pulled. The hosted half is proven on a booted box
+  (the `update` boot also drives the loop and its refusal path).
+  The appliance trigger is **half built**: `internal/hostagent/relmanifest`
+  verifies, parses and caches the signed release manifest and polls it hourly
+  (#395/#397). What is still missing is the rest of picking a target: **no
+  signing key and no `releases.malmo.network`** (so every build refuses every
+  manifest and does not poll — the deliberate inert state), **no digests in the
+  manifest** (it names versions, so the appliance source can only refuse —
+  `NEXT.md`), no per-box targeting or report-back on hosted (blocked on the
+  box↔cloud credential, `NEXT.md` Tier 1), no update notification, and no
+  dashboard surface beyond Settings → About reporting the running versions
+  (#393).
 - **Health / notifications / telemetry / time / discovery beyond stubs.** The
   brain doesn't surface health issues, the bell doesn't exist, no telemetry
   client, no chrony integration.

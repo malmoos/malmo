@@ -38,6 +38,8 @@ import (
 
 	"github.com/malmoos/malmo/internal/hostagent"
 	"github.com/malmoos/malmo/internal/hostagent/brainlaunch"
+	"github.com/malmoos/malmo/internal/hostagent/controlplane"
+	"github.com/malmoos/malmo/internal/hostagent/cpupdate"
 	"github.com/malmoos/malmo/internal/profile"
 	"github.com/malmoos/malmo/internal/protocol"
 	"github.com/malmoos/malmo/internal/version"
@@ -77,6 +79,24 @@ func main() {
 	a, cleanup := buildAgent()
 	defer cleanup()
 
+	// The brain's launch config is built once and used twice: to launch the
+	// brain at boot, and as the base of every control-plane update. Reusing it
+	// is the point — an updated brain has to be identical to a first-boot one
+	// except for the image, and a second builder would drift the first time a
+	// mount or env var is added here (docs/progress/control-plane-update-transaction.md).
+	brainCfg := brainLaunchConfig(sockPath)
+	// POST /v1/jobs/system-update. Wired in both build profiles: UPDATES.md # 8
+	// makes the stream-B transaction shared by appliance and hosted.
+	a.Updater = cpupdate.Runner{
+		Docker: cpupdate.NewCLIDocker(),
+		Prober: cpupdate.HTTPProber{},
+		Base: cpupdate.Options{
+			ControlPlaneDir: brainCfg.ControlPlaneDir,
+			BrainCfg:        brainCfg,
+			SnapshotRoot:    filepath.Join(brainCfg.DataDir, "brain-snapshots"),
+		},
+	}
+
 	mux := http.NewServeMux()
 	a.Mount(mux)
 
@@ -88,7 +108,6 @@ func main() {
 	// host-agent serving its socket so the box stays diagnosable; it does not
 	// tear host-agent down.
 	brainCtx, brainCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	brainCfg := brainLaunchConfig(sockPath)
 	// Seed the brain's Docker transport (ingress network + socket-proxy) before
 	// launching the brain — the brain reaches Docker only through this proxy
 	// (CONTROL_PLANE.md # Docker socket exposure), and the brain then reconciles
@@ -103,11 +122,30 @@ func main() {
 	}
 	brainCancel()
 
+	// The appliance release-manifest poll (RELEASE_MANIFEST.md), started last
+	// and on purpose: it tells the box which version it *could* run, and nothing
+	// about booting depends on it, so a slow or unreachable CDN must not sit in
+	// front of anything above. A hosted box has a no-op here — its target comes
+	// from the cloud, not from a signed broadcast (UPDATES.md # 8.1). A build
+	// with no baked signing key does not poll at all.
+	stopPoll, poller := startReleasePoll(brainCfg.DataDir)
+	defer stopPoll()
+
+	// The update-target loop: what tells this box which control plane to run
+	// (UPDATES.md # 8.4 step 1, internal/hostagent/updatetarget). One loop for
+	// both profiles — only the source and whether the box may apply without a
+	// prompt differ, and both come from the build-tagged updateTargetSource.
+	// Started last for the same reason the poll is: nothing about booting waits
+	// on it.
+	stopTarget := startUpdateTarget(brainCfg, a, poller)
+	defer stopTarget()
+
 	slog.Info("host-agent-real listening", "sock", sockPath)
 	srv := &http.Server{Handler: hostagent.LogRequests(mux)}
 	if err := srv.Serve(ln); err != nil {
 		slog.Error("serve", "err", err)
 		// os.Exit skips the deferred cleanup; run it by hand first.
+		stopPoll()
 		cleanup()
 		os.Exit(1)
 	}
@@ -139,8 +177,22 @@ func brainLaunchConfig(sockPath string) brainlaunch.Config {
 	if fi, err := os.Stat(profileMarker); err != nil || !fi.Mode().IsRegular() {
 		profileMarker = ""
 	}
+	// Which brain to launch is the ledger's call when it has one: it records the
+	// pair this box last *applied*, while the env default records what it last
+	// *shipped with* — older by definition once an update has landed
+	// (internal/hostagent/controlplane). brainlaunch leaves an existing brain
+	// container alone, so this only decides the case where there is none to
+	// leave: a first boot, or a box whose brain container was removed. Without
+	// it, that second case silently rolls an updated box back to the baked image.
+	brainImage, fromLedger := controlplane.ResolveBrainImage(controlPlaneDir, env("MALMO_BRAIN_IMAGE", "malmo-brain:latest"))
+	// from_ledger, not src: CLAUDE.md reserves src for a source filesystem path.
+	// Logged either way so the fallback is visible rather than silent — "which
+	// brain did this box decide to run, and did an applied update decide it" is
+	// the first question a bad update raises.
+	slog.Info("resolved brain image", "image", brainImage, "from_ledger", fromLedger)
+
 	return brainlaunch.Config{
-		Image:         env("MALMO_BRAIN_IMAGE", "malmo-brain:latest"),
+		Image:         brainImage,
 		ImageTar:      env("MALMO_BRAIN_IMAGE_TAR", filepath.Join(dataDir, "brain-image.tar")),
 		ContainerName: "malmo-brain",
 		DataDir:       dataDir,

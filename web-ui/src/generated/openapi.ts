@@ -775,6 +775,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Move the control plane to the given brain/UI image pair (admin only) */
+        post: operations["start-system-update"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/update/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Status of a control-plane update job (admin only) */
+        get: operations["get-system-update"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/system/version": {
         parameters: {
             query?: never;
@@ -782,7 +816,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The running malmo-brain build's version and git commit */
+        /** What this box is running: brain version and commit, host-agent version, UI image */
         get: operations["get-system-version"];
         put?: never;
         post?: never;
@@ -1636,6 +1670,42 @@ export interface components {
             readonly $schema?: string;
             disks: components["schemas"]["DiskSpaceDTO"][] | null;
         };
+        SystemUpdateErrorDTO: {
+            code: string;
+            message: string;
+        };
+        SystemUpdateJobDTO: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/SystemUpdateJobDTO.json
+             */
+            readonly $schema?: string;
+            error?: components["schemas"]["SystemUpdateErrorDTO"];
+            finished_at?: string;
+            job_id: string;
+            kind: string;
+            result?: components["schemas"]["SystemUpdateResultDTO"];
+            started_at: string;
+            status: string;
+        };
+        SystemUpdateRequestDTO: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/SystemUpdateRequestDTO.json
+             */
+            readonly $schema?: string;
+            brain_image?: string;
+            ui_image?: string;
+        };
+        SystemUpdateResultDTO: {
+            brain_changed: boolean;
+            failure_mode?: string;
+            revert_error?: string;
+            reverted: boolean;
+            ui_changed: boolean;
+        };
         SystemVersionDTO: {
             /**
              * Format: uri
@@ -1644,6 +1714,8 @@ export interface components {
              */
             readonly $schema?: string;
             commit: string;
+            host_agent_version?: string;
+            ui_image?: string;
             version: string;
         };
         "Test-mail-providerRequest": {
@@ -3280,6 +3352,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Set-timezoneResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "start-system-update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SystemUpdateRequestDTO"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemUpdateJobDTO"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "get-system-update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemUpdateJobDTO"];
                 };
             };
             /** @description Error */

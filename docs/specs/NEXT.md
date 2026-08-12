@@ -100,6 +100,30 @@ The *mechanism* — a manifest `secrets:` declaration → brain generates a CSPR
 **Context:** `SERVICE_PROVISIONING.md`, `APP_MANIFEST.md` # D2, `THREAT_MODEL.md` (adversaries: compromised app at runtime, stolen drive), `STORAGE.md` # LUKS, the backup entry below.
 **Why Tier 2:** the leak surface compounds — every app installed before `.env` is locked down ships an exposed secret on disk, so the longer it waits the larger the retrofit. Not strictly blocking (household trust + skeleton status make the current shape tolerable), but it shouldn't ride to v1 unhardened.
 
+### Where a control-plane update's outcome lives after it finishes
+
+`POST /api/v1/system/update` returns a job id, and `GET /v1/jobs/{id}` answers from an **in-memory** record in host-agent. Lose the id — the admin closed the tab, the dashboard reloaded — or restart host-agent, and the outcome is gone: it survives only as the pair named in the ledger (`images.json`) and whatever went to the journal. Nothing can answer "did last night's update work, and if not, why."
+
+Three committed surfaces need that answer, so the shape has to be decided before any of them is built:
+
+- **Settings → Updates** (`UPDATES.md` # 6) promises an aggregate view — what updated, what is waiting, what failed — with the rollback affordance on it.
+- **The notification** (`UPDATES.md` # 8.2, `NOTIFICATIONS.md`) is the durable, read-stateful copy for an admin who was not watching; a notification whose detail is already gone is not much of a record.
+- **The hosted report back to the cloud** (`UPDATES.md` # 8.4 step 5) is "version now running, success or failure, and the failure mode if it rolled back" — a box that reboots mid-window must still be able to send it.
+
+The open question is **what persists and where**, not whether. Options worth weighing: a `system_update` row in the brain's SQLite (natural home for anything the dashboard reads, but the brain is the thing being replaced — it cannot record its own last moments); a small host-agent-side file next to the ledger (survives the brain, but adds a second store to the one `images.json` already is); or extending the ledger itself with the outcome of the transition it already records (fewest moving parts, but turns a declaration into a log). Whichever wins also decides whether job records ever need persistence at all, which is why it is worth settling before a second job kind arrives.
+
+**Context:** `UPDATES.md` # 3 (failure signalling), # 6, # 8.2, # 8.4; `NOTIFICATIONS.md`; `internal/hostagent/jobs.go`; `internal/hostagent/controlplane` (the ledger); `docs/progress/control-plane-update-trigger.md` # Known gaps.
+**Why Tier 2:** nothing is blocked today — the transaction reverts correctly whether or not anyone reads the result — but all three surfaces above are already promised in locked specs, and each would otherwise invent its own answer. Deciding once is cheap; discovering three incompatible records later is not.
+
+### The release manifest names versions, so an appliance can never apply one
+
+The box has one update-target seam (`UPDATES.md` # 8.4, as built in #401) and it only acts on an image reference **pinned to a digest**: a box that resolved a tag itself would be trusting a movable label at update time, and two boxes told "1.4.2" a week apart could end up running different bytes. The signed release manifest names versions — `"brain": "1.4.2"` — with the registry path left implicit (`RELEASE_MANIFEST.md` # What the manifest is), and a version can only be turned into a tag. So the appliance source reads a verified manifest and **refuses it as unpinned**. The seam is real on both profiles; only the hosted one can currently produce a target.
+
+The obvious fix is optional pinned-reference fields (`brain_image`, `ui_image`) alongside the versions — additive, no `manifest_version` bump, since unknown fields are already ignored. What makes it a decision rather than a patch is that `RELEASE_MANIFEST.md` deliberately keeps image URLs out of the file so the registry can move without re-cutting every signed manifest, and a pinned reference bakes the registry host into every one of them. Weigh that against inventing a publisher-side resolve step, or a separate signed digest map beside the manifest.
+
+**Context:** `RELEASE_MANIFEST.md` # What the manifest is; `UPDATES.md` # 8.4; `internal/hostagent/updatetarget/manifest.go`; `docs/progress/update-target-source.md`.
+**Why Tier 2:** nothing is blocked — no signing key is baked into any build, so no appliance verifies a manifest at all today, and the appliance updater is inert for that reason first. It has to be settled with the appliance release pipeline, before the first signed manifest is published, because the schema is easier to widen before there are files in the wild than after.
+
 ---
 
 ## Tier 3 — Defer-able, but pin the shape

@@ -372,3 +372,72 @@ type Error struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
+
+// --- Jobs (BRAIN_HOST_PROTOCOL.md # Pattern B) ---
+//
+// One job kind exists today: system-update, the control-plane update
+// transaction (UPDATES.md # 3). The full Pattern B framework — a kind registry
+// with typed attributes, resource-class queueing, cancel, and the SSE log
+// stream — is not built, because it would be an abstraction with a single
+// consumer (CLAUDE.md # Go code discipline). What is built is the part
+// system-update needs: a job record, a MaxDuration bound, and one global lock.
+
+// JobKindSystemUpdate is the kind name of the control-plane update job.
+const JobKindSystemUpdate = "system-update"
+
+// Job status values. `cancelled`, `cancelling`, and `stalled` from the spec are
+// not produced by this host-agent: there is no cancel route, and a run that
+// passes its MaxDuration is cancelled and rolled back, so it lands on a known
+// outcome (`failed`) rather than on "we are not sure" (`stalled`).
+const (
+	JobStatusRunning   = "running"
+	JobStatusCompleted = "completed"
+	JobStatusFailed    = "failed"
+)
+
+// Job error codes. `job-timeout` means the run passed its MaxDuration and was
+// cancelled; `job-failed` means the operation itself reported a failure.
+const (
+	JobErrorTimeout = "job-timeout"
+	JobErrorFailed  = "job-failed"
+)
+
+// SystemUpdateRequest is POST /v1/jobs/system-update: the target control-plane
+// pair, as explicit image refs.
+//
+// The refs are in the request on purpose. There is no release manifest and no
+// cloud call behind this endpoint — the box↔cloud credential that a fetched
+// target would need is still undesigned (NEXT.md, Tier 1). An empty ref means
+// "leave this component alone", which is how a UI-only or brain-only ship is
+// expressed (UPDATES.md # 3). Both empty is rejected.
+type SystemUpdateRequest struct {
+	BrainImage string `json:"brain_image,omitempty"`
+	UIImage    string `json:"ui_image,omitempty"`
+}
+
+// SystemUpdateResult is what a finished system-update job did. It is reported
+// on failure as well as on success, because "we reverted, and here is what
+// broke" is the answer the dashboard has to show (UPDATES.md # 3 step 4).
+type SystemUpdateResult struct {
+	BrainChanged bool `json:"brain_changed"`
+	UIChanged    bool `json:"ui_changed"`
+	Reverted     bool `json:"reverted"`
+	// FailureMode names the step that broke: "read", "pull", "snapshot",
+	// "declare", "recreate", or "health". Empty on success.
+	FailureMode string `json:"failure_mode,omitempty"`
+	// RevertError is set when the rollback itself failed. The box is then in a
+	// state no automatic path can fix, and this is the operator's signal.
+	RevertError string `json:"revert_error,omitempty"`
+}
+
+// Job is one host-agent job record. StartedAt/FinishedAt are RFC3339, matching
+// the other timestamps on this socket (SystemHealth.CheckedAt).
+type Job struct {
+	ID         string              `json:"job_id"`
+	Kind       string              `json:"kind"`
+	Status     string              `json:"status"`
+	StartedAt  string              `json:"started_at"`
+	FinishedAt string              `json:"finished_at,omitempty"`
+	Error      *Error              `json:"error,omitempty"`
+	Result     *SystemUpdateResult `json:"result,omitempty"`
+}

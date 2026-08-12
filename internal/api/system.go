@@ -3,10 +3,12 @@ package api
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/malmoos/malmo/internal/auth"
+	"github.com/malmoos/malmo/internal/lifecycle"
 	"github.com/malmoos/malmo/internal/version"
 )
 
@@ -21,32 +23,93 @@ func (s *Server) registerSystem(api huma.API) {
 	}, s.systemStorage)
 	huma.Register(api, huma.Operation{
 		OperationID: "get-system-version", Method: "GET", Path: "/api/v1/system/version",
-		Summary: "The running malmo-brain build's version and git commit",
+		Summary: "What this box is running: brain version and commit, host-agent version, UI image",
 	}, s.systemVersion)
 }
 
-// SystemVersionDTO is the GET /api/v1/system/version body: the brain build's
-// repo SemVer (VERSION file, BUILD.md # Versioning — one version for the whole
-// monorepo, DECISIONS.md 2026-07-16) plus the short git commit it was built
-// from, both stamped at build time (internal/version). Surfacing this in the
-// dashboard is a later slice; this endpoint is the box-level read it will use.
+// SystemVersionDTO is the GET /api/v1/system/version body: what this box is
+// running, component by component.
+//
+// Version and Commit are the **brain's** build identity — the repo SemVer
+// (VERSION file, BUILD.md # Versioning — one version for the whole monorepo,
+// DECISIONS.md 2026-07-16) plus the short git commit, both stamped at build
+// time (internal/version). They keep their original meaning and position: the
+// API is additive-only within a minor (BRAIN_UI_PROTOCOL.md # Versioning), so
+// the two fields that shipped first are never repurposed to mean "the box".
+//
+// HostAgentVersion and UIImage describe the other two components of the box, so
+// one read answers "what is this box running" rather than "what is this binary"
+// (UPDATES.md # 8.4 step 5 — the box reports its versions; stream A is the
+// host-agent, stream B is the brain and UI).
+//
+// Both are omitted when unknown, and **absent means "could not read it", never
+// "not installed"**. The brain's own identity is compiled in and always
+// present, so a partial answer is still a useful one — a host-agent that is
+// briefly unreachable must not turn this endpoint into a 502 and cost the
+// caller the two facts that are still true.
 type SystemVersionDTO struct {
-	Version string `json:"version"`
-	Commit  string `json:"commit"`
+	Version          string `json:"version"`
+	Commit           string `json:"commit"`
+	HostAgentVersion string `json:"host_agent_version,omitempty"`
+	UIImage          string `json:"ui_image,omitempty"`
 }
 
-// systemVersion reads the brain's own stamped build identity — no host-agent
-// round trip, it's compiled into this binary. Available to every signed-in
-// user with no role gate, same posture as systemStorage: build identity isn't
-// per-user or sensitive data.
+// hostVersionReadTimeout bounds the host-agent leg of the version read. A var,
+// not a const, so a test can shrink it and assert the degrade path is prompt
+// without sleeping for real.
+var hostVersionReadTimeout = 3 * time.Second
+
+// systemVersion answers "what is this box running" from three sources with
+// three different failure modes, and deliberately degrades rather than failing
+// whole. The brain's own identity is compiled into this binary. The host-agent's
+// is a socket round trip that can fail transiently. The UI's is a read of the
+// staged control-plane compose, which is absent by design in dev.
+//
+// This is NOT systemStorage's posture (a host read failure there is a 502)
+// because the two answer different questions. An empty storage panel would be a
+// lie — it would render as "no disks". A version report missing one of three
+// components is self-describing: the field is absent, and the caller can see
+// exactly which one it could not learn. Failing the whole read would throw away
+// the brain version, which is both always available and the one an updater
+// needs first.
+//
+// Available to every signed-in user with no role gate, same posture as
+// systemStorage: build identity isn't per-user or sensitive data.
 func (s *Server) systemVersion(ctx context.Context, _ *struct{}) (*struct{ Body SystemVersionDTO }, error) {
 	if _, ok := auth.FromContext(ctx); !ok {
 		return nil, huma.Error401Unauthorized("unauthenticated")
 	}
-	return &struct{ Body SystemVersionDTO }{Body: SystemVersionDTO{
+	out := SystemVersionDTO{
 		Version: version.Version,
 		Commit:  version.Commit,
-	}}, nil
+	}
+
+	// Bound the host round trip well under the host client's shared 30s timeout
+	// (hostclient.New). Without this, "degrade instead of failing" degrades only
+	// after the caller has already waited 30 seconds for a component that is
+	// optional in the answer — which is the opposite of the point. A healthy
+	// host-agent answers this off a local unix socket in milliseconds, so a
+	// short bound costs nothing and a stalled one is reported as unknown
+	// promptly.
+	hostCtx, cancel := context.WithTimeout(ctx, hostVersionReadTimeout)
+	defer cancel()
+	if status, err := s.host.SystemStatus(hostCtx); err != nil {
+		// Warn, not Error: the caller still gets a useful answer, and the
+		// host-agent being unreachable already raises its own health issue
+		// (HEALTH.md locus B). Logging this at Error would double-report a
+		// condition that has an owner elsewhere.
+		slog.Warn("system-version: host status read failed", "err", err)
+	} else {
+		out.HostAgentVersion = status.AgentVersion
+	}
+
+	if img, err := lifecycle.ControlPlaneUIImage(s.controlPlaneDir); err != nil {
+		slog.Warn("system-version: control-plane ui image read failed", "err", err)
+	} else {
+		out.UIImage = img
+	}
+
+	return &struct{ Body SystemVersionDTO }{Body: out}, nil
 }
 
 // DiskSpaceDTO is one volume's fullness for the Storage bars: a human Label

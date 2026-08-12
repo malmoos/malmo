@@ -18,8 +18,16 @@ AGENT_SOCK := $(abspath $(DEV_DIR)/agent.sock)
 # container build context with no .git) rather than failing the build.
 MALMO_VERSION := $(shell cat $(CURDIR)/VERSION)
 MALMO_COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+# The minisign public keys a host-agent build accepts for the appliance release
+# manifest (RELEASE_MANIFEST.md # Signing). Comma-separated base64 key lines.
+# EMPTY BY DEFAULT, and that is the safe state: a build with no key refuses every
+# manifest and does not poll at all, rather than trusting one. There is no
+# runtime override on purpose — changing which releases a box accepts should take
+# a new, apt-signed binary, not an edit to a unit file.
+MALMO_RELEASE_KEYS ?=
 LDFLAGS := -X github.com/malmoos/malmo/internal/version.Version=$(MALMO_VERSION) \
-           -X github.com/malmoos/malmo/internal/version.Commit=$(MALMO_COMMIT)
+           -X github.com/malmoos/malmo/internal/version.Commit=$(MALMO_COMMIT) \
+           -X github.com/malmoos/malmo/internal/hostagent/relmanifest.BakedKeys=$(MALMO_RELEASE_KEYS)
 
 export MALMO_AGENT_SOCK := $(AGENT_SOCK)
 export MALMO_STATE_DIR := $(STATE_DIR)
@@ -168,12 +176,15 @@ control-plane-images: brain-image ui-image
 	@echo "saved control-plane image bundle to $(CP_IMAGE_DIR)/"
 
 # Run the full suite. Requires libpam0g-dev for the pamverifier package.
+# GOTESTFLAGS passes extra flags through to `go test` — CI sets it to -v so
+# skipped tests are visible (a skip prints nothing without it, so a test that
+# never runs reads exactly like one that passed). See .github/workflows/ci-go.yml.
 test:
-	$(GO) test ./...
+	$(GO) test $(GOTESTFLAGS) ./...
 
 # Skip the pamverifier package (no libpam0g-dev required).
 test-nopam:
-	$(GO) test $$($(GO) list ./... | grep -v pamverifier)
+	$(GO) test $(GOTESTFLAGS) $$($(GO) list ./... | grep -v pamverifier)
 
 # Integration tests for the Avahi DBus publisher. Requires avahi-daemon
 # running on the host. No sudo needed (default DBus policy allows it).

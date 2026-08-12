@@ -163,7 +163,7 @@ func (s *Server) forwardAuthExempt(r *http.Request) bool {
 // governed by the per-session stream cap, not the request-rate bucket.
 func (s *Server) rateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isStreaming(r) || s.forwardAuthExempt(r) {
+		if isStreaming(r) || isLivenessProbe(r) || s.forwardAuthExempt(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -212,6 +212,20 @@ func isStreaming(r *http.Request) bool {
 	default:
 		return false
 	}
+}
+
+// isLivenessProbe reports whether the request targets GET /healthz (healthz.go),
+// which is exempt from plane 2's 30 req/min/IP budget.
+//
+// The exemption is not a convenience. The probe's consumer is the control-plane
+// updater, which polls it for up to 60s after recreating the brain and reverts
+// the update if it never answers (UPDATES.md # 3 step 3d). At one poll a second
+// that budget runs out halfway through the wait, and the 429 would read as
+// "the new brain is not healthy" — a throttle would roll back a working update.
+// The handler does no work beyond writing a fixed body, so it costs about what
+// refusing it would.
+func isLivenessProbe(r *http.Request) bool {
+	return r.URL.Path == healthzPath
 }
 
 // retryAfterSeconds rounds a refill delay up to whole seconds, floored at 1 — a

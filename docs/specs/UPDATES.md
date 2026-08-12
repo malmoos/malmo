@@ -124,7 +124,11 @@ Both are deferred from v1 with explicit triggers documented in `RELEASE_MANIFEST
 3. When the admin clicks **Update**, host-agent runs the changed-only transaction:
    a. Pull each image whose version moved (`malmo-brain`, `malmo-ui`, or both).
    b. **If brain moved:** snapshot the brain's SQLite database to `/var/lib/malmo/brain-snapshots/<old-version>.db`. Cheap (SQLite is one file, single-digit MB at v1 scale).
-   c. Recreate the changed containers in order: brain first (if changed), then UI. Brain restart is fast (~5–10s); UI container restart is faster.
+   c. Recreate the changed containers in order: **UI first (if changed), then the brain**. Brain restart is fast (~5–10s); UI container restart is faster.
+
+   This order used to read "brain first, then UI", and that was wrong — a race, not a preference. The brain runs `docker compose up -d` on the **same** control-plane project at every startup, so a brain started before host-agent's compose finishes runs a second compose on that project at the same time. The two then interleave the rename dance compose does to recreate a service, collide on the backup name, and leave the box with **no `malmo-ui` container at all**; the updater's own health check then cannot resolve the UI and reverts a change that was otherwise fine. Starting the brain last removes the concurrency: host-agent's compose runs while no brain exists, and the brain boots into a stack that already matches the declaration, so its reconcile is a no-op. The # 8.3 handoff makes the two actors agree on *what* should be running; it says nothing about *when* each may act, and concurrent compose on one project is what falls out of that gap. Found by the booted-box proof in `docs/progress/cloud-update-boot-proof.md` — no fake-Docker test could see it.
+
+   **The rule the order rests on: the brain reconciles the control-plane project once, at startup, and never again.** Ordering removes the overlap only while that holds. A UI-only update still runs compose with the brain up, so if the brain's reconcile ever became periodic — a timer, a retry loop, a watchdog — the same two-compose collision comes back, and the recreate order does not fix that shape of it. Two actors share one compose project, and the collision needs **both to run compose at the same moment**. host-agent's compose is safe against a brain that is already up — that brain will not touch the project again — but not against a brain that is itself starting, which is why a brain-changed update starts the brain last. Anything that makes the brain call compose again after startup reopens the window, and closing it again would need a real lock between the two actors, which the # 8.3 handoff does not give.
    d. Wait up to 60s for `/healthz` on the brain and a simple HTTP probe on the UI.
 4. **On health-check failure of either:** host-agent reverts **both** to the previous pair (revert images, restore SQLite snapshot if brain was changed), restarts. Surfaces the failure in the UI with a "rollback succeeded" status.
 5. **On three consecutive failed update attempts to the same manifest:** host-agent pins to the last-known-good pair and stops re-prompting until the release manifest advances past the failing version (or `rollback_to` retracts it).
@@ -136,6 +140,8 @@ If the release manifest's `rollback_to` field retracts the currently-offered ver
 ### Update window
 
 Control-plane updates are admin-triggered, so they apply when the admin clicks. There is no fixed window. Apps and managed-service patches still serialize to the 03:00–04:00 window (#4, #5).
+
+**Hosted is the exception, and it is the same window** (# 8.4, as built): nobody clicks on a box we operate, so the target-driven update waits for 03:00–04:00 local instead of applying the moment it is published.
 
 Impact at apply time depends on what moved:
 
@@ -379,6 +385,8 @@ Why per-box rather than one fleet-wide value, or reusing the signed manifest:
 
 **The box polls the cloud; the cloud never connects in.** The box asks "what should I be running?" on its existing outbound path. No inbound port, no listener, nothing new in the firewall. This matches the rest of the hosted posture — outbound-only is why `malmo-metadata-firewall.service` can be as strict as it is (`ENVIRONMENT.md` # Provisioning, #251).
 
+**As built (#401), the target is fleet-wide, not per box.** The cloud serves one public, unauthenticated answer per channel and the box reads it. That is the deliberate first step of what this section describes, not a divergence: per-box targeting needs the box to identify itself, which needs the credential this section parks as undesigned, while a fleet-wide read needs no credential at all and is already enough for a box to learn its target and apply it. The box's report-back (# 8.4 step 5) and the fleet-side auto-halt (# 8.5) wait for the same credential.
+
 The box authenticates to the cloud with its enrollment credentials. **The concrete auth for this channel is not designed yet** — the enrollment credentials in `seed.json` today are scoped to acme-dns, not to a general box↔cloud API. Parked in `NEXT.md`.
 
 ### 8.2 We push; the tenant is told, not asked
@@ -395,12 +403,27 @@ One actor runs the stream-B control-plane transaction: `host-agent` pulls and re
 
 This has a real cost worth naming: `CONTROL_PLANE.md` locks the **brain** as the launcher of `malmo-ui` and Caddy, so `host-agent` is here reaching past the brain to containers the brain reconciles. Left alone, the brain would come back up and reconcile the UI straight back to the version it knew about.
 
-**The staged control-plane compose file is the handoff point.** `host-agent` writes the new image references into the staged compose (`MALMO_CONTROL_PLANE_DIR`, the same file `lifecycle.EnsureControlPlane` reconciles from) *before* recreating anything. The brain restarts, reads that file, and reconciles to the versions already running. The two actors never disagree because they are reading the same declaration — host-agent is the one that writes it, the brain is the one that maintains it. Rollback writes the old references back the same way.
+**The staged control-plane compose file is the handoff point.** `host-agent` writes the new UI image reference into the staged compose (`MALMO_CONTROL_PLANE_DIR`, the same file `lifecycle.EnsureControlPlane` reconciles from) *before* recreating anything. The brain restarts, reads that file, and reconciles to the version already running. The two actors never disagree because they are reading the same declaration — host-agent is the one that writes it, the brain is the one that maintains it. Rollback writes the old reference back the same way.
+
+**The brain's own reference lives in a second file, because the brain is not in that compose.** It cannot be: a process cannot bring itself up, so `host-agent` launches the brain with `docker run` (`CONTROL_PLANE.md` # host-agent launches the brain container) rather than as a compose service. So the box declares its pair across two files in the same directory, both written before anything is recreated:
+
+- **`compose.yml`** — the UI's image. Read by the **brain**, which reconciles the stack to it.
+- **`images.json`** — a small ledger: the pair the box should be running, the pair it was running before, and when each was applied. Read by **host-agent** at boot to decide which brain to launch, and by the update transaction to know what to revert to.
+
+The ledger is not bookkeeping. `host-agent` leaves an existing brain container alone, so it only chooses an image when there is no container to leave — a first boot, or a box whose brain container was removed or pruned. Without the ledger that second case relaunches the reference baked into the disk image at build time, and an applied update silently goes backwards. The ledger is also where the previous pair is recorded, which is what the revert path and the 7-day retention window (# 3) both read. Every failure to read it falls back to the baked reference rather than refusing to launch: the brain is how anyone finds out what is wrong with the box, so it has to come up.
 
 ### 8.4 Mechanics
 
 1. `host-agent` polls the cloud for this box's target version.
 2. If the target differs from what is running, it applies in the next window — no prompt.
+
+**As built (#401): steps 1 and 2 are one seam, shared with appliance.** `internal/hostagent/updatetarget` defines a single `Source` ("what should this box be running?") with an implementation per profile — hosted reads a configurable update-target URL over the box's existing outbound path, appliance reads the signed release manifest — and **one** loop consumes it: compare, validate, hold for the window, apply. Neither profile has its own copy of the poll, the compare or the apply. The details that matter:
+
+- **The answer names pinned image references, never tags.** `…@sha256:<64 hex>` for both the brain and the UI, resolved once by the sender (see `RELEASE_MANIFEST.md` for the appliance publisher and the cloud's `GET /api/updates/target` for hosted). The box **refuses** an answer that is unpinned, that names only one of the two images, that points at an unexpected repository, or whose carried digest disagrees with its own reference. A refusal is logged and changes nothing — the box stays on its current version, and nothing is pulled.
+- **An unreachable source and a "no target" answer are both no-ops**, and are distinct in the logs. A box never degrades, refuses to serve, or rolls back because it could not ask.
+- **The window is the hosted apply gate**: 03:00–04:00 local by default (`MALMO_UPDATE_WINDOW`), which is why the poll is every 15 minutes rather than hourly — an hourly poll can step over an hour-wide window. Within one window a box makes **one** attempt per target version: a failed update has already reverted the box, and retrying it every 15 minutes would be a loop, so the next attempt is the next night.
+- **The apply goes through host-agent's job lock**, the same one `POST /v1/jobs/system-update` takes, so a target-driven update and an admin-triggered one can never run at once.
+- **Appliance learns but does not apply.** The seam is shared; # 8.2 is not. On appliance the control plane stays admin-prompted (# 3), so the loop stops at "a different control plane is available".
 3. **Stream B:** pull by digest, snapshot the brain's SQLite, write the staged compose, recreate the changed containers, health-check, revert both on failure of either (# 3).
 4. **Stream A:** unchanged from # 1 and # 2 — `unattended-upgrades` security-only plus our apt repo, last in the window, reboot opportunistically. A hosted VM reboot is cheaper than an appliance one: no user is physically waiting, and the window is ours.
 5. The box reports the outcome back to the cloud: version now running, success or failure, and the failure mode if it rolled back.
@@ -434,7 +457,7 @@ Step 5 is what the whole design is for. On appliance our visibility into a bad r
 - **Hosted: the target version is per-box, held by the cloud control plane** (# 8.1). No `stable.json`, no minisign, no hourly manifest poll — that path is appliance-only (`RELEASE_MANIFEST.md`). The box polls outbound; the cloud never connects in.
 - **Hosted: updates are pushed, not prompted** (# 8.2). They apply in the window and the tenant admin is notified afterwards. **The app permission-expansion prompt is the one carve-out** — it still goes to the instance owner, because widening access to a user's data is their decision even on a box we operate.
 - **Hosted and appliance share the apply/rollback mechanics** (# 8). Only the trigger differs. The signed-manifest trigger and the cloud-target trigger are two thin paths onto one transaction.
-- **`host-agent` recreates both `malmo-brain` and `malmo-ui`** as one transaction (# 8.3). It writes the new image references into the staged control-plane compose first, so the brain reconciles to the same versions on restart instead of fighting them back.
+- **`host-agent` recreates both `malmo-brain` and `malmo-ui`** as one transaction (# 8.3). It writes the new image references first, so the brain reconciles to the same versions on restart instead of fighting them back. **Two files carry that declaration**, both in `MALMO_CONTROL_PLANE_DIR`: the staged `compose.yml` holds the UI's reference (the brain reads it), and `images.json` — a ledger of the current pair, the previous pair, and when each was applied — holds the brain's (host-agent reads it at boot). The brain is not in the compose because a process cannot bring itself up; without the ledger, a box that lost its brain container would relaunch the reference baked at build time and silently undo an applied update.
 
 ## Open questions
 

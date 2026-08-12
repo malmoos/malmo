@@ -31,6 +31,15 @@
 #   boot 4  bios        the SAME image re-booted under legacy BIOS (SeaBIOS, no OVMF)
 #                       on its own overlay → proves the dual-firmware image (grub BIOS
 #                       + systemd-boot UEFI) boots where a UEFI-only one hung (#277)
+#   access              own overlay + box-id, seeded with a TEST-PORTAL key the harness
+#                       holds → a real owner session, then the per-app forward-auth
+#                       access modes end-to-end through real Caddy (#308)
+#   update              own overlay + box-id, same test-portal key → a real control-
+#                       plane update (pull by digest from a registry inside the guest,
+#                       brain recreates itself, both files declared), a real
+#                       failed-update-then-revert (#382), and the target-driven path:
+#                       host-agent reads an update-target source and applies it with
+#                       no prompt, refusing an unpinned answer (#401)
 #
 # The positive SSO path (a valid portal assertion → owner auto-create → box session →
 # first-run wizard) needs the portal's private signing key, so it is the joint cloud
@@ -65,6 +74,10 @@ BOX_ID_B=rusty-hawk
 # The access boot (#308) provisions its OWN box on a fresh overlay, seeded with a
 # test-portal key so it can mint a real owner session — separate identity from A/B.
 BOX_ID_ACCESS=owl-harbor
+# The update boot (#382) also provisions its OWN box on a fresh overlay: it is the
+# one scenario that replaces the box's control-plane images, so it must never run
+# over an overlay another boot depends on.
+BOX_ID_UPDATE=pine-otter
 
 # Which boots to run, space-separated (unseeded seeded frozen bios access).
 # Default: all.
@@ -87,8 +100,14 @@ BOX_ID_ACCESS=owl-harbor
 #     is ALSO in the publish gate: the gate it proves is on by default for every
 #     hosted app (DECISIONS.md 2026-07-08), and this is its only real-Caddy net, so a
 #     box that leaks its forward-auth cookie to an app upstream must fail publish.
-# Both are in the gate — see ci-cloud-image.yml.
-BOOTS="${MALMO_CLOUD_BOOTS:-unseeded seeded frozen bios access}"
+#   - `update` (#382, #401) proves the control-plane updater against a real Docker
+#     daemon, a real registry inside the guest, a real brain restart, a real revert,
+#     and the update-target loop that drives all of it on a hosted box. It
+#     REPLACES the box's control-plane images, so its own overlay is not a
+#     convenience — sharing one would leave every later boot on images this scenario
+#     built.
+# All three are in the gate — see ci-cloud-image.yml.
+BOOTS="${MALMO_CLOUD_BOOTS:-unseeded seeded frozen bios access update}"
 should_run() { case " $BOOTS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 # QEMU writes serial logs as root (this script runs under sudo). Resolve the
@@ -299,6 +318,12 @@ run_boot() {
     echo "phase=${phase} verdict: ${v}"
     case "$v" in
         *PASS*)
+            # Print what the guest proved, not only that it passed. A PASS used to
+            # discard every `cloud-assertions:` line (dump_serial runs on failure
+            # only), so a scenario that silently stopped asserting — a section
+            # skipped, a proof that never ran — was indistinguishable from one that
+            # held. These lines are the evidence, and they belong in the CI log.
+            grep -o 'cloud-assertions:.*' "$QEMU_SERIAL" 2>/dev/null | tr -d '\r' | sed 's/^/  /' || true
             # On PASS the guest powers itself off (cloud-assertions.sh ok()); wait
             # for QEMU to exit so the overlay write (box-id + admin) flushes before
             # the next boot reads it. Bounded — kill if the clean shutdown hangs.
@@ -417,6 +442,48 @@ if should_run access; then
         exit 1
     fi
     echo "boot access OK — per-app forward-auth access modes verified end-to-end (restricted gate + owner proxy-through, public, Cookie strip), box_id=${BOX_ID_ACCESS}"
+fi
+
+# --- 9. update boot: the control-plane updater, for real (#382). Its OWN fresh
+# overlay + box-id, seeded with a TEST-PORTAL key like the access boot — the update
+# trigger is admin-only, so the box needs a real owner session before it can be asked
+# to update itself. Inside the guest, cloud-assertions.sh starts a registry on
+# 127.0.0.1:5000, publishes a new brain/UI pair into it by digest, drops both from the
+# local image store, and drives POST /api/v1/system/update. It then does it again with
+# a brain that starts but never serves, to prove the revert. Everything below that
+# endpoint had only ever met a fake Docker.
+if should_run update; then
+    [ -n "$GO" ] && [ -x "$GO" ] || {
+        echo "update boot needs go to mint the owner assertion; none found (\$GO='${GO:-}')" >&2
+        exit 1
+    }
+    mapfile -t update_mint < <(mint_owner_assertion "$BOX_ID_UPDATE") || true
+    UPDATE_KEY="${update_mint[0]:-}"
+    UPDATE_TOKEN="${update_mint[1]:-}"
+    [ -n "$UPDATE_KEY" ] && [ -n "$UPDATE_TOKEN" ] || {
+        echo "update boot: failed to mint the owner assertion (go run ./dev/cloud/mkassertion)" >&2
+        exit 1
+    }
+
+    # Same explicit-globals reasoning as the access boot: OVERLAY and FIRMWARE are
+    # run_boot's globals and the boots above leave them pointing elsewhere.
+    UPDATE_OVERLAY="${RUN_DIR}/overlay-update.qcow2"
+    qemu-img create -f qcow2 -b "$QCOW2" -F qcow2 "$UPDATE_OVERLAY" >/dev/null
+    OVERLAY="$UPDATE_OVERLAY"
+    FIRMWARE=uefi
+
+    # The widest ceiling in the lane, and it is not padding: on top of the shared
+    # prechecks this boot loads and starts a registry, commits and pushes two images,
+    # then runs TWO full update transactions — the second of which spends a 60s health
+    # wait failing on purpose before it reverts. Under CI's TCG-only QEMU that adds up.
+    VERDICT_TIMEOUT=1500
+    if ! run_boot "update" "update" \
+        -smbios "type=11,value=$(seed_cred_keyed "$BOX_ID_UPDATE" "$UPDATE_KEY")" \
+        -smbios "type=11,value=io.systemd.credential.binary:malmo.sso_token=$(printf '%s' "$UPDATE_TOKEN" | base64 -w0)"; then
+        echo "cloud update proof: ${VERDICT}" >&2
+        exit 1
+    fi
+    echo "boot update OK — control-plane update applied and a failed update reverted, both for real (box_id=${BOX_ID_UPDATE})"
 fi
 
 echo "cloud end-to-end: PASS (boots: ${BOOTS})"

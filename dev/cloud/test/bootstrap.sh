@@ -33,7 +33,7 @@ WIRING="${CLOUD_DIR}/mkosi.extra.wiring" # shared production wiring (ExtraTree o
 PKGMNGR="${TEST_DIR}/mkosi.pkgmngr"
 CP_BUNDLE="${REPO_ROOT}/.dev/control-plane"
 CANARY="${WORK}/.cloud-boot-ready"
-CANARY_VERSION="v18"  # bump when staging/mkosi.conf/repart changes require a clean rebuild
+CANARY_VERSION="v19"  # bump when staging/mkosi.conf/repart changes require a clean rebuild
 IMAGE_OUT="${WORK}/malmo-cloud.raw"
 
 if [ "${EUID:-$(id -u)}" -ne 0 ]; then
@@ -164,12 +164,43 @@ stage_build_go "$MKCATALOG_BIN" "${REPO_ROOT}/dev/mkcatalog/"
 # URL makes the background sync fail fast so the pre-seeded cache stands. A real
 # tenant box keeps the production default (pulls from the control plane) — this
 # override exists only in the boot-proof image.
+#
+# MALMO_UPDATE_TARGET_URL is inert here for a sharper reason (os#401): a hosted box
+# applies its control-plane target WITHOUT a prompt, so a boot proof left pointing at
+# the real control plane would, if the boot happened to land inside the 03:00-04:00
+# window, pull the live fleet images and update the box under test mid-assertion.
+# Pointing it at a dead port makes every boot's source unreachable, which the loop
+# treats as a no-op — the behaviour the box owes an offline network anyway. The update
+# boot overrides this with its own drop-in and its own in-guest source.
 cat > "$EXTRA/etc/systemd/system/host-agent.service.d/20-cloud-test-catalog.conf" <<'EOF'
 [Service]
 Environment=MALMO_CATALOG_URL=http://127.0.0.1:9
 Environment=MALMO_CATALOG_CACHE_DIR=/var/lib/malmo/catalog-cache
 Environment=MALMO_OFFLINE_INSTALL=1
+Environment=MALMO_UPDATE_TARGET_URL=http://127.0.0.1:9
 EOF
+
+# --- 3c. registry image for the control-plane update proof (#382) — TEST-LANE ONLY.
+# The update boot needs a real registry to pull FROM: the lane is air-gapped, and a
+# `docker load` + retag would prove recreate and revert while quietly skipping the one
+# step production always takes, `docker pull <ref>@sha256:...` (BUILD.md # 6 — boxes
+# pull by digest). So the guest runs its own registry on 127.0.0.1:5000, pushes the
+# target images into it, drops them from the local image store, and lets the updater
+# pull them back by digest.
+#
+# It lands in a TEST-ONLY path, not /var/lib/malmo/control-plane-images/: the first-boot
+# loader globs that dir and would then load the registry on every boot of every
+# scenario. The update assertion docker-loads this tar itself, so the other four boots
+# never touch it. It is in the test ExtraTree, so the published production image does
+# not carry it (that image is what `make build-cloud-image` lean-checks).
+#
+# Pinned by digest for the same reason whoami is: `registry:2` is a moving tag.
+echo "baking the registry image for the control-plane update proof (#382)..."
+mkdir -p "$EXTRA/var/lib/malmo/test-images"
+REGISTRY_REF="registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
+docker pull "$REGISTRY_REF"
+docker tag "$REGISTRY_REF" registry:2
+docker save registry:2 -o "$EXTRA/var/lib/malmo/test-images/registry.tar"
 
 # --- 4. Docker apt repo for the build's package manager (trixie pocket — the
 # cloud image is Release=trixie). Build-host network only; the VM never apt-installs.
