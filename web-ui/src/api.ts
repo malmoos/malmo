@@ -112,6 +112,7 @@ export type FolderSources = Schemas["FolderSources"];
 export type MailProvider = Schemas["MailProviderDTO"];
 export type MailProviderOption = Schemas["MailProviderOption"];
 export type SystemStorage = Schemas["SystemStorageDTO"];
+export type SystemVersion = Schemas["SystemVersionDTO"];
 export type DiskSpace = Schemas["DiskSpaceDTO"];
 export type AppSecrets = Schemas["AppSecretsDTO"];
 export type AppSecret = Schemas["AppSecretDTO"];
