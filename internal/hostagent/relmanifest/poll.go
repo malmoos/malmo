@@ -184,6 +184,12 @@ func (p *Poller) Poll(ctx context.Context) (Manifest, error) {
 }
 
 func (p *Poller) poll(ctx context.Context) (Manifest, error) {
+	// Run refuses to start without keys, but Poll is exported and callable on
+	// its own. A zero-value Poller must fail the same way a keyless one does —
+	// refusing every manifest — not panic on a nil verifier.
+	if p.Verifier == nil {
+		return Manifest{}, ErrNoKeys
+	}
 	base := strings.TrimSuffix(p.BaseURL, "/")
 	if base == "" {
 		base = DefaultBaseURL

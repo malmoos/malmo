@@ -2,6 +2,7 @@ package relmanifest
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -282,6 +283,14 @@ func TestRunDoesNothingWithNoKeys(t *testing.T) {
 	}
 	if c.calls() != 0 {
 		t.Fatalf("CDN was called %d times by a keyless build", c.calls())
+	}
+}
+
+// Poll is exported, so a zero-value Poller must refuse rather than panic.
+func TestPollWithNoVerifierRefusesRatherThanPanics(t *testing.T) {
+	p := &Poller{StateDir: t.TempDir()}
+	if _, err := p.Poll(context.Background()); !errors.Is(err, ErrNoKeys) {
+		t.Fatalf("err = %v, want ErrNoKeys", err)
 	}
 }
 
