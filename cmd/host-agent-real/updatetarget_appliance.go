@@ -19,6 +19,10 @@ import (
 //
 // The manifest names versions, not pinned references, so this source cannot
 // produce an applicable target today — see updatetarget.ManifestSource.
-func updateTargetSource(p *relmanifest.Poller) (src updatetarget.Source, autoApply bool, name string) {
-	return updatetarget.ManifestSource{Poller: p}, false, string(profile.Appliance)
+//
+// The error is always nil here: the appliance source is the poller this box
+// already runs, so there is no per-box configuration to get wrong. It exists so
+// the hosted half can refuse an unusable update-target credential.
+func updateTargetSource(p *relmanifest.Poller) (src updatetarget.Source, autoApply bool, name string, err error) {
+	return updatetarget.ManifestSource{Poller: p}, false, string(profile.Appliance), nil
 }
