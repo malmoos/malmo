@@ -141,6 +141,8 @@ If the release manifest's `rollback_to` field retracts the currently-offered ver
 
 Control-plane updates are admin-triggered, so they apply when the admin clicks. There is no fixed window. Apps and managed-service patches still serialize to the 03:00–04:00 window (#4, #5).
 
+**Hosted is the exception, and it is the same window** (# 8.4, as built): nobody clicks on a box we operate, so the target-driven update waits for 03:00–04:00 local instead of applying the moment it is published.
+
 Impact at apply time depends on what moved:
 
 - **UI only:** ~1s of dashboard unavailability while the UI container restarts. Open tabs hit the in-tab `426` path on the next request and prompt the user to refresh.
@@ -383,6 +385,8 @@ Why per-box rather than one fleet-wide value, or reusing the signed manifest:
 
 **The box polls the cloud; the cloud never connects in.** The box asks "what should I be running?" on its existing outbound path. No inbound port, no listener, nothing new in the firewall. This matches the rest of the hosted posture — outbound-only is why `malmo-metadata-firewall.service` can be as strict as it is (`ENVIRONMENT.md` # Provisioning, #251).
 
+**As built (#401), the target is fleet-wide, not per box.** The cloud serves one public, unauthenticated answer per channel and the box reads it. That is the deliberate first step of what this section describes, not a divergence: per-box targeting needs the box to identify itself, which needs the credential this section parks as undesigned, while a fleet-wide read needs no credential at all and is already enough for a box to learn its target and apply it. The box's report-back (# 8.4 step 5) and the fleet-side auto-halt (# 8.5) wait for the same credential.
+
 The box authenticates to the cloud with its enrollment credentials. **The concrete auth for this channel is not designed yet** — the enrollment credentials in `seed.json` today are scoped to acme-dns, not to a general box↔cloud API. Parked in `NEXT.md`.
 
 ### 8.2 We push; the tenant is told, not asked
@@ -412,6 +416,14 @@ The ledger is not bookkeeping. `host-agent` leaves an existing brain container a
 
 1. `host-agent` polls the cloud for this box's target version.
 2. If the target differs from what is running, it applies in the next window — no prompt.
+
+**As built (#401): steps 1 and 2 are one seam, shared with appliance.** `internal/hostagent/updatetarget` defines a single `Source` ("what should this box be running?") with an implementation per profile — hosted reads a configurable update-target URL over the box's existing outbound path, appliance reads the signed release manifest — and **one** loop consumes it: compare, validate, hold for the window, apply. Neither profile has its own copy of the poll, the compare or the apply. The details that matter:
+
+- **The answer names pinned image references, never tags.** `…@sha256:<64 hex>` for both the brain and the UI, resolved once by the sender (see `RELEASE_MANIFEST.md` for the appliance publisher and the cloud's `GET /api/updates/target` for hosted). The box **refuses** an answer that is unpinned, that names only one of the two images, that points at an unexpected repository, or whose carried digest disagrees with its own reference. A refusal is logged and changes nothing — the box stays on its current version, and nothing is pulled.
+- **An unreachable source and a "no target" answer are both no-ops**, and are distinct in the logs. A box never degrades, refuses to serve, or rolls back because it could not ask.
+- **The window is the hosted apply gate**: 03:00–04:00 local by default (`MALMO_UPDATE_WINDOW`), which is why the poll is every 15 minutes rather than hourly — an hourly poll can step over an hour-wide window. Within one window a box makes **one** attempt per target version: a failed update has already reverted the box, and retrying it every 15 minutes would be a loop, so the next attempt is the next night.
+- **The apply goes through host-agent's job lock**, the same one `POST /v1/jobs/system-update` takes, so a target-driven update and an admin-triggered one can never run at once.
+- **Appliance learns but does not apply.** The seam is shared; # 8.2 is not. On appliance the control plane stays admin-prompted (# 3), so the loop stops at "a different control plane is available".
 3. **Stream B:** pull by digest, snapshot the brain's SQLite, write the staged compose, recreate the changed containers, health-check, revert both on failure of either (# 3).
 4. **Stream A:** unchanged from # 1 and # 2 — `unattended-upgrades` security-only plus our apt repo, last in the window, reboot opportunistically. A hosted VM reboot is cheaper than an appliance one: no user is physically waiting, and the window is ours.
 5. The box reports the outcome back to the cloud: version now running, success or failure, and the failure mode if it rolled back.

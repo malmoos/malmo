@@ -128,8 +128,17 @@ func main() {
 	// front of anything above. A hosted box has a no-op here — its target comes
 	// from the cloud, not from a signed broadcast (UPDATES.md # 8.1). A build
 	// with no baked signing key does not poll at all.
-	stopPoll := startReleasePoll(brainCfg.DataDir)
+	stopPoll, poller := startReleasePoll(brainCfg.DataDir)
 	defer stopPoll()
+
+	// The update-target loop: what tells this box which control plane to run
+	// (UPDATES.md # 8.4 step 1, internal/hostagent/updatetarget). One loop for
+	// both profiles — only the source and whether the box may apply without a
+	// prompt differ, and both come from the build-tagged updateTargetSource.
+	// Started last for the same reason the poll is: nothing about booting waits
+	// on it.
+	stopTarget := startUpdateTarget(brainCfg, a, poller)
+	defer stopTarget()
 
 	slog.Info("host-agent-real listening", "sock", sockPath)
 	srv := &http.Server{Handler: hostagent.LogRequests(mux)}

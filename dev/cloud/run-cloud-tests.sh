@@ -36,8 +36,10 @@
 #                       access modes end-to-end through real Caddy (#308)
 #   update              own overlay + box-id, same test-portal key → a real control-
 #                       plane update (pull by digest from a registry inside the guest,
-#                       brain recreates itself, both files declared) and a real
-#                       failed-update-then-revert (#382)
+#                       brain recreates itself, both files declared), a real
+#                       failed-update-then-revert (#382), and the target-driven path:
+#                       host-agent reads an update-target source and applies it with
+#                       no prompt, refusing an unpinned answer (#401)
 #
 # The positive SSO path (a valid portal assertion → owner auto-create → box session →
 # first-run wizard) needs the portal's private signing key, so it is the joint cloud
@@ -98,8 +100,9 @@ BOX_ID_UPDATE=pine-otter
 #     is ALSO in the publish gate: the gate it proves is on by default for every
 #     hosted app (DECISIONS.md 2026-07-08), and this is its only real-Caddy net, so a
 #     box that leaks its forward-auth cookie to an app upstream must fail publish.
-#   - `update` (#382) proves the control-plane updater against a real Docker daemon,
-#     a real registry inside the guest, a real brain restart and a real revert. It
+#   - `update` (#382, #401) proves the control-plane updater against a real Docker
+#     daemon, a real registry inside the guest, a real brain restart, a real revert,
+#     and the update-target loop that drives all of it on a hosted box. It
 #     REPLACES the box's control-plane images, so its own overlay is not a
 #     convenience — sharing one would leave every later boot on images this scenario
 #     built.

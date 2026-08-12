@@ -157,20 +157,45 @@ func (a *Agent) startSystemUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	job, err := a.StartUpdate(req.BrainImage, req.UIImage)
+	if err != nil {
+		if errors.Is(err, errJobRunning) {
+			writeErr(w, http.StatusConflict, "job-running", err.Error())
+			return
+		}
+		writeErr(w, http.StatusNotImplemented, "update-unsupported", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, job)
+}
+
+// StartUpdate begins a control-plane update in the background and returns the
+// job record. It is the one way an update starts: the HTTP handler above calls
+// it, and so does the update-target loop that applies what the cloud or the
+// release manifest names (internal/hostagent/updatetarget).
+//
+// Sharing it is the point. The job registry holds **one global lock**, so an
+// admin clicking Update while the box is already applying its target gets a
+// refusal instead of a second concurrent transaction on the same containers. A
+// second entry point that reached past this into cpupdate would step around
+// that lock, and the two updates would fight over the brain container.
+func (a *Agent) StartUpdate(brainRef, uiRef string) (protocol.Job, error) {
+	if a.Updater == nil {
+		return protocol.Job{}, errors.New("this host-agent has no control-plane updater")
+	}
 	job, err := a.jobs.start(protocol.JobKindSystemUpdate)
 	if err != nil {
 		slog.Warn("system-update refused: another job is running", "err", err)
-		writeErr(w, http.StatusConflict, "job-running", err.Error())
-		return
+		return protocol.Job{}, err
 	}
-	slog.Info("system-update started", "step", "accepted", "image", req.BrainImage)
+	slog.Info("system-update started", "step", "accepted", "image", brainRef)
 
-	// The run outlives this request, so it gets its own context — the caller
-	// hanging up must not abort an update that is already changing the box. The
-	// only bound on it is MaxDuration.
-	go a.runSystemUpdate(job.ID, req)
+	// The run outlives its caller, so it gets its own context — a client hanging
+	// up, or a poll tick returning, must not abort an update that is already
+	// changing the box. The only bound on it is MaxDuration.
+	go a.runSystemUpdate(job.ID, protocol.SystemUpdateRequest{BrainImage: brainRef, UIImage: uiRef})
 
-	writeJSON(w, http.StatusAccepted, job)
+	return job, nil
 }
 
 func (a *Agent) runSystemUpdate(id string, req protocol.SystemUpdateRequest) {

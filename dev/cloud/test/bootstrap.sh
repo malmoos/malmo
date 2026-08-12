@@ -164,11 +164,20 @@ stage_build_go "$MKCATALOG_BIN" "${REPO_ROOT}/dev/mkcatalog/"
 # URL makes the background sync fail fast so the pre-seeded cache stands. A real
 # tenant box keeps the production default (pulls from the control plane) — this
 # override exists only in the boot-proof image.
+#
+# MALMO_UPDATE_TARGET_URL is inert here for a sharper reason (os#401): a hosted box
+# applies its control-plane target WITHOUT a prompt, so a boot proof left pointing at
+# the real control plane would, if the boot happened to land inside the 03:00-04:00
+# window, pull the live fleet images and update the box under test mid-assertion.
+# Pointing it at a dead port makes every boot's source unreachable, which the loop
+# treats as a no-op — the behaviour the box owes an offline network anyway. The update
+# boot overrides this with its own drop-in and its own in-guest source.
 cat > "$EXTRA/etc/systemd/system/host-agent.service.d/20-cloud-test-catalog.conf" <<'EOF'
 [Service]
 Environment=MALMO_CATALOG_URL=http://127.0.0.1:9
 Environment=MALMO_CATALOG_CACHE_DIR=/var/lib/malmo/catalog-cache
 Environment=MALMO_OFFLINE_INSTALL=1
+Environment=MALMO_UPDATE_TARGET_URL=http://127.0.0.1:9
 EOF
 
 # --- 3c. registry image for the control-plane update proof (#382) — TEST-LANE ONLY.

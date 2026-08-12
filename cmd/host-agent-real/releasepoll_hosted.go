@@ -2,6 +2,8 @@
 
 package main
 
+import "github.com/malmoos/malmo/internal/hostagent/relmanifest"
+
 // startReleasePoll does nothing on a hosted box.
 //
 // The release manifest is the **appliance** trigger: a signed broadcast that
@@ -12,5 +14,7 @@ package main
 // version it should run.
 //
 // Same name and shape as the appliance version so main.go has no build tags in
-// it (see releasepoll_appliance.go).
-func startReleasePoll(string) func() { return func() {} }
+// it (see releasepoll_appliance.go). The nil poller is what the hosted
+// update-target source ignores — it reads the cloud instead
+// (updatetarget_hosted.go).
+func startReleasePoll(string) (func(), *relmanifest.Poller) { return func() {}, nil }

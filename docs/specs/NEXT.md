@@ -115,6 +115,15 @@ The open question is **what persists and where**, not whether. Options worth wei
 **Context:** `UPDATES.md` # 3 (failure signalling), # 6, # 8.2, # 8.4; `NOTIFICATIONS.md`; `internal/hostagent/jobs.go`; `internal/hostagent/controlplane` (the ledger); `docs/progress/control-plane-update-trigger.md` # Known gaps.
 **Why Tier 2:** nothing is blocked today — the transaction reverts correctly whether or not anyone reads the result — but all three surfaces above are already promised in locked specs, and each would otherwise invent its own answer. Deciding once is cheap; discovering three incompatible records later is not.
 
+### The release manifest names versions, so an appliance can never apply one
+
+The box has one update-target seam (`UPDATES.md` # 8.4, as built in #401) and it only acts on an image reference **pinned to a digest**: a box that resolved a tag itself would be trusting a movable label at update time, and two boxes told "1.4.2" a week apart could end up running different bytes. The signed release manifest names versions — `"brain": "1.4.2"` — with the registry path left implicit (`RELEASE_MANIFEST.md` # What the manifest is), and a version can only be turned into a tag. So the appliance source reads a verified manifest and **refuses it as unpinned**. The seam is real on both profiles; only the hosted one can currently produce a target.
+
+The obvious fix is optional pinned-reference fields (`brain_image`, `ui_image`) alongside the versions — additive, no `manifest_version` bump, since unknown fields are already ignored. What makes it a decision rather than a patch is that `RELEASE_MANIFEST.md` deliberately keeps image URLs out of the file so the registry can move without re-cutting every signed manifest, and a pinned reference bakes the registry host into every one of them. Weigh that against inventing a publisher-side resolve step, or a separate signed digest map beside the manifest.
+
+**Context:** `RELEASE_MANIFEST.md` # What the manifest is; `UPDATES.md` # 8.4; `internal/hostagent/updatetarget/manifest.go`; `docs/progress/update-target-source.md`.
+**Why Tier 2:** nothing is blocked — no signing key is baked into any build, so no appliance verifies a manifest at all today, and the appliance updater is inert for that reason first. It has to be settled with the appliance release pipeline, before the first signed manifest is published, because the schema is easier to widen before there are files in the wild than after.
+
 ---
 
 ## Tier 3 — Defer-able, but pin the shape
