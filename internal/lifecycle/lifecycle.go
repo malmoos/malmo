@@ -323,6 +323,19 @@ func (m *Manager) EnsureIngress(ctx context.Context) {
 // in dev (the brain runs natively, Caddy is a standalone dev container and the
 // UI is Vite) — callers skip this entirely then. compose up -d is idempotent, so
 // a stack that is already up converges to a no-op.
+//
+// STARTUP-ONLY, AND IT MUST STAY THAT WAY. Do not call this on a timer, from a
+// retry loop, or from a watchdog. host-agent's control-plane update runs compose
+// on this SAME project (UPDATES.md # 3 step 3c), and two compose runs on one
+// project interleave the rename dance compose does to recreate a service: they
+// collide on the backup container name and can leave the box with no malmo-ui
+// container at all. That is a real failure, seen on a booted box, not a
+// theoretical one (docs/progress/cloud-update-boot-proof.md). The updater avoids
+// it by starting the brain LAST, so its compose runs while no brain exists — but
+// a UI-only update still runs compose with the brain up, so that ordering is
+// only safe while the brain touches the project exactly once, in its own first
+// seconds. Making this periodic brings the collision back in a shape the
+// ordering does not fix; it would need a real lock between the two actors.
 func (m *Manager) EnsureControlPlane(ctx context.Context, dir string) error {
 	out, err := m.docker.ControlPlaneUp(ctx, dir, controlPlaneProject)
 	if err != nil {

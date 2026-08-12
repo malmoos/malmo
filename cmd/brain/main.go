@@ -144,6 +144,13 @@ func main() {
 	// transport, not part of this stack. In dev controlPlaneDir is empty: Caddy is
 	// a standalone dev container and the UI is Vite, so this whole block is
 	// skipped and startup behaves exactly as before.
+	//
+	// This runs ONCE, here, and a failure is logged and dropped on purpose. It
+	// must not grow a retry loop or a background re-run: host-agent's updater
+	// drives compose on this same project, and a second concurrent compose can
+	// destroy the container it is recreating. See EnsureControlPlane's doc
+	// comment for the failure and UPDATES.md # 3 step 3c for the ordering that
+	// depends on this staying startup-only.
 	if cfg.controlPlaneDir != "" {
 		cpCtx, cpCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		if err := life.EnsureControlPlane(cpCtx, cfg.controlPlaneDir); err != nil {
