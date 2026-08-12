@@ -318,6 +318,12 @@ run_boot() {
     echo "phase=${phase} verdict: ${v}"
     case "$v" in
         *PASS*)
+            # Print what the guest proved, not only that it passed. A PASS used to
+            # discard every `cloud-assertions:` line (dump_serial runs on failure
+            # only), so a scenario that silently stopped asserting — a section
+            # skipped, a proof that never ran — was indistinguishable from one that
+            # held. These lines are the evidence, and they belong in the CI log.
+            grep -o 'cloud-assertions:.*' "$QEMU_SERIAL" 2>/dev/null | tr -d '\r' | sed 's/^/  /' || true
             # On PASS the guest powers itself off (cloud-assertions.sh ok()); wait
             # for QEMU to exit so the overlay write (box-id + admin) flushes before
             # the next boot reads it. Bounded — kill if the clean shutdown hangs.
