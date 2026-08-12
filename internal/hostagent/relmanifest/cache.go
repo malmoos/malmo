@@ -1,52 +1,57 @@
 package relmanifest
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 )
 
-// Cache file names, kept beside each other in the state dir. The signature is
-// stored next to the manifest because the pair is what gets re-verified on the
-// next boot — a cached manifest without its signature would have to be trusted
-// on the say-so of the file system, which is exactly what signing exists to
-// avoid.
-const (
-	manifestFile  = "manifest.json"
-	signatureFile = "manifest.json.minisig"
-)
-
-// ManifestPath is the cached manifest's path inside the state dir
+// cacheFile is the cached manifest's name inside the state dir
 // (RELEASE_MANIFEST.md # Failure modes names /var/lib/malmo/manifest.json).
-func ManifestPath(dir string) string { return filepath.Join(dir, manifestFile) }
+const cacheFile = "manifest.json"
 
-// SignaturePath is the cached signature's path inside the state dir.
-func SignaturePath(dir string) string { return filepath.Join(dir, signatureFile) }
+// ManifestPath is the cached manifest's path inside the state dir.
+func ManifestPath(dir string) string { return filepath.Join(dir, cacheFile) }
 
-// Cached is a manifest read back from disk, together with the raw bytes and the
-// signature it was stored with, so the caller can re-verify before trusting it.
+// cacheEnvelope is what actually sits in that file: the publisher's manifest
+// bytes and the signature over them, together.
+//
+// **One file, not two, and the reason is a crash.** The obvious layout is
+// manifest.json beside manifest.json.minisig, and it cannot keep the promise
+// RELEASE_MANIFEST.md # Failure modes makes — "the previous valid manifest
+// stays in effect". Two files means two renames. Lose power between them and
+// the box comes back with the new manifest beside the old signature: that pair
+// fails verification, and the previous good manifest is already gone, because
+// the first rename overwrote it. The box then has no usable cache at all, which
+// is worse than the failure the spec was describing. One file is one rename, so
+// the box always comes back to a complete pair — the new one or the old one.
+//
+// Manifest holds the publisher's exact bytes, as a JSON string. They are not
+// re-marshalled through our struct: that would drop the unknown fields Parse
+// ignores and reorder the rest, and the signature covers the exact bytes, so
+// the round trip would produce something that can never verify again.
+type cacheEnvelope struct {
+	Manifest  string `json:"manifest"`
+	Signature string `json:"signature"`
+}
+
+// Cached is a manifest read back from disk, with the raw bytes and the
+// signature it was stored with.
 type Cached struct {
 	Manifest  Manifest
 	Raw       []byte
 	Signature string
 }
 
-// Save writes the manifest bytes and its signature to dir.
-//
-// The raw bytes are stored, not a re-marshalled struct. A re-marshal would
-// drop the unknown fields Parse ignores and reorder the rest, and the stored
-// signature covers the publisher's exact bytes — so a round trip through our
-// struct would produce a file that can never verify again.
-//
-// Both files are written atomically. A box that loses power mid-write must come
-// back to either the old pair of files or the new pair, never a manifest from
-// one release beside a signature from another: that combination fails
-// verification and would look like tampering.
+// Save writes the manifest bytes and its signature to dir, as one file in one
+// atomic rename. See cacheEnvelope for why the pair may not be split.
 func Save(dir string, raw []byte, signature string) error {
-	if err := writeFileAtomic(ManifestPath(dir), raw, 0o644); err != nil {
-		return err
+	b, err := json.MarshalIndent(cacheEnvelope{Manifest: string(raw), Signature: signature}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("relmanifest: marshal cache: %w", err)
 	}
-	return writeFileAtomic(SignaturePath(dir), []byte(signature), 0o644)
+	return writeFileAtomic(ManifestPath(dir), append(b, '\n'), 0o644)
 }
 
 // Load reads the cached manifest and re-verifies it with v before returning it.
@@ -61,34 +66,35 @@ func Save(dir string, raw []byte, signature string) error {
 // A missing cache returns ok=false with a nil error: that is the normal state
 // of a box that has never reached the CDN, not a failure.
 func Load(dir string, v *Verifier) (c Cached, ok bool, err error) {
-	raw, err := os.ReadFile(ManifestPath(dir))
+	b, err := os.ReadFile(ManifestPath(dir))
 	if os.IsNotExist(err) {
 		return Cached{}, false, nil
 	}
 	if err != nil {
 		return Cached{}, false, fmt.Errorf("relmanifest: read cached manifest: %w", err)
 	}
-	sig, err := os.ReadFile(SignaturePath(dir))
-	if os.IsNotExist(err) {
-		return Cached{}, false, fmt.Errorf("relmanifest: cached manifest has no signature file")
+	var env cacheEnvelope
+	if err := json.Unmarshal(b, &env); err != nil {
+		return Cached{}, false, fmt.Errorf("relmanifest: parse cache %s: %w", ManifestPath(dir), err)
 	}
-	if err != nil {
-		return Cached{}, false, fmt.Errorf("relmanifest: read cached signature: %w", err)
+	if env.Manifest == "" || env.Signature == "" {
+		return Cached{}, false, fmt.Errorf("relmanifest: cache %s has no manifest/signature pair", ManifestPath(dir))
 	}
-	if _, err := v.Verify(raw, string(sig)); err != nil {
+	raw := []byte(env.Manifest)
+	if _, err := v.Verify(raw, env.Signature); err != nil {
 		return Cached{}, false, fmt.Errorf("relmanifest: cached manifest: %w", err)
 	}
 	m, err := Parse(raw)
 	if err != nil {
 		return Cached{}, false, err
 	}
-	return Cached{Manifest: m, Raw: raw, Signature: string(sig)}, true, nil
+	return Cached{Manifest: m, Raw: raw, Signature: env.Signature}, true, nil
 }
 
 // writeFileAtomic writes data via a same-directory temp file, an fsync, and a
 // rename, then fsyncs the directory so the rename itself survives a power cut.
 // Same ceremony as the control-plane ledger, and for the same reason: this file
-// is read on boot to decide what the box should run.
+// is read at boot to decide what the box should run.
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")

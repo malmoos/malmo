@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -324,6 +325,18 @@ func TestDecideComparesVersionsWithoutTheVPrefix(t *testing.T) {
 	}
 }
 
+// The running pair and the manifest are produced by different code paths, so
+// "already current" is compared as versions, not as strings. A box recording
+// "v1.4.2" for the same release the manifest writes as "1.4.2" must not be
+// offered an update to what it is already running.
+func TestDecideTreatsTheSameVersionWrittenTwoWaysAsCurrent(t *testing.T) {
+	m := Manifest{ManifestVersion: 1, Channel: "stable", Brain: "1.4.2", UI: "1.4.2", MinimumHostAgent: "1.0.0"}
+	box := BoxState{Running: Pair{Brain: "v1.4.2", UI: "v1.4.2"}, HostAgentVersion: "1.0.0"}
+	if got := Decide(m, box); got.Action != ActionNone {
+		t.Fatalf("action = %v, want none — the box already runs this release", got.Action)
+	}
+}
+
 // --- cache ------------------------------------------------------------------
 
 func TestCacheRoundTrip(t *testing.T) {
@@ -345,6 +358,9 @@ func TestCacheRoundTrip(t *testing.T) {
 	if string(c.Raw) != goodManifest {
 		t.Fatal("cached bytes changed on the round trip; the stored signature covers the publisher's exact bytes")
 	}
+	if c.Signature != sig {
+		t.Fatal("cached signature changed on the round trip")
+	}
 }
 
 func TestLoadWithNoCacheIsNotAnError(t *testing.T) {
@@ -364,7 +380,14 @@ func TestLoadRefusesACacheEditedOnDisk(t *testing.T) {
 	if err := Save(dir, []byte(goodManifest), s.sign([]byte(goodManifest), "t", true)); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	edited := strings.Replace(goodManifest, `"brain": "1.4.2"`, `"brain": "6.6.6"`, 1)
+	b, err := os.ReadFile(ManifestPath(dir))
+	if err != nil {
+		t.Fatalf("read cache: %v", err)
+	}
+	edited := strings.Replace(string(b), `1.4.2`, `6.6.6`, 1)
+	if edited == string(b) {
+		t.Fatal("test bug: nothing was edited")
+	}
 	if err := os.WriteFile(ManifestPath(dir), []byte(edited), 0o644); err != nil {
 		t.Fatalf("edit: %v", err)
 	}
@@ -375,15 +398,34 @@ func TestLoadRefusesACacheEditedOnDisk(t *testing.T) {
 
 func TestLoadRefusesACacheWithNoSignature(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(ManifestPath(dir), []byte(goodManifest), 0o644); err != nil {
+	// A file holding only the manifest, with no signature beside it: exactly
+	// what an operator dropping a manifest into place by hand would produce.
+	body := `{"manifest": ` + strconv.Quote(goodManifest) + `}`
+	if err := os.WriteFile(ManifestPath(dir), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	if _, ok, err := Load(dir, NewVerifier()); ok || err == nil {
-		t.Fatal("Load accepted a manifest with no signature file beside it")
+		t.Fatal("Load accepted a cache with no signature in it")
 	}
 }
 
-func TestSaveIsAtomicallyNamed(t *testing.T) {
+func TestLoadRefusesAJunkCacheFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(ManifestPath(dir), []byte("not json at all"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, ok, err := Load(dir, NewVerifier()); ok || err == nil {
+		t.Fatal("Load accepted a cache file that is not a cache")
+	}
+}
+
+// The manifest and its signature share ONE file so that saving them is ONE
+// rename. Two files would mean two renames, and a power cut between them leaves
+// the new manifest beside the old signature — a pair that cannot verify, with
+// the previous good manifest already overwritten. RELEASE_MANIFEST.md
+// # Failure modes promises the previous valid manifest stays in effect, and a
+// box with no usable cache at all does not keep that promise.
+func TestSaveWritesOneFileSoThePairCannotBeSplit(t *testing.T) {
 	dir := t.TempDir()
 	s := newSigner(t)
 	if err := Save(dir, []byte(goodManifest), s.sign([]byte(goodManifest), "t", true)); err != nil {
@@ -397,18 +439,32 @@ func TestSaveIsAtomicallyNamed(t *testing.T) {
 	for _, e := range entries {
 		names = append(names, e.Name())
 	}
-	if len(names) != 2 {
-		t.Fatalf("files = %v, want exactly the manifest and its signature (a leftover temp file means a failed write left rubbish behind)", names)
+	if len(names) != 1 || names[0] != filepath.Base(ManifestPath(dir)) {
+		t.Fatalf("files = %v, want exactly [%s] — a second file is a second rename, and a leftover temp file is a failed write leaving rubbish behind",
+			names, filepath.Base(ManifestPath(dir)))
 	}
-	for _, want := range []string{filepath.Base(ManifestPath(dir)), filepath.Base(SignaturePath(dir))} {
-		found := false
-		for _, n := range names {
-			if n == want {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("missing %s (have %v)", want, names)
-		}
+}
+
+// A second Save replaces the whole pair. The point is that the file is never a
+// mix of two releases: after saving generation 2, nothing of generation 1 is
+// readable, and generation 2 verifies on its own.
+func TestSaveReplacesTheWholePair(t *testing.T) {
+	dir := t.TempDir()
+	s := newSigner(t)
+	v := NewVerifier(s.publicKey(t))
+	if err := Save(dir, []byte(goodManifest), s.sign([]byte(goodManifest), "t", true)); err != nil {
+		t.Fatalf("Save gen1: %v", err)
+	}
+	gen2 := strings.Replace(goodManifest, `"brain": "1.4.2"`, `"brain": "1.5.0"`, 1)
+	gen2 = strings.Replace(gen2, `"ui": "1.4.2"`, `"ui": "1.5.0"`, 1)
+	if err := Save(dir, []byte(gen2), s.sign([]byte(gen2), "t", true)); err != nil {
+		t.Fatalf("Save gen2: %v", err)
+	}
+	c, ok, err := Load(dir, v)
+	if err != nil || !ok {
+		t.Fatalf("Load: ok=%v err=%v", ok, err)
+	}
+	if c.Manifest.Brain != "1.5.0" || c.Manifest.UI != "1.5.0" {
+		t.Fatalf("loaded %+v, want the second generation", c.Manifest.Pair())
 	}
 }

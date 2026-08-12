@@ -156,18 +156,39 @@ func Decide(m Manifest, box BoxState) Decision {
 		// Only a box that actually applied the retracted pair needs to move.
 		// A box that never took it simply never sees the offer — the prompt is
 		// retracted by the target below being what it already runs.
-		if box.Running == m.Pair() {
+		if samePair(box.Running, m.Pair()) {
 			return Decision{Action: ActionRollback, Target: *r}
 		}
 		return Decision{Action: ActionNone}
 	}
-	if box.Running == m.Pair() {
+	if samePair(box.Running, m.Pair()) {
 		return Decision{Action: ActionNone}
 	}
 	if !hostAgentSatisfies(box.HostAgentVersion, m.MinimumHostAgent) {
 		return Decision{Action: ActionHoldHostAgentTooOld}
 	}
 	return Decision{Action: ActionUpdate, Target: m.Pair()}
+}
+
+// samePair reports whether the box is already running what the manifest names.
+//
+// Compared as versions, not as strings, so this side matches the host-agent
+// gate below. The two sides of the comparison are produced by different code
+// paths, and a difference in how a version is written ("1.4.2" against "v1.4.2")
+// would otherwise read as "a new version is available" and offer the box an
+// update to what it already runs.
+func samePair(a, b Pair) bool {
+	return sameVersion(a.Brain, b.Brain) && sameVersion(a.UI, b.UI)
+}
+
+// sameVersion compares two versions, falling back to exact string equality when
+// either will not parse — an unparseable version cannot be compared, and
+// treating it as equal to everything would silence the update prompt.
+func sameVersion(a, b string) bool {
+	if !validVersion(a) || !validVersion(b) {
+		return a == b
+	}
+	return semver.Compare(canonical(a), canonical(b)) == 0
 }
 
 // hostAgentSatisfies reports whether have >= want.

@@ -31,11 +31,12 @@ New `internal/hostagent/relmanifest`, three files, four jobs.
 
 **An unreadable version fails closed.** A host-agent version that will not parse cannot be compared, and calling it "new enough" would let the one safety belt here open itself whenever the string is malformed. (A dev build stamps `dev`, so this is not hypothetical.)
 
-**Cache** (`cache.go`) — the manifest and its signature, written atomically beside each other, the same temp-fsync-rename-fsync ceremony the control-plane ledger uses and for the same reason: both are read at boot to decide what the box runs.
+**Cache** (`cache.go`) — the manifest and its signature in **one** file at `/var/lib/malmo/manifest.json`, written with the same temp-fsync-rename-fsync ceremony the control-plane ledger uses.
 
-Two decisions worth naming:
+Three decisions worth naming:
 
-- **The raw bytes are stored, not a re-marshalled struct.** A re-marshal would drop the unknown fields `Parse` ignores and reorder the rest, and the signature covers the publisher's exact bytes — so the round trip would produce a file that can never verify again.
+- **One file, not two, and review is what found this.** The first version wrote `manifest.json` beside `manifest.json.minisig`, each write atomic on its own. That cannot keep the promise `RELEASE_MANIFEST.md` # Failure modes makes — "the previous valid manifest stays in effect". Two files means two renames: lose power between them and the box comes back with the new manifest beside the old signature, a pair that fails verification, **and the previous good manifest is already gone** because the first rename overwrote it. The box would have no usable cache at all, which is worse than the failure the spec was describing. One file is one rename, so the box always comes back to a complete pair — the new one or the old one.
+- **The raw bytes are stored, not a re-marshalled struct.** A re-marshal would drop the unknown fields `Parse` ignores and reorder the rest, and the signature covers the publisher's exact bytes — so the round trip would produce something that can never verify again. The publisher's bytes live in the file as a JSON string.
 - **`Load` re-verifies before returning.** The cache is what an offline box acts on, so trusting it unchecked would make the local file system a way around the signature: anything that can write `/var/lib/malmo` could then choose the version the box runs.
 
 ## Testing
@@ -48,6 +49,7 @@ Four mutation checks, each done by editing the code and restoring it:
 2. Apply the prehash to the wrong algorithm mode ⇒ the both-modes test fails.
 3. Treat an unreadable host-agent version as new enough ⇒ the fail-closed case in `TestDecide` fails.
 4. Skip the re-verify in `Load` ⇒ `TestLoadRefusesACacheEditedOnDisk` fails.
+5. Compare the running pair as strings instead of as versions ⇒ the "same version written two ways" test fails.
 
 ## Known gaps & deviations
 
@@ -55,6 +57,8 @@ Four mutation checks, each done by editing the code and restoring it:
 - **No box has a key**, so on a real appliance every manifest is refused with `ErrNoKeys` and the appliance updater is inert. That is deliberate and safe, but it means this package is proven against test-generated keys only.
 - **No interop test against the real `minisign` tool.** The test signer implements the format from the spec; a genuine `minisign -S` file has never been fed to it. Worth adding when a signing key exists, or as an optional test gated on the binary being installed.
 - **The version → image-ref step is undecided and out of scope.** The manifest names versions, the transaction pulls **by digest** (`BUILD.md` # 6), and the published ghcr packages are **still private** — `BUILD.md` # 6 records that flipping them to public is a manual org-admin action that has not happened, so no box can pull them anonymously today. Resolving a version to a digest needs either a registry lookup at update time or digests in the manifest. That is a maintainer decision, not something to settle inside this package.
+- **`writeFileAtomic` is duplicated.** `internal/hostagent/controlplane` has the same helper, byte for byte. Three consumers now share the logic, which is the point at which extracting it (say `internal/atomicfile`) stops being premature. Left out of this change to keep the diff to one package.
+- **`controlplane` has the two-file version of the same crash problem.** It writes `compose.yml` and `images.json` as separate atomic writes, so a power cut between them leaves the declaration half-updated. That is merged code and a separate fix, recorded here because this review is what surfaced the shape of it.
 - **The three-strikes pin** (`UPDATES.md` # 3 step 5) is not here; it belongs with the trigger that retries.
 - **`Decide` has no notion of "I already refused this one".** A box that fails an update three times still gets `update` from this function; the counter that stops re-offering lives with the trigger.
 
