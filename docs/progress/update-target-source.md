@@ -30,6 +30,15 @@ Closes #401. [control-plane-update-transaction.md](control-plane-update-transact
 
 **Checked against the live control plane**, not only against fakes: `HTTPSource` with its production default URL was run against `https://malmo.network/api/updates/target`, parsed the real v0.6.0 answer, and passed `Validate` with the default repositories. That is the whole cross-repo contract — field names, digest shape, repository — verified against the deployed sender rather than a fixture copied from it. The scratch test was removed afterwards.
 
+**Proven on a booted box**, with the lane's own words:
+
+```
+cloud-assertions: update-target — REFUSAL OK (a tagged answer was refused, box unchanged)
+cloud-assertions: update-target — APPLY OK (the box read its target, pulled the pinned pair and applied it with no prompt)
+```
+
+Getting those two lines out took a fix to the lane itself, and it is worth recording why. A passing boot printed **only** the verdict: the guest's per-step `cloud-assertions:` lines go to stdout, systemd routes that to the journal, the journal dies with the VM, and `dump_serial` runs on failure only. So a PASS said a scenario held and nothing about which proofs ran — a section that quietly stopped asserting was indistinguishable from one that passed. The test-only unit now sends the script's output to the serial console (`StandardOutput=journal+console`) and the harness echoes those lines on PASS. The first attempt at this was inert — it grepped a serial log the lines never reached — which is exactly the failure it now prevents.
+
 **The booted-box lane now drives this loop, not just the admin trigger** (`dev/cloud/cloud-assertions.sh`, the `update` boot). After the existing happy-path and revert proofs it publishes a gen-3 pair to the in-guest registry, serves an update-target answer from a file server on the loopback, and restarts host-agent to force a tick. Two things are asserted: an answer naming **tags** is refused with the brain container untouched, and a pinned answer is pulled and applied with no admin in the loop — ledger, container generation label, and an authenticated request afterwards. The test image also points `MALMO_UPDATE_TARGET_URL` at a dead port for every boot, so no scenario can quietly pull the live fleet images if a CI run happens to land inside the window.
 
 `make check` cannot run whole locally here (`libpam0g-dev` cgo fails in this environment on a pre-existing build error unrelated to the change); `gofmt`, `go vet` and the full suite were run with cgo disabled, both build tags of `cmd/host-agent-real` compile, and CI runs the real gate.
