@@ -18,16 +18,43 @@ Net: a provisioned box logs both milestones, binds `:443`, and serves every `<sl
 
 ## The boot-proof lane
 
-`dev/cloud/run-cloud-tests.sh` (`make test-cloud-qemu`) boots the real production image under QEMU, **air-gapped** (`restrict=on` — the seed arrives over SMBIOS, never the network), and greps a serial-console verdict written by `dev/cloud/cloud-assertions.sh`. Three UEFI scenarios over one persisted overlay, plus a fourth legacy-BIOS boot on its own overlay:
+`dev/cloud/run-cloud-tests.sh` (`make test-cloud-qemu`) boots the real production image under QEMU, **air-gapped** (`restrict=on` — the seed arrives over SMBIOS, never the network), and greps a serial-console verdict written by `dev/cloud/cloud-assertions.sh`. Three UEFI scenarios over one persisted overlay, plus three boots that each get their own fresh overlay — the legacy-BIOS smoke boot, and the two that change the box (`access`, `update`):
 
 | Scenario | What it asserts (box-facing) |
 |----------|------------------------------|
 | `unseeded` | No seed → `GET /_malmo/sso` ⇒ 503 (gate armed, closed); `POST /setup` ⇒ 403 (disabled on hosted — the owner bootstraps via SSO, not a secret). |
 | `seeded` | Seed with a **complete** enrollment → brain logs `provisioning seed ingested`; a bad token on `/_malmo/sso` ⇒ 401 (verifier armed); **`:443` binds** and the brain logs `caddy: wildcard TLS configured`. |
 | `frozen` | A *different* seed re-delivered on a later boot is ignored; the box still serves under the original box-id and does **not** re-ingest. |
+| `access` | A valid owner assertion (minted by the harness, which holds the test-portal private key) → owner session → an app installed air-gapped, then the per-app forward-auth access modes end-to-end through real Caddy: restricted gates an anonymous request and proxies the owner through, public is reachable with no session, and `malmo_forward_auth` never reaches the app upstream in either mode (#308/#335). Own fresh overlay + box-id. |
+| `update` | A **real control-plane update and a real failed-update-then-revert** (#382) — see the section below. Own fresh overlay + box-id; the only scenario that replaces the box's own images. |
 | `bios` | The **same image booted under legacy BIOS** (SeaBIOS — QEMU's default firmware, no OVMF pflash) instead of UEFI → the control plane comes up and the SSO gate is armed. Proves the dual-firmware image (systemd-boot UEFI + GRUB BIOS, `ENVIRONMENT.md` # Boot) boots where a UEFI-only image hung on Hetzner CX/Intel (#277). Runs on its own fresh overlay, so it's independent of the provisioning sequence above. |
 
 **Air-gapped means config-apply, not a real cert.** The lane cannot reach acme-dns or Let's Encrypt, so the `seeded` scenario proves the brain *applies* the issuer + binds `:443`, not that a cert was obtained. Real DNS-01 issuance + a live `*.<box-id>` cert are verified on a real provider box on a real network — deliberately outside this lane (the whole "config that looks right but never issues" class is invisible air-gapped; the `certificates.automate` unit test in `internal/caddy/caddy_test.go` is the closest static guard).
+
+## The `update` boot (the control-plane updater proof)
+
+The `update` scenario is the only place the updater meets a real Docker daemon, a real registry, a real brain restart and a real revert. Everything under `POST /api/v1/system/update` — the ledger, the transaction, the trigger — is otherwise proven against a fake Docker. Read `../progress/cloud-update-boot-proof.md` for why it is shaped this way.
+
+What the boot does, in order:
+
+1. **Owner session.** The boot is seeded with a test-portal key and given a signed owner assertion over SMBIOS, like the `access` boot. The update trigger is admin-only, so without this the box cannot be asked to update itself.
+2. **A registry inside the guest.** `docker load` of a test-only tarball (`/var/lib/malmo/test-images/registry.tar`), then a container on `127.0.0.1:5000`. Docker treats a localhost registry as insecure by default, so no daemon config is involved.
+3. **A new pair, published by digest.** `docker commit` derives a new brain and a new UI from the images the box is running, adding one marker label. Both are pushed and then **removed from the local image store**, and their absence is asserted — that is what makes the updater's pull a real fetch instead of a no-op.
+4. **The happy path.** `POST /api/v1/system/update` with both refs, then poll the job. Asserted: the job completes with both `*_changed` true and `reverted` false; the brain **container id changed**; the running brain is on the target ref and carries the marker label; `images.json` names the new pair and records the previous one; `compose.yml` pins the new UI ref; `/healthz` answers on the new container's own address; `GET /api/v1/system/version` reports the new UI image.
+5. **The revert.** A second update points at a brain that starts, truncates `/var/lib/malmo/state/malmo.db`, drops a marker file and never serves. Asserted: the job is `failed` with `failure_mode: health` and `reverted: true` and no `revert_error`; the marker file exists (so the bad brain really ran); the brain is back on the previous good ref and the ledger no longer names the failed one; `malmo.db` is a valid SQLite file again; and the box answers an authenticated `/api/v1/me` with the **same** session cookie.
+
+Reading a red one:
+
+| Symptom | Most likely cause | Where to look |
+|---------|-------------------|---------------|
+| `in-guest registry never answered on 127.0.0.1:5000` | The registry tarball is missing from the image, or the container could not start. | Was the image rebuilt after `dev/cloud/test/bootstrap.sh` changed? The canary (`.dev/cloud-boot/.cloud-boot-ready`) gates the rebuild — bump `CANARY_VERSION` when staging changes. |
+| `… is still in the local image store before the update` | The post-push `docker rmi` did not remove the image. The scenario refuses to continue, because the pull it is about to prove would not be a real fetch. | Something else references the image — check `docker ps -a` in the serial diag. |
+| `the brain container was NEVER recreated (same id …)` | The update reported success without replacing the brain. This is the single most important assertion in the boot. | host-agent's journal lines in the diag block (`system-update`, `control plane`), then `images.json`. |
+| job never reaches a terminal state | The box did not come back after the brain was recreated — most likely Caddy cannot reach the new brain, or the brain did not re-install its routes. | The diag block's `docker ps -a` and brain log tail; the job record lives in host-agent, so `journalctl -u host-agent` is the ground truth. |
+| job fails with `resolve ui address: docker inspect malmo-ui: exit status 1` | **Two `docker compose up` running on the `malmo-control-plane` project at once**, which can leave the box with no `malmo-ui` container. This is what the first run of this boot found (see `../progress/cloud-update-boot-proof.md`). The fix was to recreate the UI **before** starting the brain, so host-agent's compose runs while no brain exists. | The brain's `control-plane stack up failed; continuing` line in the serial log — a `Conflict. The container name "…_malmo-ui" is already in use` there is the signature. Then check the recreate order in `internal/hostagent/cpupdate/update.go`. |
+| revert asserted but `malmo.db` still broken | `restoreBrainDB` did not run or restored nothing. | The `brain snapshots` listing in the diag block: an empty snapshot dir means the snapshot step, not the restore, is the failure. |
+
+The diag block dumped on failure carries `images.json`, the compose image lines, the snapshot dir listing and host-agent's update log lines, so a red update boot should be diagnosable from the serial log alone.
 
 ## When it's red: where to look
 
@@ -44,8 +71,8 @@ A **broken image build** presents as several of these at once (e.g. `:443` refus
 
 ## How to run it
 
-- **CI (preferred — no local root/KVM, no image push):** `gh workflow run "CI / Cloud image" --ref <branch> -f publish=false`. Builds the image, then runs the `unseeded seeded bios` boots under QEMU (the `bios` boot re-boots under legacy BIOS, #277). `publish=true` (the default) additionally uploads the built image to the provider — only do that deliberately. Runtime ~10 min.
-- **Local:** `sudo make test-cloud-qemu` (needs root + `/dev/kvm`). Scope boots with `MALMO_CLOUD_BOOTS="seeded"` to reproduce the wildcard path alone, `"bios"` to reproduce the legacy-BIOS boot alone, or the default `"unseeded seeded frozen bios"` for the full run.
+- **CI (preferred — no local root/KVM, no image push):** `gh workflow run "CI / Cloud image" --ref <branch> -f publish=false`. Builds the image, then runs the `unseeded seeded bios access update` boots under QEMU. `publish=true` (the default) additionally uploads the built image to the provider — only do that deliberately. Runtime ~10 min for the build, plus the boots (the `update` boot is the longest — it runs two full update transactions, one of which spends a 60s health wait failing on purpose).
+- **Local:** `sudo make test-cloud-qemu` (needs root + `/dev/kvm`). Scope boots with `MALMO_CLOUD_BOOTS="seeded"` to reproduce the wildcard path alone, `"bios"` for the legacy-BIOS boot alone, `"update"` for the updater proof alone, or the default `"unseeded seeded frozen bios access update"` for the full run.
 
 ## Related history (frozen snapshots — background, not the current view)
 

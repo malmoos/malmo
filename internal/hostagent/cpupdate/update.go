@@ -17,7 +17,10 @@
 //  3. Write the declaration — ledger + staged compose — **before** recreating
 //     anything. This is the # 8.3 handoff: the brain comes back up and
 //     reconciles to the refs already running instead of fighting them back.
-//  4. Recreate only what moved.
+//  4. Recreate only what moved — **compose first, brain last**. The brain runs
+//     the same compose project at startup, so a brain started before the
+//     compose finishes runs a second, concurrent `compose up` on it. See
+//     recreate() for what that does to the box.
 //  5. Health-check the brain (/healthz) and the UI.
 //  6. On any failure from step 2 on: revert **both** refs, restore the
 //     snapshot, put the containers back, and report which step failed.
@@ -274,7 +277,31 @@ func declare(o Options, l controlplane.Ledger, res Result) error {
 // recreate replaces the containers whose refs moved. The brain is recreated
 // from the same spec brainlaunch uses at boot, so the only difference between
 // an updated brain and a freshly booted one is the image.
+//
+// **The compose stack goes up first, and the brain is started last.** UPDATES.md
+// # 3 step 3c used to say the opposite ("brain first, then UI"), and that order
+// is a race: the brain runs `docker compose up -d` on this same
+// `malmo-control-plane` project at every startup (lifecycle.EnsureControlPlane),
+// so a brain started before ComposeUp boots straight into the compose run
+// host-agent is in the middle of. Two composes on one project then interleave
+// the rename dance compose does to recreate a service, they collide on the
+// backup name, and the box is left with **no container named `malmo-ui` at
+// all** — after which this transaction's own health check cannot resolve the
+// UI's address, reports the update unhealthy, and reverts a change that was
+// otherwise fine. That is not a theory: it is what the booted-box lane saw on
+// its first run (docs/progress/cloud-update-boot-proof.md).
+//
+// Starting the brain last removes the concurrency instead of narrowing it: the
+// compose runs while no brain exists, and the brain then boots into a stack that
+// already matches the declaration, so its own reconcile is a no-op. It costs a
+// few extra seconds of API downtime, which is inside the coordinated-ship notice
+// the spec already promises.
 func recreate(ctx context.Context, d Docker, o Options, target controlplane.Pair, res Result) error {
+	if res.UIChanged {
+		if out, err := d.ComposeUp(ctx, o.ControlPlaneDir, controlPlaneProject); err != nil {
+			return fmt.Errorf("control-plane compose up: %w\n%s", err, out)
+		}
+	}
 	if res.BrainChanged {
 		// Idempotent by design: step 2 already removed this container to take
 		// the snapshot, and RemoveContainer treats an absent container as
@@ -288,11 +315,6 @@ func recreate(ctx context.Context, d Docker, o Options, target controlplane.Pair
 		}
 		if err := d.Run(ctx, brainSpec(o, target.Brain)); err != nil {
 			return fmt.Errorf("run brain on %s: %w", target.Brain, err)
-		}
-	}
-	if res.UIChanged {
-		if out, err := d.ComposeUp(ctx, o.ControlPlaneDir, controlPlaneProject); err != nil {
-			return fmt.Errorf("control-plane compose up: %w\n%s", err, out)
 		}
 	}
 	return nil
@@ -356,6 +378,16 @@ func revert(ctx context.Context, d Docker, p Prober, o Options, before controlpl
 		r.RevertErr = fmt.Errorf("restore declaration: %w", err)
 		return r
 	}
+	// Same ordering as the apply, and for the same reason: the compose stack
+	// goes back first and the brain is started last, so host-agent's compose can
+	// never run at the same time as the brain's own startup reconcile of the
+	// same project. The two paths are kept in one order deliberately — this
+	// package has already been bitten once by a fix applied to the apply path
+	// and missed on the recovery path (see detached()).
+	//
+	// The brain container is removed BEFORE the compose runs, not after: the
+	// database restore below needs the brain stopped, and a brain left running
+	// during the compose is the very concurrency this order exists to remove.
 	if res.BrainChanged {
 		if err := d.RemoveContainer(ctx, o.BrainCfg.ContainerName); err != nil {
 			r.RevertErr = fmt.Errorf("remove brain container: %w", err)
@@ -368,14 +400,16 @@ func revert(ctx context.Context, d Docker, p Prober, o Options, before controlpl
 			r.RevertErr = fmt.Errorf("restore brain database: %w", err)
 			return r
 		}
-		if err := d.Run(ctx, brainSpec(o, before.Current.Brain)); err != nil {
-			r.RevertErr = fmt.Errorf("run brain on %s: %w", before.Current.Brain, err)
-			return r
-		}
 	}
 	if res.UIChanged {
 		if out, err := d.ComposeUp(ctx, o.ControlPlaneDir, controlPlaneProject); err != nil {
 			r.RevertErr = fmt.Errorf("control-plane compose up: %w\n%s", err, out)
+			return r
+		}
+	}
+	if res.BrainChanged {
+		if err := d.Run(ctx, brainSpec(o, before.Current.Brain)); err != nil {
+			r.RevertErr = fmt.Errorf("run brain on %s: %w", before.Current.Brain, err)
 			return r
 		}
 	}
