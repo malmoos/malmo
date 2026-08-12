@@ -21,15 +21,17 @@ import (
 // both profiles. A second copy of any of it, per profile, is what UPDATES.md # 8
 // means by "we only build it once".
 func startUpdateTarget(brainCfg brainlaunch.Config, a *hostagent.Agent, poller *relmanifest.Poller) func() {
-	src, autoApply, name := updateTargetSource(poller)
-
-	window, err := updatetarget.ParseWindow(os.Getenv("MALMO_UPDATE_WINDOW"))
+	src, autoApply, name, err := updateTargetSource(poller)
 	if err != nil {
-		// A box with a mistyped window must not lose its updates, and must not
-		// silently use a window nobody chose either: say so and take the default.
-		slog.Warn("update window is not readable; using the default", "err", err)
-		window = updatetarget.DefaultWindow
+		// Refuse; do not fall back. The box was pointed somewhere deliberately
+		// and we cannot honour it, so running the loop against the fleet default
+		// would quietly move a pinned box onto stable (updateconfig.go). No loop
+		// means the box keeps serving whatever it is already running.
+		slog.Error("update target is not usable; this box will not update itself", "err", err)
+		return func() {}
 	}
+
+	window, windowFrom := updateWindow()
 
 	loop := &updatetarget.Loop{
 		Source: src,
@@ -48,7 +50,7 @@ func startUpdateTarget(brainCfg brainlaunch.Config, a *hostagent.Agent, poller *
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	go loop.Run(ctx)
-	slog.Info("update target loop started", "profile", name, "window", window.String())
+	slog.Info("update target loop started", "profile", name, "window", window.String(), "from", windowFrom)
 	return cancel
 }
 
