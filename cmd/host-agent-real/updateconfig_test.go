@@ -29,6 +29,22 @@ func noCreds(t *testing.T) {
 	t.Setenv(credentialsDirEnv, "")
 }
 
+// unreadableCred makes the named credential exist but fail to read: the entry is
+// there, so it is not the absent case, and opening it cannot produce its bytes.
+//
+// A directory is what stands in for the unreadable file. Mode 0o000 would be the
+// obvious choice and is the wrong one: root ignores it, so the test would quietly
+// assert nothing whenever the suite runs as root. os.ReadFile on a directory
+// fails for every user.
+func unreadableCred(t *testing.T, name string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, name), 0o700); err != nil {
+		t.Fatalf("make unreadable credential %s: %v", name, err)
+	}
+	t.Setenv(credentialsDirEnv, dir)
+}
+
 func TestReadCredential(t *testing.T) {
 	t.Run("no credentials directory", func(t *testing.T) {
 		noCreds(t)
@@ -54,6 +70,20 @@ func TestReadCredential(t *testing.T) {
 		}
 		if !ok || v != "https://example.test/target" {
 			t.Fatalf("got (%q, %v), want (%q, true)", v, ok, "https://example.test/target")
+		}
+	})
+
+	// Present but unreadable is an error, not the absent case. The caller asked
+	// for something that is there and did not get it, and the two settings then
+	// make opposite calls about what to do with that.
+	t.Run("present but unreadable", func(t *testing.T) {
+		unreadableCred(t, credUpdateTargetURL)
+		v, ok, err := readCredential(credUpdateTargetURL)
+		if err == nil {
+			t.Fatalf("got (%q, %v, nil), want an error", v, ok)
+		}
+		if ok {
+			t.Fatal("an unreadable credential must not report ok")
 		}
 	})
 }
@@ -129,6 +159,21 @@ func TestUpdateTargetURL(t *testing.T) {
 			}
 		})
 	}
+
+	// An unreadable credential is refused for the same reason an unparseable one
+	// is: the box was pointed somewhere and we cannot honour it, so reading the
+	// fleet endpoint instead would move a pinned box onto stable.
+	t.Run("refuses an unreadable credential", func(t *testing.T) {
+		unreadableCred(t, credUpdateTargetURL)
+		t.Setenv(envUpdateTargetURL, env)
+		target, _, err := updateTargetURL()
+		if err == nil {
+			t.Fatal("an unreadable credential must be refused, not resolved")
+		}
+		if target != "" {
+			t.Fatalf("an unreadable credential fell back to %q; it must fall back to nothing", target)
+		}
+	})
 }
 
 func TestUpdateWindow(t *testing.T) {
@@ -170,6 +215,19 @@ func TestUpdateWindow(t *testing.T) {
 		w, from := updateWindow()
 		if w != updatetarget.DefaultWindow || from != fromDefault {
 			t.Fatalf("got (%v, %q), want (%v, %q)", w, from, updatetarget.DefaultWindow, fromDefault)
+		}
+	})
+
+	// The other half of the asymmetry the target URL sets up: the window does not
+	// refuse an unreadable credential, it warns and carries on down the chain, so
+	// the env var below it is still heard. Losing a box's updates over a clock
+	// reading it could not read would be the worse trade.
+	t.Run("unreadable credential defers to the env var", func(t *testing.T) {
+		unreadableCred(t, credUpdateWindow)
+		t.Setenv(envUpdateWindow, "05:00-06:00")
+		w, from := updateWindow()
+		if w != envWindow || from != fromEnv {
+			t.Fatalf("got (%v, %q), want (%v, %q)", w, from, envWindow, fromEnv)
 		}
 	})
 
