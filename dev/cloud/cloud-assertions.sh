@@ -29,7 +29,10 @@
 #                      access modes end-to-end through real Caddy (#308)
 #     update           a real control-plane update and a real failed-update-then-
 #                      revert, pulled by digest from a registry inside the guest
-#                      (#382). The only scenario that changes the box's images.
+#                      (#382), then the same update again driven by an update-target
+#                      source rather than an admin (#401) — including a refusal of an
+#                      answer that is not pinned to a digest. The only scenario that
+#                      changes the box's images.
 #
 # On PASS the script powers the box off cleanly (the serial-only analogue of the
 # medium lane's SSH `systemctl poweroff`) so the brain's SQLite box-id write flushes
@@ -959,6 +962,104 @@ update)
     spa_after="$(http_status / "$DASH_HOST" 2>/dev/null || true)"
     grep -q ' 200' <<<"$spa_after" || fail "update: after the revert the dashboard does not answer: status='$spa_after'"
     echo "cloud-assertions: update — REVERT OK (health failure detected, both refs and the SQLite snapshot restored, box serving on the old pair with the same session)"
+
+    # 6. THE TARGET-DRIVEN PATH (os#401). Everything above was driven by an admin
+    #    POSTing two refs. On a hosted box nobody types them: host-agent reads an
+    #    update-target source and applies what it is handed, in the update window,
+    #    with no prompt (UPDATES.md # 8.4). This proves that loop against a real
+    #    source, a real registry pull and the real transaction — and, first, proves
+    #    it REFUSES an answer that is not pinned to a digest.
+    target_dir=/var/lib/malmo/test-target
+    target_url=http://127.0.0.1:5001/target.json
+    mkdir -p "$target_dir"
+
+    write_target() { # BRAIN_REF UI_REF -> writes the answer the box will read
+        printf '{"version":"%s","channel":"stable","brain_image":"%s","brain_digest":"%s","ui_image":"%s","ui_digest":"%s","published_at":"2026-01-01T00:00:00Z","an_unknown_field":true}\n' \
+            "$3" "$1" "${1##*@}" "$2" "${2##*@}" > "$target_dir/target.json"
+    }
+
+    # Restarting host-agent is how a tick is forced: the loop polls every 15
+    # minutes but ticks once immediately at startup, and a boot proof cannot wait
+    # a quarter of an hour. The drop-in also opens the window to the whole day and
+    # points the repository assertion at the in-guest registry, which is the same
+    # configurability a box under test gets in production.
+    mkdir -p /etc/systemd/system/host-agent.service.d
+    cat > /etc/systemd/system/host-agent.service.d/30-update-target.conf <<EOF
+[Service]
+Environment=MALMO_UPDATE_TARGET_URL=${target_url}
+Environment=MALMO_UPDATE_WINDOW=00:00-23:59
+Environment=MALMO_UPDATE_BRAIN_REPO=127.0.0.1:5000/malmo-brain
+Environment=MALMO_UPDATE_UI_REPO=127.0.0.1:5000/malmo-ui
+EOF
+    systemctl daemon-reload || fail "update-target: systemctl daemon-reload failed"
+
+    # The source: a file server on the loopback, run from the Caddy image the box
+    # already has, so this needs nothing the boot-proof image does not ship.
+    caddy_image="$(docker inspect -f '{{.Config.Image}}' malmo-caddy 2>/dev/null || true)"
+    [ -n "$caddy_image" ] || fail "update-target: no malmo-caddy container to borrow a file-server image from"
+    docker rm -f malmo-test-target >/dev/null 2>&1 || true
+    write_target "127.0.0.1:5000/malmo-brain:v3" "127.0.0.1:5000/malmo-ui:v3" "v0.0.0-unpinned"
+    docker run -d --name malmo-test-target -p 127.0.0.1:5001:80 \
+        -v "$target_dir":/srv:ro "$caddy_image" \
+        caddy file-server --root /srv --listen :80 >/dev/null 2>&1 \
+        || fail "update-target: could not start the in-guest update-target file server"
+    tgt=""
+    for _i in $(seq 1 60); do
+        tgt="$(http_status_addr 127.0.0.1 5001 /target.json 2>/dev/null || true)"
+        grep -q ' 200' <<<"$tgt" && break
+        sleep 1
+    done
+    grep -q ' 200' <<<"$tgt" || fail "update-target: the in-guest source never answered on 127.0.0.1:5001 (last status='$tgt'): $(docker logs malmo-test-target 2>&1 | tail -5)"
+
+    # 6a. THE REFUSAL. The answer names TAGS. A box that pulled them would be
+    #     trusting a movable label, so it must refuse and stay exactly where it is.
+    brain_id_before_target="$(docker inspect -f '{{.Id}}' malmo-brain 2>/dev/null || true)"
+    systemctl restart host-agent.service || fail "update-target: could not restart host-agent"
+    sleep 30
+    journalctl -u host-agent.service -b --no-pager 2>&1 | grep -q "refusing the answer" \
+        || fail "update-target: host-agent did not log a refusal for an unpinned answer: $(journalctl -u host-agent.service -b --no-pager 2>&1 | grep -i 'update target' | tail -5)"
+    [ "$(docker inspect -f '{{.Id}}' malmo-brain 2>/dev/null || true)" = "$brain_id_before_target" ] \
+        || fail "update-target: the box acted on an UNPINNED answer — the brain container was replaced"
+    echo "cloud-assertions: update-target — REFUSAL OK (a tagged answer was refused, box unchanged)"
+
+    # 6b. THE APPLY. A pinned gen-3 pair, published and dropped locally like the
+    #     ones above, so the loop's apply is a real registry pull.
+    brain_v3="$(publish_gen "$(docker inspect -f '{{.Config.Image}}' malmo-brain)" malmo-brain:v3 'LABEL malmo.test.generation=v3')" \
+        || fail "update-target: could not publish the gen-3 brain image"
+    ui_v3="$(publish_gen "$(docker inspect -f '{{.Config.Image}}' malmo-ui)" malmo-ui:v3 'LABEL malmo.test.generation=v3')" \
+        || fail "update-target: could not publish the gen-3 ui image"
+    write_target "$brain_v3" "$ui_v3" "v0.0.0-target-test"
+    systemctl restart host-agent.service || fail "update-target: could not restart host-agent for the pinned answer"
+
+    applied=""
+    for _i in $(seq 1 420); do
+        if grep -qF "$brain_v3" "$ledger" 2>/dev/null && grep -qF "$ui_v3" "$ledger" 2>/dev/null; then
+            applied=yes
+            break
+        fi
+        sleep 1
+    done
+    [ -n "$applied" ] \
+        || fail "update-target: nothing applied the pinned target within 420s (ledger: $(tr -d '\n' < "$ledger")): $(journalctl -u host-agent.service -b --no-pager 2>&1 | grep -i 'update target\|system-update' | tail -10)"
+
+    # The containers really moved, not just the declaration.
+    gen3=""
+    for _i in $(seq 1 120); do
+        gen3="$(docker inspect -f '{{index .Config.Labels "malmo.test.generation"}}' malmo-brain 2>/dev/null || true)"
+        [ "$gen3" = v3 ] && break
+        sleep 1
+    done
+    [ "$gen3" = v3 ] \
+        || fail "update-target: the running brain does not carry the gen-3 marker (got '$gen3') — the ledger moved but the container did not"
+    me_after=""
+    for _i in $(seq 1 90); do
+        me_after="$(status_of "$(full_get /api/v1/me "$apex" "$session_cookie" 2>/dev/null || true)")"
+        grep -q ' 200' <<<"$me_after" && break
+        sleep 1
+    done
+    grep -q ' 200' <<<"$me_after" \
+        || fail "update-target: after the target-driven update the box does not answer an authenticated /api/v1/me (status='$me_after')"
+    echo "cloud-assertions: update-target — APPLY OK (the box read its target, pulled the pinned pair and applied it with no prompt)"
     ;;
 *)
     fail "unknown assert mode '$MODE'"

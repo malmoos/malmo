@@ -30,6 +30,14 @@ ImportCredential=malmo.sso_token
 # kill it mid-poll before it writes a verdict. No timeout — the QEMU harness owns
 # the outer deadline.
 TimeoutStartSec=0
+# Send the script's own output to the serial console, not only to the journal.
+# Without this ONLY the verdict and the failure diag reach the console (they are
+# written to /dev/console by hand), so a PASS told the harness that a scenario
+# held and nothing about WHICH proofs ran — a section that quietly stopped
+# asserting looked exactly like one that passed. The journal dies with the VM;
+# the serial log is the only thing the harness keeps.
+StandardOutput=journal+console
+StandardError=journal+console
 ExecStart=/usr/local/bin/cloud-assertions.sh
 
 [Install]

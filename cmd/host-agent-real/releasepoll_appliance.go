@@ -29,7 +29,11 @@ import (
 // A build with no baked signing key does not poll at all — relmanifest.Run says
 // so once, loudly, and returns. That is every build today (RELEASE_MANIFEST.md
 // # Signing defers key custody until there is a release to sign).
-func startReleasePoll(stateDir string) func() {
+// It returns the stop function and the poller itself. The poller is what the
+// appliance update-target source reads (updatetarget_appliance.go): the same
+// verified manifest that answers "which release exists" is the only thing on an
+// appliance that could answer "which release should this box run".
+func startReleasePoll(stateDir string) (func(), *relmanifest.Poller) {
 	p := &relmanifest.Poller{
 		HTTP:     &http.Client{Timeout: 30 * time.Second},
 		Verifier: relmanifest.VerifierFromBakedKeys(),
@@ -47,5 +51,5 @@ func startReleasePoll(stateDir string) func() {
 	ctx, cancel := context.WithCancel(context.Background())
 	go p.Run(ctx)
 	slog.Info("release manifest poll started", "keys", p.Verifier.Keys(), "state_dir", stateDir)
-	return cancel
+	return cancel, p
 }
