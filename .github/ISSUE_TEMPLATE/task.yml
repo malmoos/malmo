@@ -61,6 +61,6 @@ body:
     id: done_when
     attributes:
       label: Done when
-      description: A crisp, observable acceptance condition.
+      description: A crisp, observable acceptance condition. If the slice only matters on a hosted box, say where it must be observable — "in the QEMU lane" and "on a provisioned box" are different claims, and a condition only the test lane can satisfy is how #404 shipped a mechanism that does nothing in production.
     validations:
       required: true

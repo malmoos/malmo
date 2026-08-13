@@ -31,6 +31,16 @@ Wire: `browser → web-ui → brain`, and the brain fans out to `docker compose`
 - **`Makefile` + `dev/`** — dev orchestration (`make help`).
 - **`docs/`** — `architecture.md` (as-built), `README.md` (spec map), `specs/` (design source of truth), `progress/` (per-change ADR log), `dev/` (how-to).
 
+## What the hosted control plane sends a box
+
+A hosted box talks to a control plane that lives in a **private** repo. Keep it out of this repo's code and issues, but know the seams, because a change on either side of one is a two-repo change and **cannot be checked by reading a diff here**:
+
+1. **The seed** (cloud → box, once): raw JSON at `/var/lib/malmo/seed.json`, the box's identity and its enrollment. Its shape is defined *here*, in `internal/profile.Seed` and `ENVIRONMENT.md` # Provisioning & first-boot; the other side mirrors the wire format field-for-field.
+2. **The update target** (box → cloud, ongoing): the box asks which brain + UI to run and gets back pinned image digests (`UPDATES.md` # 8).
+3. **The catalog** (cloud → box, ongoing): the app catalog boxes fetch, per the Catalog apps bullet above.
+
+**The seed is the only channel that carries per-box configuration, it arrives as metadata user-data, and it is written once when the VM is created.** systemd credentials over SMBIOS are a QEMU-lane thing and reach no real box. Before you write an issue that hands a box a new per-box setting, check `ENVIRONMENT.md` # Provisioning & first-boot — a change that assumed otherwise shipped, passed CI, and did nothing (#404 → #407).
+
 ## Developing
 
 **When starting work on any issue, read `docs/dev/contributing.md` first** — it is the authoritative contribution loop (orient → pick → branch → build → test → document → self-review → PR) and includes rules that supplement those in this file. The commands below are a quick reference; contributing.md is the binding guide.
