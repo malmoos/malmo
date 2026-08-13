@@ -247,6 +247,29 @@ for c in $want; do
     grep -qw "$c" <<<"$running" || fail "control-plane container '$c' not running after 120s (have: $running)"
 done
 
+# --- 5b. container stdout is readable through journald by CONTAINER_NAME — the
+# EXACT query host-agent-real's per-app log tail runs
+# (internal/hostagent/journalsource: `journalctl CONTAINER_NAME=<container>`).
+# This is deliberately not a `docker logs` read: `docker logs` works on every log
+# driver, which is precisely why the driver being wrong went unnoticed and every
+# app's Logs tab hung on "Waiting for log output…" on a real box. Assert the
+# driver, then assert the query it exists to serve actually returns lines.
+log_driver="$(docker info --format '{{.LoggingDriver}}' 2>/dev/null || true)"
+[ "$log_driver" = journald ] || \
+    fail "docker log driver is '$log_driver' (want journald) — the per-app Logs tab reads journalctl CONTAINER_NAME=, which only the journald driver populates"
+# malmo-brain is the safe probe: it is up by now (step 5) and always writes
+# startup milestones to stdout. Poll — journald ingest can lag container start
+# by a beat under a loaded TCG boot, same race wait_brain_log documents.
+brain_journal=""
+for _i in $(seq 1 60); do
+    brain_journal="$(journalctl CONTAINER_NAME=malmo-brain -b --no-pager -n 5 -o cat 2>/dev/null || true)"
+    [ -n "$brain_journal" ] && break
+    sleep 1
+done
+[ -n "$brain_journal" ] || \
+    fail "journalctl CONTAINER_NAME=malmo-brain returned nothing after 60s — container stdout is not reaching journald, so the per-app Logs tab will hang for every app"
+echo "cloud-assertions: container logs readable via journalctl CONTAINER_NAME= (driver=journald)"
+
 # --- 6. proxy boundary: the brain reaches Docker only through the socket-proxy,
 # never the raw socket (CONTROL_PLANE.md # Docker socket exposure).
 brain_sock="$(docker inspect malmo-brain --format '{{range .Mounts}}{{println .Source}}{{end}}' 2>/dev/null | grep -c 'docker.sock' || true)"
