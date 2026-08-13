@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -205,6 +206,77 @@ func TestTick_HoldsUntilTheWindow(t *testing.T) {
 	}
 }
 
+// --- where the window comes from -------------------------------------------
+
+// configured stands in for the box's own MALMO_UPDATE_WINDOW.
+func configured(l *Loop, s string) {
+	w, err := ParseWindow(s)
+	if err != nil {
+		panic(err)
+	}
+	l.Window, l.WindowFrom = w, "env"
+}
+
+// The answer wins. When to update is per-box policy the control plane owns and
+// can change while the box runs (UPDATES.md # 8.1).
+func TestTick_TheWindowInTheAnswerWins(t *testing.T) {
+	ap := &fakeApplier{}
+	tgt := goodTarget()
+	tgt.Window = "12:00-13:00"
+	// It is half past noon, and the box is set to update in the small hours.
+	l := newLoop(&fakeSource{target: tgt}, fakeRunning{brain: oldBrain, ui: oldUI}, ap, ptr(at(12, 12, 30)))
+	configured(l, "03:00-04:00")
+	l.Tick(context.Background())
+	if len(ap.calls) != 1 {
+		t.Fatalf("applied %v, want one update — the answer's window is now open", ap.calls)
+	}
+}
+
+// An answer with no window is "no opinion", never "use the default". If it were
+// read as the default it would silently outrank the operator's own setting.
+func TestTick_NoWindowInTheAnswerKeepsTheConfiguredOne(t *testing.T) {
+	ap := &fakeApplier{}
+	now := ptr(at(12, 12, 30))
+	l := newLoop(&fakeSource{target: goodTarget()}, fakeRunning{brain: oldBrain, ui: oldUI}, ap, now)
+	configured(l, "12:45-13:00")
+	l.Tick(context.Background())
+	if len(ap.calls) != 0 {
+		t.Fatalf("applied %v at 12:30, want nothing — the configured window is still shut", ap.calls)
+	}
+	*now = at(12, 12, 50)
+	l.Tick(context.Background())
+	if len(ap.calls) != 1 {
+		t.Fatalf("applied %v at 12:50, want one update inside the configured window", ap.calls)
+	}
+}
+
+// A window the box cannot read warns and falls back. It is not fatal: a wrong
+// hour can only apply an update at the wrong time, while a wrong target sends the
+// box to the wrong version.
+func TestTick_AnUnreadableWindowInTheAnswerFallsBack(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prev)
+
+	ap := &fakeApplier{}
+	tgt := goodTarget()
+	tgt.Window = "tonight-ish"
+	l := newLoop(&fakeSource{target: tgt}, fakeRunning{brain: oldBrain, ui: oldUI}, ap, ptr(at(12, 12, 30)))
+	// The box's own window is open now. The built-in default is not, so an apply
+	// proves the fall-back went to the configured window and not to the default.
+	configured(l, "12:00-13:00")
+	for range 3 {
+		l.Tick(context.Background())
+	}
+	if len(ap.calls) != 1 {
+		t.Fatalf("applied %v, want one update — a bad window must not stop the box updating", ap.calls)
+	}
+	if got := strings.Count(buf.String(), "window in the answer is not readable"); got != 1 {
+		t.Errorf("warned %d times about the same bad window, want 1:\n%s", got, buf.String())
+	}
+}
+
 func TestTick_OneAttemptPerWindow(t *testing.T) {
 	ap := &fakeApplier{}
 	now := at(12, 3, 5)
@@ -309,6 +381,85 @@ func TestHTTPSource_ReadsTheAnswer(t *testing.T) {
 	}
 	if err := got.Validate(DefaultRepositories); err != nil {
 		t.Errorf("Validate: %v", err)
+	}
+}
+
+// The box says who it is, so the control plane can answer for this box and not
+// for the fleet (UPDATES.md # 8.1).
+func TestHTTPSource_SendsTheBoxID(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.RawQuery
+		fmt.Fprintf(w, `{"version":"v1","brain_image":%q,"ui_image":%q}`, brainRef, uiRef)
+	}))
+	defer srv.Close()
+
+	if _, err := (HTTPSource{URL: srv.URL, BoxID: "cindy-fox"}).Target(context.Background()); err != nil {
+		t.Fatalf("Target: %v", err)
+	}
+	if got != "box_id=cindy-fox" {
+		t.Fatalf("query = %q, want box_id=cindy-fox", got)
+	}
+}
+
+// A box with no identity sends NO parameter, not an empty one. An empty
+// box_id= names a box called nothing, and an appliance box must ask exactly what
+// it asked before boxes had an identity at all.
+func TestHTTPSource_NoBoxIDSendsNoParameter(t *testing.T) {
+	var raw string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw = r.URL.String()
+		fmt.Fprintf(w, `{"version":"v1","brain_image":%q,"ui_image":%q}`, brainRef, uiRef)
+	}))
+	defer srv.Close()
+
+	if _, err := (HTTPSource{URL: srv.URL + "/target"}).Target(context.Background()); err != nil {
+		t.Fatalf("Target: %v", err)
+	}
+	if raw != "/target" {
+		t.Fatalf("asked %q, want a bare /target with no query at all", raw)
+	}
+}
+
+// A box pointed at a URL that already carries a query keeps it.
+func TestHTTPSource_BoxIDJoinsAnExistingQuery(t *testing.T) {
+	var q url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q = r.URL.Query()
+		fmt.Fprintf(w, `{"version":"v1","brain_image":%q,"ui_image":%q}`, brainRef, uiRef)
+	}))
+	defer srv.Close()
+
+	src := HTTPSource{URL: srv.URL + "/target?channel=candidate", BoxID: "cindy-fox"}
+	if _, err := src.Target(context.Background()); err != nil {
+		t.Fatalf("Target: %v", err)
+	}
+	if q.Get("channel") != "candidate" || q.Get("box_id") != "cindy-fox" {
+		t.Fatalf("query = %v, want both channel and box_id", q)
+	}
+}
+
+// The window is optional on the wire. Present, it is carried through raw; absent,
+// it stays empty, which the loop reads as "no opinion".
+func TestHTTPSource_ReadsTheWindow(t *testing.T) {
+	body := `{"version":"v1","brain_image":%q,"ui_image":%q%s}`
+	for _, tc := range []struct{ name, extra, want string }{
+		{"a window in the answer", `,"window":"01:00-02:00"`, "01:00-02:00"},
+		{"no window field", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprintf(w, body, brainRef, uiRef, tc.extra)
+			}))
+			defer srv.Close()
+			got, err := HTTPSource{URL: srv.URL}.Target(context.Background())
+			if err != nil {
+				t.Fatalf("Target: %v", err)
+			}
+			if got.Window != tc.want {
+				t.Fatalf("Window = %q, want %q", got.Window, tc.want)
+			}
+		})
 	}
 }
 

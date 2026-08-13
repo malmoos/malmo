@@ -32,8 +32,12 @@ import (
 //
 // The window has no seed source. It has to be changeable while the box runs, and
 // the seed can never be rewritten, so the control plane's answer is its home
-// (UPDATES.md # 8.1). Until that lands the window is environment variable, then
-// default.
+// (UPDATES.md # 8.1). What is resolved here is only the fallback under it:
+//
+//	answer  >  environment variable  >  built-in default
+//
+// The answer is read by the loop, not here, because it arrives on every poll
+// rather than once at startup (internal/hostagent/updatetarget, Loop.windowFor).
 //
 // **Nothing here is build-tagged, on purpose.** The target URL only matters on
 // the hosted build, but `go vet ./...` and `go test ./...` both run untagged, so
@@ -62,9 +66,14 @@ func seedPath() string {
 	return profile.DefaultSeedPath
 }
 
-// seedTargetURL reads update_target_url out of the provisioning seed. ok is false
-// when the seed carries no target and the caller should look further down the
-// chain.
+// seedUpdateFacts reads the two per-box update facts out of the provisioning
+// seed: the endpoint this box asks, and the identity it says it is when it asks.
+//
+// **One read for both.** They live in one file, so two reads could see two
+// different files and pair a box id with a target that was never meant for it.
+// An empty target means the seed named none and the caller should look further
+// down the chain. An empty box id means this box has no identity to send, which
+// is every appliance box and any hosted box seeded without one.
 //
 // It reads the file itself instead of calling profile.ReadSeed. That reader is
 // the brain's: it hard-errors on a seed with no box_id and no
@@ -83,32 +92,37 @@ func seedPath() string {
 //     carried a target and we cannot tell, so reading the fleet endpoint instead
 //     could move a box that was meant to be pinned onto stable. Same call, and
 //     the same reason, as an unusable URL below.
-func seedTargetURL() (target string, ok bool, err error) {
+func seedUpdateFacts() (target, boxID string, err error) {
 	path := seedPath()
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		slog.Info("no provisioning seed; taking the update target from the environment or the default", "src", path)
-		return "", false, nil
+		return "", "", nil
 	}
 	if err != nil {
-		return "", false, fmt.Errorf("read seed %s: %w", path, err)
+		return "", "", fmt.Errorf("read seed %s: %w", path, err)
 	}
 	var s profile.Seed
 	if err := json.Unmarshal(b, &s); err != nil {
-		return "", false, fmt.Errorf("parse seed %s: %w", path, err)
+		return "", "", fmt.Errorf("parse seed %s: %w", path, err)
 	}
 	// Trimmed: the seed is text written by a provisioner, and stray whitespace is
 	// the most likely way to hand over a URL that then does not parse.
 	target = strings.TrimSpace(s.UpdateTargetURL)
+	boxID = strings.TrimSpace(s.BoxID)
 	if target == "" {
 		slog.Info("the provisioning seed names no update target; taking it from the environment or the default", "src", path)
-		return "", false, nil
 	}
-	return target, true, nil
+	return target, boxID, nil
 }
 
-// updateTargetURL resolves the update-target endpoint for this box. An empty
-// target means updatetarget.DefaultURL, the fleet endpoint.
+// updateTarget resolves what this box needs to ask its source: the endpoint, and
+// the box id it sends with the question. An empty target means
+// updatetarget.DefaultURL, and an empty box id means the box asks anonymously.
+//
+// The box id comes from the seed whatever the target's source is. Identity and
+// endpoint are separate facts: a box whose URL is a local hand-edit is still the
+// same box, so it still says who it is.
 //
 // **A seeded target that is unusable is an error, never a fallback.** A box
 // carrying it was deliberately pointed somewhere by whoever provisioned it;
@@ -119,21 +133,21 @@ func seedTargetURL() (target string, ok bool, err error) {
 // Only the seeded value is validated. The environment variable is the operator's
 // own hand-edit on a box they can already reach, and it has never been checked;
 // tightening it is a separate change, not a side effect of this one.
-func updateTargetURL() (target, from string, err error) {
-	raw, ok, err := seedTargetURL()
+func updateTarget() (target, from, boxID string, err error) {
+	raw, boxID, err := seedUpdateFacts()
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	if ok {
+	if raw != "" {
 		if err := checkTargetURL(raw); err != nil {
-			return "", "", err
+			return "", "", "", err
 		}
-		return raw, fromSeed, nil
+		return raw, fromSeed, boxID, nil
 	}
 	if v := os.Getenv(envUpdateTargetURL); v != "" {
-		return v, fromEnv, nil
+		return v, fromEnv, boxID, nil
 	}
-	return "", fromDefault, nil
+	return "", fromDefault, boxID, nil
 }
 
 // checkTargetURL rejects anything the box could not actually fetch from. It is
@@ -154,7 +168,9 @@ func checkTargetURL(s string) error {
 	return nil
 }
 
-// updateWindow resolves the window an update may start in.
+// updateWindow resolves the window an update may start in, unless the source's
+// answer names one of its own. It is the box's local setting, and the answer
+// sits above it.
 //
 // Unlike the target URL, an unreadable window falls back with a warning. The two
 // are not symmetric: a wrong window can only apply an update at the wrong hour,

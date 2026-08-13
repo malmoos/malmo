@@ -38,22 +38,22 @@ func noSeed(t *testing.T) {
 	t.Setenv(envSeedPath, filepath.Join(t.TempDir(), "seed.json"))
 }
 
-func TestSeedTargetURL(t *testing.T) {
+func TestSeedUpdateFacts(t *testing.T) {
 	// No seed at all must not be an error. This is every appliance box, and a
 	// hosted box provisioned without one.
 	t.Run("absent seed is not an error", func(t *testing.T) {
 		noSeed(t)
-		target, ok, err := seedTargetURL()
-		if err != nil || ok || target != "" {
-			t.Fatalf("got (%q, %v, %v), want (\"\", false, nil)", target, ok, err)
+		target, boxID, err := seedUpdateFacts()
+		if err != nil || target != "" || boxID != "" {
+			t.Fatalf("got (%q, %q, %v), want (\"\", \"\", nil)", target, boxID, err)
 		}
 	})
 
 	t.Run("seed without the field falls through", func(t *testing.T) {
 		seedFile(t, seededTarget(""))
-		target, ok, err := seedTargetURL()
-		if err != nil || ok || target != "" {
-			t.Fatalf("got (%q, %v, %v), want (\"\", false, nil)", target, ok, err)
+		target, _, err := seedUpdateFacts()
+		if err != nil || target != "" {
+			t.Fatalf("got (%q, %v), want (\"\", nil)", target, err)
 		}
 	})
 
@@ -61,20 +61,20 @@ func TestSeedTargetURL(t *testing.T) {
 	// an unusable one.
 	t.Run("empty field falls through", func(t *testing.T) {
 		seedFile(t, seededTarget("  "))
-		target, ok, err := seedTargetURL()
-		if err != nil || ok || target != "" {
-			t.Fatalf("got (%q, %v, %v), want (\"\", false, nil)", target, ok, err)
+		target, _, err := seedUpdateFacts()
+		if err != nil || target != "" {
+			t.Fatalf("got (%q, %v), want (\"\", nil)", target, err)
 		}
 	})
 
 	t.Run("field present, surrounding whitespace trimmed", func(t *testing.T) {
 		seedFile(t, seededTarget(" https://example.test/target\\n "))
-		target, ok, err := seedTargetURL()
+		target, _, err := seedUpdateFacts()
 		if err != nil {
-			t.Fatalf("seedTargetURL: %v", err)
+			t.Fatalf("seedUpdateFacts: %v", err)
 		}
-		if !ok || target != "https://example.test/target" {
-			t.Fatalf("got (%q, %v), want (%q, true)", target, ok, "https://example.test/target")
+		if target != "https://example.test/target" {
+			t.Fatalf("target = %q, want %q", target, "https://example.test/target")
 		}
 	})
 
@@ -82,12 +82,9 @@ func TestSeedTargetURL(t *testing.T) {
 	// so it is a hard error rather than the absent case.
 	t.Run("malformed seed is an error", func(t *testing.T) {
 		seedFile(t, `{"box_id": `)
-		target, ok, err := seedTargetURL()
+		target, boxID, err := seedUpdateFacts()
 		if err == nil {
-			t.Fatalf("got (%q, %v, nil), want an error", target, ok)
-		}
-		if ok {
-			t.Fatal("a malformed seed must not report ok")
+			t.Fatalf("got (%q, %q, nil), want an error", target, boxID)
 		}
 	})
 
@@ -97,26 +94,23 @@ func TestSeedTargetURL(t *testing.T) {
 	// os.ReadFile on a directory fails for every user.
 	t.Run("unreadable seed is an error", func(t *testing.T) {
 		t.Setenv(envSeedPath, t.TempDir())
-		target, ok, err := seedTargetURL()
+		target, boxID, err := seedUpdateFacts()
 		if err == nil {
-			t.Fatalf("got (%q, %v, nil), want an error", target, ok)
-		}
-		if ok {
-			t.Fatal("an unreadable seed must not report ok")
+			t.Fatalf("got (%q, %q, nil), want an error", target, boxID)
 		}
 	})
 }
 
-func TestUpdateTargetURL(t *testing.T) {
+func TestUpdateTarget(t *testing.T) {
 	const seeded = "https://candidate.example.test/api/updates/target"
 	const env = "http://127.0.0.1:9"
 
 	t.Run("seed beats the env var", func(t *testing.T) {
 		seedFile(t, seededTarget(seeded))
 		t.Setenv(envUpdateTargetURL, env)
-		target, from, err := updateTargetURL()
+		target, from, _, err := updateTarget()
 		if err != nil {
-			t.Fatalf("updateTargetURL: %v", err)
+			t.Fatalf("updateTarget: %v", err)
 		}
 		if target != seeded || from != fromSeed {
 			t.Fatalf("got (%q, %q), want (%q, %q)", target, from, seeded, fromSeed)
@@ -126,9 +120,9 @@ func TestUpdateTargetURL(t *testing.T) {
 	t.Run("env var used when the seed names no target", func(t *testing.T) {
 		seedFile(t, seededTarget(""))
 		t.Setenv(envUpdateTargetURL, env)
-		target, from, err := updateTargetURL()
+		target, from, _, err := updateTarget()
 		if err != nil {
-			t.Fatalf("updateTargetURL: %v", err)
+			t.Fatalf("updateTarget: %v", err)
 		}
 		if target != env || from != fromEnv {
 			t.Fatalf("got (%q, %q), want (%q, %q)", target, from, env, fromEnv)
@@ -140,9 +134,9 @@ func TestUpdateTargetURL(t *testing.T) {
 	t.Run("env var used when there is no seed at all", func(t *testing.T) {
 		noSeed(t)
 		t.Setenv(envUpdateTargetURL, env)
-		target, from, err := updateTargetURL()
+		target, from, _, err := updateTarget()
 		if err != nil {
-			t.Fatalf("updateTargetURL: %v", err)
+			t.Fatalf("updateTarget: %v", err)
 		}
 		if target != env || from != fromEnv {
 			t.Fatalf("got (%q, %q), want (%q, %q)", target, from, env, fromEnv)
@@ -154,9 +148,9 @@ func TestUpdateTargetURL(t *testing.T) {
 	t.Run("neither leaves the fleet default untouched", func(t *testing.T) {
 		noSeed(t)
 		t.Setenv(envUpdateTargetURL, "")
-		target, from, err := updateTargetURL()
+		target, from, _, err := updateTarget()
 		if err != nil {
-			t.Fatalf("updateTargetURL: %v", err)
+			t.Fatalf("updateTarget: %v", err)
 		}
 		if target != "" || from != fromDefault {
 			t.Fatalf("got (%q, %q), want (\"\", %q)", target, from, fromDefault)
@@ -181,7 +175,7 @@ func TestUpdateTargetURL(t *testing.T) {
 		t.Run("refuses "+tc.name, func(t *testing.T) {
 			seedFile(t, seededTarget(tc.url))
 			t.Setenv(envUpdateTargetURL, env)
-			target, from, err := updateTargetURL()
+			target, from, _, err := updateTarget()
 			if err == nil {
 				t.Fatalf("got (%q, %q, nil), want an error", target, from)
 			}
@@ -191,13 +185,52 @@ func TestUpdateTargetURL(t *testing.T) {
 		})
 	}
 
+	// The identity the box sends. It comes off the same seed read as the target,
+	// and it does not depend on where the target came from: a box whose URL is a
+	// local hand-edit is still that box.
+	t.Run("the box id comes from the seed", func(t *testing.T) {
+		seedFile(t, seededTarget(seeded))
+		_, _, boxID, err := updateTarget()
+		if err != nil {
+			t.Fatalf("updateTarget: %v", err)
+		}
+		if boxID != "cindy-fox" {
+			t.Fatalf("box_id = %q, want %q", boxID, "cindy-fox")
+		}
+	})
+
+	t.Run("the box id survives an env-var target", func(t *testing.T) {
+		seedFile(t, seededTarget(""))
+		t.Setenv(envUpdateTargetURL, env)
+		_, from, boxID, err := updateTarget()
+		if err != nil {
+			t.Fatalf("updateTarget: %v", err)
+		}
+		if from != fromEnv || boxID != "cindy-fox" {
+			t.Fatalf("got (%q, %q), want (%q, %q)", from, boxID, fromEnv, "cindy-fox")
+		}
+	})
+
+	// No seed, no identity. The appliance box and the unseeded hosted box both ask
+	// anonymously, which is what HTTPSource turns into "send no parameter".
+	t.Run("no seed means no box id", func(t *testing.T) {
+		noSeed(t)
+		_, _, boxID, err := updateTarget()
+		if err != nil {
+			t.Fatalf("updateTarget: %v", err)
+		}
+		if boxID != "" {
+			t.Fatalf("box_id = %q, want empty on a box with no seed", boxID)
+		}
+	})
+
 	// A malformed seed is refused for the same reason an unusable URL is: it may
 	// have pinned this box and we cannot read it, so falling through to the fleet
 	// endpoint could move a pinned box onto stable.
 	t.Run("refuses a malformed seed", func(t *testing.T) {
 		seedFile(t, "not json at all")
 		t.Setenv(envUpdateTargetURL, env)
-		target, _, err := updateTargetURL()
+		target, _, _, err := updateTarget()
 		if err == nil {
 			t.Fatal("a malformed seed must be refused, not resolved")
 		}

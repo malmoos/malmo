@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/malmoos/malmo/internal/hostagent/controlplane"
@@ -83,8 +84,13 @@ type Loop struct {
 	// Repos is the expected home of each image; the zero value means
 	// DefaultRepositories.
 	Repos Repositories
-	// Window is when an update may start; the zero value means DefaultWindow.
+	// Window is when an update may start, unless the source names one of its
+	// own. The zero value means DefaultWindow.
 	Window Window
+	// WindowFrom says where Window came from, carried only so the logs can say
+	// what an answer's window replaced. One of the `from` values in
+	// UPDATES.md # 8.4.
+	WindowFrom string
 	// AutoApply is the # 8.2 difference between the profiles. Hosted is true:
 	// we operate the box, so it patches itself and the tenant is told
 	// afterwards. Appliance is false: the control plane is admin-prompted
@@ -106,6 +112,11 @@ type Loop struct {
 	// has been down for a week, or whose appliance manifest can never be pinned,
 	// says so once per change and not four times an hour forever.
 	lastQuiet string
+	// lastWindow dedupes the window lines. It is separate memory from
+	// lastQuiet: the window and the target change independently, and a target
+	// that moves every night must not keep re-announcing a window that never
+	// moved.
+	lastWindow string
 	// attempted is the target version this loop last started an update for, and
 	// the window occurrence it did it in. One attempt per window per version: a
 	// failed update reverts the box, so the next tick sees the same difference
@@ -163,6 +174,48 @@ func (l *Loop) nextDelay() time.Duration {
 		d = time.Second
 	}
 	return d
+}
+
+// fromAnswer is the `from` value for a window the source named. The other
+// values are host-agent's (cmd/host-agent-real/updateconfig.go); this one lives
+// here because this package is where an answer's window is read.
+const fromAnswer = "answer"
+
+// windowFor picks the window for this tick.
+//
+// **The answer wins when it carries one.** When to update is per-box policy the
+// control plane owns, and it has to be changeable while the box runs
+// (UPDATES.md # 8.1). An answer with no window is "no opinion", not "use the
+// default": treating it as the default would silently outrank the operator's own
+// MALMO_UPDATE_WINDOW.
+//
+// A window the box cannot read warns and falls back. That is deliberately unlike
+// a bad target, which stops the loop: a wrong hour can only apply an update at
+// the wrong time, while a wrong target sends the box to the wrong version.
+func (l *Loop) windowFor(t Target) Window {
+	if strings.TrimSpace(t.Window) == "" {
+		return l.window()
+	}
+	w, err := ParseWindow(t.Window)
+	if err != nil {
+		l.sayWindow("bad:"+t.Window, slog.LevelWarn,
+			"update target: the window in the answer is not readable; keeping the configured one",
+			"err", err, "window", l.window().String(), "from", l.WindowFrom)
+		return l.window()
+	}
+	l.sayWindow("answer:"+w.String(), slog.LevelInfo,
+		"update target: taking the update window from the answer",
+		"window", w.String(), "from", fromAnswer)
+	return w
+}
+
+// sayWindow logs a change in the window, once per change.
+func (l *Loop) sayWindow(key string, level slog.Level, msg string, args ...any) {
+	if l.lastWindow == key {
+		return
+	}
+	l.lastWindow = key
+	slog.Log(context.Background(), level, msg, args...)
 }
 
 // quiet logs msg only when this tick's state differs from the last one.
@@ -239,7 +292,7 @@ func (l *Loop) Tick(ctx context.Context) {
 	}
 
 	now := l.now()
-	w := l.window()
+	w := l.windowFor(t)
 	if !w.Contains(now) {
 		l.quiet(slog.LevelInfo, "holding:"+t.Version, "update target: holding a new version for the update window",
 			"brain", t.Version, "step", "waiting", "zone", now.Location().String())

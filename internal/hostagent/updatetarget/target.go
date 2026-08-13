@@ -69,6 +69,17 @@ type Target struct {
 	UIDigest    string
 	// PublishedAt is when the release was published. Informational.
 	PublishedAt time.Time
+	// Window is when this box may apply, as "HH:MM-HH:MM" local, or empty when
+	// the source has no opinion.
+	//
+	// **Empty is not "use the default".** It means the box keeps the window it
+	// is configured with. Reading it as the default would let a source that
+	// says nothing outrank an operator's own setting (UPDATES.md # 8.4).
+	//
+	// It is carried raw, not parsed, because a source is untrusted input and a
+	// window it cannot state properly must not stop the box updating. The loop
+	// parses it, warns, and falls back.
+	Window string
 }
 
 // Source is the seam: one call, one answer.
