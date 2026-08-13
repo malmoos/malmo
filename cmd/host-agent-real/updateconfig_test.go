@@ -9,103 +9,136 @@ import (
 	"github.com/malmoos/malmo/internal/hostagent/updatetarget"
 )
 
-// credsDir points CREDENTIALS_DIRECTORY at a fresh directory holding the given
-// credentials, the way systemd does for a unit with ImportCredential=.
-func credsDir(t *testing.T, creds map[string]string) {
+// seedFile writes a seed at a fresh path and points MALMO_SEED_PATH at it, the
+// way the first-boot materializer lands one before host-agent starts.
+func seedFile(t *testing.T, body string) {
 	t.Helper()
-	dir := t.TempDir()
-	for name, body := range creds {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o400); err != nil {
-			t.Fatalf("write credential %s: %v", name, err)
-		}
+	path := filepath.Join(t.TempDir(), "seed.json")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write seed: %v", err)
 	}
-	t.Setenv(credentialsDirEnv, dir)
+	t.Setenv(envSeedPath, path)
 }
 
-// noCreds is the un-provisioned case: systemd passed this unit nothing, so it
-// set no CREDENTIALS_DIRECTORY at all.
-func noCreds(t *testing.T) {
-	t.Helper()
-	t.Setenv(credentialsDirEnv, "")
-}
-
-// unreadableCred makes the named credential exist but fail to read: the entry is
-// there, so it is not the absent case, and opening it cannot produce its bytes.
-//
-// A directory is what stands in for the unreadable file. Mode 0o000 would be the
-// obvious choice and is the wrong one: root ignores it, so the test would quietly
-// assert nothing whenever the suite runs as root. os.ReadFile on a directory
-// fails for every user.
-func unreadableCred(t *testing.T, name string) {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(dir, name), 0o700); err != nil {
-		t.Fatalf("make unreadable credential %s: %v", name, err)
+// seededTarget is a seed of the shape a provisioned box gets, with the update
+// target set to url. An empty url leaves the field out entirely, which is what a
+// box that was never steered receives.
+func seededTarget(url string) string {
+	const head = `{"box_id":"cindy-fox","assertion_verification_key":"a2V5"`
+	if url == "" {
+		return head + `}`
 	}
-	t.Setenv(credentialsDirEnv, dir)
+	return head + `,"update_target_url":"` + url + `"}`
 }
 
-func TestReadCredential(t *testing.T) {
-	t.Run("no credentials directory", func(t *testing.T) {
-		noCreds(t)
-		v, ok, err := readCredential(credUpdateTargetURL)
-		if err != nil || ok || v != "" {
-			t.Fatalf("got (%q, %v, %v), want (\"\", false, nil)", v, ok, err)
+// noSeed is the appliance case, and a hosted box provisioned without a seed: the
+// path exists as a name and nothing was ever written there.
+func noSeed(t *testing.T) {
+	t.Helper()
+	t.Setenv(envSeedPath, filepath.Join(t.TempDir(), "seed.json"))
+}
+
+func TestSeedTargetURL(t *testing.T) {
+	// No seed at all must not be an error. This is every appliance box, and a
+	// hosted box provisioned without one.
+	t.Run("absent seed is not an error", func(t *testing.T) {
+		noSeed(t)
+		target, ok, err := seedTargetURL()
+		if err != nil || ok || target != "" {
+			t.Fatalf("got (%q, %v, %v), want (\"\", false, nil)", target, ok, err)
 		}
 	})
 
-	t.Run("directory without this credential", func(t *testing.T) {
-		credsDir(t, map[string]string{"malmo.seed": "{}"})
-		v, ok, err := readCredential(credUpdateTargetURL)
-		if err != nil || ok || v != "" {
-			t.Fatalf("got (%q, %v, %v), want (\"\", false, nil)", v, ok, err)
+	t.Run("seed without the field falls through", func(t *testing.T) {
+		seedFile(t, seededTarget(""))
+		target, ok, err := seedTargetURL()
+		if err != nil || ok || target != "" {
+			t.Fatalf("got (%q, %v, %v), want (\"\", false, nil)", target, ok, err)
 		}
 	})
 
-	t.Run("present, trailing newline trimmed", func(t *testing.T) {
-		credsDir(t, map[string]string{credUpdateTargetURL: "https://example.test/target\n"})
-		v, ok, err := readCredential(credUpdateTargetURL)
+	// An empty field carries no instruction, so it is the absent case rather than
+	// an unusable one.
+	t.Run("empty field falls through", func(t *testing.T) {
+		seedFile(t, seededTarget("  "))
+		target, ok, err := seedTargetURL()
+		if err != nil || ok || target != "" {
+			t.Fatalf("got (%q, %v, %v), want (\"\", false, nil)", target, ok, err)
+		}
+	})
+
+	t.Run("field present, surrounding whitespace trimmed", func(t *testing.T) {
+		seedFile(t, seededTarget(" https://example.test/target\\n "))
+		target, ok, err := seedTargetURL()
 		if err != nil {
-			t.Fatalf("readCredential: %v", err)
+			t.Fatalf("seedTargetURL: %v", err)
 		}
-		if !ok || v != "https://example.test/target" {
-			t.Fatalf("got (%q, %v), want (%q, true)", v, ok, "https://example.test/target")
+		if !ok || target != "https://example.test/target" {
+			t.Fatalf("got (%q, %v), want (%q, true)", target, ok, "https://example.test/target")
 		}
 	})
 
-	// Present but unreadable is an error, not the absent case. The caller asked
-	// for something that is there and did not get it, and the two settings then
-	// make opposite calls about what to do with that.
-	t.Run("present but unreadable", func(t *testing.T) {
-		unreadableCred(t, credUpdateTargetURL)
-		v, ok, err := readCredential(credUpdateTargetURL)
+	// A seed that will not parse might have carried a target and we cannot tell,
+	// so it is a hard error rather than the absent case.
+	t.Run("malformed seed is an error", func(t *testing.T) {
+		seedFile(t, `{"box_id": `)
+		target, ok, err := seedTargetURL()
 		if err == nil {
-			t.Fatalf("got (%q, %v, nil), want an error", v, ok)
+			t.Fatalf("got (%q, %v, nil), want an error", target, ok)
 		}
 		if ok {
-			t.Fatal("an unreadable credential must not report ok")
+			t.Fatal("a malformed seed must not report ok")
+		}
+	})
+
+	// Present but unreadable is an error for the same reason. A directory stands
+	// in for the unreadable file: mode 0o000 would be ignored by root, so the
+	// assertion would quietly evaporate whenever the suite runs as root, while
+	// os.ReadFile on a directory fails for every user.
+	t.Run("unreadable seed is an error", func(t *testing.T) {
+		t.Setenv(envSeedPath, t.TempDir())
+		target, ok, err := seedTargetURL()
+		if err == nil {
+			t.Fatalf("got (%q, %v, nil), want an error", target, ok)
+		}
+		if ok {
+			t.Fatal("an unreadable seed must not report ok")
 		}
 	})
 }
 
 func TestUpdateTargetURL(t *testing.T) {
-	const cred = "https://candidate.example.test/api/updates/target"
+	const seeded = "https://candidate.example.test/api/updates/target"
 	const env = "http://127.0.0.1:9"
 
-	t.Run("credential beats the env var", func(t *testing.T) {
-		credsDir(t, map[string]string{credUpdateTargetURL: cred})
+	t.Run("seed beats the env var", func(t *testing.T) {
+		seedFile(t, seededTarget(seeded))
 		t.Setenv(envUpdateTargetURL, env)
 		target, from, err := updateTargetURL()
 		if err != nil {
 			t.Fatalf("updateTargetURL: %v", err)
 		}
-		if target != cred || from != fromCredential {
-			t.Fatalf("got (%q, %q), want (%q, %q)", target, from, cred, fromCredential)
+		if target != seeded || from != fromSeed {
+			t.Fatalf("got (%q, %q), want (%q, %q)", target, from, seeded, fromSeed)
 		}
 	})
 
-	t.Run("env var used when no credential", func(t *testing.T) {
-		noCreds(t)
+	t.Run("env var used when the seed names no target", func(t *testing.T) {
+		seedFile(t, seededTarget(""))
+		t.Setenv(envUpdateTargetURL, env)
+		target, from, err := updateTargetURL()
+		if err != nil {
+			t.Fatalf("updateTargetURL: %v", err)
+		}
+		if target != env || from != fromEnv {
+			t.Fatalf("got (%q, %q), want (%q, %q)", target, from, env, fromEnv)
+		}
+	})
+
+	// The appliance path: no seed file exists at all, and the box must resolve
+	// exactly as it did before, not error.
+	t.Run("env var used when there is no seed at all", func(t *testing.T) {
+		noSeed(t)
 		t.Setenv(envUpdateTargetURL, env)
 		target, from, err := updateTargetURL()
 		if err != nil {
@@ -119,7 +152,7 @@ func TestUpdateTargetURL(t *testing.T) {
 	// The regression that matters most: a box provisioned the way every box is
 	// provisioned today must still read the fleet endpoint.
 	t.Run("neither leaves the fleet default untouched", func(t *testing.T) {
-		noCreds(t)
+		noSeed(t)
 		t.Setenv(envUpdateTargetURL, "")
 		target, from, err := updateTargetURL()
 		if err != nil {
@@ -130,67 +163,54 @@ func TestUpdateTargetURL(t *testing.T) {
 		}
 		// Empty is what HTTPSource reads as "the fleet endpoint".
 		if (updatetarget.HTTPSource{URL: target}).URL != "" {
-			t.Fatal("an absent credential must leave HTTPSource on its default URL")
+			t.Fatal("an absent seed target must leave HTTPSource on its default URL")
 		}
 	})
 
-	// An unusable credential is refused. It must not fall through to the env var
-	// or to the fleet default: a box meant to be pinned must not join stable.
+	// An unusable seeded target is refused. It must not fall through to the env
+	// var or to the fleet default: a box meant to be pinned must not join stable.
 	for _, tc := range []struct {
 		name string
-		body string
+		url  string
 	}{
-		{"empty", ""},
-		{"whitespace only", "  \n"},
 		{"no scheme", "candidate.example.test/api/updates/target"},
 		{"wrong scheme", "ftp://candidate.example.test/target"},
 		{"no host", "https:///api/updates/target"},
-		{"not a url", "https://exa mple.test/\x7f"},
+		{"not a url", "https://exa mple.test/\\u007f"},
 	} {
 		t.Run("refuses "+tc.name, func(t *testing.T) {
-			credsDir(t, map[string]string{credUpdateTargetURL: tc.body})
+			seedFile(t, seededTarget(tc.url))
 			t.Setenv(envUpdateTargetURL, env)
 			target, from, err := updateTargetURL()
 			if err == nil {
 				t.Fatalf("got (%q, %q, nil), want an error", target, from)
 			}
 			if target != "" {
-				t.Fatalf("a refused credential resolved to %q; it must resolve to nothing", target)
+				t.Fatalf("a refused target resolved to %q; it must resolve to nothing", target)
 			}
 		})
 	}
 
-	// An unreadable credential is refused for the same reason an unparseable one
-	// is: the box was pointed somewhere and we cannot honour it, so reading the
-	// fleet endpoint instead would move a pinned box onto stable.
-	t.Run("refuses an unreadable credential", func(t *testing.T) {
-		unreadableCred(t, credUpdateTargetURL)
+	// A malformed seed is refused for the same reason an unusable URL is: it may
+	// have pinned this box and we cannot read it, so falling through to the fleet
+	// endpoint could move a pinned box onto stable.
+	t.Run("refuses a malformed seed", func(t *testing.T) {
+		seedFile(t, "not json at all")
 		t.Setenv(envUpdateTargetURL, env)
 		target, _, err := updateTargetURL()
 		if err == nil {
-			t.Fatal("an unreadable credential must be refused, not resolved")
+			t.Fatal("a malformed seed must be refused, not resolved")
 		}
 		if target != "" {
-			t.Fatalf("an unreadable credential fell back to %q; it must fall back to nothing", target)
+			t.Fatalf("a malformed seed fell back to %q; it must fall back to nothing", target)
 		}
 	})
 }
 
 func TestUpdateWindow(t *testing.T) {
-	credWindow := updatetarget.Window{Start: 1 * time.Hour, End: 2 * time.Hour}
 	envWindow := updatetarget.Window{Start: 5 * time.Hour, End: 6 * time.Hour}
 
-	t.Run("credential beats the env var", func(t *testing.T) {
-		credsDir(t, map[string]string{credUpdateWindow: "01:00-02:00\n"})
-		t.Setenv(envUpdateWindow, "05:00-06:00")
-		w, from := updateWindow()
-		if w != credWindow || from != fromCredential {
-			t.Fatalf("got (%v, %q), want (%v, %q)", w, from, credWindow, fromCredential)
-		}
-	})
-
-	t.Run("env var used when no credential", func(t *testing.T) {
-		noCreds(t)
+	t.Run("env var wins over the default", func(t *testing.T) {
 		t.Setenv(envUpdateWindow, "05:00-06:00")
 		w, from := updateWindow()
 		if w != envWindow || from != fromEnv {
@@ -198,8 +218,7 @@ func TestUpdateWindow(t *testing.T) {
 		}
 	})
 
-	t.Run("neither leaves the default window untouched", func(t *testing.T) {
-		noCreds(t)
+	t.Run("no setting leaves the default window untouched", func(t *testing.T) {
 		t.Setenv(envUpdateWindow, "")
 		w, from := updateWindow()
 		if w != updatetarget.DefaultWindow || from != fromDefault {
@@ -209,36 +228,22 @@ func TestUpdateWindow(t *testing.T) {
 
 	// Unlike the target URL, a mistyped window falls back rather than costing the
 	// box its updates: a wrong hour cannot send it to a wrong version.
-	t.Run("unparseable credential falls back to the default", func(t *testing.T) {
-		credsDir(t, map[string]string{credUpdateWindow: "half past three"})
-		t.Setenv(envUpdateWindow, "")
+	t.Run("unparseable setting falls back to the default", func(t *testing.T) {
+		t.Setenv(envUpdateWindow, "half past three")
 		w, from := updateWindow()
 		if w != updatetarget.DefaultWindow || from != fromDefault {
 			t.Fatalf("got (%v, %q), want (%v, %q)", w, from, updatetarget.DefaultWindow, fromDefault)
 		}
 	})
 
-	// The other half of the asymmetry the target URL sets up: the window does not
-	// refuse an unreadable credential, it warns and carries on down the chain, so
-	// the env var below it is still heard. Losing a box's updates over a clock
-	// reading it could not read would be the worse trade.
-	t.Run("unreadable credential defers to the env var", func(t *testing.T) {
-		unreadableCred(t, credUpdateWindow)
-		t.Setenv(envUpdateWindow, "05:00-06:00")
+	// The window has no seed source, so a seed carrying an update target must not
+	// change the window this box applies in.
+	t.Run("a seeded target does not touch the window", func(t *testing.T) {
+		seedFile(t, seededTarget("https://candidate.example.test/target"))
+		t.Setenv(envUpdateWindow, "")
 		w, from := updateWindow()
-		if w != envWindow || from != fromEnv {
-			t.Fatalf("got (%v, %q), want (%v, %q)", w, from, envWindow, fromEnv)
-		}
-	})
-
-	// An empty credential carries no instruction, so the env var below it is
-	// still heard rather than being shadowed into the default.
-	t.Run("empty credential defers to the env var", func(t *testing.T) {
-		credsDir(t, map[string]string{credUpdateWindow: "\n"})
-		t.Setenv(envUpdateWindow, "05:00-06:00")
-		w, from := updateWindow()
-		if w != envWindow || from != fromEnv {
-			t.Fatalf("got (%v, %q), want (%v, %q)", w, from, envWindow, fromEnv)
+		if w != updatetarget.DefaultWindow || from != fromDefault {
+			t.Fatalf("got (%v, %q), want (%v, %q)", w, from, updatetarget.DefaultWindow, fromDefault)
 		}
 	})
 }

@@ -969,8 +969,12 @@ update)
     #    with no prompt (UPDATES.md # 8.4). This proves that loop against a real
     #    source, a real registry pull and the real transaction — and, first, proves
     #    it REFUSES an answer that is not pinned to a digest.
+    #    The target URL itself is NOT set here. It arrives in this boot's seed
+    #    (run-cloud-tests.sh, seed_cred_keyed's third argument), because the seed
+    #    is the only channel a real box has for a per-box fact and an environment
+    #    drop-in would prove a path production never takes (os#407). The address
+    #    below must stay in step with the one that script seeds.
     target_dir=/var/lib/malmo/test-target
-    target_url=http://127.0.0.1:5001/target.json
     mkdir -p "$target_dir"
 
     write_target() { # BRAIN_REF UI_REF -> writes the answer the box will read
@@ -980,13 +984,13 @@ update)
 
     # Restarting host-agent is how a tick is forced: the loop polls every 15
     # minutes but ticks once immediately at startup, and a boot proof cannot wait
-    # a quarter of an hour. The drop-in also opens the window to the whole day and
+    # a quarter of an hour. The drop-in opens the window to the whole day and
     # points the repository assertion at the in-guest registry, which is the same
-    # configurability a box under test gets in production.
+    # configurability a box under test gets in production. The target URL is not
+    # here — it comes from the seed.
     mkdir -p /etc/systemd/system/host-agent.service.d
     cat > /etc/systemd/system/host-agent.service.d/30-update-target.conf <<EOF
 [Service]
-Environment=MALMO_UPDATE_TARGET_URL=${target_url}
 Environment=MALMO_UPDATE_WINDOW=00:00-23:59
 Environment=MALMO_UPDATE_BRAIN_REPO=127.0.0.1:5000/malmo-brain
 Environment=MALMO_UPDATE_UI_REPO=127.0.0.1:5000/malmo-ui
@@ -1016,6 +1020,13 @@ EOF
     brain_id_before_target="$(docker inspect -f '{{.Id}}' malmo-brain 2>/dev/null || true)"
     systemctl restart host-agent.service || fail "update-target: could not restart host-agent"
     sleep 30
+    # The channel, before the behaviour: host-agent must have taken this URL out of
+    # the seed. Without this the apply below would still pass on a box that read the
+    # target from anywhere at all, which is exactly how the credential mechanism
+    # stayed green while doing nothing on a real box (os#404 → os#407).
+    journalctl -u host-agent.service -b --no-pager 2>&1 | grep -q 'from=seed' \
+        || fail "update-target: host-agent did not resolve its target from the seed: $(journalctl -u host-agent.service -b --no-pager 2>&1 | grep -i 'update target' | tail -5)"
+    echo "cloud-assertions: update-target — SEED OK (the box took its update target from the provisioning seed)"
     journalctl -u host-agent.service -b --no-pager 2>&1 | grep -q "refusing the answer" \
         || fail "update-target: host-agent did not log a refusal for an unpinned answer: $(journalctl -u host-agent.service -b --no-pager 2>&1 | grep -i 'update target' | tail -5)"
     [ "$(docker inspect -f '{{.Id}}' malmo-brain 2>/dev/null || true)" = "$brain_id_before_target" ] \
