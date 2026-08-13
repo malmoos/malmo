@@ -56,6 +56,15 @@ type Seed struct {
 	// the box-id + assertion key still work. omitempty so an appliance/un-enrolled
 	// seed round-trips without an empty block.
 	Enrollment EnrollmentCredentials `json:"enrollment,omitempty"`
+	// UpdateTargetURL is the update-target endpoint this box reads (UPDATES.md
+	// # 8.4). Empty means the control plane's fleet endpoint. It is here because
+	// "which control plane does this box belong to" is fixed for the life of the
+	// box, and the seed is written once when the VM is created (ENVIRONMENT.md
+	// # Provisioning & first-boot). It is **configuration, not identity**: unlike
+	// BoxID it is re-read on every boot and never frozen into the brain's SQLite.
+	// host-agent reads it, the brain does not. omitempty so an appliance or
+	// un-steered seed round-trips unchanged.
+	UpdateTargetURL string `json:"update_target_url,omitempty"`
 }
 
 // EnrollmentCredentials is a per-box joohoi/acme-dns account (cloud

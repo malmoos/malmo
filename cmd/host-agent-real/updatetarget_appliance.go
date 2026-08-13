@@ -22,7 +22,7 @@ import (
 //
 // The error is always nil here: the appliance source is the poller this box
 // already runs, so there is no per-box configuration to get wrong. It exists so
-// the hosted half can refuse an unusable update-target credential.
+// the hosted half can refuse an unusable seeded update target.
 func updateTargetSource(p *relmanifest.Poller) (src updatetarget.Source, autoApply bool, name string, err error) {
 	return updatetarget.ManifestSource{Poller: p}, false, string(profile.Appliance), nil
 }
