@@ -22,6 +22,14 @@ import (
 // for a per-box fact. MALMO_UPDATE_TARGET_URL stays underneath it as the local
 // hand-edit the boot proof uses. Empty means the control plane's public endpoint.
 //
+// **The box says who it is.** The seed's box_id goes out as a query parameter,
+// which is what lets the control plane answer for this box and not for the whole
+// fleet (UPDATES.md # 8.1). A box with no box id asks anonymously and gets
+// whatever the endpoint serves everyone, exactly as every box did before. The
+// identity is a bare id on an unauthenticated endpoint and is deliberately weak;
+// the trade-off is written down in UPDATES.md # 8.1 and the real credential is
+// parked in NEXT.md.
+//
 // An unusable seeded target, and a seed that will not parse, are returned as an
 // error rather than resolved away, so the caller can refuse instead of quietly
 // reading the fleet default.
@@ -30,7 +38,7 @@ import (
 // a hosted box has one opinion about its target, and a signed public broadcast
 // would be a second.
 func updateTargetSource(*relmanifest.Poller) (src updatetarget.Source, autoApply bool, name string, err error) {
-	target, from, err := updateTargetURL()
+	target, from, boxID, err := updateTarget()
 	if err != nil {
 		return nil, false, "", err
 	}
@@ -39,12 +47,12 @@ func updateTargetSource(*relmanifest.Poller) (src updatetarget.Source, autoApply
 		shown = updatetarget.DefaultURL
 	}
 	if from == fromDefault {
-		slog.Info("update target resolved", "url", shown, "from", from)
+		slog.Info("update target resolved", "url", shown, "from", from, "box_id", boxID)
 	} else {
 		// Loud on purpose. "This box is not following the fleet" is the first
 		// thing anyone needs to know when one box behaves unlike the rest, and
 		// it has to be visible without knowing to go looking for it.
-		slog.Warn("this box is not following the fleet update target", "url", shown, "from", from)
+		slog.Warn("this box is not following the fleet update target", "url", shown, "from", from, "box_id", boxID)
 	}
-	return updatetarget.HTTPSource{URL: target}, true, string(profile.Hosted), nil
+	return updatetarget.HTTPSource{URL: target, BoxID: boxID}, true, string(profile.Hosted), nil
 }

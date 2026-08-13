@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -41,14 +42,45 @@ type Doer interface {
 type HTTPSource struct {
 	// URL is the update-target endpoint; empty means DefaultURL.
 	URL string
+	// BoxID is this box's identity, sent as the box_id query parameter so the
+	// control plane can answer for this box and not for the fleet (UPDATES.md
+	// # 8.1). Empty means "no identity", and then nothing is sent.
+	BoxID string
 	// HTTP is the client; nil means a plain client with fetchTimeout.
 	HTTP Doer
 }
 
+// requestURL is the exact URL this box asks on.
+//
+// **A box with no identity sends no parameter at all.** An empty `box_id=` is a
+// different statement: it names a box called nothing, and the control plane
+// would have to guess what to do with it. An appliance box, and a hosted box
+// with no seed, both take this path, so their request stays byte-for-byte what
+// it was before boxes said who they are.
+//
+// The parameter is merged into whatever query the configured URL already has,
+// so a box pointed at `…/target?channel=candidate` keeps its channel.
+func (s HTTPSource) requestURL() (string, error) {
+	raw := s.URL
+	if raw == "" {
+		raw = DefaultURL
+	}
+	if s.BoxID == "" {
+		return raw, nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("updatetarget: %s is not a URL: %w", raw, err)
+	}
+	q := u.Query()
+	q.Set("box_id", s.BoxID)
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
 // wireTarget is the answer as it arrives. It is a CONTRACT WITH THE CONTROL
-// PLANE (malmoos/cloud, internal/portal/updates.go): encoding/json silently
-// drops what it does not model, so a rename on either side is a two-repo change,
-// not a refactor.
+// PLANE: encoding/json silently drops what it does not model, so a rename on
+// either side is a two-repo change, not a refactor.
 //
 // **Unknown fields are ignored on purpose.** The answer may carry more than the
 // box models — that is how the sender ships a new optional field without a fleet
@@ -61,6 +93,9 @@ type wireTarget struct {
 	UIImage     string    `json:"ui_image"`
 	UIDigest    string    `json:"ui_digest"`
 	PublishedAt time.Time `json:"published_at"`
+	// Window is optional. An answer that leaves it out has no opinion about
+	// when this box may update, and the box then keeps its own setting.
+	Window string `json:"window"`
 }
 
 // Target reads the update-target URL.
@@ -75,9 +110,9 @@ type wireTarget struct {
 // that is not JSON — is an error, and the loop treats it as a no-op that keeps
 // the box on its current version.
 func (s HTTPSource) Target(ctx context.Context) (Target, error) {
-	url := s.URL
-	if url == "" {
-		url = DefaultURL
+	url, err := s.requestURL()
+	if err != nil {
+		return Target{}, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
@@ -119,5 +154,6 @@ func (s HTTPSource) Target(ctx context.Context) (Target, error) {
 		UIImage:     w.UIImage,
 		UIDigest:    w.UIDigest,
 		PublishedAt: w.PublishedAt,
+		Window:      w.Window,
 	}, nil
 }
