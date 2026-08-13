@@ -118,14 +118,39 @@ type Loop struct {
 	// moved.
 	lastWindow string
 	// attempted is the target version this loop last started an update for, and
-	// the window occurrence it did it in. One attempt per window per version: a
-	// failed update reverts the box, so the next tick sees the same difference
-	// again, and without this the box would retry a bad target every quarter of
-	// an hour until the window closed.
+	// the night it did it in. One attempt per night per version: a failed
+	// update reverts the box, so the next tick sees the same difference again,
+	// and without this the box would retry a bad target every quarter of an
+	// hour until the window closed.
+	//
+	// **night, not the occurrence's exact start instant.** The window can now
+	// change on every tick (an answer can move it at any poll, UPDATES.md #
+	// 8.4), so comparing exact start timestamps breaks: a same-night change to
+	// the window's start moves the occurrence's timestamp without moving its
+	// calendar date, and comparing timestamps would read that as "a later
+	// occurrence" and let the same version be retried twice in one night. The
+	// date is stable across such a shift; it only advances on a genuinely new
+	// night. See occurrenceNight.
 	attempted struct {
 		version string
-		window  time.Time
+		night   time.Time
 	}
+}
+
+// occurrenceNight is the calendar date (local midnight) of the window
+// occurrence that contains t, using w's own wrap-past-midnight rollback
+// (Window.Occurrence) so a window spanning local midnight (e.g. "23:30-00:30")
+// still counts as one night, not two.
+//
+// This exists instead of comparing w.Occurrence(t) directly because w can
+// change between ticks: the answer can move the window's start on any poll.
+// The occurrence's exact start instant moves with it, but its calendar date
+// does not, as long as the shift keeps the occurrence on the same night. That
+// is what makes the one-attempt-per-night guard in Tick immune to a same-night
+// window nudge while still opening back up on the next real night.
+func occurrenceNight(w Window, t time.Time) time.Time {
+	start := w.Occurrence(t)
+	return time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
 }
 
 func (l *Loop) now() time.Time {
@@ -298,13 +323,13 @@ func (l *Loop) Tick(ctx context.Context) {
 			"brain", t.Version, "step", "waiting", "zone", now.Location().String())
 		return
 	}
-	if occ := w.Occurrence(now); l.attempted.version == t.Version && !occ.After(l.attempted.window) {
+	if night := occurrenceNight(w, now); l.attempted.version == t.Version && !night.After(l.attempted.night) {
 		// Already tried this version tonight. If it failed it has already put
 		// the box back, and the next window is soon enough to try again.
 		return
 	}
 
-	l.attempted.version, l.attempted.window = t.Version, w.Occurrence(now)
+	l.attempted.version, l.attempted.night = t.Version, occurrenceNight(w, now)
 	l.lastQuiet = ""
 	jobID, err := l.Applier.StartUpdate(t.BrainImage, t.UIImage)
 	if err != nil {

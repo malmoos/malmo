@@ -298,6 +298,64 @@ func TestTick_OneAttemptPerWindow(t *testing.T) {
 	}
 }
 
+// A window that moves within the same night must not look like a new night.
+// The answer can move a box's window on any poll (UPDATES.md # 8.4), so the
+// one-attempt-per-night guard has to survive that: the same version, still
+// failing, still reverted, must not be retried twice before the sun comes up
+// just because the control plane nudged the hour in between.
+func TestTick_AWindowThatMovesWithinTheNightDoesNotDoubleApply(t *testing.T) {
+	ap := &fakeApplier{}
+	tgt := goodTarget()
+	tgt.Window = "12:00-13:00"
+	now := at(12, 12, 5)
+	src := &fakeSource{target: tgt}
+	l := newLoop(src, fakeRunning{brain: oldBrain, ui: oldUI}, ap, &now)
+	l.Tick(context.Background())
+	if len(ap.calls) != 1 {
+		t.Fatalf("started %d updates on the first tick, want 1", len(ap.calls))
+	}
+
+	// Same version, same night, later start — a plausible control-plane nudge,
+	// not a new day.
+	later := goodTarget()
+	later.Window = "12:10-13:00"
+	src.target = later
+	now = at(12, 12, 20)
+	l.Tick(context.Background())
+	if len(ap.calls) != 1 {
+		t.Fatalf("started %d updates after the window moved within the same night, want still 1", len(ap.calls))
+	}
+}
+
+// The companion case: a version that is still failing does get retried the
+// next night, exactly as TestTick_OneAttemptPerWindow already proves for a
+// window that never changes. This one keeps a moved window in play across the
+// day boundary, so a fix for the case above cannot solve it by making the
+// guard too sticky to ever open again.
+func TestTick_SameVersionNextNightStillAppliesWithAMovedWindow(t *testing.T) {
+	ap := &fakeApplier{}
+	tgt := goodTarget()
+	tgt.Window = "12:00-13:00"
+	now := at(12, 12, 5)
+	src := &fakeSource{target: tgt}
+	l := newLoop(src, fakeRunning{brain: oldBrain, ui: oldUI}, ap, &now)
+	l.Tick(context.Background())
+	if len(ap.calls) != 1 {
+		t.Fatalf("started %d updates on the first tick, want 1", len(ap.calls))
+	}
+
+	// A different night, and the window has moved again since. Still the same
+	// version: the guard must open back up regardless.
+	later := goodTarget()
+	later.Window = "12:10-13:00"
+	src.target = later
+	now = at(13, 12, 20)
+	l.Tick(context.Background())
+	if len(ap.calls) != 2 {
+		t.Fatalf("started %d updates the next night, want 2", len(ap.calls))
+	}
+}
+
 func TestTick_ANewVersionIsTriedInTheSameWindow(t *testing.T) {
 	ap := &fakeApplier{}
 	src := &fakeSource{target: goodTarget()}
