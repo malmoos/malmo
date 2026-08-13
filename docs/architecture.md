@@ -160,7 +160,9 @@ So this doc isn't read as a claim about the finished product:
   #401), consumed once by host-agent: it asks a source, validates the answer,
   compares it with the pair the box declares, and starts the same job an admin
   would. On **hosted** the source is the control plane's public update-target
-  URL and the box applies without a prompt, inside the 03:00–04:00 window; on
+  URL, asked with the box's own `box_id` (#408) so the answer can be per box,
+  and the box applies without a prompt, inside the window the answer names or
+  the 03:00–04:00 default; on
   **appliance** the source is the signed release manifest and the box only
   learns its target, because the control plane there is admin-prompted. Every
   answer must name both images pinned to a digest in an expected repository, or

@@ -42,14 +42,19 @@ func startUpdateTarget(brainCfg brainlaunch.Config, a *hostagent.Agent, poller *
 			// compares against the ref actually running.
 			BrainDefault: brainCfg.Image,
 		},
-		Applier:   agentApplier{a},
-		Repos:     repositories(),
-		Window:    window,
-		AutoApply: autoApply,
-		Profile:   name,
+		Applier: agentApplier{a},
+		Repos:   repositories(),
+		// The box's own window. An answer that names one wins over it, so this
+		// is the fallback the loop uses until a source has an opinion.
+		Window:     window,
+		WindowFrom: windowFrom,
+		AutoApply:  autoApply,
+		Profile:    name,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	go loop.Run(ctx)
+	// The window here is the local setting. A source that names its own window
+	// replaces it, and the loop logs that with from=answer when it happens.
 	slog.Info("update target loop started", "profile", name, "window", window.String(), "from", windowFrom)
 	return cancel
 }

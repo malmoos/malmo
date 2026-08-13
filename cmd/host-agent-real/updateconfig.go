@@ -1,131 +1,176 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/malmoos/malmo/internal/hostagent/updatetarget"
+	"github.com/malmoos/malmo/internal/profile"
 )
 
 // This file resolves the two per-box update settings: which update target this
-// box reads, and the window it applies in. Both can arrive three ways, and the
-// precedence is the same for both:
+// box reads, and the window it applies in.
 //
-//	systemd credential  >  environment variable  >  built-in default
+// The target URL comes from the provisioning seed first:
 //
-// The credential wins because it is the **per-box fact**, injected at provision
-// time down the same path malmo.seed already uses (ENVIRONMENT.md
-// # Provisioning). A hosted box has no SSH (ENVIRONMENT.md # Access & files), so
-// after boot there is no other way in; without this, a provisioned box could
-// never be pointed at a candidate release. The environment variable stays below
-// it as the local hand-edit: an operator drop-in, or the CI boot proof pointing
-// the loop at a server inside the guest.
+//	seed  >  environment variable  >  built-in default
+//
+// The seed is the **only channel a real box has** for a per-box fact. It arrives
+// as metadata user-data and is written once, when the VM is created
+// (ENVIRONMENT.md # Provisioning & first-boot). "Which control plane does this
+// box belong to" is fixed for the life of the box, so the seed is the right home
+// for it. A hosted box has no SSH (ENVIRONMENT.md # Access & files), so without
+// this a provisioned box could never be pointed at a candidate release. The
+// environment variable stays below it as the local hand-edit: an operator
+// drop-in, or the CI boot proof pointing the loop at a server inside the guest.
+//
+// The window has no seed source. It has to be changeable while the box runs, and
+// the seed can never be rewritten, so the control plane's answer is its home
+// (UPDATES.md # 8.1). What is resolved here is only the fallback under it:
+//
+//	answer  >  environment variable  >  built-in default
+//
+// The answer is read by the loop, not here, because it arrives on every poll
+// rather than once at startup (internal/hostagent/updatetarget, Loop.windowFor).
 //
 // **Nothing here is build-tagged, on purpose.** The target URL only matters on
 // the hosted build, but `go vet ./...` and `go test ./...` both run untagged, so
 // anything behind `//go:build hosted` is neither vetted nor tested by CI. The tag
 // stays on the call site (updatetarget_hosted.go); the logic lives here.
 const (
-	credUpdateTargetURL = "malmo.update_target_url"
-	credUpdateWindow    = "malmo.update_window"
-
+	envSeedPath        = "MALMO_SEED_PATH"
 	envUpdateTargetURL = "MALMO_UPDATE_TARGET_URL"
 	envUpdateWindow    = "MALMO_UPDATE_WINDOW"
 )
 
-// Which of the three sources won, for the startup log.
+// Which source won, for the startup log.
 const (
-	fromCredential = "credential"
-	fromEnv        = "env"
-	fromDefault    = "default"
+	fromSeed    = "seed"
+	fromEnv     = "env"
+	fromDefault = "default"
 )
 
-// credentialsDirEnv is systemd's handle on the credentials it passed this unit.
-// systemd sets it only when the unit imports at least one credential that was
-// actually delivered.
-const credentialsDirEnv = "CREDENTIALS_DIRECTORY"
-
-// readCredential reads the systemd credential called name.
-//
-// ok is false when this unit was passed no credentials at all, or none by that
-// name. That is the ordinary case (a box provisioned without either credential
-// keeps the fleet behaviour), so it is not an error. A credential that is there
-// but cannot be read is, because the caller asked for something that exists and
-// did not get it.
-func readCredential(name string) (value string, ok bool, err error) {
-	dir := os.Getenv(credentialsDirEnv)
-	if dir == "" {
-		return "", false, nil
+// seedPath is where this box's provisioning seed lands. The override matches the
+// brain's (cmd/brain/main.go), so a test or a boot proof points both sides at one
+// file with one variable.
+func seedPath() string {
+	if v := os.Getenv(envSeedPath); v != "" {
+		return v
 	}
-	b, err := os.ReadFile(filepath.Join(dir, name))
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("read credential %s: %w", name, err)
-	}
-	// Trimmed: a credential written by a provisioner is text, and a trailing
-	// newline is the most likely way to hand over a URL that then does not parse.
-	return strings.TrimSpace(string(b)), true, nil
+	return profile.DefaultSeedPath
 }
 
-// updateTargetURL resolves the update-target endpoint for this box. An empty
-// target means updatetarget.DefaultURL, the fleet endpoint.
+// seedUpdateFacts reads the two per-box update facts out of the provisioning
+// seed: the endpoint this box asks, and the identity it says it is when it asks.
 //
-// **A credential that is present but unusable is an error, never a fallback.**
-// A box carrying this credential was deliberately pointed somewhere by whoever
-// provisioned it; silently reading the fleet default instead would move a box
-// that is meant to be pinned to a candidate straight onto stable, which is the
-// one outcome pinning exists to prevent. The caller refuses rather than updates.
+// **One read for both.** They live in one file, so two reads could see two
+// different files and pair a box id with a target that was never meant for it.
+// An empty target means the seed named none and the caller should look further
+// down the chain. An empty box id means this box has no identity to send, which
+// is every appliance box and any hosted box seeded without one.
 //
-// Only the credential is validated. The environment variable is the operator's
+// It reads the file itself instead of calling profile.ReadSeed. That reader is
+// the brain's: it hard-errors on a seed with no box_id and no
+// assertion-verification key, which is right for the brain and wrong here.
+// host-agent wants one optional field, so a box seeded only for updates, and a
+// box with no seed at all, must both work. The struct is still profile.Seed, so
+// there is one definition of the wire shape.
+//
+// Three seed states, three answers:
+//
+//   - **Absent.** The appliance case, and a hosted box provisioned without a
+//     seed. Not an error. Fall through, and say so once.
+//   - **Present and readable.** Use update_target_url when it is set. An empty
+//     field carries no instruction, so it falls through like an absent one.
+//   - **Present and malformed.** An error. Bytes we cannot parse might have
+//     carried a target and we cannot tell, so reading the fleet endpoint instead
+//     could move a box that was meant to be pinned onto stable. Same call, and
+//     the same reason, as an unusable URL below.
+func seedUpdateFacts() (target, boxID string, err error) {
+	path := seedPath()
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		slog.Info("no provisioning seed; taking the update target from the environment or the default", "src", path)
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("read seed %s: %w", path, err)
+	}
+	var s profile.Seed
+	if err := json.Unmarshal(b, &s); err != nil {
+		return "", "", fmt.Errorf("parse seed %s: %w", path, err)
+	}
+	// Trimmed: the seed is text written by a provisioner, and stray whitespace is
+	// the most likely way to hand over a URL that then does not parse.
+	target = strings.TrimSpace(s.UpdateTargetURL)
+	boxID = strings.TrimSpace(s.BoxID)
+	if target == "" {
+		slog.Info("the provisioning seed names no update target; taking it from the environment or the default", "src", path)
+	}
+	return target, boxID, nil
+}
+
+// updateTarget resolves what this box needs to ask its source: the endpoint, and
+// the box id it sends with the question. An empty target means
+// updatetarget.DefaultURL, and an empty box id means the box asks anonymously.
+//
+// The box id comes from the seed whatever the target's source is. Identity and
+// endpoint are separate facts: a box whose URL is a local hand-edit is still the
+// same box, so it still says who it is.
+//
+// **A seeded target that is unusable is an error, never a fallback.** A box
+// carrying it was deliberately pointed somewhere by whoever provisioned it;
+// silently reading the fleet default instead would move a box that is meant to be
+// pinned to a candidate straight onto stable, which is the one outcome pinning
+// exists to prevent. The caller refuses rather than updates.
+//
+// Only the seeded value is validated. The environment variable is the operator's
 // own hand-edit on a box they can already reach, and it has never been checked;
 // tightening it is a separate change, not a side effect of this one.
-func updateTargetURL() (target, from string, err error) {
-	raw, ok, err := readCredential(credUpdateTargetURL)
+func updateTarget() (target, from, boxID string, err error) {
+	raw, boxID, err := seedUpdateFacts()
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	if ok {
+	if raw != "" {
 		if err := checkTargetURL(raw); err != nil {
-			return "", "", err
+			return "", "", "", err
 		}
-		return raw, fromCredential, nil
+		return raw, fromSeed, boxID, nil
 	}
 	if v := os.Getenv(envUpdateTargetURL); v != "" {
-		return v, fromEnv, nil
+		return v, fromEnv, boxID, nil
 	}
-	return "", fromDefault, nil
+	return "", fromDefault, boxID, nil
 }
 
 // checkTargetURL rejects anything the box could not actually fetch from. It is
 // deliberately shallow (an absolute http or https URL with a host) because the point
-// is to catch a provisioning mistake (an empty file, a hostname with no scheme,
-// a pasted shell fragment), not to police where a box may be pointed.
+// is to catch a provisioning mistake (a hostname with no scheme, a pasted shell
+// fragment), not to police where a box may be pointed.
 func checkTargetURL(s string) error {
-	if s == "" {
-		return fmt.Errorf("credential %s is empty", credUpdateTargetURL)
-	}
 	u, err := url.Parse(s)
 	if err != nil {
-		return fmt.Errorf("credential %s is not a URL: %w", credUpdateTargetURL, err)
+		return fmt.Errorf("seed update_target_url is not a URL: %w", err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("credential %s must be an http or https URL, got %q", credUpdateTargetURL, s)
+		return fmt.Errorf("seed update_target_url must be an http or https URL, got %q", s)
 	}
 	if u.Host == "" {
-		return fmt.Errorf("credential %s has no host: %q", credUpdateTargetURL, s)
+		return fmt.Errorf("seed update_target_url has no host: %q", s)
 	}
 	return nil
 }
 
-// updateWindow resolves the window an update may start in.
+// updateWindow resolves the window an update may start in, unless the source's
+// answer names one of its own. It is the box's local setting, and the answer
+// sits above it.
 //
 // Unlike the target URL, an unreadable window falls back with a warning. The two
 // are not symmetric: a wrong window can only apply an update at the wrong hour,
@@ -144,15 +189,9 @@ func updateWindow() (updatetarget.Window, string) {
 }
 
 // windowSetting returns the raw window setting and where it came from. An empty
-// credential counts as absent rather than as "use the default": it carries no
-// instruction, so the environment variable below it should still be heard.
+// variable counts as absent rather than as "use the default": it carries no
+// instruction.
 func windowSetting() (raw, from string) {
-	v, ok, err := readCredential(credUpdateWindow)
-	if err != nil {
-		slog.Warn("update window credential is not readable; falling back", "err", err)
-	} else if ok && v != "" {
-		return v, fromCredential
-	}
 	if v := os.Getenv(envUpdateWindow); v != "" {
 		return v, fromEnv
 	}

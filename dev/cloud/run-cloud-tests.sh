@@ -204,11 +204,22 @@ if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then ACCEL=kvm; fi
 #     config and :443 comes up (the #278 regression class), not that a cert exists.
 #     A seed with no enrollment (the prior shape) skipped that pass entirely, which
 #     is exactly why CI never caught a hosted box failing to bind :443.
+#   - update_target_url: OPTIONAL third argument, and the only boot that passes it
+#     is the update boot (os#407). The seed is the only channel a real box has for
+#     a per-box fact, so this is the one place the lane can prove that channel;
+#     an environment drop-in would prove a path production never takes. Left out
+#     everywhere else, which is what an un-steered box receives — those boots keep
+#     the dead-port MALMO_UPDATE_TARGET_URL from bootstrap.sh.
 # Prints `io.systemd.credential.binary:malmo.seed=<base64>`.
-seed_cred_keyed() { # box_id key_b64 -> SMBIOS value string
-    local box_id="$1" key="$2" json
-    json="$(printf '{"box_id":"%s","assertion_verification_key":"%s","enrollment":{"subdomain":"%s","username":"%s","password":"%s"}}' \
-        "$box_id" "$key" "cloud-lane-acmedns-subdomain" "cloud-lane-acmedns-user" "cloud-lane-acmedns-pass")"
+seed_cred_keyed() { # box_id key_b64 [update_target_url] -> SMBIOS value string
+    local box_id="$1" key="$2" target="${3:-}" json target_field=""
+    # An `if`, not `[ … ] && …`: under `set -e` a false test as the whole
+    # statement takes the script down with it.
+    if [ -n "$target" ]; then
+        target_field="$(printf '"update_target_url":"%s",' "$target")"
+    fi
+    json="$(printf '{"box_id":"%s","assertion_verification_key":"%s",%s"enrollment":{"subdomain":"%s","username":"%s","password":"%s"}}' \
+        "$box_id" "$key" "$target_field" "cloud-lane-acmedns-subdomain" "cloud-lane-acmedns-user" "cloud-lane-acmedns-pass")"
     printf 'io.systemd.credential.binary:malmo.seed=%s' "$(printf '%s' "$json" | base64 -w0)"
 }
 # The unkeyed boots: a random 32-byte key (this box holds no matching private key).
@@ -452,6 +463,10 @@ fi
 # local image store, and drives POST /api/v1/system/update. It then does it again with
 # a brain that starts but never serves, to prove the revert. Everything below that
 # endpoint had only ever met a fake Docker.
+#
+# It is also the boot that proves the seeded update target (os#407): its seed names
+# the in-guest source below, and cloud-assertions.sh asserts host-agent resolved the
+# target `from=seed`. Nothing else exercises the one channel a real box has.
 if should_run update; then
     [ -n "$GO" ] && [ -x "$GO" ] || {
         echo "update boot needs go to mint the owner assertion; none found (\$GO='${GO:-}')" >&2
@@ -464,6 +479,12 @@ if should_run update; then
         echo "update boot: failed to mint the owner assertion (go run ./dev/cloud/mkassertion)" >&2
         exit 1
     }
+
+    # The update-target source the seed points this box at. It must match the
+    # address cloud-assertions.sh serves target.json on, inside the guest: the
+    # seed is delivered here, the file server is started there, and nothing
+    # cross-checks the two but a failing boot.
+    UPDATE_TARGET_URL=http://127.0.0.1:5001/target.json
 
     # Same explicit-globals reasoning as the access boot: OVERLAY and FIRMWARE are
     # run_boot's globals and the boots above leave them pointing elsewhere.
@@ -478,7 +499,7 @@ if should_run update; then
     # wait failing on purpose before it reverts. Under CI's TCG-only QEMU that adds up.
     VERDICT_TIMEOUT=1500
     if ! run_boot "update" "update" \
-        -smbios "type=11,value=$(seed_cred_keyed "$BOX_ID_UPDATE" "$UPDATE_KEY")" \
+        -smbios "type=11,value=$(seed_cred_keyed "$BOX_ID_UPDATE" "$UPDATE_KEY" "$UPDATE_TARGET_URL")" \
         -smbios "type=11,value=io.systemd.credential.binary:malmo.sso_token=$(printf '%s' "$UPDATE_TOKEN" | base64 -w0)"; then
         echo "cloud update proof: ${VERDICT}" >&2
         exit 1

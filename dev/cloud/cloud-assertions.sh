@@ -969,25 +969,37 @@ update)
     #    with no prompt (UPDATES.md # 8.4). This proves that loop against a real
     #    source, a real registry pull and the real transaction — and, first, proves
     #    it REFUSES an answer that is not pinned to a digest.
+    #    The target URL itself is NOT set here. It arrives in this boot's seed
+    #    (run-cloud-tests.sh, seed_cred_keyed's third argument), because the seed
+    #    is the only channel a real box has for a per-box fact and an environment
+    #    drop-in would prove a path production never takes (os#407). The address
+    #    below must stay in step with the one that script seeds.
     target_dir=/var/lib/malmo/test-target
-    target_url=http://127.0.0.1:5001/target.json
     mkdir -p "$target_dir"
 
-    write_target() { # BRAIN_REF UI_REF -> writes the answer the box will read
-        printf '{"version":"%s","channel":"stable","brain_image":"%s","brain_digest":"%s","ui_image":"%s","ui_digest":"%s","published_at":"2026-01-01T00:00:00Z","an_unknown_field":true}\n' \
-            "$3" "$1" "${1##*@}" "$2" "${2##*@}" > "$target_dir/target.json"
+    write_target() { # BRAIN_REF UI_REF VERSION [WINDOW] -> the answer the box reads
+        # The window is optional on the wire (os#408). Left out, the answer has
+        # no opinion and the box keeps MALMO_UPDATE_WINDOW; set, it wins.
+        local window=""
+        if [ -n "${4:-}" ]; then window=",\"window\":\"$4\""; fi
+        printf '{"version":"%s","channel":"stable","brain_image":"%s","brain_digest":"%s","ui_image":"%s","ui_digest":"%s","published_at":"2026-01-01T00:00:00Z"%s,"an_unknown_field":true}\n' \
+            "$3" "$1" "${1##*@}" "$2" "${2##*@}" "$window" > "$target_dir/target.json"
     }
 
     # Restarting host-agent is how a tick is forced: the loop polls every 15
     # minutes but ticks once immediately at startup, and a boot proof cannot wait
-    # a quarter of an hour. The drop-in also opens the window to the whole day and
-    # points the repository assertion at the in-guest registry, which is the same
-    # configurability a box under test gets in production.
+    # a quarter of an hour. The drop-in points the repository assertion at the
+    # in-guest registry, which is the same configurability a box under test gets
+    # in production. The target URL is not here — it comes from the seed.
+    #
+    # **The window in the drop-in is one minute wide and almost certainly shut.**
+    # That is the point (os#408): the apply below can only happen if the window in
+    # the ANSWER outranks this variable. A whole-day variable here would let the
+    # apply pass whether the box read the answer's window or ignored it.
     mkdir -p /etc/systemd/system/host-agent.service.d
     cat > /etc/systemd/system/host-agent.service.d/30-update-target.conf <<EOF
 [Service]
-Environment=MALMO_UPDATE_TARGET_URL=${target_url}
-Environment=MALMO_UPDATE_WINDOW=00:00-23:59
+Environment=MALMO_UPDATE_WINDOW=04:00-04:01
 Environment=MALMO_UPDATE_BRAIN_REPO=127.0.0.1:5000/malmo-brain
 Environment=MALMO_UPDATE_UI_REPO=127.0.0.1:5000/malmo-ui
 EOF
@@ -1016,6 +1028,18 @@ EOF
     brain_id_before_target="$(docker inspect -f '{{.Id}}' malmo-brain 2>/dev/null || true)"
     systemctl restart host-agent.service || fail "update-target: could not restart host-agent"
     sleep 30
+    # The channel, before the behaviour: host-agent must have taken this URL out of
+    # the seed. Without this the apply below would still pass on a box that read the
+    # target from anywhere at all, which is exactly how the credential mechanism
+    # stayed green while doing nothing on a real box (os#404 → os#407).
+    journalctl -u host-agent.service -b --no-pager 2>&1 | grep -q 'from=seed' \
+        || fail "update-target: host-agent did not resolve its target from the seed: $(journalctl -u host-agent.service -b --no-pager 2>&1 | grep -i 'update target' | tail -5)"
+    echo "cloud-assertions: update-target — SEED OK (the box took its update target from the provisioning seed)"
+    # The box says which box it is. Without the id in the ask, the answer is the
+    # same for every box and one box can never be moved on its own (os#408).
+    journalctl -u host-agent.service -b --no-pager 2>&1 | grep -q "update target.*box_id=$box_id" \
+        || fail "update-target: host-agent did not resolve a box_id to send with its ask: $(journalctl -u host-agent.service -b --no-pager 2>&1 | grep -i 'update target' | tail -5)"
+    echo "cloud-assertions: update-target — IDENTITY OK (the box asks as box_id=$box_id)"
     journalctl -u host-agent.service -b --no-pager 2>&1 | grep -q "refusing the answer" \
         || fail "update-target: host-agent did not log a refusal for an unpinned answer: $(journalctl -u host-agent.service -b --no-pager 2>&1 | grep -i 'update target' | tail -5)"
     [ "$(docker inspect -f '{{.Id}}' malmo-brain 2>/dev/null || true)" = "$brain_id_before_target" ] \
@@ -1028,8 +1052,22 @@ EOF
         || fail "update-target: could not publish the gen-3 brain image"
     ui_v3="$(publish_gen "$(docker inspect -f '{{.Config.Image}}' malmo-ui)" malmo-ui:v3 'LABEL malmo.test.generation=v3')" \
         || fail "update-target: could not publish the gen-3 ui image"
-    write_target "$brain_v3" "$ui_v3" "v0.0.0-target-test"
+    # The answer carries a whole-day window. The drop-in above says 04:00-04:01,
+    # so the apply below is only possible if the box took the window from here.
+    write_target "$brain_v3" "$ui_v3" "v0.0.0-target-test" "00:00-23:59"
     systemctl restart host-agent.service || fail "update-target: could not restart host-agent for the pinned answer"
+
+    # The window, before the apply it enables. from=answer is the whole claim:
+    # where the box got the hour from, not just that it updated.
+    window_taken=""
+    for _i in $(seq 1 60); do
+        journalctl -u host-agent.service -b --no-pager 2>&1 \
+            | grep -q 'taking the update window from the answer.*from=answer' && { window_taken=yes; break; }
+        sleep 1
+    done
+    [ -n "$window_taken" ] \
+        || fail "update-target: host-agent did not take the update window from the answer: $(journalctl -u host-agent.service -b --no-pager 2>&1 | grep -i 'update target\|window' | tail -5)"
+    echo "cloud-assertions: update-target — WINDOW OK (the answer's window outranked MALMO_UPDATE_WINDOW)"
 
     applied=""
     for _i in $(seq 1 420); do

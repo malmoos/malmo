@@ -18,6 +18,14 @@ There is no small fix — Caddy's admin must bind `0.0.0.0:2019` (the brain is a
 
 C3b (#207, [hosted-wildcard-cert.md](docs/progress/hosted-wildcard-cert.md)) configures the hosted box's Caddy to push its `_acme-challenge` TXT to an acme-dns endpoint — a box-side constant `MALMO_ACMEDNS_ENDPOINT`, default `https://auth.malmo.network`. **Deployed and confirmed (2026-06-23, `malmoos/cloud` #14):** the cloud control-plane VM now fronts acme-dns with Caddy, exposing only `/update` + `/health` over real Let's Encrypt TLS for `auth.malmo.network` (404 on `/register`, which stays loopback-only), with the authoritative `:53` face delegated and answering publicly. The default `https://auth.malmo.network` is therefore a **confirmed live endpoint**, not a chosen value — the box-side default needs no change. The one remaining piece is the joint real-issuance run: a live box actually obtaining/renewing its `*.<box-id>.malmo.network` wildcard against this endpoint, verified at cloud #6 / CL6 (not an OS-side task — the box-side wiring is complete).
 
+## Authenticate the box to the control plane (the update-target ask, and everything after it)
+
+A hosted box now says which box it is when it asks for its update target: `GET <target-url>?box_id=<id>` (#408, `UPDATES.md` # 8.1). The endpoint is public and unauthenticated, so the identity is a claim, not a proof. Anyone who learns a box-id can read what that box is told to run, and can ask as that box.
+
+That is accepted while the ask is only a **read** of version information, and while the operator path that sets a target sits behind the control plane's own auth. It stops being enough the moment the box **writes**: the report-back in `UPDATES.md` # 8.4 step 5 ("this box is now on v0.7.0, or it failed and rolled back") and the fleet-side auto-halt in # 8.5 both need the control plane to trust who is talking. A fleet view built on an unauthenticated report is a fleet view anyone can lie to.
+
+What is missing is a general box↔cloud credential. The `enrollment` block in `seed.json` is scoped to acme-dns and cannot be reused for this. The seed is the delivery channel — it is the only per-box channel a real box has, and it is write-once (`ENVIRONMENT.md` # Provisioning & first-boot) — so a long-lived per-box secret with an on-box rotation path is the shape to design. Nothing that mutates state should be built on the bare `box_id` in the meantime.
+
 ## Encrypt hosted enrollment credentials at rest (box-side)
 
 The per-box acme-dns credentials the brain ingests from the seed are persisted plaintext in `box_meta` (`store.BoxMetaEnrollment`), matching the cloud producer's MVP posture. The threat is loss of the brain's SQLite: a leaked subdomain/username/password lets an attacker renew certs for that one box, not escalate beyond it. Encrypt at rest when the box's DB lands on shared/backed-up infra. The cloud side tracks the symmetric item for its own `boxes` table (`malmoos/cloud` NEXT.md).
