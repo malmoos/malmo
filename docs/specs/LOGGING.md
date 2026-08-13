@@ -95,7 +95,7 @@ RateLimitBurst=10000
 - **128 MB volatile cap** for the pre-`/var/log/journal/`-ready early-boot window.
 - **Rate limit: 10000 messages / 30s per systemd unit.** Generous burst for system services. Caps `sshd` brute-force spam, runaway daemons, anything attributed to a real systemd unit.
 
-Docker is the deliberate exception, at `/etc/systemd/system/docker.service.d/malmo-logging.conf`:
+Docker is the deliberate exception, at `/etc/systemd/system/docker.service.d/10-malmo-logging.conf`:
 
 ```
 [Service]

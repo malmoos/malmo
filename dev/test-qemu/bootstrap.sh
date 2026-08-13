@@ -21,7 +21,7 @@ TEST_DIR="${REPO_ROOT}/dev/test-qemu"
 WORK="${REPO_ROOT}/.dev/qemu"
 EXTRA="${TEST_DIR}/mkosi.extra"
 CANARY="${WORK}/.malmo-medium-ready"
-CANARY_VERSION="v26"  # bump when mkosi.conf changes require a clean rebuild
+CANARY_VERSION="v27"  # bump when mkosi.conf changes require a clean rebuild
 PASSPHRASE_FILE="${TEST_DIR}/mkosi.passphrase"  # LUKS recovery key (slice 0023); gitignored
 IMAGE_OUT="${WORK}/malmo-medium.raw"
 SSH_KEY="${WORK}/ssh-key"
@@ -208,7 +208,36 @@ mkdir -p "$EXTRA/etc/systemd/system" \
          "$EXTRA/etc/ssh/sshd_config.d" \
          "$EXTRA/etc/pam.d" \
          "$EXTRA/etc/malmo/secrets" \
+         "$EXTRA/etc/docker" \
+         "$EXTRA/etc/systemd/system/docker.service.d" \
          "$EXTRA/usr/local/bin"
+
+# Container logging. Docker's daemon-wide log driver must be journald
+# (LOGGING.md # Docker daemon uses the `journald` log driver): host-agent-real's
+# per-app log tail runs `journalctl CONTAINER_NAME=<container>`
+# (internal/hostagent/journalsource), and CONTAINER_NAME is set only by that
+# driver. Under Docker's json-file default the match returns nothing and the
+# dashboard's Logs tab waits forever, for every app. Kept byte-identical to the
+# hosted lane's committed dev/cloud/mkosi.extra/etc/docker/daemon.json — both
+# real profiles run the same host-agent binary against the same expectation.
+cat > "$EXTRA/etc/docker/daemon.json" <<'EOF'
+{
+  "log-driver": "journald"
+}
+EOF
+
+# Docker is the deliberate exception to journald's per-unit rate limit
+# (LOGGING.md # Tuning). journald enforces the limit against _SYSTEMD_UNIT, so
+# with the driver above every container on the box shares ONE bucket attributed
+# to docker.service; under the 10000-per-30s default a single chatty container
+# silently starves every other container's lines. Disabled here rather than
+# globally, so real system services keep their cap. Byte-identical to the
+# hosted lane's dev/cloud/mkosi.extra/.../10-malmo-logging.conf.
+cat > "$EXTRA/etc/systemd/system/docker.service.d/10-malmo-logging.conf" <<'EOF'
+[Service]
+LogRateLimitIntervalSec=0
+LogRateLimitBurst=0
+EOF
 
 # Recovery keyfile baked at the production path STORAGE.md specifies
 # (/etc/malmo/secrets/luks-recovery.key, mode 0400, root-owned). The
