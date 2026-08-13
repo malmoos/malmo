@@ -171,7 +171,8 @@ stage_build_go "$MKCATALOG_BIN" "${REPO_ROOT}/dev/mkcatalog/"
 # window, pull the live fleet images and update the box under test mid-assertion.
 # Pointing it at a dead port makes every boot's source unreachable, which the loop
 # treats as a no-op — the behaviour the box owes an offline network anyway. The update
-# boot overrides this with its own drop-in and its own in-guest source.
+# boot overrides this from its SEED, not from a drop-in (os#407): the seed is the only
+# channel a real box has for a per-box fact, and it outranks this variable.
 cat > "$EXTRA/etc/systemd/system/host-agent.service.d/20-cloud-test-catalog.conf" <<'EOF'
 [Service]
 Environment=MALMO_CATALOG_URL=http://127.0.0.1:9
