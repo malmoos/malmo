@@ -213,10 +213,11 @@ func TestNoUnmodeledFields(t *testing.T) {
 }
 
 // TestExternalCostsSurviveTheDigest is the byte-fidelity proof for the newest
-// field on the wire. No published app declares a cost yet, so the pinned fixture
-// cannot exercise it — this builds a snapshot that does, the way the control
-// plane marshals one, and checks the box reproduces the digest over it and
-// projects it onto the detail page.
+// field on the wire. It builds a snapshot that declares a cost, the way the
+// control plane marshals one, and checks the box reproduces the digest over it
+// and projects it onto the detail page. The pinned fixture now carries a
+// published app that declares costs, but the case is still constructed here so
+// the proof does not depend on which apps happen to be published.
 //
 // The digest is computed over json.Marshal of the app array, so a mirror that
 // declared ExternalCosts in a different position than the control plane's App
