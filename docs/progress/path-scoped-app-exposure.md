@@ -35,7 +35,7 @@ Two shapes and nothing else: an exact path, or a path plus everything under it. 
 
 **The route builder takes the manifest** (`internal/lifecycle`). `buildRouteConfig(inst, man, host, upstream)`; all four call sites already had `man` in scope. The gate still fires only on `hosted && restricted`, so the appliance route is byte-for-byte what it always was — no scrub, no strip, no gate — even for a manifest that declares public paths.
 
-**The dashboard says what is actually true.** `GET /api/v1/apps/{id}` carries the declared paths, and the Access control names them instead of claiming a bare "Only you can open it". The paths are read from the **instance's own manifest copy** — the same file the route was built from — not from the catalog, so the label cannot drift from the route when the catalog moves on.
+**The dashboard says what is actually true.** `GET /api/v1/apps/{id}` and the exposure `PUT`'s echo both carry the declared paths — through one `withPublicPaths` helper, because these are the two responses that carry an app's exposure and the access label is built from the pair; a response with the exposure but not the paths says "Only me" about an app that is partly open. The Access control names those paths instead of claiming a bare "Only you can open it". The paths are read from the **instance's own manifest copy** — the same file the route was built from — not from the catalog, so the label cannot drift from the route when the catalog moves on.
 
 **The proof runs through real Caddy.** The hosted lane's `access` boot already installs an app and drives both exposure modes end to end; its test-catalog whoami now declares `public_paths`, and the boot asserts the parts a unit test cannot reach: the declared paths answer anonymously, a forged `X-Malmo-User` never reaches the app on either branch while the vouched one still does, `malmo_forward_auth` is stripped on the public branch too, and a **bypass table** stays gated — `/v1extra` (the prefix footgun), `/v1/../`, `//v1/`, `/v1/%2e%2e/`, `/V1x`, `/admin`. The requests are written raw onto the socket, so no client-side normalization softens them.
 
@@ -49,7 +49,6 @@ Two shapes and nothing else: an exact path, or a path plus everything under it. 
 - **Nothing in the catalog declares the field yet.** Langfuse's `status.yml` limitation and Laminar's screening note both still describe the wall as permanent; both are accurate until a catalog manifest actually declares its ingestion paths, which is a `malmoos/store` change, not this one.
 - **The 16-entry cap is not a boundary.** An author with enough entries can still cover an app. The cap keeps the list reviewable; catalog review is what stops the case it cannot.
 - **No audit trail on the public branch.** Anonymous requests bypass the brain entirely, so Activity never sees them. Inherent to the design, now stated rather than assumed.
-- **The exposure `PUT` response does not carry the paths**, only `GET /apps/{id}` does. The dashboard invalidates and refetches after a toggle, so the label is right a beat later; a client that trusted the `PUT` body alone would see the field missing.
 
 ## What's next
 

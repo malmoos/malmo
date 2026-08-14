@@ -385,6 +385,22 @@ func (s *Server) toDTO(i store.Instance, ownerUsername string, e *catalog.Entry)
 	return dto
 }
 
+// withPublicPaths fills in the app's manifest-declared anonymous paths (#415).
+// Every response that carries an app's exposure must carry these too: the
+// dashboard's access label is built from the pair, and a response with the
+// exposure but not the paths says "Only me" about an app that is partly open.
+//
+// The source is the INSTANCE's manifest copy, not the catalog's. That is the
+// file the route builder read, so the label cannot claim a narrower app than
+// Caddy is serving even after the catalog moves on. A missing or unreadable copy
+// leaves the field empty rather than failing the request — the app's own detail
+// page must still render.
+func (s *Server) withPublicPaths(dto *InstanceDTO) {
+	if man, err := s.life.InstanceManifest(dto.ID); err == nil {
+		dto.PublicPaths = man.Access.PublicPaths
+	}
+}
+
 // --- handlers ------------------------------------------------------------
 
 func (s *Server) listCatalog(ctx context.Context, _ *struct{}) (*struct {
@@ -573,15 +589,10 @@ func (s *Server) getApp(ctx context.Context, in *struct {
 		catEntry = &e
 	}
 	dto := s.toDTO(i, owner.Username, catEntry)
+	s.withPublicPaths(&dto)
 	// Mail enrichment for the rebind picker. The manifest comes from the
 	// catalog, so a withdrawn app simply hides the picker (the binding itself
 	// keeps working — lifecycle reads the instance dir's own manifest copy).
-	// The declared public paths come from the INSTANCE's manifest copy, not the
-	// catalog's: the route Caddy is serving was built from that file, and a
-	// catalog that has since moved on must not change what the label claims.
-	if man, err := s.life.InstanceManifest(i.ID); err == nil {
-		dto.PublicPaths = man.Access.PublicPaths
-	}
 	if man, _, err := s.catalog.Load(i.ManifestID); err == nil && man.Mail != nil {
 		dto.MailSupported = true
 		if mp, err := s.store.GetInstanceMailProvider(i.ID); err == nil {

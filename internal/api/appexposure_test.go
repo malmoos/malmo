@@ -182,3 +182,31 @@ func TestGetApp_NoPublicPathsWhenUndeclared(t *testing.T) {
 		t.Fatalf("public_paths = %v, want none", out.Body.PublicPaths)
 	}
 }
+
+// The exposure toggle echoes the app so the dashboard can render without a
+// refetch. That echo must carry the declared public paths too: exposure alone
+// would render "Only me" for an app that is partly open.
+func TestSetAppExposure_EchoCarriesPublicPaths(t *testing.T) {
+	s, id, instDir := hostedExposureServer(t, "u_owner", store.ScopePersonal, "stopped")
+	man := `
+id: cfgapp
+manifest_version: 1
+name: Cfg App
+version: "1.0"
+compose_file: compose.yml
+main_service: app
+main_port: 8080
+access:
+  public_paths: ["/v1/*"]
+`
+	if err := os.WriteFile(filepath.Join(instDir, "manifest.yml"), []byte(man), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	out, err := putExposure(t, s, adminCtx("u_admin"), id, store.ExposureRestricted)
+	if err != nil {
+		t.Fatalf("set exposure: %v", err)
+	}
+	if got := out.Body.PublicPaths; len(got) != 1 || got[0] != "/v1/*" {
+		t.Fatalf("exposure echo public_paths = %v, want the manifest's declaration", got)
+	}
+}
