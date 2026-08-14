@@ -351,6 +351,129 @@ func TestAddRoute_ForwardAuthGate(t *testing.T) {
 	assertCookieStripped(t, app)
 }
 
+// Path-scoped exposure (#415): a restricted app that declares public paths must
+// emit ONE route whose subroute proxies those paths straight through and gates
+// everything else. One route and one @id, so the insert-at-0 ordering against
+// the catch-all is unchanged.
+func TestAddRoute_PublicPathsCarveOutOfTheGate(t *testing.T) {
+	handle := routeHandle(t, RouteConfig{
+		InstanceID: "i1", Host: "h", Upstream: "app:80",
+		StripCookieName: "malmo_forward_auth",
+		PublicPaths:     []string{"/v1", "/v1/*"},
+		ScrubHeaders:    []string{"X-Malmo-User", "X-Malmo-User-Id"},
+		ForwardAuth: &ForwardAuthConfig{
+			Upstream: "malmo-brain:8080", VerifyPath: "/_malmo/forward-auth/verify",
+			CopyHeaders: []string{"X-Malmo-User", "X-Malmo-User-Id"},
+			LoginURL:    "https://cindy-fox.malmo.network/",
+		},
+	})
+	if len(handle) != 2 {
+		t.Fatalf("want [scrub, subroute], got %d handlers", len(handle))
+	}
+	sub := handle[1].(map[string]any)
+	if sub["handler"] != "subroute" {
+		t.Fatalf("second handler = %v, want subroute", sub["handler"])
+	}
+	routes := sub["routes"].([]any)
+	if len(routes) != 2 {
+		t.Fatalf("want 2 subroutes (public paths, then the gated rest), got %d", len(routes))
+	}
+
+	// Subroute 0: the declared paths, verbatim, straight to the app with no gate.
+	pub := routes[0].(map[string]any)
+	match := pub["match"].([]any)[0].(map[string]any)["path"].([]any)
+	if len(match) != 2 || match[0] != "/v1" || match[1] != "/v1/*" {
+		t.Errorf("public matcher = %v, want the declared paths verbatim", match)
+	}
+	pubHandle := pub["handle"].([]any)
+	if len(pubHandle) != 1 {
+		t.Fatalf("public branch = %d handlers, want the app proxy alone (no gate)", len(pubHandle))
+	}
+	pubProxy := pubHandle[0].(map[string]any)
+	if pubProxy["handler"] != "reverse_proxy" {
+		t.Errorf("public branch handler = %v, want reverse_proxy", pubProxy["handler"])
+	}
+	// The #335 invariant holds on the public branch too: it is the same proxy.
+	assertCookieStripped(t, pubProxy)
+
+	// Subroute 1: no matcher ⇒ everything else, gated exactly as before.
+	rest := routes[1].(map[string]any)
+	if _, ok := rest["match"]; ok {
+		t.Error("the gated branch must have no matcher (catch-all for every other path)")
+	}
+	restHandle := rest["handle"].([]any)
+	if len(restHandle) != 2 {
+		t.Fatalf("gated branch = %d handlers, want [forward_auth, proxy]", len(restHandle))
+	}
+	if rw := restHandle[0].(map[string]any)["rewrite"].(map[string]any); rw["uri"] != "/_malmo/forward-auth/verify" {
+		t.Errorf("gated branch is not the forward_auth gate: %v", restHandle[0])
+	}
+	assertCookieStripped(t, restHandle[1].(map[string]any))
+}
+
+// The identity scrub is the outer guarantee forward_auth cannot give: it must be
+// the FIRST handler, so it covers the public branch (where no gate runs), the
+// gated branch, and the verify subrequest itself. A caller-forged X-Malmo-User
+// must never reach an app on any path (#415).
+func TestAddRoute_ScrubsIdentityHeadersFirst(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  RouteConfig
+	}{
+		{"public app, no gate", RouteConfig{
+			InstanceID: "i1", Host: "h", Upstream: "app:80",
+			StripCookieName: "malmo_forward_auth",
+			ScrubHeaders:    []string{"X-Malmo-User", "X-Malmo-User-Id"},
+		}},
+		{"restricted app", RouteConfig{
+			InstanceID: "i1", Host: "h", Upstream: "app:80",
+			StripCookieName: "malmo_forward_auth",
+			ScrubHeaders:    []string{"X-Malmo-User", "X-Malmo-User-Id"},
+			ForwardAuth:     &ForwardAuthConfig{Upstream: "b:8080", VerifyPath: "/v", LoginURL: "https://l/"},
+		}},
+		{"restricted app with public paths", RouteConfig{
+			InstanceID: "i1", Host: "h", Upstream: "app:80",
+			StripCookieName: "malmo_forward_auth",
+			ScrubHeaders:    []string{"X-Malmo-User", "X-Malmo-User-Id"},
+			PublicPaths:     []string{"/v1/*"},
+			ForwardAuth:     &ForwardAuthConfig{Upstream: "b:8080", VerifyPath: "/v", LoginURL: "https://l/"},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handle := routeHandle(t, tc.cfg)
+			first := handle[0].(map[string]any)
+			if first["handler"] != "headers" {
+				t.Fatalf("first handler = %v, want the identity scrub", first["handler"])
+			}
+			del := first["request"].(map[string]any)["delete"].([]any)
+			for _, want := range []string{"X-Malmo-User", "X-Malmo-User-Id"} {
+				found := false
+				for _, d := range del {
+					if d == want {
+						found = true
+					}
+				}
+				if !found {
+					t.Errorf("%s is not scrubbed, so a caller can forge it", want)
+				}
+			}
+		})
+	}
+}
+
+// PublicPaths without a gate is meaningless — a public app has nothing to carve
+// out of — and must not turn the route into a subroute.
+func TestAddRoute_PublicPathsIgnoredWithoutGate(t *testing.T) {
+	handle := routeHandle(t, RouteConfig{
+		InstanceID: "i1", Host: "h", Upstream: "app:80",
+		StripCookieName: "malmo_forward_auth",
+		PublicPaths:     []string{"/v1/*"},
+	})
+	if len(handle) != 1 || handle[0].(map[string]any)["handler"] != "reverse_proxy" {
+		t.Fatalf("public app route must stay the plain proxy, got %v", handle)
+	}
+}
+
 // applyEmittedCookieStrip runs the route's own emitted Cookie replacements over
 // a real Cookie header, exactly as Caddy does: each search_regexp is compiled
 // with Go's regexp and applied with ReplaceAllString, in the emitted order.

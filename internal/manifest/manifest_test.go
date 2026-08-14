@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -1114,5 +1115,109 @@ external_costs:
 `)
 	if _, err := Parse(src); err != nil {
 		t.Fatalf("parse: %v (a %d-rune estimate is exactly at the cap)", err, EstimateMaxChars)
+	}
+}
+
+// --- access.public_paths (#415) -------------------------------------------
+
+func accessManifest(paths string) []byte {
+	return []byte(`
+id: langfuse
+manifest_version: 1
+name: Langfuse
+version: "3.0"
+compose_file: compose.yml
+main_service: web
+main_port: 3000
+access:
+  public_paths: ` + paths + `
+`)
+}
+
+func TestParseAccessPublicPaths(t *testing.T) {
+	m, err := Parse(accessManifest(`["/v1", "/api/public/*"]`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if want := []string{"/v1", "/api/public/*"}; !reflect.DeepEqual(m.Access.PublicPaths, want) {
+		t.Fatalf("public_paths = %v, want %v", m.Access.PublicPaths, want)
+	}
+}
+
+func TestParseAccessAbsentIsEmpty(t *testing.T) {
+	m, err := Parse([]byte(`
+id: whoami
+manifest_version: 1
+name: Whoami
+version: "1.10"
+compose_file: compose.yml
+main_service: whoami
+main_port: 80
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(m.Access.PublicPaths) != 0 {
+		t.Fatalf("public_paths = %v, want empty for a manifest with no access block", m.Access.PublicPaths)
+	}
+}
+
+// The validation is what stops an author from writing a path that opens more of
+// the app than they meant to, and what stops a manifest from silently voiding
+// the box owner's access toggle. Each case names the mistake it catches.
+func TestParseRejectsBadPublicPaths(t *testing.T) {
+	cases := map[string]string{
+		"whole app via slash":        `["/"]`,
+		"whole app via star":         `["/*"]`,
+		"whole app via double star":  `["/**"]`,
+		"whole app via bare star":    `["*"]`,
+		"relative path matches none": `["v1/*"]`,
+		"empty entry":                `[""]`,
+		// "/v1*" also matches "/v1admin" — the classic prefix footgun.
+		"wildcard not on a segment": `["/v1*"]`,
+		"wildcard mid path":         `["/v1/*/traces"]`,
+		"leading wildcard":          `["/*/v1"]`,
+		// Caddy matches a decoded, cleaned path; the app sees the original URI.
+		// A declaration containing any of these means two different things on the
+		// two sides of the proxy.
+		"percent encoding": `["/v1/%2e%2e/*"]`,
+		"traversal":        `["/v1/../admin/*"]`,
+		"double slash":     `["//v1/*"]`,
+		"query string":     `["/v1?public=1"]`,
+		"fragment":         `["/v1#x"]`,
+		"backslash":        `["/v1\\admin/*"]`,
+		"whitespace":       `["/v1 /*"]`,
+		// Matching is case-insensitive, so these two are the same rule.
+		"case-insensitive duplicate": `["/v1/*", "/V1/*"]`,
+		"exact duplicate":            `["/v1/*", "/v1/*"]`,
+	}
+	for label, paths := range cases {
+		t.Run(label, func(t *testing.T) {
+			if _, err := Parse(accessManifest(paths)); err == nil {
+				t.Errorf("Parse accepted %s (%s), want an error", paths, label)
+			}
+		})
+	}
+}
+
+func TestParseRejectsTooManyPublicPaths(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("[")
+	for i := 0; i <= MaxPublicPaths; i++ {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, `"/p%d/*"`, i)
+	}
+	b.WriteString("]")
+	if _, err := Parse(accessManifest(b.String())); err == nil {
+		t.Fatalf("Parse accepted %d public paths, want at most %d", MaxPublicPaths+1, MaxPublicPaths)
+	}
+}
+
+func TestParseRejectsOverlongPublicPath(t *testing.T) {
+	long := "/" + strings.Repeat("a", maxPublicPathLen) + "/*"
+	if _, err := Parse(accessManifest(`["` + long + `"]`)); err == nil {
+		t.Fatalf("Parse accepted a %d-character public path, want an error", len(long))
 	}
 }

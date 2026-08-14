@@ -346,6 +346,13 @@ type InstanceDTO struct {
 	// rebind picker (SERVICE_PROVISIONING.md # BYO outgoing mail).
 	MailSupported  bool   `json:"mail_supported,omitempty"`
 	MailProviderID string `json:"mail_provider_id,omitempty"`
+	// PublicPaths are the request paths the app's manifest declares as anonymous
+	// even while Exposure is "restricted" (#415). Detail-page enrichment, like the
+	// mail fields. It is read from the instance's own manifest copy — the same
+	// file the route builder reads — so the dashboard label cannot claim a
+	// narrower app than Caddy is actually serving. Empty ⇒ the access toggle means
+	// exactly what it says.
+	PublicPaths []string `json:"public_paths,omitempty"`
 }
 
 func (s *Server) toDTO(i store.Instance, ownerUsername string, e *catalog.Entry) InstanceDTO {
@@ -569,6 +576,12 @@ func (s *Server) getApp(ctx context.Context, in *struct {
 	// Mail enrichment for the rebind picker. The manifest comes from the
 	// catalog, so a withdrawn app simply hides the picker (the binding itself
 	// keeps working — lifecycle reads the instance dir's own manifest copy).
+	// The declared public paths come from the INSTANCE's manifest copy, not the
+	// catalog's: the route Caddy is serving was built from that file, and a
+	// catalog that has since moved on must not change what the label claims.
+	if man, err := s.life.InstanceManifest(i.ID); err == nil {
+		dto.PublicPaths = man.Access.PublicPaths
+	}
 	if man, _, err := s.catalog.Load(i.ManifestID); err == nil && man.Mail != nil {
 		dto.MailSupported = true
 		if mp, err := s.store.GetInstanceMailProvider(i.ID); err == nil {

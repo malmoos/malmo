@@ -115,6 +115,18 @@ const setExposure = useMutation({
   mutationFn: (next: Exposure) => api.put<Instance>(`/apps/${id.value}/exposure`, { exposure: next }),
   onSettled: invalidate,
 });
+// Paths the app's manifest keeps open to anyone even while the app is "Only me"
+// (#415 — an app whose API is token-authed and whose UI is session-authed). The
+// label must say so: "Only me" would otherwise claim a narrower app than the box
+// is really serving. Empty for almost every app.
+const publicPaths = computed<string[]>(() => app.value?.public_paths ?? []);
+const accessSummary = computed(() => {
+  if (exposure.value === "public") return "Anyone with the link can open it.";
+  if (publicPaths.value.length > 0) {
+    return `Only you can open the app — visitors sign in to your box first. These paths stay open to anyone, so tools outside your box can reach them: ${publicPaths.value.join(", ")}`;
+  }
+  return "Only you can open it — visitors sign in to your box first.";
+});
 
 // ── Outgoing email (SERVICE_PROVISIONING.md # BYO outgoing mail) ─────────────
 // Shown only for mail-capable apps (mail_supported comes from GET /apps/{id}).
@@ -363,11 +375,7 @@ const saveConfig = useMutation({
         <div class="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card px-4 py-3">
           <div class="min-w-0 flex-1">
             <div class="text-sm font-medium">Who can open this app</div>
-            <div class="text-xs text-muted-foreground">
-              {{ exposure === "public"
-                ? "Anyone with the link can open it."
-                : "Only you can open it — visitors sign in to your box first." }}
-            </div>
+            <div class="text-xs text-muted-foreground">{{ accessSummary }}</div>
           </div>
           <div role="group" aria-label="Access mode" class="inline-flex shrink-0 rounded-lg border border-border p-0.5 text-sm">
             <button

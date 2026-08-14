@@ -419,7 +419,10 @@ fi
 # SSO → installs whoami air-gapped → proves the restricted gate (302 without a
 # session, proxied-through WITH the owner's forward-auth cookie), the public toggle
 # (reachable with no session), and the Cookie-strip invariant (the app upstream never
-# receives the cookie) in both modes.
+# receives the cookie) in both modes. The same app declares access.public_paths, so
+# the boot also proves the path-scoped carve-out (#415) through real Caddy: declared
+# paths answer anonymously, forged identity headers never reach the app, and the
+# path-matcher bypass table stays gated.
 if should_run access; then
     [ -n "$GO" ] && [ -x "$GO" ] || {
         echo "access boot needs go to mint the owner assertion; none found (\$GO='${GO:-}')" >&2

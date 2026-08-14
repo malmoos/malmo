@@ -352,6 +352,19 @@ full_get() { # PATH HOST [COOKIE] -> full response
     cat <&3
     exec 3>&- 3<&-
 }
+# Like full_get, plus one arbitrary extra request header. The path-scoped
+# exposure probes (#415) need to send a FORGED X-Malmo-User and see what the app
+# upstream received, which no cookie-only helper can do.
+full_get_hdr() { # PATH HOST HEADER-LINE [COOKIE] -> full response
+    exec 3<>/dev/tcp/127.0.0.1/80 || return 1
+    if [ -n "${4:-}" ]; then
+        printf 'GET %s HTTP/1.0\r\nHost: %s\r\n%s\r\nCookie: %s\r\nConnection: close\r\n\r\n' "$1" "$2" "$3" "$4" >&3
+    else
+        printf 'GET %s HTTP/1.0\r\nHost: %s\r\n%s\r\nConnection: close\r\n\r\n' "$1" "$2" "$3" >&3
+    fi
+    cat <&3
+    exec 3>&- 3<&-
+}
 full_send() { # METHOD PATH HOST COOKIE JSON -> full response
     local len; len="$(printf '%s' "$5" | wc -c | tr -d ' ')"
     exec 3<>/dev/tcp/127.0.0.1/80 || return 1
@@ -691,6 +704,67 @@ access)
     grep -iE "^Location: *https://${apex}/" <<<"$n_resp" >/dev/null \
         || fail "access: restricted-app 302 Location is not the box login: $(grep -i '^Location:' <<<"$n_resp" | tr -d '\r')"
     echo "cloud-assertions: restricted app gates an unauthenticated request (302 → box login)"
+
+    # 3b. PATH-SCOPED EXPOSURE (#415). The app is still restricted, and its manifest
+    #     declares access.public_paths ["/v1", "/v1/*"]. The claim: those paths
+    #     answer anonymously (an external SDK can post to the API) while every other
+    #     path keeps the box login in front of it. This is the half a unit test
+    #     cannot prove — Caddy matches a normalized path, the app sees the original
+    #     URI, and that gap is where this bug class lives.
+    for p in /v1 /v1/traces "/v1/traces?x=1"; do
+        pp_resp="$(full_get "$p" "$app_host" 2>/dev/null || true)"
+        grep -q ' 200' <<<"$(status_of "$pp_resp")" && grep -qi 'Hostname:' <<<"$pp_resp" \
+            || fail "access: declared public path $p did not reach the app anonymously: status='$(status_of "$pp_resp")'"
+    done
+    echo "cloud-assertions: declared public paths answer with no session (the token-authed API works while the UI stays gated)"
+
+    # 3c. THE FORGERY GUARD, and the reason the scrub is unconditional. The gate does
+    #     not run on a public path, so nothing there would overwrite a caller-supplied
+    #     X-Malmo-User. If the app got a brain-vouched header on one path and a forged
+    #     one on another it could not tell them apart, and "malmo says this is the
+    #     owner" would become "anyone on the internet says so".
+    fg_resp="$(full_get_hdr /v1/traces "$app_host" 'X-Malmo-User: attacker' 2>/dev/null || true)"
+    grep -qi 'Hostname:' <<<"$fg_resp" || fail "access: forged-header probe did not reach the app on a public path"
+    grep -qiE '^X-Malmo-User:' <<<"$fg_resp" \
+        && fail "access: IDENTITY FORGERY — a client-supplied X-Malmo-User survived to the app upstream on a public path: $(grep -i '^X-Malmo-User:' <<<"$fg_resp" | tr -d '\r')"
+    # Same forgery on the GATED path, with the owner's cookie: the app must receive
+    # the brain's value, never the caller's.
+    fg2_resp="$(full_get_hdr / "$app_host" 'X-Malmo-User: attacker' "$fa_cookie" 2>/dev/null || true)"
+    grep -qi 'Hostname:' <<<"$fg2_resp" || fail "access: forged-header probe did not reach the app on the gated path"
+    grep -qiE '^X-Malmo-User: *attacker' <<<"$fg2_resp" \
+        && fail "access: IDENTITY FORGERY — a client-supplied X-Malmo-User survived the gate: $(grep -i '^X-Malmo-User:' <<<"$fg2_resp" | tr -d '\r')"
+    grep -qiE '^X-Malmo-User:' <<<"$fg2_resp" \
+        || fail "access: the gated path lost the vouched X-Malmo-User entirely (the scrub is deleting the brain's own value)"
+    echo "cloud-assertions: identity headers scrubbed on both branches (forged X-Malmo-User never reaches the app; the vouched one still does)"
+
+    # 3d. The #335 per-cookie strip holds on the public branch too — it is the same
+    #     proxy handler on both sides of the subroute, and this proves it.
+    pc_resp="$(full_get /v1/traces "$app_host" "${fa_cookie}; probe=leakcheck" 2>/dev/null || true)"
+    grep -qi 'Hostname:' <<<"$pc_resp" || fail "access: public-path cookie probe did not reach the app"
+    grep -qiE '^Cookie:.*malmo_forward_auth=' <<<"$pc_resp" \
+        && fail "access: COOKIE LEAK (public path) — the app upstream received malmo_forward_auth on a declared public path"
+    grep -qiE '^Cookie:.*probe=leakcheck' <<<"$pc_resp" \
+        || fail "access: public path lost the app's own cookie — the strip is removing more than malmo_forward_auth"
+    echo "cloud-assertions: public paths strip only malmo_forward_auth (same proxy handler as the gated branch)"
+
+    # 3e. THE BYPASS TABLE — the point of running this through real Caddy. Every
+    #     entry is a request that must NOT be treated as a public path. The requests
+    #     are written raw onto the socket (no client-side normalization), so what
+    #     Caddy matches is exactly what is asserted here:
+    #       /v1extra          "/v1/*" must not behave like a bare "/v1*" prefix, or
+    #                         a sibling route would be exposed by accident;
+    #       /v1/../ and //v1/ path traversal and slash-merging: Caddy matches the
+    #                         cleaned path, so these resolve to the app root;
+    #       /v1/%2e%2e/       the encoded form of the same, the case where a matcher
+    #                         and an app can disagree about what the path is;
+    #       /V1x, /admin      plain non-matches, the control.
+    #     A 302 to the box login is the pass condition: the gate ran.
+    for bad in /v1extra "/v1/../" "//v1/" "/v1/%2e%2e/" /V1x /admin; do
+        bp_resp="$(full_get "$bad" "$app_host" 2>/dev/null || true)"
+        grep -q ' 302' <<<"$(status_of "$bp_resp")" \
+            || fail "access: PATH GATE BYPASS — '$bad' was not gated (status='$(status_of "$bp_resp")'); it is not a declared public path, so it must 302 to the box login"
+    done
+    echo "cloud-assertions: path-matcher bypass table gated (prefix footgun, traversal, encoded traversal, double slash, case variant)"
 
     # 4. flip to PUBLIC via the exposure toggle (owner session; the endpoint is
     #    hosted-only + owner-or-admin). Resolve the instance id from the running

@@ -136,3 +136,49 @@ func TestSetAppExposure_FailureAudits(t *testing.T) {
 		t.Error("expected an app.exposure.set failure audit")
 	}
 }
+
+// The detail response carries the manifest's declared public paths, so the
+// dashboard can say that part of an "Only me" app is open (#415). It reads the
+// INSTANCE's manifest copy — the same file the route builder reads — so the
+// label cannot claim a narrower app than Caddy is serving.
+func TestGetApp_CarriesDeclaredPublicPaths(t *testing.T) {
+	s, id, instDir := hostedExposureServer(t, "u_owner", store.ScopePersonal, "running")
+	man := `
+id: cfgapp
+manifest_version: 1
+name: Cfg App
+version: "1.0"
+compose_file: compose.yml
+main_service: app
+main_port: 8080
+access:
+  public_paths: ["/v1/*"]
+`
+	if err := os.WriteFile(filepath.Join(instDir, "manifest.yml"), []byte(man), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	out, err := s.getApp(adminCtx("u_admin"), &struct {
+		ID string `path:"id"`
+	}{ID: id})
+	if err != nil {
+		t.Fatalf("get app: %v", err)
+	}
+	if got := out.Body.PublicPaths; len(got) != 1 || got[0] != "/v1/*" {
+		t.Fatalf("public_paths = %v, want the manifest's declaration", got)
+	}
+}
+
+// An app that declares nothing carries nothing, so the toggle keeps meaning
+// exactly what it says for almost every app.
+func TestGetApp_NoPublicPathsWhenUndeclared(t *testing.T) {
+	s, id, _ := hostedExposureServer(t, "u_owner", store.ScopePersonal, "running")
+	out, err := s.getApp(adminCtx("u_admin"), &struct {
+		ID string `path:"id"`
+	}{ID: id})
+	if err != nil {
+		t.Fatalf("get app: %v", err)
+	}
+	if len(out.Body.PublicPaths) != 0 {
+		t.Fatalf("public_paths = %v, want none", out.Body.PublicPaths)
+	}
+}
