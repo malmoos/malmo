@@ -759,12 +759,31 @@ access)
     #                         and an app can disagree about what the path is;
     #       /V1x, /admin      plain non-matches, the control.
     #     A 302 to the box login is the pass condition: the gate ran.
-    for bad in /v1extra "/v1/../" "//v1/" "/v1/%2e%2e/" /V1x /admin; do
+    #     The claim asserted for every entry is the one that matters: the app is
+    #     NOT reached without a session. How the box says no differs by entry:
+    #       gate  — the forward_auth gate ran and 302'd to the box login;
+    #       merge — Caddy collapses the duplicate slash and 301's to the
+    #               normalized path BEFORE matching, so the app is never reached
+    #               and the redirect target is then judged on its own merits
+    #               (`/v1/` is genuinely public, `//admin` normalizes to a gated
+    #               `/admin`). This was the one real correction the first CI run
+    #               produced: the probe is safe, the expectation was wrong.
+    for probe in "/v1extra|gate" "/v1/../|gate" "//v1/|merge" "/v1/%2e%2e/|gate" "/V1x|gate" "/admin|gate"; do
+        bad="${probe%|*}"; want="${probe#*|}"
         bp_resp="$(full_get "$bad" "$app_host" 2>/dev/null || true)"
-        grep -q ' 302' <<<"$(status_of "$bp_resp")" \
-            || fail "access: PATH GATE BYPASS — '$bad' was not gated (status='$(status_of "$bp_resp")'); it is not a declared public path, so it must 302 to the box login"
+        bp_status="$(status_of "$bp_resp")"
+        grep -qi 'Hostname:' <<<"$bp_resp" \
+            && fail "access: UNGATED PATH — '$bad' reached the app upstream with no session; it is not a declared public path"
+        case "$want:$bp_status" in
+            gate:*" 302"*) ;;
+            merge:*" 301"*)
+                grep -qiE '^Location:.*//v1/' <<<"$bp_resp" \
+                    && fail "access: UNGATED PATH — '$bad' redirected without collapsing the duplicate slash: $(grep -i '^Location:' <<<"$bp_resp" | tr -d '\r')"
+                ;;
+            *) fail "access: UNGATED PATH — '$bad' answered '$bp_status', wanted $want; an undeclared path must never be served anonymously" ;;
+        esac
     done
-    echo "cloud-assertions: path-matcher bypass table gated (prefix footgun, traversal, encoded traversal, double slash, case variant)"
+    echo "cloud-assertions: undeclared paths stay closed (prefix footgun, traversal, encoded traversal, double slash, case variant)"
 
     # 4. flip to PUBLIC via the exposure toggle (owner session; the endpoint is
     #    hosted-only + owner-or-admin). Resolve the instance id from the running

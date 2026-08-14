@@ -327,8 +327,16 @@ run_boot() {
         return 1
     fi
     echo "phase=${phase} verdict: ${v}"
+    # Match the verdict EXACTLY, not as a substring. The guest emits either
+    # "MALMO_CLOUD_ASSERTIONS: PASS" or "MALMO_CLOUD_ASSERTIONS: FAIL: <reason>",
+    # and the old `*PASS*` glob read any failure whose REASON happened to contain
+    # the letters "pass" as a pass. That is not hypothetical: a new assertion
+    # failing with "PATH GATE BYPASS — ..." turned a genuinely red access boot
+    # into a green CI run, printing "boot access OK" under a FAIL verdict it had
+    # just echoed (#415). Any word like bypass/passphrase/password in a failure
+    # message re-opens it, so anchor on the verdict word itself.
     case "$v" in
-        *PASS*)
+        "MALMO_CLOUD_ASSERTIONS: PASS"*)
             # Print what the guest proved, not only that it passed. A PASS used to
             # discard every `cloud-assertions:` line (dump_serial runs on failure
             # only), so a scenario that silently stopped asserting — a section
