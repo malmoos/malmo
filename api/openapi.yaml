@@ -962,6 +962,12 @@ components:
           type: string
         owner_username:
           type: string
+        public_paths:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
         scope:
           type: string
         slug:

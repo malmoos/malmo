@@ -346,6 +346,13 @@ type InstanceDTO struct {
 	// rebind picker (SERVICE_PROVISIONING.md # BYO outgoing mail).
 	MailSupported  bool   `json:"mail_supported,omitempty"`
 	MailProviderID string `json:"mail_provider_id,omitempty"`
+	// PublicPaths are the request paths the app's manifest declares as anonymous
+	// even while Exposure is "restricted" (#415). Detail-page enrichment, like the
+	// mail fields. It is read from the instance's own manifest copy — the same
+	// file the route builder reads — so the dashboard label cannot claim a
+	// narrower app than Caddy is actually serving. Empty ⇒ the access toggle means
+	// exactly what it says.
+	PublicPaths []string `json:"public_paths,omitempty"`
 }
 
 func (s *Server) toDTO(i store.Instance, ownerUsername string, e *catalog.Entry) InstanceDTO {
@@ -376,6 +383,22 @@ func (s *Server) toDTO(i store.Instance, ownerUsername string, e *catalog.Entry)
 		dto.IconGlyph = e.IconGlyph
 	}
 	return dto
+}
+
+// withPublicPaths fills in the app's manifest-declared anonymous paths (#415).
+// Every response that carries an app's exposure must carry these too: the
+// dashboard's access label is built from the pair, and a response with the
+// exposure but not the paths says "Only me" about an app that is partly open.
+//
+// The source is the INSTANCE's manifest copy, not the catalog's. That is the
+// file the route builder read, so the label cannot claim a narrower app than
+// Caddy is serving even after the catalog moves on. A missing or unreadable copy
+// leaves the field empty rather than failing the request — the app's own detail
+// page must still render.
+func (s *Server) withPublicPaths(dto *InstanceDTO) {
+	if man, err := s.life.InstanceManifest(dto.ID); err == nil {
+		dto.PublicPaths = man.Access.PublicPaths
+	}
 }
 
 // --- handlers ------------------------------------------------------------
@@ -566,6 +589,7 @@ func (s *Server) getApp(ctx context.Context, in *struct {
 		catEntry = &e
 	}
 	dto := s.toDTO(i, owner.Username, catEntry)
+	s.withPublicPaths(&dto)
 	// Mail enrichment for the rebind picker. The manifest comes from the
 	// catalog, so a withdrawn app simply hides the picker (the binding itself
 	// keeps working — lifecycle reads the instance dir's own manifest copy).

@@ -262,22 +262,39 @@ func (m *Manager) defaultExposure() string {
 //
 // Only that one cookie is stripped. The app's own cookies must reach it, or a
 // third-party app with a cookie login cannot authenticate at all (#335).
-func (m *Manager) buildRouteConfig(inst store.Instance, host, upstream string) caddy.RouteConfig {
+//
+// Two things follow from the manifest rather than the instance row (#415):
+// the identity headers are scrubbed from every hosted app route, and a
+// restricted app's declared `access.public_paths` are carved out of its gate.
+func (m *Manager) buildRouteConfig(inst store.Instance, man *manifest.Manifest, host, upstream string) caddy.RouteConfig {
 	cfg := caddy.RouteConfig{InstanceID: inst.ID, Host: host, Upstream: upstream}
 	if !m.hosted() {
 		return cfg
 	}
 	cfg.StripCookieName = auth.ForwardAuthCookieName
+	// Scrubbed on EVERY hosted route, not only where the gate runs. A restricted
+	// app that learns to trust X-Malmo-User keeps trusting it after the owner
+	// flips it to Public, or on one of its own public paths — and there the gate
+	// is not there to overwrite a forged header (#415).
+	cfg.ScrubHeaders = identityHeaders
 	if inst.Exposure == store.ExposureRestricted {
 		cfg.ForwardAuth = &caddy.ForwardAuthConfig{
 			Upstream:    m.brainUpstream,
 			VerifyPath:  profile.ForwardAuthVerifyPath,
-			CopyHeaders: []string{"X-Malmo-User", "X-Malmo-User-Id"},
+			CopyHeaders: identityHeaders,
 			LoginURL:    "https://" + profile.HostedDashboardHost(m.boxID) + "/",
+		}
+		if man != nil {
+			cfg.PublicPaths = man.Access.PublicPaths
 		}
 	}
 	return cfg
 }
+
+// identityHeaders are the request headers the brain vouches for on an allowed
+// forward-auth request, and the same set scrubbed from every inbound request so
+// a caller can never forge them (ENVIRONMENT.md # Per-app owner-only access).
+var identityHeaders = []string{"X-Malmo-User", "X-Malmo-User-Id"}
 
 // lockInstance acquires the per-instance lock (creating it on first use) and
 // returns the unlock func. Callers `defer unlock()`. See instLocks.
@@ -825,7 +842,7 @@ func (m *Manager) install(ctx context.Context, man *manifest.Manifest, composeBy
 	// 12. Flip the Caddy upstream from splash to the real container.
 	step("flipping_route")
 	upstream := fmt.Sprintf("malmo-%s-%s:%d", id, man.MainService, man.MainPort)
-	if err := m.caddy.AddRoute(ctx, m.buildRouteConfig(inst, host, upstream)); err != nil {
+	if err := m.caddy.AddRoute(ctx, m.buildRouteConfig(inst, man, host, upstream)); err != nil {
 		slog.Warn("caddy upstream flip failed (continuing)",
 			"instance_id", id, "host", host, "upstream", upstream, "err", err)
 	}
@@ -1060,7 +1077,7 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 
 	// Healthy — flip the splash to the real container.
 	upstream := fmt.Sprintf("malmo-%s-%s:%d", id, man.MainService, man.MainPort)
-	if err := m.caddy.AddRoute(ctx, m.buildRouteConfig(inst, host, upstream)); err != nil {
+	if err := m.caddy.AddRoute(ctx, m.buildRouteConfig(inst, man, host, upstream)); err != nil {
 		slog.Warn("start: caddy upstream flip failed (continuing)",
 			"instance_id", id, "host", host, "upstream", upstream, "err", err)
 	}
@@ -1099,7 +1116,7 @@ func (m *Manager) SetExposure(ctx context.Context, instanceID, exposure string) 
 	}
 	host, _ := m.publishHost(ctx, inst)
 	upstream := fmt.Sprintf("malmo-%s-%s:%d", inst.ID, man.MainService, man.MainPort)
-	return m.caddy.AddRoute(ctx, m.buildRouteConfig(inst, host, upstream))
+	return m.caddy.AddRoute(ctx, m.buildRouteConfig(inst, man, host, upstream))
 }
 
 // startFailed parks a start that came up but never went healthy in the same
@@ -1449,7 +1466,7 @@ func (m *Manager) reassertRouting(ctx context.Context, inst store.Instance) bool
 	}
 	host, avahiOK := m.publishHost(ctx, inst)
 	upstream := fmt.Sprintf("malmo-%s-%s:%d", inst.ID, man.MainService, man.MainPort)
-	if err := m.caddy.AddRoute(ctx, m.buildRouteConfig(inst, host, upstream)); err != nil {
+	if err := m.caddy.AddRoute(ctx, m.buildRouteConfig(inst, man, host, upstream)); err != nil {
 		slog.Warn("reconcile: caddy route",
 			"instance_id", inst.ID, "host", host, "upstream", upstream, "err", err)
 	}

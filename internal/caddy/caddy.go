@@ -63,6 +63,23 @@ type RouteConfig struct {
 	// subrequest to the brain verify endpoint (hosted restricted apps). nil is a
 	// public app: the plain reverse_proxy with no gate.
 	ForwardAuth *ForwardAuthConfig
+	// PublicPaths, when non-empty alongside a non-nil ForwardAuth, carves those
+	// request paths out of the gate: they proxy straight to the app with no box
+	// login, while every other path stays gated (#415). It is how an app that
+	// pairs a token-authed API with a session-authed UI keeps the box login in
+	// front of the UI. Ignored when ForwardAuth is nil — a public app has no gate
+	// to carve out of.
+	PublicPaths []string
+	// ScrubHeaders lists request headers deleted from EVERY request this route
+	// proxies, before any gate runs. It carries malmo's vouched-identity headers
+	// so a caller can never supply them: the app must be able to read
+	// X-Malmo-User as "the brain said so", on every path and in every exposure.
+	//
+	// The forward_auth gate does its own delete-before-set of the same headers on
+	// the allow branch, and that stays. This is the outer guarantee the gate
+	// cannot give, because the gate does not run on a public app or on a public
+	// path.
+	ScrubHeaders []string
 }
 
 // ForwardAuthConfig parameterises the forward_auth gate placed in front of a
@@ -77,6 +94,19 @@ type ForwardAuthConfig struct {
 // AddRoute registers Host(cfg.Host) -> the app's reverse_proxy(cfg.Upstream),
 // optionally wrapped in a forward_auth gate and/or a Cookie strip per cfg. The
 // upstream is the real container alias, added once the app is healthy.
+//
+// The emitted handler chain, in order:
+//
+//  1. the identity-header scrub (cfg.ScrubHeaders), first so it covers every
+//     later branch, gated or not;
+//  2. either the flat [forwardAuth?, proxy], or — when cfg carves public paths
+//     out of a gate — a subroute whose first route proxies those paths straight
+//     through and whose second route gates everything else.
+//
+// The proxy handler is built once and used on both branches of the subroute, so
+// the Cookie strip (#335) applies identically to gated and public paths. A route
+// with no scrub, no gate and no public paths is byte-for-byte the plain
+// reverse_proxy the appliance has always emitted.
 func (c *Client) AddRoute(ctx context.Context, cfg RouteConfig) error {
 	proxy := map[string]any{
 		"handler":   "reverse_proxy",
@@ -87,12 +117,50 @@ func (c *Client) AddRoute(ctx context.Context, cfg RouteConfig) error {
 			"request": map[string]any{"replace": stripCookieReplacements(cfg.StripCookieName)},
 		}
 	}
-	handle := make([]any, 0, 2)
-	if cfg.ForwardAuth != nil {
-		handle = append(handle, forwardAuthHandler(*cfg.ForwardAuth))
+	handle := make([]any, 0, 3)
+	if len(cfg.ScrubHeaders) > 0 {
+		handle = append(handle, scrubHeadersHandler(cfg.ScrubHeaders))
 	}
-	handle = append(handle, proxy)
+	switch {
+	case cfg.ForwardAuth != nil && len(cfg.PublicPaths) > 0:
+		handle = append(handle, map[string]any{
+			"handler": "subroute",
+			"routes": []any{
+				// Declared public paths: no gate, straight to the app. Its token
+				// auth is the app's own business.
+				map[string]any{
+					"match":  []any{map[string]any{"path": cfg.PublicPaths}},
+					"handle": []any{proxy},
+				},
+				// No matcher ⇒ every other path, gated exactly as a fully
+				// restricted app is.
+				map[string]any{
+					"handle": []any{forwardAuthHandler(*cfg.ForwardAuth), proxy},
+				},
+			},
+		})
+	case cfg.ForwardAuth != nil:
+		handle = append(handle, forwardAuthHandler(*cfg.ForwardAuth), proxy)
+	default:
+		handle = append(handle, proxy)
+	}
 	return c.upsertRoute(ctx, cfg.InstanceID, cfg.Host, handle)
+}
+
+// scrubHeadersHandler renders a Caddy headers handler that deletes the named
+// request headers. Placed at the head of an app route it is the one guarantee
+// forward_auth cannot give on its own: forward_auth scrubs only on the branch
+// where it runs, and it does not run on a public app or on a public path, so
+// without this a caller could hand an app a forged X-Malmo-User there.
+func scrubHeadersHandler(names []string) map[string]any {
+	del := make([]any, 0, len(names))
+	for _, n := range names {
+		del = append(del, n)
+	}
+	return map[string]any{
+		"handler": "headers",
+		"request": map[string]any{"delete": del},
+	}
 }
 
 // stripCookieReplacements renders the Caddy headers.request.replace body that

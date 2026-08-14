@@ -1314,6 +1314,7 @@ export interface components {
             name: string;
             owner_user_id: string;
             owner_username: string;
+            public_paths?: string[] | null;
             scope: string;
             slug: string;
             state: string;
