@@ -68,5 +68,10 @@ func (s *Server) setAppExposure(ctx context.Context, in *struct {
 	if e, err := s.catalog.Entry(inst.ManifestID); err == nil {
 		catEntry = &e
 	}
-	return &struct{ Body InstanceDTO }{Body: s.toDTO(inst, owner.Username, catEntry)}, nil
+	dto := s.toDTO(inst, owner.Username, catEntry)
+	// The access label is exposure + declared public paths together, so a toggle
+	// response that carried only the exposure would let the dashboard render
+	// "Only me" for an app with open paths until the next refetch.
+	s.withPublicPaths(&dto)
+	return &struct{ Body InstanceDTO }{Body: dto}, nil
 }

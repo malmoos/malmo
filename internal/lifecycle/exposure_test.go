@@ -185,3 +185,117 @@ func TestReconcile_Hosted_ReassertKeepsGate(t *testing.T) {
 		t.Fatalf("a restart must not drop the gate or strip: %+v", cfg)
 	}
 }
+
+// --- path-scoped exposure (#415) ------------------------------------------
+
+// installWhoamiWithPublicPaths installs the same test app with an
+// `access.public_paths` block, so the route builder has a manifest that declares
+// one.
+func installWhoamiWithPublicPaths(t *testing.T, e *testEnv, paths string) store.Instance {
+	t.Helper()
+	man := whoamiManifest(testDigest) + "access:\n  public_paths: " + paths + "\n"
+	e.writeCatalogApp(t, "whoami", whoamiCompose, man)
+	e.docker.digests[testImage] = testDigest
+	inst, err := e.m.Install(context.Background(), "whoami", Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	return inst
+}
+
+// A restricted hosted app carries its manifest's public paths into the route, so
+// the token-authed API answers anonymously while the UI keeps the box login.
+func TestInstall_Hosted_RestrictedCarriesPublicPaths(t *testing.T) {
+	e := newTestEnv(t)
+	e.m.SetEnvironment(profile.Hosted, "cindy-fox")
+	inst := installWhoamiWithPublicPaths(t, e, `["/v1/*"]`)
+
+	cfg := e.caddy.config(inst.ID)
+	if cfg.ForwardAuth == nil {
+		t.Fatal("the app must still be gated — public paths are an exception, not an off switch")
+	}
+	if len(cfg.PublicPaths) != 1 || cfg.PublicPaths[0] != "/v1/*" {
+		t.Fatalf("PublicPaths = %v, want the manifest's declaration", cfg.PublicPaths)
+	}
+}
+
+// Every hosted app route scrubs the vouched identity headers, in every exposure.
+// The gate scrubs only where it runs, and it does not run on a public app or on
+// a public path — so without this a caller could forge X-Malmo-User there.
+func TestHosted_AllExposuresScrubIdentityHeaders(t *testing.T) {
+	e := newTestEnv(t)
+	e.m.SetEnvironment(profile.Hosted, "cindy-fox")
+	inst := installWhoamiWithPublicPaths(t, e, `["/v1/*"]`)
+
+	assertScrubbed := func(what string) {
+		t.Helper()
+		cfg := e.caddy.config(inst.ID)
+		if len(cfg.ScrubHeaders) == 0 {
+			t.Fatalf("%s: route scrubs no identity headers", what)
+		}
+		for _, want := range []string{"X-Malmo-User", "X-Malmo-User-Id"} {
+			found := false
+			for _, h := range cfg.ScrubHeaders {
+				if h == want {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("%s: %s is not scrubbed, so a caller can forge it", what, want)
+			}
+		}
+	}
+	assertScrubbed("restricted with public paths")
+
+	if err := e.m.SetExposure(context.Background(), inst.ID, store.ExposurePublic); err != nil {
+		t.Fatalf("set public: %v", err)
+	}
+	assertScrubbed("public")
+}
+
+// A public app has no gate, so its manifest's public paths are meaningless and
+// must not reach the route: nothing to carve out of.
+func TestSetExposure_PublicDropsPublicPaths(t *testing.T) {
+	e := newTestEnv(t)
+	e.m.SetEnvironment(profile.Hosted, "cindy-fox")
+	inst := installWhoamiWithPublicPaths(t, e, `["/v1/*"]`)
+	if err := e.m.SetExposure(context.Background(), inst.ID, store.ExposurePublic); err != nil {
+		t.Fatalf("set public: %v", err)
+	}
+	cfg := e.caddy.config(inst.ID)
+	if cfg.ForwardAuth != nil {
+		t.Fatal("a public app must not be gated")
+	}
+	if len(cfg.PublicPaths) != 0 {
+		t.Fatalf("PublicPaths = %v, want none on a public app", cfg.PublicPaths)
+	}
+}
+
+// The appliance route stays exactly what it was: no scrub, no strip, no gate, no
+// public paths — even for a manifest that declares them.
+func TestInstall_Appliance_IgnoresPublicPaths(t *testing.T) {
+	e := newTestEnv(t)
+	inst := installWhoamiWithPublicPaths(t, e, `["/v1/*"]`)
+	cfg := e.caddy.config(inst.ID)
+	if cfg.StripCookieName != "" || cfg.ForwardAuth != nil || len(cfg.PublicPaths) != 0 || len(cfg.ScrubHeaders) != 0 {
+		t.Fatalf("appliance route must stay the plain reverse_proxy, got %+v", cfg)
+	}
+}
+
+// A restart rebuilds the route from the instance's own manifest copy, so the
+// carve-out survives a reboot instead of quietly closing (or quietly widening).
+func TestReconcile_Hosted_ReassertKeepsPublicPaths(t *testing.T) {
+	e := newTestEnv(t)
+	e.m.SetEnvironment(profile.Hosted, "cindy-fox")
+	inst := installWhoamiWithPublicPaths(t, e, `["/v1/*"]`)
+
+	e.docker.psManaged = map[string]bool{}
+	e.caddy.calls = nil
+	if err := e.m.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	cfg := e.caddy.config(inst.ID)
+	if cfg.ForwardAuth == nil || len(cfg.PublicPaths) != 1 || cfg.PublicPaths[0] != "/v1/*" {
+		t.Fatalf("a restart must rebuild the same carve-out, got %+v", cfg)
+	}
+}

@@ -390,6 +390,26 @@ Apps that don't support external libraries fall back to `storage.app_managed_use
 
 **No `cap_add` for store (Tier-3) apps.** The brain's override drops ALL capabilities and adds none. Apps that genuinely need Linux capabilities (VPN clients, FUSE mounts, raw sockets) belong in Tier 2 — OS integrations curated by malmo with a separate install path. See `SERVICE_PROVISIONING.md`. If a Tier-3 compose declares `cap_add`, the brain refuses to install it.
 
+### E2. Access — path-scoped exceptions to the box login
+
+Hosted boxes put a **box login in front of each app** by default, and the owner flips a per-app toggle between "Only me" and "Public" (`ENVIRONMENT.md` # Per-app owner-only access). That is a whole-app decision, and some apps do not fit it: a developer tool often pairs a **token-authed API** with a **session-authed UI**, so letting an external SDK reach the API means making the whole app public, which drops the box login in front of the UI too. Langfuse hit this wall first; Laminar hit it worse, because its self-hosted UI signs in any email with no password.
+
+The manifest may therefore declare paths that stay open even while the app is owner-only:
+
+```yaml
+access:
+  public_paths: ["/v1", "/v1/*"]   # served anonymously; the rest keeps the box login
+```
+
+- **It is an exception, not a second exposure switch.** The app stays "Only me". Only the listed paths skip the gate, and only on hosted — an appliance app is public anyway, so the field changes nothing there.
+- **Two shapes, nothing else:** an exact path (`/v1`) or a path and everything under it (`/v1/*`). `/`, `/*` and `/**` are rejected outright: they would make the whole app public while the dashboard still offers the owner an access toggle for it. A mid-path or bare-suffix wildcard is rejected too, because `/v1*` also matches `/v1admin` — an author reaching for "everything under /v1" would open a sibling path they never read. At most 16 entries, 128 characters each.
+- **Declare the plain, decoded path.** `%`, `?`, `#`, `\`, `//` and `..` are rejected. The proxy matches a cleaned, decoded path while the app sees the original URI, so a declaration containing any of those means two different things on the two sides.
+- **Matching is case-insensitive**, so `/v1/*` also opens `/V1/x`. Entries that differ only by case are duplicates.
+- **`/v1/*` does not match `/v1` itself.** Declare both when the API answers on the bare prefix.
+- **The author does not get identity from a public path.** malmo's vouched identity headers are stripped from every inbound request on every hosted app route, so a caller can never forge them — see `ENVIRONMENT.md` # Per-app owner-only access.
+- **The trust boundary is catalog review**, not this validation. These paths ship in the catalog, which malmo curates; the rules above catch an author's mistake, and a manifest that wanted to be hostile already chooses the app's images. A reviewer should ask one question: is every declared path authenticated by the app itself?
+- **The dashboard says so.** An app that declares public paths shows them on its access control instead of a bare "Only you can open it" (`DASHBOARD.md` # Settings).
+
 ### F. Lifecycle hooks — deferred from MVP
 
 The `hooks:` block is **not part of v1.** Apps already run their own migrations on container start; the brain's **pre-update snapshot** (`UPDATES.md` # Pre-update snapshot) is the v1 safety net for migrations that go wrong.

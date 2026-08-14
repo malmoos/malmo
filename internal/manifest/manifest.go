@@ -137,6 +137,30 @@ type Manifest struct {
 	// this schema. Nor is either one a limitation: a limitation is a broken
 	// feature, and paying for something is not a defect.
 	ExternalCosts []ExternalCost `yaml:"external_costs,omitempty"`
+
+	// Access declares path-scoped exceptions to the box's own login gate
+	// (APP_MANIFEST.md # E2, ENVIRONMENT.md # Per-app owner-only access). Absent ⇒
+	// the whole app follows the instance's exposure, which is the normal case.
+	Access Access `yaml:"access,omitempty"`
+}
+
+// Access is the app's declared access shape. Today it holds one field, and it is
+// a block rather than a bare list so later access-related declarations have a
+// home that does not re-open the top level.
+type Access struct {
+	// PublicPaths lists request paths an owner-only ("restricted") app still
+	// serves to anonymous callers. It exists for the app that pairs a
+	// token-authed API with a session-authed UI: without it, letting an external
+	// SDK reach the API means making the whole app public, which drops the box
+	// login in front of the UI too (#415).
+	//
+	// It is a narrow exception, not a second exposure switch. The paths are
+	// carried by the catalog, so catalog review is the trust boundary; the
+	// validation below is a guard against an author mistake, not against a
+	// hostile manifest (a hostile manifest already chooses the app's images).
+	// The gate is hosted-only: an appliance app is always public, so the field
+	// changes nothing there.
+	PublicPaths []string `yaml:"public_paths,omitempty" json:"public_paths,omitempty"`
 }
 
 // ExternalCost is one third-party charge the app depends on (APP_MANIFEST.md #
@@ -558,6 +582,16 @@ var secretName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 // `API-KEY` rejected.
 var configEnvName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
+// MaxPublicPaths caps how many path-scoped exceptions one app may declare
+// (APP_MANIFEST.md # E2). The cap is not a security boundary — an author with
+// enough entries can still cover an app — it keeps the list reviewable, and a
+// manifest that needs more than this is really asking to be a public app.
+const MaxPublicPaths = 16
+
+// maxPublicPathLen caps one declared path. Long enough for any real API prefix,
+// short enough that a path can be read at a glance in review.
+const maxPublicPathLen = 128
+
 // reservedConfigEnv is the loader/runtime denylist a config `app_env` may never
 // take (APP_MANIFEST.md # D4 # Reserved names): names that reach process or
 // platform internals. The MALMO_ prefix is rejected separately (the brain's
@@ -648,7 +682,78 @@ func (m *Manifest) validate() error {
 	if err := m.validateMail(); err != nil {
 		return err
 	}
+	if err := m.validateAccess(); err != nil {
+		return err
+	}
 	return ValidatePermissions(&m.Permissions)
+}
+
+// validateAccess checks the declared public paths (APP_MANIFEST.md # E2). Two
+// shapes are allowed and nothing else:
+//
+//	/v1        an exact path
+//	/v1/*      that path and everything under it
+//
+// Everything else is rejected, and each rule pays for itself:
+//
+//   - A path must start with "/" — a relative pattern matches nothing in Caddy,
+//     so it would silently leave the API gated.
+//   - "/" and "/*" are rejected outright. Either one exposes the whole app while
+//     the dashboard still offers an access toggle for it, so the manifest would
+//     be overriding a decision that belongs to the box owner.
+//   - The wildcard may only appear as a trailing "/*". The obvious-looking
+//     "/v1*" also matches "/v1admin", so an author reaching for "everything
+//     under /v1" would open a sibling path they never read.
+//   - "%", "?", "#", "\", "//" and ".." are rejected. Caddy matches a cleaned,
+//     decoded path while the app sees the original URI, so a declaration
+//     containing any of these means two different things on the two sides of the
+//     proxy. Authors declare the plain, decoded prefix and let Caddy normalize.
+//
+// Matching in Caddy is case-insensitive, so "/v1/*" also opens "/V1/x"; entries
+// are therefore de-duplicated case-insensitively and the spec says so. Absent ⇒
+// no-op.
+func (m *Manifest) validateAccess() error {
+	paths := m.Access.PublicPaths
+	if len(paths) == 0 {
+		return nil
+	}
+	if len(paths) > MaxPublicPaths {
+		return fmt.Errorf("access: %d public_paths declared, at most %d allowed", len(paths), MaxPublicPaths)
+	}
+	seen := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		switch {
+		case p == "" || !strings.HasPrefix(p, "/"):
+			return fmt.Errorf("access: public_paths entry %q must start with %q", p, "/")
+		case p == "/" || p == "/*" || p == "/**":
+			return fmt.Errorf("access: public_paths entry %q would make the whole app public; use the app's access toggle instead", p)
+		case len(p) > maxPublicPathLen:
+			return fmt.Errorf("access: public_paths entry %q is longer than %d characters", p, maxPublicPathLen)
+		}
+		for _, bad := range []string{"%", "?", "#", `\`, "//", ".."} {
+			if strings.Contains(p, bad) {
+				return fmt.Errorf("access: public_paths entry %q may not contain %q (declare the plain decoded path)", p, bad)
+			}
+		}
+		if strings.ContainsAny(p, " \t") {
+			return fmt.Errorf("access: public_paths entry %q may not contain whitespace", p)
+		}
+		// The only wildcard allowed is a trailing "/*". Trimming it must leave a
+		// star-free literal path, which rejects "/v1*", "/*/v1" and "/v1/*/x".
+		literal := strings.TrimSuffix(p, "/*")
+		if strings.Contains(literal, "*") {
+			return fmt.Errorf("access: public_paths entry %q may only use a trailing %q wildcard (%q matches %q too)", p, "/*", "/v1*", "/v1admin")
+		}
+		if literal == "" {
+			return fmt.Errorf("access: public_paths entry %q would make the whole app public; use the app's access toggle instead", p)
+		}
+		key := strings.ToLower(p)
+		if seen[key] {
+			return fmt.Errorf("access: duplicate public_paths entry %q (matching is case-insensitive)", p)
+		}
+		seen[key] = true
+	}
+	return nil
 }
 
 // validateSecrets checks declared secret names and normalizes the byte length

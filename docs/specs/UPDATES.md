@@ -161,7 +161,10 @@ The trigger for prompting is **permission expansion**, not version bumps. Concre
 
 - New permission key (e.g., `devices` newly present) → prompt.
 - Widened value (`internet: false → true`, new entry in `folders`, new entry in `devices`, `gpu: false → true`, mode upgrade `read → write` on an existing folder, etc.) → prompt.
+- A new or widened `access.public_paths` entry (`APP_MANIFEST.md` # E2) → prompt. It exposes more of the app to anonymous callers, which is the same kind of trust event as a new folder grant, even though it sits outside the `permissions:` block. A narrower or unchanged list → no prompt.
 - Same or narrower permissions → auto-apply, no prompt.
+
+The `public_paths` rule is **specified, not yet built** — the permission diff itself is unimplemented (no app-update transaction reads it yet), so this says what the diff must cover when it lands.
 
 This means a Photos `1.4 → 2.0` bump that doesn't touch permissions auto-applies. A Photos `1.4 → 1.5` bump that adds `devices: [/dev/dri]` for hardware-accelerated thumbnails prompts.
 

@@ -28,6 +28,14 @@ permissions:
   internet: false
   lan: false
 
+# Path-scoped exposure (#415). The lane needs an app that declares public paths
+# to prove the carve-out, and whoami is the right one: it echoes the request, so
+# the assertions can see exactly what the app upstream received on each branch.
+# The exact entry and the prefix entry are both declared, because "/v1/*" does
+# NOT match "/v1" itself in Caddy and a real API app needs both.
+access:
+  public_paths: ["/v1", "/v1/*"]
+
 images:
   traefik/whoami:v1.10.3:
     digest: sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c
