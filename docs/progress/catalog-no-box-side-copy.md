@@ -18,7 +18,7 @@ The reasoning is in `DECISIONS.md` 2026-08-17, but the short form: browsing a st
 
 ### A dev/test seam replaces the pre-seeded cache (`MALMO_CATALOG_FILE`)
 
-Four lanes booted a brain from a pre-seeded cache file plus a dead catalog URL: `make dev-app` / `make seed-catalog`, `dev/test-qemu/bootstrap.sh`, `dev/cloud/test/bootstrap.sh`, and (URL only, no seed) `dev/test-health.sh`. They now pass the snapshot explicitly as `MALMO_CATALOG_FILE`, read once at construction by `loadSnapshotFile` and never written back. It is an input, not a cache: `TestRemoteSnapshotFileSeed` asserts the file's mtime and size are untouched after a sync attempt. A missing or corrupt seed leaves the store empty rather than failing construction — a dev seed must not be able to stop a box booting.
+Three lanes booted a brain from a pre-seeded cache file plus a dead catalog URL: `make dev-app` / `make seed-catalog`, `dev/test-qemu/bootstrap.sh`, and `dev/cloud/test/bootstrap.sh`. They now pass the snapshot explicitly as `MALMO_CATALOG_FILE`, read once at construction by `loadSnapshotFile` and never written back. (`dev/test-health.sh` set a dead URL but never seeded a cache, so it needs no change.) It is an input, not a cache: `TestRemoteSnapshotFileSeed` asserts the file's mtime and size are untouched after a sync attempt. A missing or corrupt seed leaves the store empty rather than failing construction — a dev seed must not be able to stop a box booting.
 
 Plumbed through `cmd/brain` (`catalogSnapshotFile`), `brainlaunch.Config.CatalogFile` → `MALMO_CATALOG_FILE`, and `cmd/host-agent-real`. Production sets none of it. The Makefile writes its seed to `.dev/catalog-seed.json` (`CATALOG_SEED`) instead of into the cache dir.
 
