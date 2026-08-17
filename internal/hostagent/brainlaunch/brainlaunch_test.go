@@ -166,8 +166,9 @@ func TestLaunchRunSpec(t *testing.T) {
 	if v := envVal(s.Env, "MALMO_DASHBOARD_UI_UPSTREAM"); v != "malmo-ui:80" {
 		t.Errorf("MALMO_DASHBOARD_UI_UPSTREAM = %q, want malmo-ui:80", v)
 	}
-	// The control-plane catalog origin + last-good cache dir. The cache is under
-	// DataDir, so it rides the data-dir mount (no separate Mount entry).
+	// The control-plane catalog origin + asset cache dir (icons and screenshots
+	// only — the snapshot is never written to disk). The cache is under DataDir, so
+	// it rides the data-dir mount (no separate Mount entry).
 	if v := envVal(s.Env, "MALMO_CATALOG_URL"); v != "https://malmo.network" {
 		t.Errorf("MALMO_CATALOG_URL = %q, want https://malmo.network", v)
 	}
@@ -236,6 +237,23 @@ func TestLaunchRunSpecOfflineAndNoCatalog(t *testing.T) {
 	}
 	if v := envVal(s.Env, "MALMO_CATALOG_CACHE_DIR"); v != "" {
 		t.Errorf("MALMO_CATALOG_CACHE_DIR = %q, want unset when CatalogCacheDir is empty", v)
+	}
+	if v := envVal(s.Env, "MALMO_CATALOG_FILE"); v != "" {
+		t.Errorf("MALMO_CATALOG_FILE = %q, want unset when CatalogFile is empty", v)
+	}
+}
+
+// The air-gapped lanes stage a snapshot file and point the brain at it, because
+// there is no control plane in the VM to sync from. A real box never sets it.
+func TestLaunchRunSpecCatalogFile(t *testing.T) {
+	f := newFake()
+	cfg := testConfig()
+	cfg.CatalogFile = "/var/lib/malmo/catalog-seed.json"
+	if err := Launch(context.Background(), f, cfg); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if v := envVal(f.lastRun.Env, "MALMO_CATALOG_FILE"); v != "/var/lib/malmo/catalog-seed.json" {
+		t.Errorf("MALMO_CATALOG_FILE = %q, want the staged snapshot path", v)
 	}
 }
 

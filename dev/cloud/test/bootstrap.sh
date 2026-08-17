@@ -133,7 +133,7 @@ cp "${TEST_DIR}/malmo-cloud-assertions.service" "$EXTRA/etc/systemd/system/"
 # globs *.tar) docker-loads it too.
 echo "baking whoami app image + catalog snapshot for the access-mode e2e (#308)..."
 mkdir -p "$EXTRA/var/lib/malmo/control-plane-images" \
-         "$EXTRA/var/lib/malmo/catalog-cache" \
+         "$EXTRA/var/lib/malmo" \
          "$EXTRA/etc/systemd/system/host-agent.service.d"
 
 # whoami image: pull by DIGEST (not the mutable tag), re-tag to the v1.10.3 the
@@ -144,26 +144,28 @@ docker pull "$WHOAMI_REF"
 docker tag "$WHOAMI_REF" traefik/whoami:v1.10.3
 docker save traefik/whoami:v1.10.3 -o "$EXTRA/var/lib/malmo/control-plane-images/whoami.tar"
 
-# Pre-seed the brain's last-good catalog cache with a whoami snapshot: air-gapped,
-# the brain reads this at boot exactly as a synced-then-offline snapshot and installs
-# from it (internal/catalog/remote.go # loadCache). mkcatalog generates it from the
-# minimal hosted whoami package (pure routing, no folder grant — the access proof is
-# the gate + strip, not bind mounts) and stamps the integrity digest the brain
-# verifies. Built as the caller (warm Go cache) via stage_build_go, then run as root.
+# Stage a local catalog snapshot with a whoami app: the lane is air-gapped, so there
+# is no control plane to sync from, and the brain reads this file once at boot to
+# seed its store (internal/catalog/remote.go # loadSnapshotFile, MALMO_CATALOG_FILE).
+# It is an input the brain never writes back — a box keeps no catalog on disk.
+# mkcatalog generates it from the minimal hosted whoami package (pure routing, no
+# folder grant — the access proof is the gate + strip, not bind mounts) and stamps
+# the integrity digest the brain verifies. Built as the caller (warm Go cache) via
+# stage_build_go, then run as root.
 MKCATALOG_BIN="${WORK}/mkcatalog"
 stage_build_go "$MKCATALOG_BIN" "${REPO_ROOT}/dev/mkcatalog/"
 "$MKCATALOG_BIN" \
     -pkg "${TEST_DIR}/catalog/whoami" \
     -environments hosted \
-    -out "$EXTRA/var/lib/malmo/catalog-cache/catalog.json"
+    -out "$EXTRA/var/lib/malmo/catalog-seed.json"
 
 # Offline-install env, layered over the shared 10-cloud-brain.conf drop-in (20- sorts
 # after, so these win). host-agent-real forwards them into the brain container
 # (cmd/host-agent-real/main.go → brainlaunch): OFFLINE_INSTALL trusts the docker-
 # loaded image's catalog-promised digest instead of pulling, and the inert catalog
-# URL makes the background sync fail fast so the pre-seeded cache stands. A real
-# tenant box keeps the production default (pulls from the control plane) — this
-# override exists only in the boot-proof image.
+# URL makes the background sync fail fast so the staged snapshot stands. A real
+# tenant box keeps the production default (pulls from the control plane, and sets no
+# MALMO_CATALOG_FILE at all) — these overrides exist only in the boot-proof image.
 #
 # MALMO_UPDATE_TARGET_URL is inert here for a sharper reason (os#401): a hosted box
 # applies its control-plane target WITHOUT a prompt, so a boot proof left pointing at
@@ -176,7 +178,7 @@ stage_build_go "$MKCATALOG_BIN" "${REPO_ROOT}/dev/mkcatalog/"
 cat > "$EXTRA/etc/systemd/system/host-agent.service.d/20-cloud-test-catalog.conf" <<'EOF'
 [Service]
 Environment=MALMO_CATALOG_URL=http://127.0.0.1:9
-Environment=MALMO_CATALOG_CACHE_DIR=/var/lib/malmo/catalog-cache
+Environment=MALMO_CATALOG_FILE=/var/lib/malmo/catalog-seed.json
 Environment=MALMO_OFFLINE_INSTALL=1
 Environment=MALMO_UPDATE_TARGET_URL=http://127.0.0.1:9
 EOF

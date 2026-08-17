@@ -31,7 +31,7 @@ import (
 const wireSchemaVersion = 1
 
 // catalogFile is the whole published catalog as served byte-for-byte by GET
-// /catalog/sync — the versioned index the box caches last-good and projects
+// /catalog/sync — the versioned index the box holds in memory and projects
 // locally. Mirror of cloud catalog.CatalogFile.
 type catalogFile struct {
 	SchemaVersion int       `json:"schema_version"`
@@ -189,10 +189,9 @@ func indexDigest(apps []wireApp) (string, error) {
 
 // verify refuses a snapshot the box can't trust: a schema version it can't read,
 // or an index digest that doesn't match the stamped one (a truncated or corrupted
-// fetch, or a tampered cache file). It is an integrity check; authenticity comes
-// from TLS on the fetch (no separate signature — cloud #62). Called on every
-// fetched and every cache-loaded snapshot before it is projected, so a bad snapshot
-// never becomes the read source.
+// fetch). It is an integrity check; authenticity comes from TLS on the fetch (no
+// separate signature — cloud #62). Called on every snapshot before it is projected,
+// so a bad one never becomes the read source.
 func (f catalogFile) verify() error {
 	if f.SchemaVersion != wireSchemaVersion {
 		return fmt.Errorf("catalog schema version %d, want %d", f.SchemaVersion, wireSchemaVersion)
@@ -208,8 +207,8 @@ func (f catalogFile) verify() error {
 }
 
 // parseSnapshot unmarshals raw /catalog/sync bytes and verifies them in one step —
-// the only way a snapshot enters the box, whether from the network or the
-// last-good cache file.
+// the only way a snapshot enters the box, whether fetched from the control plane or
+// read from a staged local file (the dev/test seam, MALMO_CATALOG_FILE).
 func parseSnapshot(data []byte) (catalogFile, error) {
 	var f catalogFile
 	if err := json.Unmarshal(data, &f); err != nil {

@@ -21,6 +21,22 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-08-17 — The box keeps no catalog on disk; only icons and screenshots are cached, for 24 hours
+
+**Previously:** the box was a thin client **with a last-good on-disk cache** (`DECISIONS.md` 2026-07-02). It wrote every verified snapshot to `/var/lib/malmo/catalog-cache/catalog.json` and read it back at boot, so a box that had synced once browsed its last-good catalog forever, online or not. Proxied icons and screenshots were cached next to it with no expiry at all.
+
+**Now:** the brain holds the snapshot **in memory only**. Nothing writes it to disk, nothing reads it back at boot. A box that cannot reach the catalog endpoint shows an **empty store** until a sync lands. Icons and screenshots are still proxied and cached on disk, now with a **24-hour expiry**; an expired asset whose refetch fails is served stale rather than broken. The dev and test lanes that used to pre-seed the cache file now pass a snapshot explicitly as `MALMO_CATALOG_FILE` — an input the brain reads once and never writes.
+
+**Why:**
+- **Browsing offline was never installing offline.** The 2026-07-02 entry already said it: "installing an app needs internet to pull images regardless." So the cache bought a catalog you could read but not act on. That is a thin slice of value for a permanent copy of the catalog on every box.
+- **A pinned copy goes wrong in a way an empty store does not.** The catalog is a separate distribution with its own release cadence. A box holding an old snapshot can offer a version of a manifest the store no longer publishes, and install it. Empty is a state the user can understand and the box recovers from on the next sync; silently stale is neither.
+- **It makes the failure visible.** A box that rejects a snapshot on a digest mismatch used to freeze on its cache and keep looking healthy (`APP_STORE.md` # What the box models). With no cache, a restart shows an empty store — worse cosmetics, better signal.
+- **Assets are a different question, so they got a different answer.** Icons are page furniture for a snapshot the box already holds, and re-fetching them per request would be wasteful. But their filenames are stable per app (`icon.png`), so an unexpiring cache meant the first icon a box ever fetched was the icon it served forever, and republished artwork never reached the fleet. A day is short enough that a fixed icon lands on its own and long enough that browsing is not a stream of refetches. A per-asset digest on the wire would be better and is a two-repo change; the TTL is the cheap correct-enough form.
+
+**Affected docs:** `docs/specs/APP_STORE.md` (superseded banner, Failure modes, What the box models, Landing page, Locked decisions); `docs/specs/NEXT.md` (publish-mechanism language); `docs/architecture.md` (catalog package row + app-store note); `CLAUDE.md` + `docs/dev/contributing.md` (where catalog artifacts live, synthetic fixtures); `docs/dev/running-locally.md` (env-var list); `docs/dev/authoring-apps-with-an-agent.md`. Progress: `catalog-no-box-side-copy.md`.
+
+---
+
 ## 2026-08-11 — Hosted updates are cloud-decided per box and pushed, not manifest-driven and prompted
 
 **Previously:** `UPDATES.md` and `RELEASE_MANIFEST.md` described one update model for every box: a signed static `stable.json` on a CDN, polled hourly, verified with minisign, surfacing an "Update available" prompt that an admin clicks. That model was written before the `hosted` profile existed and was silently assumed to cover it.

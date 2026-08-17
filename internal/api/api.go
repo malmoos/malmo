@@ -235,8 +235,8 @@ func (s *Server) register(api huma.API) {
 	// same-origin, box-identity-gated endpoints instead of pulling the whole
 	// catalog and filtering client-side. They mirror the control plane's public
 	// /catalog/{home,category,search} (cloud specs/CATALOG.md # Serve) but are served
-	// from the box's own synced snapshot, so browse still works offline (step 3's
-	// last-good cache). "home" and "search" are literal path segments; "category"
+	// from the box's own synced snapshot, so browse needs no round trip to the
+	// control plane. "home" and "search" are literal path segments; "category"
 	// takes ?name= rather than a /category/{cat} path so it does not collide with the
 	// /catalog/{id}/install-plan route under net/http's mux precedence.
 	huma.Register(api, huma.Operation{

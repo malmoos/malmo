@@ -20,12 +20,23 @@ import (
 // remote.go is the box's thin-client catalog: it consumes the control plane's
 // public-read catalog API (cloud specs/CATALOG.md) instead of reading a baked
 // directory. The box fetches the whole snapshot (GET /catalog/sync) in one shot,
-// verifies its integrity digest, caches it last-good on disk, and projects the
-// six-method surface locally — so the UI never blocks on the network and an
-// offline box still browses its last-good catalog. A never-synced box shows an
-// empty store. It stays the box↔cloud install contract: Load re-parses the
-// verbatim manifest with the box's own manifest.Parse, so the box remains the sole
-// enforcer of the manifest contract.
+// verifies its integrity digest, holds it in memory, and projects the six-method
+// surface locally — so the UI never blocks on the network.
+//
+// The box keeps NO copy of the snapshot on disk. The catalog is a separate
+// distribution with its own release cadence, and the box always renders the
+// version the endpoint is serving now: a box that has not synced yet, or cannot
+// reach the endpoint, shows an empty store rather than an older catalog. That is
+// the honest state — browsing a stale catalog was never the same as being able
+// to act on it, because installing an app pulls images over the same network,
+// and a pinned old copy can offer a manifest the store no longer publishes.
+// Icons and screenshots are a separate case: those are proxied per request and
+// cached on disk with a TTL (see assetTTL), because they are page furniture for
+// a snapshot the box is already holding.
+//
+// It stays the box↔cloud install contract: Load re-parses the verbatim manifest
+// with the box's own manifest.Parse, so the box remains the sole enforcer of the
+// manifest contract.
 
 const (
 	// defaultRefreshInterval is how often the box re-syncs the snapshot. The
@@ -40,41 +51,51 @@ const (
 	// into memory: the timeout bounds wall-clock, not bytes, so a compromised or
 	// MITM'd control plane must not be able to pressure box memory with an
 	// unbounded body. Both are far above any real payload — the snapshot carries
-	// every app's verbatim manifest + compose (the real one is ~150 KiB for ~20
-	// apps), and assets are icons/screenshots — so a legitimate catalog never
-	// trips them; exceeding is treated as a fetch failure (last-good stands).
+	// every app's verbatim manifest + compose, and assets are icons/screenshots —
+	// so a legitimate catalog never trips them; exceeding is treated as a fetch
+	// failure (the snapshot in memory stands until the next tick).
 	maxSnapshotBytes = 32 << 20 // 32 MiB
 	maxAssetBytes    = 16 << 20 // 16 MiB
-	// cacheFileName is the last-good snapshot on disk under CacheDir. Byte-for-byte
-	// the /catalog/sync body, so the integrity digest re-verifies over exactly the
-	// bytes the sync tool stamped.
-	cacheFileName = "catalog.json"
-	// assetsDir is the CacheDir subtree the proxied icon/screenshot files land in,
-	// mirroring the control plane's per-app asset layout (<id>/<file>).
+	// assetsDir is the AssetCacheDir subtree the proxied icon/screenshot files land
+	// in, mirroring the control plane's per-app asset layout (<id>/<file>).
 	assetsDir = "assets"
+	// assetTTL is how long a proxied icon or screenshot is served from disk before
+	// it is fetched again. Asset filenames are stable per app ("icon.png"), so
+	// without an expiry the first icon a box ever fetched would be the icon it
+	// served forever — republishing artwork would never reach the fleet. A day is
+	// short enough that a fixed icon lands on its own, and long enough that
+	// browsing the store is not a stream of refetches.
+	assetTTL = 24 * time.Hour
 )
 
 // RemoteOptions configures the control-plane catalog client. BaseURL is the
 // control plane's origin serving the catalog API (the client appends /catalog/…);
 // Environment is the box's own surface ("appliance"|"hosted") used to filter the
-// snapshot; CacheDir holds the last-good snapshot and proxied assets.
+// snapshot; AssetCacheDir holds proxied icons and screenshots (never the
+// snapshot). SnapshotFile is a dev/test-only seam — see the field comment.
 type RemoteOptions struct {
-	BaseURL         string
-	Environment     string
-	CacheDir        string
+	BaseURL       string
+	Environment   string
+	AssetCacheDir string
+	// SnapshotFile is a local snapshot to start from, for dev and test lanes that
+	// run a brain with no reachable control plane (make dev-app, the QEMU boot
+	// proofs, dev/test-health.sh). It is read once at construction and never
+	// written: it is an input, not a cache. Production leaves it empty — a real box
+	// gets its catalog from BaseURL and nowhere else.
+	SnapshotFile    string
 	RefreshInterval time.Duration
 	HTTPClient      *http.Client
 }
 
-// remoteSource implements source against the control-plane catalog API with a
-// last-good on-disk cache. Reads project from the in-memory snapshot under an
-// RLock; the background sync loop swaps a freshly fetched-and-verified snapshot in
-// under the write lock, so a read never blocks on the network and never sees a
-// half-applied snapshot.
+// remoteSource implements source against the control-plane catalog API. Reads
+// project from the in-memory snapshot under an RLock; the background sync loop
+// swaps a freshly fetched-and-verified snapshot in under the write lock, so a
+// read never blocks on the network and never sees a half-applied snapshot. The
+// snapshot lives only in memory — nothing writes it to disk.
 type remoteSource struct {
 	baseURL  string
 	env      string
-	cacheDir string
+	cacheDir string // assets only
 	interval time.Duration
 	http     *http.Client
 
@@ -123,11 +144,10 @@ func newSnapshot(f catalogFile) *snapshot {
 	return s
 }
 
-// NewRemote builds a control-plane-backed catalog. It loads the last-good cache
-// synchronously (so an offline or slow-to-sync box browses immediately) but does
-// not touch the network — call StartRefresh to begin syncing. A missing or
-// unreadable cache is not an error: the box simply starts with an empty store
-// until the first sync lands.
+// NewRemote builds a control-plane-backed catalog. It does not touch the network
+// — call StartRefresh to begin syncing — so a box starts with an empty store and
+// fills it when the first sync lands. When SnapshotFile is set (dev and test
+// lanes only) it is read here to seed that starting state.
 func NewRemote(opts RemoteOptions) *Catalog {
 	interval := opts.RefreshInterval
 	if interval <= 0 {
@@ -140,56 +160,58 @@ func NewRemote(opts RemoteOptions) *Catalog {
 	rs := &remoteSource{
 		baseURL:    strings.TrimRight(opts.BaseURL, "/"),
 		env:        opts.Environment,
-		cacheDir:   opts.CacheDir,
+		cacheDir:   opts.AssetCacheDir,
 		interval:   interval,
 		http:       client,
 		assetLocks: map[string]*sync.Mutex{},
 	}
-	if err := os.MkdirAll(opts.CacheDir, 0o755); err != nil {
-		slog.Error("catalog: create cache dir; last-good cache disabled", "src", opts.CacheDir, "err", err)
+	if err := os.MkdirAll(opts.AssetCacheDir, 0o755); err != nil {
+		slog.Error("catalog: create asset cache dir; icons will be fetched per request", "src", opts.AssetCacheDir, "err", err)
 	}
-	rs.loadCache()
+	if opts.SnapshotFile != "" {
+		rs.loadSnapshotFile(opts.SnapshotFile)
+	}
 	return &Catalog{src: rs}
 }
 
-// loadCache seeds the in-memory snapshot from the last-good cache file at startup.
-// Best-effort: an absent file is the never-synced case (empty store), and a
-// corrupt or tampered file fails verify and is ignored (the next sync overwrites
-// it) rather than crashing the box. On success it also primes the ETag so the very
-// first sync can 304 when the control plane still holds the same snapshot.
-func (r *remoteSource) loadCache() {
-	data, err := os.ReadFile(r.cachePath())
+// loadSnapshotFile seeds the in-memory snapshot from a local file, for the dev and
+// test lanes that run a brain against no reachable control plane (RemoteOptions.
+// SnapshotFile). It is read here and never written back — the file belongs to
+// whoever staged it, not to the brain. Best-effort by design: an absent or invalid
+// file leaves the store empty and the sync loop still runs, because failing to
+// boot a box over a dev seed would be a worse trade than an empty store.
+func (r *remoteSource) loadSnapshotFile(path string) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			slog.Warn("catalog: read last-good cache failed; starting with empty store", "src", r.cachePath(), "err", err)
-		}
+		slog.Warn("catalog: read local snapshot file failed; starting with empty store", "src", path, "err", err)
 		return
 	}
 	f, err := parseSnapshot(data)
 	if err != nil {
-		slog.Warn("catalog: last-good cache invalid; ignoring", "src", r.cachePath(), "err", err)
+		slog.Warn("catalog: local snapshot file invalid; ignoring", "src", path, "err", err)
 		return
 	}
 	r.mu.Lock()
 	r.snap = newSnapshot(f)
 	r.etag = `"` + f.IndexSHA256 + `"`
 	r.mu.Unlock()
-	slog.Info("catalog: loaded last-good cache", "apps", len(f.Apps), "index_sha256", f.IndexSHA256)
+	slog.Info("catalog: loaded local snapshot file", "src", path, "apps", len(f.Apps), "index_sha256", f.IndexSHA256)
 }
 
 // startRefresh runs the background sync loop bound to ctx: one immediate sync (so
-// a freshly provisioned box populates its store promptly) then one per interval.
-// Each attempt is independent and best-effort — a failure keeps the last-good
-// snapshot and the loop retries next tick — so a control plane blip never empties
-// the store. A second call is a no-op (the started guard): one sync loop only, no
-// matter how many times cmd/brain wires it.
+// a freshly booted box populates its store promptly) then one per interval. Each
+// attempt is independent and best-effort — a failure keeps whatever snapshot is
+// already in memory and the loop retries next tick — so a control plane blip
+// during uptime never empties a store that has synced. A second call is a no-op
+// (the started guard): one sync loop only, no matter how many times cmd/brain
+// wires it.
 func (r *remoteSource) startRefresh(ctx context.Context) {
 	if !r.started.CompareAndSwap(false, true) {
 		return
 	}
 	go func() {
 		if err := r.syncOnce(ctx); err != nil {
-			slog.Warn("catalog: initial sync failed; serving last-good cache", "err", err)
+			slog.Warn("catalog: initial sync failed; store is empty until a sync lands", "err", err)
 		}
 		t := time.NewTicker(r.interval)
 		defer t.Stop()
@@ -199,7 +221,7 @@ func (r *remoteSource) startRefresh(ctx context.Context) {
 				return
 			case <-t.C:
 				if err := r.syncOnce(ctx); err != nil {
-					slog.Warn("catalog: sync failed; serving last-good cache", "err", err)
+					slog.Warn("catalog: sync failed; keeping the snapshot in memory", "err", err)
 				}
 			}
 		}
@@ -207,10 +229,9 @@ func (r *remoteSource) startRefresh(ctx context.Context) {
 }
 
 // syncOnce fetches the snapshot once, verifies it, and swaps it in as the new read
-// source, writing it through to the last-good cache. A 304 (the control plane
-// still holds the snapshot the box last saw) is the common no-op path. A transport
-// error, a non-200/304 status, or a failed verify returns an error and leaves the
-// current snapshot untouched.
+// source. A 304 (the control plane still holds the snapshot the box last saw) is
+// the common no-op path. A transport error, a non-200/304 status, or a failed
+// verify returns an error and leaves the current snapshot untouched.
 func (r *remoteSource) syncOnce(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+"/catalog/sync", nil)
 	if err != nil {
@@ -253,22 +274,14 @@ func (r *remoteSource) syncOnce(ctx context.Context) error {
 	r.snap = newSnapshot(f)
 	r.etag = newETag
 	r.mu.Unlock()
-	// Persist last-good only when the content actually changed, to avoid rewriting
-	// the same bytes every interval. Verified bytes, so the cache re-verifies on
-	// next boot.
 	if newETag != prev {
-		if err := writeFileAtomic(r.cachePath(), data); err != nil {
-			slog.Warn("catalog: persist last-good cache failed; in-memory snapshot still updated", "src", r.cachePath(), "err", err)
-		}
 		slog.Info("catalog: synced snapshot", "apps", len(f.Apps), "index_sha256", f.IndexSHA256)
 	}
 	return nil
 }
 
-func (r *remoteSource) cachePath() string { return filepath.Join(r.cacheDir, cacheFileName) }
-
 // current returns the live snapshot under the read lock, or nil when the box has
-// never synced and has no cache (empty store).
+// not synced yet (empty store).
 func (r *remoteSource) current() *snapshot {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -506,17 +519,21 @@ func (r *remoteSource) ScreenshotPath(id string, i int) (string, error) {
 }
 
 // cachedAsset resolves an asset to a local file, fetching it from the control
-// plane once and caching it under CacheDir/assets/<id>/<assetFile>. The asset name
-// comes from the verified snapshot, but it is still contained under the assets
-// root defensively (a corrupt snapshot must never write outside the cache). A
-// fetch failure with no cached copy returns a non-ErrNotFound error (500) — the
-// app genuinely has this asset; the box just can't reach it right now.
+// plane and caching it under AssetCacheDir/assets/<id>/<assetFile> for assetTTL.
+// The asset name comes from the verified snapshot, but it is still contained under
+// the assets root defensively (a corrupt snapshot must never write outside the
+// cache). A fetch failure with no cached copy returns a non-ErrNotFound error
+// (500) — the app genuinely has this asset; the box just can't reach it right now.
+//
+// A cached file past its TTL is refetched, but a refetch that fails serves the
+// expired file rather than the error: stale artwork beats a broken image, and the
+// next request tries again.
 func (r *remoteSource) cachedAsset(id, assetFile, cpPath string) (string, error) {
 	local, ok := safeJoin(filepath.Join(r.cacheDir, assetsDir, id), assetFile)
 	if !ok {
 		return "", fmt.Errorf("%w: %q asset %q escapes cache dir", ErrNotFound, id, assetFile)
 	}
-	if _, err := os.Stat(local); err == nil {
+	if fresh(local) {
 		return local, nil // fast-path cache hit — no lock
 	}
 	// Serialize concurrent misses for this asset so N simultaneous requests do one
@@ -524,11 +541,16 @@ func (r *remoteSource) cachedAsset(id, assetFile, cpPath string) (string, error)
 	mu := r.assetLock(id + "/" + assetFile)
 	mu.Lock()
 	defer mu.Unlock()
-	if _, err := os.Stat(local); err == nil {
+	if fresh(local) {
 		return local, nil // another goroutine fetched it while we waited on the lock
 	}
 	data, err := r.fetchAsset(cpPath)
 	if err != nil {
+		// An expired copy is better than no icon at all.
+		if _, statErr := os.Stat(local); statErr == nil {
+			slog.Warn("catalog: refresh asset failed; serving the expired copy", "src", local, "url", cpPath, "err", err)
+			return local, nil
+		}
 		return "", err
 	}
 	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
@@ -564,6 +586,17 @@ func (r *remoteSource) fetchAsset(cpPath string) ([]byte, error) {
 		return nil, fmt.Errorf("catalog: read asset %q: %w", cpPath, err)
 	}
 	return data, nil
+}
+
+// fresh reports whether a cached asset exists and is younger than assetTTL. An
+// unreadable file counts as absent, so a broken cache entry is refetched instead
+// of served.
+func fresh(path string) bool {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return time.Since(fi.ModTime()) < assetTTL
 }
 
 // assetLock returns the per-asset mutex for key, creating it on first use. The map
@@ -607,8 +640,8 @@ func safeJoin(base, rel string) (string, bool) {
 
 // writeFileAtomic writes data to a temp file in the destination directory and
 // renames it into place, so a concurrent reader (or a crash mid-write) never sees
-// a half-written file — the last-good cache and each proxied asset must be all or
-// nothing.
+// a half-written file — each proxied asset must be all or nothing. The rename also
+// resets the file's mtime, which is what expires it (see fresh / assetTTL).
 func writeFileAtomic(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".tmp-*")

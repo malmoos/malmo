@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // validManifest is a minimal manifest.yml the box's manifest.Parse accepts, so
@@ -121,8 +124,19 @@ func (f *fakeCP) server() *httptest.Server {
 
 // newRemote builds a remoteSource (not the Catalog facade) so tests can drive
 // syncOnce and the projections directly, without a background loop racing them.
+// cacheDir is the ASSET cache — the snapshot is never written anywhere.
 func newRemote(baseURL, env, cacheDir string) *remoteSource {
-	c := NewRemote(RemoteOptions{BaseURL: baseURL, Environment: env, CacheDir: cacheDir})
+	c := NewRemote(RemoteOptions{BaseURL: baseURL, Environment: env, AssetCacheDir: cacheDir})
+	return c.src.(*remoteSource)
+}
+
+// newRemoteFromFile builds a remoteSource seeded from a local snapshot file, the
+// dev/test seam (MALMO_CATALOG_FILE).
+func newRemoteFromFile(baseURL, env, cacheDir, snapshotFile string) *remoteSource {
+	c := NewRemote(RemoteOptions{
+		BaseURL: baseURL, Environment: env,
+		AssetCacheDir: cacheDir, SnapshotFile: snapshotFile,
+	})
 	return c.src.(*remoteSource)
 }
 
@@ -185,30 +199,102 @@ func TestRemoteSyncAndProject(t *testing.T) {
 	}
 }
 
-func TestRemoteLastGoodFallback(t *testing.T) {
+// TestRemoteKeepsNoSnapshotOnDisk pins the rule that the box holds the catalog in
+// memory only. A synced source survives a later failed sync (the snapshot it
+// already has stays), but nothing about it outlives the process: a fresh source
+// over the very same directory starts empty, because there is no file to read.
+//
+// The store being empty rather than stale is the intended behavior, not a
+// degradation to work around — see APP_STORE.md # Failure modes.
+func TestRemoteKeepsNoSnapshotOnDisk(t *testing.T) {
 	cp := newFakeCP(t, testApps())
 	srv := cp.server()
-	cache := t.TempDir()
+	dir := t.TempDir()
 
-	// First box syncs successfully and writes the last-good cache.
-	r := newRemote(srv.URL, "hosted", cache)
+	r := newRemote(srv.URL, "hosted", dir)
 	if err := r.syncOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if l, _ := r.List(); len(l) != 2 {
+		t.Fatalf("List after sync = %d apps, want 2", len(l))
+	}
 	srv.Close() // control plane now unreachable
 
-	// A fresh box pointed at the same cache but a dead control plane loads
-	// last-good on construction and still browses.
-	r2 := newRemote(srv.URL, "hosted", cache)
-	if l, _ := r2.List(); len(l) != 2 {
-		t.Fatalf("last-good List = %d apps, want 2", len(l))
-	}
-	// And a sync attempt against the dead server keeps the last-good snapshot.
-	if err := r2.syncOnce(context.Background()); err == nil {
+	// A failed sync leaves the snapshot this source already holds untouched.
+	if err := r.syncOnce(context.Background()); err == nil {
 		t.Fatal("syncOnce against dead server should error")
 	}
-	if l, _ := r2.List(); len(l) != 2 {
-		t.Fatalf("List after failed sync = %d apps, want last-good 2", len(l))
+	if l, _ := r.List(); len(l) != 2 {
+		t.Fatalf("List after failed sync = %d apps, want the 2 already in memory", len(l))
+	}
+
+	// A new source over the same directory — the restart case — has nothing to
+	// read back, so it browses empty until a sync lands.
+	r2 := newRemote(srv.URL, "hosted", dir)
+	if l, _ := r2.List(); len(l) != 0 {
+		t.Fatalf("a restarted box must start empty, got %d apps: the snapshot was persisted somewhere", len(l))
+	}
+
+	// And no snapshot-shaped file was written under the asset cache dir either.
+	found, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) > 0 {
+		t.Errorf("snapshot written to disk: %v", found)
+	}
+}
+
+// TestRemoteSnapshotFileSeed covers the dev/test seam (MALMO_CATALOG_FILE): a
+// local snapshot seeds the store at construction, and the brain never writes to
+// it — the file belongs to whoever staged it.
+func TestRemoteSnapshotFileSeed(t *testing.T) {
+	body, _ := makeSnapshot(t, testApps())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "catalog.json")
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// No control plane at all: the seed is the whole store.
+	r := newRemoteFromFile("http://127.0.0.1:1", "hosted", t.TempDir(), path)
+	if l, _ := r.List(); len(l) != 2 {
+		t.Fatalf("seeded List = %d apps, want 2", len(l))
+	}
+	if err := r.syncOnce(context.Background()); err == nil {
+		t.Fatal("syncOnce against no control plane should error")
+	}
+	if l, _ := r.List(); len(l) != 2 {
+		t.Fatalf("List after failed sync = %d apps, want the seeded 2", len(l))
+	}
+
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) || after.Size() != before.Size() {
+		t.Error("the seed file was written to; it is an input, not a cache")
+	}
+}
+
+// TestRemoteSnapshotFileInvalid: a missing or corrupt seed leaves the store empty
+// and the source usable, rather than failing construction. A dev seed must not be
+// able to stop a box from booting.
+func TestRemoteSnapshotFileInvalid(t *testing.T) {
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "bad.json")
+	if err := os.WriteFile(bad, []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{bad, filepath.Join(dir, "absent.json")} {
+		r := newRemoteFromFile("http://127.0.0.1:1", "hosted", t.TempDir(), path)
+		if l, _ := r.List(); len(l) != 0 {
+			t.Errorf("seed %q: List = %d apps, want empty", path, len(l))
+		}
 	}
 }
 
@@ -281,6 +367,85 @@ func TestRemoteAssetProxyAndCache(t *testing.T) {
 	}
 	if _, err := r.ScreenshotPath("alpha", 5); err == nil {
 		t.Fatal("out-of-range screenshot; want ErrNotFound")
+	}
+}
+
+// TestRemoteAssetExpires covers the asset TTL. Asset filenames are stable per app
+// ("icon.png"), so without an expiry the first icon a box fetched would be the
+// icon it served forever, and republished artwork would never reach the fleet.
+// Aging the cached file past assetTTL must produce a refetch.
+func TestRemoteAssetExpires(t *testing.T) {
+	cp := newFakeCP(t, testApps())
+	srv := cp.server()
+	defer srv.Close()
+
+	r := newRemote(srv.URL, "appliance", t.TempDir())
+	if err := r.syncOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	p, err := r.IconPath("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A second request inside the TTL is served from disk.
+	if _, err := r.IconPath("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	cp.mu.Lock()
+	hits := cp.assetHits
+	cp.mu.Unlock()
+	if hits != 1 {
+		t.Fatalf("asset fetched %d times inside the TTL, want 1", hits)
+	}
+
+	// Age the cached file past the TTL: the next request refetches.
+	old := time.Now().Add(-assetTTL - time.Minute)
+	if err := os.Chtimes(p, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.IconPath("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	cp.mu.Lock()
+	hits = cp.assetHits
+	cp.mu.Unlock()
+	if hits != 2 {
+		t.Fatalf("asset fetched %d times after expiry, want 2 (the expired copy must be refreshed)", hits)
+	}
+}
+
+// TestRemoteExpiredAssetSurvivesFailedRefresh: once an asset is expired but the
+// control plane is unreachable, the box serves the stale file rather than a
+// broken image. The snapshot has no such fallback; artwork does.
+func TestRemoteExpiredAssetSurvivesFailedRefresh(t *testing.T) {
+	cp := newFakeCP(t, testApps())
+	srv := cp.server()
+	defer srv.Close()
+
+	r := newRemote(srv.URL, "appliance", t.TempDir())
+	if err := r.syncOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	p, err := r.IconPath("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-assetTTL - time.Minute)
+	if err := os.Chtimes(p, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	cp.mu.Lock()
+	cp.failAsset = true
+	cp.mu.Unlock()
+
+	got, err := r.IconPath("alpha")
+	if err != nil {
+		t.Fatalf("an expired asset with a failing refresh must still be served: %v", err)
+	}
+	if got != p {
+		t.Fatalf("IconPath = %q, want the expired copy %q", got, p)
 	}
 }
 

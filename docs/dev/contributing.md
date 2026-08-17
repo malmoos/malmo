@@ -67,6 +67,8 @@ The inner dev loop is all native, no VM — see [`running-locally.md`](running-l
 
 Every behavioral change ships with tests. Which layer depends on what you touched — see [`testing-brain.md`](testing-brain.md) for the brain pyramid (unit → store → lifecycle-with-fakes → API → integration → e2e) and [`../specs/TESTING.md`](../specs/TESTING.md) for the boot-level lanes (nspawn fast / QEMU medium / soak).
 
+**Test data is synthetic and self-contained.** Write fixtures with fake data in the shape you need; don't check in a copy of a payload a malmo endpoint serves. This matters most for the app catalog: the artifacts are authored in `malmoos/store` and reach a box only through the published snapshot, so `internal/catalog/testdata/snapshot.json` is hand-written fake apps in the published wire shape. Keep it hand-written — regenerating it from the Go types it is checked against would make `TestNoUnmodeledFields` agree with itself and test nothing. `go test ./internal/catalog -run TestVerifyFixtureSnapshot -update` re-stamps its digest after you edit the shape.
+
 Before you push, run the gate:
 
 ```bash
