@@ -40,7 +40,7 @@ compiles clean; Docker Desktop covers Caddy and app containers.
   (no journald needed), so the per-app Logs tab shows live logs in the inner loop.
 - **The full inner-loop stack** — `make dev` (Caddy container + fake host-agent
   + brain + Vite), installing apps, SSE, routing, uninstall.
-- **Sample manifests** — `catalog/`.
+- **Sample manifests** — none in this repo. App artifacts are authored in `malmoos/store`; use `make dev-app APP=<id> STORE=../store` to boot one against the brain.
 - **Unit tests** for all the above, plus the self-contained `make test-health`.
 
 On macOS, cgo automatically selects the stub implementations (`pam_other.go`,
@@ -195,7 +195,9 @@ Everything dev-generated is under `.dev/` (git-ignored):
     └── instances/<id>/           # per-app: manifest, compose, override, .env, data/
 ```
 
-Override defaults with env vars: `MALMO_LISTEN`, `MALMO_STATE_DIR`, `MALMO_CATALOG_URL`, `MALMO_CATALOG_CACHE_DIR`, `MALMO_CATALOG_REFRESH`, `MALMO_AGENT_SOCK`, `MALMO_CADDY_ADMIN`, `MALMO_CADDY_LISTEN`, `MALMO_TRUSTED_PROXIES`.
+Override defaults with env vars: `MALMO_LISTEN`, `MALMO_STATE_DIR`, `MALMO_CATALOG_URL`, `MALMO_CATALOG_CACHE_DIR`, `MALMO_CATALOG_FILE`, `MALMO_CATALOG_REFRESH`, `MALMO_AGENT_SOCK`, `MALMO_CADDY_ADMIN`, `MALMO_CADDY_LISTEN`, `MALMO_TRUSTED_PROXIES`.
+
+Two of those are about the catalog and are easy to mix up. `MALMO_CATALOG_CACHE_DIR` is where proxied icons and screenshots land — never the catalog itself, which the brain holds in memory and re-fetches (`../specs/APP_STORE.md` # Failure modes). `MALMO_CATALOG_FILE` is a local snapshot the brain reads once at startup and never writes back, for working without a reachable control plane; `make dev-app` sets it for you. A real box sets neither by hand.
 
 `MALMO_TRUSTED_PROXIES` is the one with a security consequence: it lists the proxies (comma-separated IPs or CIDRs) whose `X-Forwarded-For` the brain will believe when deriving the client IP its per-IP throttles key on (`BRAIN_UI_PROTOCOL.md` # Rate limiting & abuse). Leave it unset and it defaults to loopback plus Docker's bridge pool (`127.0.0.0/8`, `::1/128`, `172.16.0.0/12`) — deliberately **not** all the private ranges, because a trusted hop is skipped during the chain walk, so trusting `192.168.0.0/16` or `10.0.0.0/8` would make every LAN client resolve to Caddy's address and share one throttle bucket. Set it to the empty string to ignore the header entirely and key on the peer address. A value that doesn't parse stops the brain at startup rather than silently falling back.
 

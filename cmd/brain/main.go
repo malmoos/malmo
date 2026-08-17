@@ -101,22 +101,25 @@ func main() {
 
 	// Catalog source (CATALOG step 3, cloud #62). Every box — appliance and hosted
 	// alike — is a thin client of the control plane's public-read catalog API: it
-	// fetches the /catalog/sync snapshot, verifies its integrity digest, caches it
-	// last-good on disk, and projects the six-method surface locally (cloud
-	// specs/CATALOG.md # Consume). The last-good cache is the resilience story: once
-	// a box has synced it browses offline from cache, and a never-synced box shows an
-	// empty store (the documented, accepted behavior — the catalog API is public-read
-	// precisely so an appliance with no portal account can use it, and installing an
-	// app needs internet to pull images regardless). No baked catalog ships in the
-	// image. Env filtering is by the resolved profile.
+	// fetches the /catalog/sync snapshot, verifies its integrity digest, holds it in
+	// memory, and projects the six-method surface locally (cloud specs/CATALOG.md #
+	// Consume). The box keeps no copy of the catalog on disk, so it always renders
+	// what the endpoint serves now; before the first sync lands the store is empty
+	// (the documented, accepted behavior — the catalog API is public-read precisely
+	// so an appliance with no portal account can use it, and installing an app needs
+	// internet to pull images regardless). Only icons and screenshots are cached, per
+	// request and with a TTL. No baked catalog ships in the image. Env filtering is by
+	// the resolved profile.
 	cat := catalog.NewRemote(catalog.RemoteOptions{
 		BaseURL:         cfg.catalogBaseURL,
 		Environment:     string(prof),
-		CacheDir:        cfg.catalogCacheDir,
+		AssetCacheDir:   cfg.catalogAssetCacheDir,
+		SnapshotFile:    cfg.catalogSnapshotFile,
 		RefreshInterval: cfg.catalogRefresh,
 	})
 	slog.Info("catalog: remote control-plane source",
-		"profile", string(prof), "base_url", cfg.catalogBaseURL, "cache_dir", cfg.catalogCacheDir)
+		"profile", string(prof), "base_url", cfg.catalogBaseURL, "cache_dir", cfg.catalogAssetCacheDir,
+		"src", cfg.catalogSnapshotFile)
 	host := hostclient.New(cfg.agentSock)
 	cd := caddy.New(cfg.caddyAdmin)
 	bus := events.NewBus()
@@ -316,7 +319,7 @@ func main() {
 		fatal("listen", "listen", cfg.listen, "err", err)
 	}
 	slog.Info("malmo-brain listening",
-		"listen", cfg.listen, "state_dir", cfg.stateDir, "catalog_cache_dir", cfg.catalogCacheDir)
+		"listen", cfg.listen, "state_dir", cfg.stateDir, "catalog_cache_dir", cfg.catalogAssetCacheDir)
 
 	// Dashboard host route (WEB_UI.md # deploy model): /api/v1/* → brain,
 	// everything else → malmo-ui. Production-only — gated on the UI upstream being
@@ -521,7 +524,8 @@ type config struct {
 	listen                 string
 	stateDir               string
 	catalogBaseURL         string
-	catalogCacheDir        string
+	catalogAssetCacheDir   string
+	catalogSnapshotFile    string
 	catalogRefresh         time.Duration
 	agentSock              string
 	caddyAdmin             string
@@ -550,16 +554,22 @@ func loadConfig() config {
 		// Control-plane catalog: the public-read catalog origin every box syncs the
 		// /catalog/sync snapshot from (CATALOG step 3, cloud #62). Served on the apex
 		// (cloud specs/CATALOG.md), overridable to point a box at staging or an inert
-		// address (the air-gapped test lane). The cache dir holds the last-good
-		// snapshot + proxied assets; it lives under the brain state so it survives a
-		// restart but is not user data.
-		catalogBaseURL:  env("MALMO_CATALOG_URL", "https://malmo.network"),
-		catalogCacheDir: env("MALMO_CATALOG_CACHE_DIR", "/var/lib/malmo/catalog-cache"),
-		catalogRefresh:  envDuration("MALMO_CATALOG_REFRESH", 0), // 0 ⇒ package default
-		agentSock:       env("MALMO_AGENT_SOCK", protocol.SocketPath),
-		caddyAdmin:      env("MALMO_CADDY_ADMIN", "http://localhost:2019"),
-		caddyListen:     caddyListen,
-		caddyProbeURL:   env("MALMO_CADDY_PROBE_URL", probeBaseURL(caddyListen)),
+		// address (the air-gapped test lane). The asset cache dir holds proxied icons
+		// and screenshots only — never the snapshot, which the box holds in memory and
+		// re-fetches (APP_STORE.md # Failure modes).
+		//
+		// MALMO_CATALOG_FILE is a dev/test seam, not a box setting: a local snapshot to
+		// start from when there is no reachable control plane (make dev-app, the QEMU
+		// boot proofs). The brain reads it and never writes it. Production leaves it
+		// unset.
+		catalogBaseURL:       env("MALMO_CATALOG_URL", "https://malmo.network"),
+		catalogAssetCacheDir: env("MALMO_CATALOG_CACHE_DIR", "/var/lib/malmo/catalog-cache"),
+		catalogSnapshotFile:  env("MALMO_CATALOG_FILE", ""),
+		catalogRefresh:       envDuration("MALMO_CATALOG_REFRESH", 0), // 0 ⇒ package default
+		agentSock:            env("MALMO_AGENT_SOCK", protocol.SocketPath),
+		caddyAdmin:           env("MALMO_CADDY_ADMIN", "http://localhost:2019"),
+		caddyListen:          caddyListen,
+		caddyProbeURL:        env("MALMO_CADDY_PROBE_URL", probeBaseURL(caddyListen)),
 		// Control-plane / dashboard wiring is production-only. controlPlaneDir and
 		// dashboardUIUpstream default empty so the containerless dev brain skips
 		// both the compose bring-up and the dashboard route; the containerized

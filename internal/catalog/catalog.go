@@ -5,9 +5,9 @@
 // plane or read from a local directory tree.
 //
 // In production every box — appliance and hosted alike — uses the remote client
-// (NewRemote): a thin HTTP consumer of the control plane's /catalog/sync snapshot
-// with a last-good on-disk cache (remote.go; cloud specs/CATALOG.md # Consume). No
-// catalog is baked into the image (cloud #62). The original disk reader (New) is
+// (NewRemote): a thin HTTP consumer of the control plane's /catalog/sync snapshot,
+// held in memory and never written to disk (remote.go; cloud specs/CATALOG.md #
+// Consume). No catalog is baked into the image (cloud #62). The original disk reader (New) is
 // retained only as the constructor internal/api and internal/lifecycle tests build
 // a controlled catalog with; it implements the same private source interface, so
 // the rest of the brain holds a *Catalog and is agnostic to which is wired.
@@ -86,9 +86,8 @@ func (c *Catalog) Load(id string) (*manifest.Manifest, []byte, error) { return c
 // through, mirroring the control plane's public catalog API (cloud
 // specs/CATALOG.md # Serve) so the box never pulls the whole catalog up front. They
 // are derived from the same source the flat List reads — the box already holds the
-// whole snapshot locally, so these stay same-origin and work offline (the browse
-// half of step 3's last-good cache) rather than re-proxying each hit to the control
-// plane. They are computed on the facade (not per-source) because every input but
+// whole snapshot in memory, so these stay same-origin and need no round trip,
+// rather than re-proxying each hit to the control plane. They are computed on the facade (not per-source) because every input but
 // featured is a projection of List; only featured differs by backing.
 
 // Home is the store landing payload: the categories present on this box's

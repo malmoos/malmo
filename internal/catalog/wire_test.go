@@ -4,10 +4,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,20 +17,61 @@ import (
 	"github.com/malmoos/malmo/internal/manifest"
 )
 
-// TestVerifyRealSnapshot is the box side of the box↔cloud digest contract: a
+// updateFixture rewrites the fixture's stamped digest from its own apps array,
+// so editing the shape by hand does not mean computing a SHA-256 by hand:
+//
+//	go test ./internal/catalog -run TestVerifyFixtureSnapshot -update
+//
+// It only ever touches the index_sha256 value. Every other byte of the fixture
+// stays as authored, which is what keeps TestNoUnmodeledFields honest — see the
+// note on hand-authoring there.
+var updateFixture = flag.Bool("update", false, "rewrite testdata/snapshot.json's index_sha256 from its own apps array")
+
+// fixturePath is the pinned snapshot both this file's fixture-reading tests use.
+var fixturePath = filepath.Join("testdata", "snapshot.json")
+
+// digestRe matches the fixture's stamped digest field, so -update can replace
+// that one value without re-marshalling (and thereby reordering and reformatting)
+// the hand-authored file around it.
+var digestRe = regexp.MustCompile(`"index_sha256":\s*"[0-9a-f]*"`)
+
+// TestVerifyFixtureSnapshot is the box side of the box↔cloud digest contract: a
 // byte-faithful mirror of the cloud App shape must reproduce the exact index
-// digest the sync tool stamped, or the box would reject every real snapshot.
-// testdata/snapshot.json is a pinned copy of the control plane's published
-// dist/catalog.json (../cloud internal/catalog/dist). If the wire shape here drifts
-// from the cloud's, this fails — which is the point: the two are one contract.
-func TestVerifyRealSnapshot(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("testdata", "snapshot.json"))
+// digest the sync tool stamps, or the box would reject every snapshot it is
+// served.
+//
+// testdata/snapshot.json is a SYNTHETIC snapshot: fake apps, written here, in
+// the published wire shape. It is not a copy of any catalog the control plane
+// serves — app manifests and compose files are authored in the store, and this
+// repo holds none of them (CLAUDE.md # Catalog apps). What the fixture pins is
+// the SHAPE, which is all these tests need.
+func TestVerifyFixtureSnapshot(t *testing.T) {
+	data, err := os.ReadFile(fixturePath)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if *updateFixture {
+		var raw catalogFile
+		if err := json.Unmarshal(data, &raw); err != nil {
+			t.Fatal(err)
+		}
+		digest, err := indexDigest(raw.Apps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		updated := digestRe.ReplaceAll(data, []byte(`"index_sha256": "`+digest+`"`))
+		if !digestRe.Match(data) {
+			t.Fatalf("%s has no index_sha256 field to update", fixturePath)
+		}
+		if err := os.WriteFile(fixturePath, updated, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("rewrote %s index_sha256 to %s", fixturePath, digest)
+		data = updated
+	}
 	f, err := parseSnapshot(data)
 	if err != nil {
-		t.Fatalf("real snapshot must parse and verify: %v", err)
+		t.Fatalf("fixture snapshot must parse and verify (re-stamp it with -update): %v", err)
 	}
 	if len(f.Apps) == 0 {
 		t.Fatal("fixture snapshot carries no apps")
@@ -120,23 +163,33 @@ var ignoredTopLevelKeys = map[string]string{
 	"os_capabilities_version": "publish-side provenance stamp, no box-side meaning",
 }
 
-// TestNoUnmodeledFields is the guard for the exact failure mode that let a new
-// top-level field (the curated landing page, "home") reach the box silently:
-// verify() only checks the schema version and the apps-array digest, so a
-// wire struct that has fallen behind the real published shape stays green
-// forever unless something asserts the two key sets match. This test parses
-// the pinned fixture into a generic map[string]any and fails on any top-level
-// or per-app key that the box's own wire types (catalogFile / wireApp, plus
-// the nested footprint/author/links/images shapes) do not declare a json tag
-// for.
+// TestNoUnmodeledFields asserts that the wire shape written down in the fixture
+// and the wire shape the box's types model are the same set of keys. It parses
+// the fixture into a generic map[string]any and fails on any top-level or
+// per-app key that catalogFile / wireApp (plus the nested
+// footprint/author/links/images shapes) do not declare a json tag for.
 //
-// A field showing up here is not automatically a bug — it means the
-// published shape moved and this box needs to make a decision: model the
-// field (in wire.go, and in dev/mkcatalog if mkcatalog should emit it too),
-// or add it to ignoredTopLevelKeys with a comment saying why the box doesn't
-// need it. Don't delete or weaken this test to make it pass.
+// Read what this does and does not catch. The fixture is hand-authored, so this
+// is a check between two things kept in this repo: it catches a json tag renamed
+// or dropped in wire.go without the pinned shape following, and it makes the
+// shape the box believes in reviewable as one file. It CANNOT tell you that the
+// published shape moved — the box does not hold a published snapshot to compare
+// against, by design. Noticing that a newly published field is one the box does
+// not model is a publish-side check, on the side that has the published
+// snapshot.
+//
+// Because the fixture is hand-authored, keep it that way: never regenerate it
+// from the Go types in this package. A fixture generated from the very structs
+// it is checked against agrees with them always, and this test becomes a test of
+// nothing. -update (see TestVerifyFixtureSnapshot) re-stamps the digest only,
+// for that reason.
+//
+// When the box starts modelling a new field, add it here in the fixture too, so
+// the shape stays written down in one readable place. When the box deliberately
+// does not model a top-level field, record it in ignoredTopLevelKeys with the
+// reason. Don't delete or weaken this test to make it pass.
 func TestNoUnmodeledFields(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("testdata", "snapshot.json"))
+	data, err := os.ReadFile(fixturePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,17 +203,17 @@ func TestNoUnmodeledFields(t *testing.T) {
 		if knownTop[key] || ignoredTopLevelKeys[key] != "" {
 			continue
 		}
-		t.Errorf("testdata/snapshot.json has top-level key %q that catalogFile (internal/catalog/wire.go) does not model: "+
+		t.Errorf("the pinned fixture has top-level key %q that catalogFile (internal/catalog/wire.go) does not model: "+
 			"either add a field for it there (and in dev/mkcatalog if mkcatalog should emit it too), or add it to "+
 			"ignoredTopLevelKeys with a comment explaining why the box doesn't need it", key)
 	}
 
 	appsRaw, ok := raw["apps"].([]any)
 	if !ok {
-		t.Fatal("testdata/snapshot.json: \"apps\" is missing or not an array")
+		t.Fatal("the pinned fixture: \"apps\" is missing or not an array")
 	}
 	if len(appsRaw) == 0 {
-		t.Fatal("testdata/snapshot.json: \"apps\" is empty, guard has nothing to check")
+		t.Fatal("the pinned fixture: \"apps\" is empty, guard has nothing to check")
 	}
 
 	knownApp := jsonKeys(reflect.TypeOf(wireApp{}))
@@ -182,7 +235,7 @@ func TestNoUnmodeledFields(t *testing.T) {
 	for _, a := range appsRaw {
 		app, ok := a.(map[string]any)
 		if !ok {
-			t.Fatal("testdata/snapshot.json: an \"apps\" entry is not an object")
+			t.Fatal("the pinned fixture: an \"apps\" entry is not an object")
 		}
 		id, _ := app["id"].(string)
 		for key := range app {
@@ -283,7 +336,7 @@ func TestExternalCostsSurviveTheDigest(t *testing.T) {
 // parsed: a per-app key the box does not model is absent from the re-marshal, so
 // the digest cannot reproduce. This test exists because the spec used to state
 // the harmless half as if it covered both, and a per-app field was added on that
-// reading — the box froze on its last-good cache instead of dropping a field.
+// reading — the box rejected the whole snapshot instead of dropping a field.
 func TestUnknownFieldAsymmetry(t *testing.T) {
 	// The published bytes, as the control plane would marshal them: one app
 	// carrying a per-app key this box does not model.

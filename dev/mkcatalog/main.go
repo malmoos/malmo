@@ -1,10 +1,11 @@
 // Command mkcatalog generates a control-plane catalog snapshot (the /catalog/sync
 // wire format) from one or more on-disk app packages, optionally with a curated
-// landing page. It pre-seeds the brain's last-good cache with that snapshot: the
-// brain's remote catalog client loads it at boot exactly as it would a
-// synced-then-offline snapshot, and installs an app from it
-// (internal/catalog/remote.go # loadCache). This exercises the real remote read
-// path (verify → project → Load) with no catalog/ directory in the image.
+// landing page. The brain reads that snapshot once at boot (MALMO_CATALOG_FILE,
+// internal/catalog/remote.go # loadSnapshotFile) and installs an app from it, so
+// this exercises the real remote read path (verify → project → Load) with no
+// catalog/ directory in the image and no control plane to reach. The file is an
+// input for dev and test lanes only — a box keeps no catalog on disk and a real
+// one never sets MALMO_CATALOG_FILE.
 //
 // Two callers:
 //
@@ -16,7 +17,7 @@
 //     so it needs no verdict on the app (unlike the control plane's own publish
 //     tool, which serves only listed: true records) — you boot the app to
 //     *decide* its verdict. The Makefile points MALMO_CATALOG_URL at an inert
-//     address so the background sync can't overwrite the seed with the real
+//     address so the background sync can't replace the seed with the real
 //     published catalog.
 //
 //   - dev/test-qemu/bootstrap.sh: the air-gapped QEMU full-stack lane, which
