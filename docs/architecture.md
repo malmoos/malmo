@@ -74,7 +74,9 @@ Plus the **Docker daemon** on the host, which the brain drives with the
 
 Packages under `internal/` and what each owns. Layer rules come from
 [`../CLAUDE.md`](../CLAUDE.md) # Go code discipline; only the directional rules
-are stated below.
+are stated below. The table is the whole of `internal/`'s top level; the
+host-side implementation packages under `internal/hostagent/…` are covered by
+the `host-agent-real` row in # Components and by # What is not built yet.
 
 | Package | Owns | Imported by |
 |---|---|---|
@@ -92,6 +94,11 @@ are stated below.
 | `assertion` | Verifies the portal's short-lived Ed25519 ownership assertion for the hosted portal-to-box SSO handshake (`Verify`: signature + expiry; box-id/issuer/replay are the handler's policy). Minimal signed token, not a JWT. Mirrors the cloud signer's wire format. Leaf package. | `api` |
 | `audit` | Append-only `audit_events` table writes. Every elevation-class mutation calls `audit.Record` on success **and** failure. | `api` |
 | `events` | In-memory pub-sub bus for SSE. Lifecycle stages publish; the SSE handler subscribes. | `lifecycle`, `api`, `cmd/brain` |
+| `health` | The brain's typed-issue registry (`HEALTH.md`). The taxonomy is registered in code — a stable string ID binds severity / category / tier / `blocks_*` at registration, never redeclared per raise. Writes through to SQLite on every raise/clear so issues survive a brain restart. | `api`, `notify`, `store`, `cmd/brain` |
+| `notify` | Routing + derivation for the dashboard notification center (`NOTIFICATIONS.md`). Notifications are *derived* from events that already exist — today, health raise/clear transitions through a code-registered allowlist — never a parallel taxonomy. Coalesces by `dedup_key`, and emits the member-transparency variant for box-blocking storage issues. | `api`, `store`, `cmd/brain` |
+| `applog` | Per-app log fan-out (`BRAIN_UI_PROTOCOL.md` Pattern C, `LOGGING.md` # Per-app logs). Sits between host-agent's single upstream follow per instance and the dashboard's many SSE readers, and owns the reconnect contract host-agent deliberately does not: a ~256 KiB ring buffer, replay from `Last-Event-ID`, one `{"lost":true}` marker when a position was evicted, and a linger so a quick reconnect reuses the warm buffer. One ref-counted `Hub` per instance — zero idle cost when nobody is watching. | `api`, `cmd/brain` |
+| `systemlive` | The live system-resources stream (`BRAIN_UI_PROTOCOL.md` Pattern C stream 3, `LOCAL_ANALYTICS.md`). Ref-counted upstream poller: the first SSE subscriber starts a 1 Hz poll of host-agent's raw cumulative counters, each poll is diffed into rates and fanned out, the last unsubscribe stops it. Same zero-idle-cost shape as `applog`. | `api`, `cmd/brain` |
+| `storageverify` | The canary + enrollment-marker check behind the `malmo-storage-verify` reporter (`BOOT.md` # The storage-ready target, `STORAGE.md` # Storage canary). Split out of `cmd/` only so the check is unit-testable against a tempdir root; the binary is a thin shell that writes findings to `/run/malmo/health/storage.json`. **Not a brain package** — it is imported by `cmd/malmo-storage-verify` alone. | `cmd/malmo-storage-verify` |
 | `version` | The malmo build identity: `Version` (repo `VERSION` file) and `Commit` (git sha), stamped at build time via `-ldflags -X` (`Makefile`, `BUILD.md` # Versioning). Dumb — vars + a `String()`, no logic. | `api`, `hostagent`, `cmd/brain`, `cmd/host-agent`, `cmd/host-agent-real` |
 
 **Cross-cutting invariants:**
@@ -133,7 +140,8 @@ and host-agent agree on paths.
 brain, Vite — in one terminal. `make help` lists the per-process targets for
 the four-terminal layout. See [`dev/running-locally.md`](dev/running-locally.md)
 for the full inner loop. The VM-based outer loop for host-integrated parts
-(boot, LUKS, systemd) is not wired here yet.
+(boot, LUKS, systemd) is not wired into the native dev loop — it lives in the
+QEMU lanes (`specs/TESTING.md`).
 
 ## What is **not** built yet
 
@@ -141,8 +149,19 @@ So this doc isn't read as a claim about the finished product:
 
 - **Full real host-agent.** `cmd/host-agent-real` is partially real: PAM password verify, `/proc` system sampling, disk usage, RAM pressure, journal streaming, service health, reboot-required, discovery (per-LAN-interface Avahi announcements from the NetworkManager LAN set, allowlist sync, IP-change replay), and the first-boot brain launch (#164: load-if-absent, lockstep label check, `docker run --restart unless-stopped`) are wired. LUKS/TPM, apt, and the NM configuration surface (WiFi setup, `/v1/network/*`) are not yet wired — those ops are still no-ops or stubs.
 - **Control-plane stack bring-up — built (M1b, #165), VM-boot acceptance pending.** host-agent seeds the brain's Docker transport (the `malmo-ingress` network + the `docker-socket-proxy`, raw socket `:ro`, `EXEC` denied) before launching the brain, and points it at `DOCKER_HOST=tcp://docker-proxy:2375`; the brain then reconciles Caddy + `malmo-ui` from the staged control-plane compose (`lifecycle.EnsureControlPlane`) and installs the dashboard route (`/api/v1/* → brain`, else → `malmo-ui`). All of it is **production-gated** on `MALMO_CONTROL_PLANE_DIR`/`MALMO_DASHBOARD_UI_UPSTREAM`, so the natively-run dev brain is unchanged (standalone dev Caddy, Vite UI, raw socket). Managed-DB-in-production stays gated on a provisioning re-architecture off `docker exec` (the proxy denies `EXEC` — `DECISIONS.md` 2026-06-14). Unit-tested; a real VM boot pass (`sudo make test-medium-qemu`) is still outstanding.
-- **Storage subsystem.** No `/srv/malmo`, no mergerfs, no LUKS-unlock flow,
-  no `malmo-storage-ready.target`. Apps write to wherever Docker puts volumes.
+- **Storage subsystem — the boot half exists, the pooling half does not.** The
+  userspace boot chain is real and shipped in `dist/systemd/`
+  (`malmo-storage-ready.target`, `malmo-storage-verify.service`,
+  `malmo-recovery.target`) with the reporter in `cmd/malmo-storage-verify` and
+  the health wiring in `internal/health`
+  ([`progress/boot-pipeline-units.md`](progress/boot-pipeline-units.md)), and
+  **LUKS root + first-boot TPM enrollment + unseal is proven end to end** in the
+  QEMU medium lane against a real kernel and a software TPM
+  ([`progress/luks-tpm-enrollment.md`](progress/luks-tpm-enrollment.md)). What
+  does **not** exist: the data-drive half — no mergerfs assembly, no `/srv/malmo`
+  pool (the path appears only as the storage-verify canary), no UI or host-agent
+  surface for adding a drive or unlocking one. On a dev box apps still write to
+  wherever Docker puts volumes.
 - **Boot, install ISO, updates.** The `mkosi` image build (`BUILD.md` # 2;
   proven in the test lane, not yet the production ISO) and stream A
   (`unattended-upgrades` + the apt repo) are spec-only. **Stream B — the

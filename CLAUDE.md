@@ -12,7 +12,7 @@ Two phrases that constrain a lot of design:
 A running malmo is five processes/artifacts. Three are Go, one is JavaScript, one is a container we don't write.
 
 - **`malmo-brain`** (`cmd/brain/`, `internal/`) — the control-plane daemon. One Go binary: owns SQLite state, the REST+SSE API, the app lifecycle, and the Caddy config. Drives Docker via the `docker compose` CLI.
-- **`host-agent`** (`cmd/host-agent/`) — the privileged side. Today it's a **fake**: real `BRAIN_HOST_PROTOCOL.md` wire format over a real UNIX socket, but the host ops themselves (Avahi, LUKS, PAM, apt) are stubbed in memory. The real one is `cmd/host-agent-real/` (PAM verify is real; the rest is still being built).
+- **`host-agent`** — the privileged side, in two binaries. `cmd/host-agent/` is the **fake** used by the inner dev loop: real `BRAIN_HOST_PROTOCOL.md` wire format over a real UNIX socket, host ops stubbed in memory. `cmd/host-agent-real/` is the real one, and most of it is real now — PAM verify, user management, `/proc` sampling, disk and RAM, journal streaming, service health, reboot-required, time zone, Avahi discovery, the first-boot brain launch, and the control-plane update path. Still not wired: LUKS/TPM, apt, and the NetworkManager configuration surface. It also builds a slim `hosted` variant (`go build -tags hosted`) for the cloud image. `docs/architecture.md` # Components has the current split.
 - **`web-ui`** (`web-ui/`) — Vue 3 + Vite + TanStack Query dashboard. Talks only to the brain.
 - **Caddy** (`dev/`) — reverse proxy. Terminates `*.local` and routes to app containers + the brain, configured live by the brain via Caddy's admin API. Subdomain routing per app, never path-based (browser same-origin policy is the reason).
 - **SQLite** — the brain's only persistent store (`internal/store/`).
@@ -24,8 +24,8 @@ Wire: `browser → web-ui → brain`, and the brain fans out to `docker compose`
 ## Where the important files are
 
 - **`cmd/brain/main.go`** — ~100 lines; names every package and how they wire. Best single starting point for the code.
-- **`internal/`** — the brain's packages (`api`, `lifecycle`, `store`, `catalog`, `manifest`, `admission`, `caddy`, `hostclient`, `protocol`, `auth`, `audit`, `events`, plus host-integration and health packages). What each owns and the import rules are in `docs/architecture.md` # Inside the brain.
-- **`cmd/`** — entry points: `brain`, `host-agent` (fake), `host-agent-real`, plus small tools (`malmo`, `malmo-storage-verify`, `openapi-gen`).
+- **`internal/`** — the brain's packages (`api`, `lifecycle`, `store`, `catalog`, `manifest`, `admission`, `caddy`, `profile`, `hostclient`, `protocol`, `auth`, `assertion`, `audit`, `events`, `version`, plus the health/observability set — `health`, `notify`, `applog`, `systemlive`, `storageverify` — and `internal/hostagent/…`, the host-side implementation packages). What each owns and the import rules are in `docs/architecture.md` # Inside the brain.
+- **`cmd/`** — entry points: `brain`, `host-agent` (fake), `host-agent-real`, plus small tools (`malmo`, `malmo-storage-verify`, `malmo-network-verify`, `openapi-gen`).
 - **`web-ui/`** — the dashboard. Internal code architecture in `docs/dev/web-ui.md`.
 - **Catalog apps** — not in this repo, and they don't get added here. The artifacts (`manifest.yml`, `compose.yml`, icons, screenshots) live in `malmoos/store` under `apps/<id>/`, the control plane publishes them as one snapshot, and a box pulls that snapshot from a malmo endpoint at runtime — it keeps no copy on disk (cloud #62, `DECISIONS.md` 2026-07-02 and 2026-08-17). **Adding an app starts with a Catalog app issue in `malmoos/store`**, not here; authoring works from that issue per `docs/dev/authoring-apps-with-an-agent.md`, which keeps the schema (`internal/manifest`), the admission policy, the `malmo manifest` CLI, and the gap ledger on this side. Catalog test fixtures in this repo are **synthetic** — fake apps in the published wire shape, never a copy of a snapshot the endpoint serves (`internal/catalog/testdata/snapshot.json`).
 - **`Makefile` + `dev/`** — dev orchestration (`make help`).
@@ -83,7 +83,7 @@ Every change ships with documentation — a code change is not complete until it
 - **Root `README.md`** is the front door (pitch + quickstart); keep its quickstart accurate when the dev workflow changes.
 - **No line wrapping in markdown.** Use continuous lines of text, not ~70-character breaks. Markdown viewers reflow; hard-wrapped lines make diffs harder to read.
 
-`DECISIONS.md` (evolution-of-thinking log — read before relitigating) and `NEXT.md` (prioritized open design topics; the only place open items live — never add them to individual docs) are the two cross-cutting docs to know by name.
+`docs/specs/DECISIONS.md` (evolution-of-thinking log — read before relitigating) and `docs/specs/NEXT.md` (prioritized open design topics; the only place open items live — never add them to individual docs) are the two cross-cutting docs to know by name. Both live in `docs/specs/`; there is no copy of either at the repo root. Specs cross-reference them as bare filenames (`NEXT.md`), because every spec is their sibling.
 
 ## Go code discipline
 
@@ -127,6 +127,6 @@ Small set of rules. Codified now so we don't have to back them out later.
 - **Write in plain English — CEFR B1.** This applies to everything you produce: chat replies, docs, progress entries, PR bodies, issue text, commit messages, code comments, and UI copy. Short sentences, common words, one idea per sentence. Prefer "use" over "utilise", "let" over "facilitate", "so" over "consequently". Cut clause-stacking and em-dash pile-ups; split into two sentences instead. Technical terms the project owns (`manifest`, `reconciler`, `bind mount`, `PGDATA`) stay — B1 is about the sentence around the term, not about dumbing down the domain. Precision wins if the two ever conflict: say the exact thing in simple words rather than a vague thing in simple words.
 - Read the relevant `docs/specs/` doc(s) end-to-end before proposing changes — they cross-reference each other heavily and decisions in one constrain the others. Use `docs/README.md` to find the right one.
 - Push back on tradeoffs; defer to product calls once made (per user preference).
-- Open questions are tracked at the bottom of each doc and in `NEXT.md` — that's where genuinely unresolved items live. Don't invent answers; surface them.
+- Open questions are tracked at the bottom of each doc and in `docs/specs/NEXT.md` — that's where genuinely unresolved items live. Don't invent answers; surface them.
 - Don't add "future-proofing" abstractions to the spec. The docs are already explicit about what's deferred (e.g., fscrypt, ARM, snapshots, paid-app mechanics).
 - Keep the "no NAS vocabulary in the UI" rule (`STORAGE.md`) in mind for any user-facing language.

@@ -25,7 +25,11 @@ Each entry: one-sentence shape, the doc it touches, and *why this tier*. The doc
 
 `UPDATES.md` # 8 locks the hosted update trigger: the box polls the cloud control plane for its per-box target version, outbound-only. **What authenticates that call is undesigned.** The `enrollment` block the box receives in `seed.json` (`ENVIRONMENT.md` # Admin bootstrap — as built) is an acme-dns account — scoped to writing one DNS TXT record, not to a general control-plane API. So the hosted update path has a designed trigger and no credential to make the call with.
 
+**Where this stands as built (#408).** A hosted box now says which box it is when it asks for its update target: `GET <target-url>?box_id=<id>` (`UPDATES.md` # 8.1). The endpoint is public and unauthenticated, so that identity is a claim, not a proof. Anyone who learns a box-id can read what that box is told to run, and can ask as that box. That is accepted while the ask is only a **read** of version information, and while the operator path that sets a target sits behind the control plane's own auth. It stops being enough the moment the box **writes**: the report-back in `UPDATES.md` # 8.4 step 5 ("this box is now on v0.7.0, or it failed and rolled back") and the fleet-side auto-halt in # 8.5 both need the control plane to trust who is talking. A fleet view built on an unauthenticated report is a fleet view anyone can lie to. **Nothing that mutates state should be built on the bare `box_id` in the meantime.**
+
 Shape to decide: does the box get a second, separate credential at provision time (simple, one more secret to seed and rotate), or does the `box_id` + a control-plane-issued token become a general-purpose box identity that later features (metering, suspend/restore, fleet management — `ENVIRONMENT.md` # Deferred) also use? The second is more work now and is almost certainly what we end up needing, which is the argument for not designing the first one twice. Also open: rotation, and what a box does when its credential is rejected (keep running and keep serving, is the obvious answer — an auth failure must never take a tenant's apps down).
+
+The **seed is the delivery channel** — it is the only per-box channel a real box has, and it is write-once (`ENVIRONMENT.md` # Provisioning & first-boot) — so a long-lived per-box secret with an on-box rotation path is the shape to design.
 
 **Context:** `UPDATES.md` # 8.1, `ENVIRONMENT.md` # Updates (hosted) + # Provisioning, `malmoos/cloud` (the other half lives there).
 **Why Tier 1:** it blocks implementing the hosted update trigger, which is the first slice of the update work. The apply/rollback half can be built without it; the "what should I be running" half cannot.
@@ -364,6 +368,22 @@ Surfaced by `ENVIRONMENT.md`, smaller than the commercial layer but real: (1) **
 
 ---
 
+### Encrypt hosted enrollment credentials at rest (box-side)
+
+The per-box acme-dns credentials the brain ingests from the seed are persisted plaintext in `box_meta` (`store.BoxMetaEnrollment`), matching the cloud producer's MVP posture. The threat is loss of the brain's SQLite: a leaked subdomain/username/password lets an attacker renew certs for that one box, not escalate beyond it. Encrypt at rest when the box's DB lands on shared or backed-up infra. The cloud side tracks the symmetric item for its own `boxes` table (`malmoos/cloud` NEXT.md).
+
+**Context:** `ENVIRONMENT.md` # Provisioning & first-boot, `THREAT_MODEL.md`.
+**Why Tier 3:** the blast radius is one box's certs, and the fix is a self-contained box-side change. Pin the key-management shape (where the box's own key lives, given it has no secret store yet) before the DB moves anywhere shared.
+
+### Per-app disk quota for hosted tenants
+
+`ENVIRONMENT.md` # Per-instance resource limits names a per-app **disk quota** as the third dimension the hosted control plane needs to bound a paying tenant. The memory + CPU cgroup limits landed with #211, but disk quota was deferred: the locked storage stack (`ext4` + Docker's `overlay2`, `STORAGE.md`) cannot enforce a per-container write-layer quota portably. Docker's `--storage-opt size=` works only on `xfs`-with-`pquota` or the `devicemapper`/`btrfs` drivers — none of which the appliance or the cloud image use.
+
+The realistic path is **XFS project quotas** on the data tree, driven through the host-agent (a privileged op — set/clear a project ID + hard limit on an app's `/var/lib/malmo/instances/<id>/` subtree and its bound use-case folders). It needs a `BRAIN_HOST_PROTOCOL.md` verb, a `host-agent-real` implementation, and the same store-backed-policy + reconcile seam the cgroup limits already use (`internal/store` `instance_resource_limits` would gain a `disk_bytes` column). Hosted-only in practice.
+
+**Context:** `ENVIRONMENT.md` # Per-instance resource limits, `STORAGE.md`, `BRAIN_HOST_PROTOCOL.md`. Deferred from #211; tracked in #221.
+**Why Tier 3:** out of scope until the cloud image's storage layout is fixed, and that layout choice is what decides whether XFS project quotas are even available. Pin the shape with the layout, not after it.
+
 ## Tier 4 — Smaller open items
 
 Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
@@ -474,6 +494,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Local dev/test subcommands beyond lint/check/resolve (`malmo install --local`, etc.) — let authors run a manifest on their own box before a catalog PR. `malmo manifest lint` (schema + sibling-compose validation, issue #7), `malmo manifest check` (lint + the compose admission policy in one pass, so authors never hand-eyeball `admission.go`), and `malmo manifest resolve` (registry digest + download/disk size resolution into the object-form `images` map, issue #69) shipped and own the `cmd/malmo` skeleton; this remaining item is the heavier "actually install it locally" surface. `APP_MANIFEST.md`, `APP_STORE.md`.
 - `malmo catalog scaffold --compose <path>` — deterministic Phase-2 rewrite of an upstream compose into a Door-1 skeleton (drop `ports:`, named volume → `./data/` bind, flag — never silently strip — forbidden directives, emit a `manifest.yml`/`compose.yml` draft with TODOs). Cuts the mechanical keystrokes out of the agent-authoring loop (`docs/dev/authoring-apps-with-an-agent.md`). Deliberately takes a compose the author already located, NOT a repo URL: gathering a compose (it may live in a linked repo, under `docs/`, or only as a `docker run` line) and the ADAPT-DON'T-FORCE bail decision both stay model-side — a tool that crawls or auto-strips gets them wrong. **Trigger: revisit after ~10 hand-authored apps, and build only against the rewrite patterns actually observed across them** — the catalog is two apps deep today, so the common transforms aren't known yet (no premature abstraction, CLAUDE.md). `APP_MANIFEST.md`, `APP_LIFECYCLE.md`.
 - Catalog PR template + author-facing docs surface (subset of the Tier-3 "Documentation surface" entry). `APP_STORE.md`.
+- **`malmo manifest resolve` — daemon-free registry sizer for `disk_bytes`.** #120 fixed the containerd-store bug by streaming `docker save` and decompressing layer blobs locally. It works and is store-agnostic, but it is slow: a multi-GB image like open-webui takes about a minute to stream and decompress just to count bytes. The clean path is to fetch the image manifest straight from the registry (no local pull, no `docker save`), walk the layer descriptors, fetch each compressed blob, decompress on the fly, and sum the bytes — same decompressed-tar number, no Docker daemon needed, which is also what catalog CI wants since no daemon runs there. The registry-client work was scoped in [`../progress/catalog-image-footprint.md`](../progress/catalog-image-footprint.md). `APP_STORE.md` # Catalog schema.
 - Manifest changelog discipline — when schema v1 → v2 ships, how authors find out. Revisit once we have a `v2` candidate. `APP_MANIFEST.md`.
 
 **Web UI**
