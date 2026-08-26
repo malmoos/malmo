@@ -20,11 +20,10 @@ Actionable parallel work lives in [GitHub Issues](https://github.com/malmoos/mal
 ## Specs
 
 `specs/` holds the design docs. [`specs/SPEC.md`](specs/SPEC.md) is the entry
-point, and [`../CLAUDE.md`](../CLAUDE.md) holds the load-bearing decisions the
-specs elaborate. The Orientation list below groups every spec in `specs/`; if a
-doc is in that folder and not in this list, that's a bug — fix it in the same
-change. Cross-references inside the specs are bare filenames, relative to
-`specs/`.
+point, and [`../CLAUDE.md`](../CLAUDE.md) holds the big decisions the specs
+build on. The list below groups every spec in `specs/`. If a doc is in that
+folder and not in this list, that is a bug: fix it in the same change. Inside
+the specs, cross-references are bare filenames, relative to `specs/`.
 
 Orientation:
 

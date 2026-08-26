@@ -148,7 +148,7 @@ QEMU lanes (`specs/TESTING.md`).
 So this doc isn't read as a claim about the finished product:
 
 - **Full real host-agent.** `cmd/host-agent-real` is partially real: PAM password verify, `/proc` system sampling, disk usage, RAM pressure, journal streaming, service health, reboot-required, discovery (per-LAN-interface Avahi announcements from the NetworkManager LAN set, allowlist sync, IP-change replay), and the first-boot brain launch (#164: load-if-absent, lockstep label check, `docker run --restart unless-stopped`) are wired. LUKS/TPM, apt, and the NM configuration surface (WiFi setup, `/v1/network/*`) are not yet wired — those ops are still no-ops or stubs.
-- **Control-plane stack bring-up — built (M1b, #165), VM-boot acceptance pending.** host-agent seeds the brain's Docker transport (the `malmo-ingress` network + the `docker-socket-proxy`, raw socket `:ro`, `EXEC` denied) before launching the brain, and points it at `DOCKER_HOST=tcp://docker-proxy:2375`; the brain then reconciles Caddy + `malmo-ui` from the staged control-plane compose (`lifecycle.EnsureControlPlane`) and installs the dashboard route (`/api/v1/* → brain`, else → `malmo-ui`). All of it is **production-gated** on `MALMO_CONTROL_PLANE_DIR`/`MALMO_DASHBOARD_UI_UPSTREAM`, so the natively-run dev brain is unchanged (standalone dev Caddy, Vite UI, raw socket). Managed-DB-in-production is **no longer gated**: #185 moved provisioning off `docker exec` onto a one-shot `--rm` client container, so `EXEC` stays denied and the brain stays off the app-reachable `malmo-svc-*` network (`DECISIONS.md` 2026-06-15, which flips the 2026-06-14 gate). The bring-up is proven on a booted box in the **hosted** cloud lane, which runs in CI; the **appliance** medium-lane pass (`sudo make test-medium-qemu`) is still outstanding.
+- **Control-plane stack bring-up — built (M1b, #165), VM-boot acceptance pending.** host-agent seeds the brain's Docker transport (the `malmo-ingress` network + the `docker-socket-proxy`, raw socket `:ro`, `EXEC` denied) before launching the brain, and points it at `DOCKER_HOST=tcp://docker-proxy:2375`; the brain then reconciles Caddy + `malmo-ui` from the staged control-plane compose (`lifecycle.EnsureControlPlane`) and installs the dashboard route (`/api/v1/* → brain`, else → `malmo-ui`). All of it is **production-gated** on `MALMO_CONTROL_PLANE_DIR`/`MALMO_DASHBOARD_UI_UPSTREAM`, so the natively-run dev brain is unchanged (standalone dev Caddy, Vite UI, raw socket). Managed DB in production is **no longer blocked**. #185 moved provisioning off `docker exec` onto a one-shot `--rm` client container. So `EXEC` stays denied, and the brain stays off the app-reachable `malmo-svc-*` network (`DECISIONS.md` 2026-06-15, which lifts the 2026-06-14 gate). The bring-up is proven on a booted box by the **hosted** cloud lane, which runs in CI. The **appliance** medium-lane run (`sudo make test-medium-qemu`) is still outstanding.
 - **Storage subsystem — the boot half exists, the pooling half does not.** The
   userspace boot chain is real and shipped in `dist/systemd/`
   (`malmo-storage-ready.target`, `malmo-storage-verify.service`,
@@ -197,31 +197,30 @@ So this doc isn't read as a claim about the finished product:
   box↔cloud credential, `NEXT.md` Tier 1), no update notification, and no
   dashboard surface beyond Settings → About reporting the running versions
   (#393).
-- **File manager.** `FILES.md` is written and `/files` is a routed top-level
-  destination, but nothing behind it exists: the brain registers no
-  `/api/v1/files/*` handlers and host-agent implements none of the
-  `/v1/files/*` ops the protocol reserves. `FilesView.vue` is a
-  "coming soon" stub.
-- **Telemetry — consent only, no client.** The first-run consent choice is
-  recorded (`POST /api/v1/system/telemetry` → `box_meta`), but nothing sends
-  anything anywhere: there is no telemetry client and no endpoint to send to
-  (`TELEMETRY.md`). Health, notifications, time and discovery, which used to sit
-  in this bullet, are built — the typed health registry (`internal/health`)
-  raises issues that surface on `GET /api/v1/health` and in the dashboard's
-  `HealthBanner`, the notification centre and its bell are real
-  (`internal/notify`, `NotificationBell.vue`, per-category mute), the
-  `clock-not-synced` detector parses real `chronyc tracking`
-  (`internal/hostagent/clockhealth`), the time zone is settable through
-  host-agent, and Avahi discovery is listed as real in # Components above.
+- **File manager.** `FILES.md` is written, and `/files` is a real top-level
+  route. Nothing behind it is built. The brain registers no `/api/v1/files/*`
+  handlers, and host-agent implements none of the `/v1/files/*` ops the protocol
+  reserves. `FilesView.vue` is a "coming soon" stub.
+- **Telemetry — we record consent, and send nothing.** The first-run consent
+  choice is stored (`POST /api/v1/system/telemetry` → `box_meta`). Nothing goes
+  anywhere after that: there is no telemetry client, and no endpoint to send to
+  (`TELEMETRY.md`). Health, notifications, time and discovery used to sit in
+  this bullet too. They are built now: `internal/health` raises typed issues
+  that show on `GET /api/v1/health` and in the dashboard's `HealthBanner`; the
+  notification centre and its bell work (`internal/notify`,
+  `NotificationBell.vue`, mute per category); the `clock-not-synced` detector
+  reads real `chronyc tracking` (`internal/hostagent/clockhealth`); the time
+  zone can be set through host-agent; and Avahi discovery is listed as real in
+  # Components above.
 - **Off-box notification transports.** The bell is dashboard-only. No email and
   no push, so a box that needs attention while nobody is looking at the
   dashboard cannot say so (`NOTIFICATIONS.md`, `specs/NEXT.md` Tier 2).
-- **Login UI — rendered, but not a route.** `Login.vue` is real and reachable:
-  `App.vue` picks between `Setup`, `Login` and the dashboard from auth state, so
-  a logged-out appliance box shows the login screen without a route change. What
-  does not exist is a `/login` route — the logged-out screens are app state, not
-  router entries (`/recover` is the one exception). Cookie sessions and the auth
-  pipeline behind it are real.
+- **Login UI — it renders, but it is not a route.** `Login.vue` is real and
+  users reach it. `App.vue` chooses between `Setup`, `Login` and the dashboard
+  based on auth state, so a logged-out appliance box shows the login screen with
+  no route change. There is no `/login` route: the logged-out screens are app
+  state, not router entries. `/recover` is the one exception. Cookie sessions
+  and the auth pipeline behind the screen are real.
 - **App store.** Every box syncs the catalog from the control plane (`GET /catalog/sync`) with integrity-digest verification and TLS for authenticity; no catalog is baked into the image, the box keeps no copy on disk (`DECISIONS.md` 2026-08-17), and there is no Ed25519 signature (`DECISIONS.md` 2026-07-02). What remains is cloud-side: the store is the authoring surface. The door-1 app-authoring how-to (`docs/dev/authoring-apps-with-an-agent.md`) is reconciled with that — it authors into `store:apps/<id>/` and keeps the schema, tooling, and gap ledger here.
 
 For where each of these is planned, see the matching `specs/` doc.

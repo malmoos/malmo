@@ -1,9 +1,9 @@
 <script setup lang="ts">
 // Files — a top-level destination because "files are first-class" (DASHBOARD.md
 // # global navigation). The in-dashboard file browser over the user's use-case
-// folders and ~/Shared/ is specced in FILES.md; none of it is built yet — the
-// brain has no /api/v1/files/* handlers and host-agent has no /v1/files/* ops —
-// so this is a deliberate stub until that slice lands.
+// folders and ~/Shared/ is specced in FILES.md. None of it is built yet: the
+// brain has no /api/v1/files/* handlers, and host-agent has no /v1/files/* ops.
+// So this is a deliberate stub until that slice lands.
 import { FolderOpen } from "lucide-vue-next";
 </script>
 

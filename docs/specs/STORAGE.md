@@ -159,14 +159,18 @@ Optional but expected. One or more drives, each ext4 + LUKS + TPM-enrolled indep
   seed.json                       provisioning seed (hosted only)
 ```
 
-**These paths are as-built, and the nesting is deliberate.** Everything the brain writes sits under one state dir it is handed as `MALMO_STATE_DIR` (`/var/lib/malmo/state` on a real box; `.dev/state` under `make dev`) — the database, the per-instance dirs and the managed-service data alike. host-agent bind-mounts `/var/lib/malmo` into the brain container at the same path, so the host and the brain see identical paths.
+**These are the real paths.** The brain writes everything under one folder. It gets that folder as `MALMO_STATE_DIR`. On a real box it is `/var/lib/malmo/state`. Under `make dev` it is `.dev/state`. host-agent mounts `/var/lib/malmo` into the brain container at the same path, so the host and the brain see the same paths.
 
-**Why `state/` and not a flat `/var/lib/malmo/`:** this directory holds two owners' files. `control-plane/` and `seed.json` are host-agent's; everything under `state/` is the brain's, and nothing else writes there. Flattening would mean either pointing `MALMO_STATE_DIR` at `/var/lib/malmo` — putting host-agent's files inside the brain's state dir — or teaching the brain two roots. Keeping it one directory is also what makes the rest cheap: one bind mount into the brain container, and one directory for `internal/hostagent/cpupdate` to snapshot and restore around a control-plane update (`DECISIONS.md` 2026-08-26).
+**Why the extra `state/` folder.** `/var/lib/malmo/` holds files from two owners. `control-plane/` and `seed.json` belong to host-agent. Everything in `state/` belongs to the brain, and nothing else writes there. So `state/` is the line between them.
 
-Two consequences worth stating because getting them wrong fails **silently**:
+Without it we would have to do one of two bad things. Either point `MALMO_STATE_DIR` at `/var/lib/malmo`, which puts host-agent's files inside the brain's folder. Or teach the brain about two folders instead of one.
 
-- A restore must put the database back at `state/malmo.db` **with its `-wal` sidecar**. The brain opens WAL, so copying the main file alone gives you a valid database that is simply missing its newest commits — it opens fine and reports no error.
-- Anything measuring an app's disk usage walks `state/instances/<id>/`, not `instances/<id>/`. The latter does not exist, so a `du` against it returns nothing rather than failing.
+One folder also keeps other things simple. The brain container needs one mount. And `internal/hostagent/cpupdate` can copy one folder to snapshot the brain before an update (`DECISIONS.md` 2026-08-26).
+
+Two mistakes here fail **silently**. Neither shows an error:
+
+- **Restoring the database.** Put it back at `state/malmo.db`, and bring the `-wal` file too. The brain uses WAL mode. If you copy only the main file, you get a working database that is missing its newest writes.
+- **Measuring an app's disk use.** Read `state/instances/<id>/`, not `instances/<id>/`. The second path does not exist, so `du` returns nothing instead of failing.
 
 The use-case folders (`Photos`, `Music`, `Movies`, `Documents`, `Notes`, `Downloads`) are auto-created at user creation. `~/.config/user-dirs.dirs` is populated so XDG-aware tools resolve them. Users may rename, delete, or add folders — apps resolve canonical paths via XDG so a rename doesn't break them.
 
