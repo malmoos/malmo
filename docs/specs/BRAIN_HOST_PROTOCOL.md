@@ -186,6 +186,17 @@ GET /v1/system/gpu
 
 The real host-agent detects the GPU by scanning `/dev/dri/renderD*` and reading each node's PCI vendor (`/sys/class/drm/renderD*/device/vendor`; `0x8086` → `intel`), and resolves the render GID via `os/user.LookupGroup("render")` — the same way `/v1/identity/well-known` resolves `malmo-shared`. The `render` group and the udev rules binding the DRI nodes to it are provisioned by the box build's media stack, not by host-agent (the OS-image half is tracked separately — see issue #125). The fake host-agent returns a synthetic Intel iGPU (`present: true, vendor: "intel"`, a fixed dev `render_gid`) so the override path is exercisable under `make dev`, with a toggle to report `present: false` so the capacity-refusal path is testable without real hardware. This is the brain's only GPU host query — vendor→runtime selection is entirely the brain's job; the manifest stays vendor-agnostic `gpu: true` (`APP_MANIFEST.md` # E).
 
+**System time zone (`POST /v1/system/set-timezone`).** The only write in the "misc host state" group. It is the host op behind the first-run wizard's time-zone step (`FIRST_RUN.md`) and behind Settings → System → Time (`SETTINGS.md`). Pattern A, no response body:
+
+```
+POST /v1/system/set-timezone   { "zone": "Europe/Stockholm" }
+  → 200 OK
+```
+
+- `zone` is an IANA tz database name, like `"Europe/Stockholm"` or `"UTC"`. **The brain checks it before calling.** host-agent does not check it.
+- The real host-agent runs `timedatectl set-timezone <zone>`. That is what re-points `/etc/localtime` (`TIME.md` # System TZ). Both build profiles have it, so a hosted box sets its time zone the same way an appliance does.
+- Clock **sync** is a different thing, and it is not a write. The `clock-not-synced` detector reads `chronyc tracking` and reports it through `GET /v1/health/system` (# Health). Nothing in this protocol sets the time.
+
 **Network endpoints (NetworkManager-backed).** host-agent exposes Pattern A routes that wrap NetworkManager's DBus surface:
 
 ```

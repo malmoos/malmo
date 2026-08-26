@@ -127,7 +127,7 @@ Caddy on a busy household box can emit thousands of access-log entries per hour,
 
 ### Where
 
-A single table `audit_events` in the existing `brain.db`. No new database file, no new connection pool.
+A single table `audit_events` in the brain's existing database (`state/malmo.db`). No new database file, no new connection pool.
 
 ### Schema sketch
 
@@ -202,7 +202,7 @@ A buggy migration or a future contributor's `DELETE` can't accidentally rewrite 
 
 Brain doesn't see SSH or SMB logins directly — they go through `sshd` / `smbd` → PAM → journald, outside brain's code path. But "did someone unauthorized access my box?" is exactly the question audit log answers, so these events have to land in `audit_events`.
 
-Brain opens a long-lived `journal_follow` against host-agent filtered to `_COMM=sshd OR _COMM=smbd OR _COMM=sudo OR _COMM=su`. host-agent streams matching entries; brain parses them through a small `pamparse` package and writes `audit_events` rows via the same `audit.Record()` path. The journald cursor checkpoints in `brain.db` (`brain_meta.audit_journal_cursor`) so brain restarts resume cleanly.
+Brain opens a long-lived `journal_follow` against host-agent filtered to `_COMM=sshd OR _COMM=smbd OR _COMM=sudo OR _COMM=su`. host-agent streams matching entries; brain parses them through a small `pamparse` package and writes `audit_events` rows via the same `audit.Record()` path. The journald cursor checkpoints in the brain's SQLite (the key-value table is `box_meta`, not a `brain_meta` — `internal/store`) so brain restarts resume cleanly.
 
 Event vocabulary added by this ingestion path:
 

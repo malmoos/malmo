@@ -166,7 +166,9 @@ Upstream Debian ships `smbd.service`, `avahi-daemon.service`, etc. malmo extends
 
 ### The bootstrap marker is written by the brain, not by systemd
 
-`malmo-prepare-wizard.service` runs as a oneshot when `/var/lib/malmo-state/.bootstrapped` does not exist. Its job is "ensure the brain is reachable and the wizard can run" — *not* "the box is bootstrapped." The `.bootstrapped` marker is written **by the brain** at the end of the wizard, not by systemd at oneshot exit. This avoids the failure mode where the user closes the wizard halfway and the next boot believes setup is complete.
+`malmo-prepare-wizard.service` runs as a oneshot while the box is not yet bootstrapped. Its job is "ensure the brain is reachable and the wizard can run" — *not* "the box is bootstrapped." The marker is written **by the brain** at the end of the wizard, not by systemd at oneshot exit. This avoids the failure mode where the user closes the wizard halfway and the next boot believes setup is complete.
+
+> **As built, the marker is not a file.** The brain stores `first_run_complete` in its `box_meta` table (`internal/store`). `GET /api/v1/auth/state` reads it and `POST /api/v1/system/first-run-complete` sets it. The `/var/lib/malmo-state/.bootstrapped` file described above was never created, and nor was that folder. The brain's state lives at `/var/lib/malmo/state/` (`STORAGE.md` # mount layout). `malmo-prepare-wizard.service` does not exist yet either — `dist/systemd/` ships the storage and recovery units plus `host-agent.service`. So if that unit is built later, it must read the brain's state, not a file next to it.
 
 ### Hang protection on the storage chain
 

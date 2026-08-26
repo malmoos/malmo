@@ -20,14 +20,15 @@ Actionable parallel work lives in [GitHub Issues](https://github.com/malmoos/mal
 ## Specs
 
 `specs/` holds the design docs. [`specs/SPEC.md`](specs/SPEC.md) is the entry
-point; the full annotated list (what each doc owns and its headline decisions)
-is the **Documents** section of [`../CLAUDE.md`](../CLAUDE.md). Cross-references
-inside the specs are bare filenames, relative to `specs/`.
+point, and [`../CLAUDE.md`](../CLAUDE.md) holds the big decisions the specs
+build on. The list below groups every spec in `specs/`. If a doc is in that
+folder and not in this list, that is a bug: fix it in the same change. Inside
+the specs, cross-references are bare filenames, relative to `specs/`.
 
 Orientation:
 
 - **Start here:** `SPEC.md`, `CONTROL_PLANE.md`, `ENVIRONMENT.md` (the two environment profiles — `appliance` vs malmo-operated `hosted` — and every hosted-specific delta).
-- **Apps:** `APP_LIFECYCLE.md`, `APP_MANIFEST.md`, `APP_STORE.md`, `APP_ISOLATION.md`, `SERVICE_PROVISIONING.md`.
+- **Apps:** `APP_LIFECYCLE.md`, `APP_MANIFEST.md`, `APP_STORE.md`, `APP_ISOLATION.md`, `SERVICE_PROVISIONING.md`, `CAPABILITIES.md` (the machine-readable ledger of shipped platform capabilities, so catalog curation stops depending on someone remembering — the manifest itself is [`dev/capabilities.yml`](dev/capabilities.yml)).
 - **Protocols:** `BRAIN_UI_PROTOCOL.md`, `BRAIN_HOST_PROTOCOL.md` (Pattern C stream 1 — `journal_follow` per-app log tail — is now implemented; `journal_query` and `journal_export_range` remain deferred).
 - **Frontend:** `WEB_UI.md` (stack/deploy), `DASHBOARD.md` (logged-in IA + the owner-scoped apps model + install flows, incl. Door-2 custom-container), `SETTINGS.md` (Settings IA: My-account / Box-settings split, panel inventory, role gating), `FILES.md` (in-dashboard file manager).
 - **System:** `STORAGE.md`, `BOOT.md`, `DISCOVERY.md`, `MALMO_NETWORK.md`, `TIME.md`, `USERS_AND_GROUPS.md`, `AUTH.md`.

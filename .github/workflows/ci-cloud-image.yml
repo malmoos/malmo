@@ -171,7 +171,8 @@ jobs:
     # mkosi-sandbox EPERM (#189), so the fix has to be proven here, not on a
     # floating ubuntu-latest.
     runs-on: ubuntu-24.04
-    # Two mkosi builds (production image + QEMU test image), three QEMU boots, and
+    # Two mkosi builds (production image + QEMU test image), the QEMU boots (five
+    # on a push/dispatch, just `update` on a PR — see MALMO_CLOUD_BOOTS below), and
     # the compress-and-attach publish run ~10 min in practice; the 120 cap is a
     # generous ceiling so a one-off slow runner is never killed mid-build.
     timeout-minutes: 120
