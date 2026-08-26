@@ -16,7 +16,7 @@ one is JavaScript, one is a container we don't write.
 | **`host-agent` (fake)** | `cmd/host-agent/` | Privileged side used in the inner dev loop. Speaks the real `BRAIN_HOST_PROTOCOL.md` wire format over a UNIX socket; the host operations themselves (Avahi, LUKS, PAM, apt) are stubbed in memory. | **Fake** (real wire, canned ops) |
 | **`host-agent-real`** | `cmd/host-agent-real/`, `internal/hostagent/` | The real privileged binary. Seam-injected reporters: PAM password verify (`pamverifier`), `/proc` system sampling (`procsource`), disk usage, RAM pressure, journal streaming, service health, reboot-required flag, user manager, system time-zone setter (`timezone`, `timedatectl set-timezone` — the first-run wizard's Step 3, wired in both build profiles). Discovery is real: per-LAN-interface Avahi announcements (`avahipublisher`) driven by the NetworkManager LAN set (`netstate`), with an avahi-daemon.conf allowlist sync and IP-change replay. Seeds the brain's Docker transport then launches the brain container on startup (`brainlaunch`: `EnsureTransport` creates `malmo-ingress` + runs the `docker-socket-proxy`; `Launch` docker-loads the bundled image if absent, lockstep `malmo.protocol.major` OCI-label check, `docker run --restart unless-stopped` on the ingress net with `DOCKER_HOST` at the proxy). Host ops not yet wired: LUKS/TPM, apt, NM configuration (WiFi setup, `/v1/network/*`). A build-tagged slim **`hosted`** profile (`go build -tags hosted`, #204/C1c) compiles the discovery/NetworkManager stack out for the cloud image — `avahipublisher`/`netstate` unwired, no-op publisher, nil `Net` — keeping the same PAM/user-mgmt/health-system/brain-launch seams (`cmd/host-agent-real/wiring_appliance.go` vs `wiring_hosted.go`). | Partial — see "What is not built yet" |
 | **Caddy** | `dev/caddy.json`, `dev/docker-compose.yml` | Reverse proxy. Terminates `*.local` (appliance) or `*.<box-id>.malmo.network` over real Let's Encrypt HTTPS (hosted, via a custom acme-dns build) and routes to app containers + the brain. Configured live by the brain via Caddy's admin API. | Real (container) |
-| **`web-ui`** | `web-ui/` | Vue 3 + Vite + TanStack Query dashboard. Talks only to the brain. Tailwind 4 landed; shadcn-vue scaffolding present, components not yet copied in. Internal code architecture: [`dev/web-ui.md`](dev/web-ui.md). | Real |
+| **`web-ui`** | `web-ui/` | Vue 3 + Vite + TanStack Query dashboard. Talks only to the brain. Tailwind 4 with the Oatmeal `@theme` tokens; `reka-ui` + `cn()` are present as shadcn-vue scaffolding, but the owned components in `components/ui/` (`Button`, `Heading`) are hand-written from the Oatmeal patterns, not pulled through the shadcn CLI (#261). Internal code architecture: [`dev/web-ui.md`](dev/web-ui.md). | Real |
 | **SQLite** | `$STATE_DIR/malmo.db` | The brain's only persistent store. Schema + queries in `internal/store/`. | Real |
 
 Plus the **Docker daemon** on the host, which the brain drives with the
@@ -148,7 +148,7 @@ QEMU lanes (`specs/TESTING.md`).
 So this doc isn't read as a claim about the finished product:
 
 - **Full real host-agent.** `cmd/host-agent-real` is partially real: PAM password verify, `/proc` system sampling, disk usage, RAM pressure, journal streaming, service health, reboot-required, discovery (per-LAN-interface Avahi announcements from the NetworkManager LAN set, allowlist sync, IP-change replay), and the first-boot brain launch (#164: load-if-absent, lockstep label check, `docker run --restart unless-stopped`) are wired. LUKS/TPM, apt, and the NM configuration surface (WiFi setup, `/v1/network/*`) are not yet wired — those ops are still no-ops or stubs.
-- **Control-plane stack bring-up — built (M1b, #165), VM-boot acceptance pending.** host-agent seeds the brain's Docker transport (the `malmo-ingress` network + the `docker-socket-proxy`, raw socket `:ro`, `EXEC` denied) before launching the brain, and points it at `DOCKER_HOST=tcp://docker-proxy:2375`; the brain then reconciles Caddy + `malmo-ui` from the staged control-plane compose (`lifecycle.EnsureControlPlane`) and installs the dashboard route (`/api/v1/* → brain`, else → `malmo-ui`). All of it is **production-gated** on `MALMO_CONTROL_PLANE_DIR`/`MALMO_DASHBOARD_UI_UPSTREAM`, so the natively-run dev brain is unchanged (standalone dev Caddy, Vite UI, raw socket). Managed-DB-in-production stays gated on a provisioning re-architecture off `docker exec` (the proxy denies `EXEC` — `DECISIONS.md` 2026-06-14). Unit-tested; a real VM boot pass (`sudo make test-medium-qemu`) is still outstanding.
+- **Control-plane stack bring-up — built (M1b, #165), VM-boot acceptance pending.** host-agent seeds the brain's Docker transport (the `malmo-ingress` network + the `docker-socket-proxy`, raw socket `:ro`, `EXEC` denied) before launching the brain, and points it at `DOCKER_HOST=tcp://docker-proxy:2375`; the brain then reconciles Caddy + `malmo-ui` from the staged control-plane compose (`lifecycle.EnsureControlPlane`) and installs the dashboard route (`/api/v1/* → brain`, else → `malmo-ui`). All of it is **production-gated** on `MALMO_CONTROL_PLANE_DIR`/`MALMO_DASHBOARD_UI_UPSTREAM`, so the natively-run dev brain is unchanged (standalone dev Caddy, Vite UI, raw socket). Managed-DB-in-production is **no longer gated**: #185 moved provisioning off `docker exec` onto a one-shot `--rm` client container, so `EXEC` stays denied and the brain stays off the app-reachable `malmo-svc-*` network (`DECISIONS.md` 2026-06-15, which flips the 2026-06-14 gate). The bring-up is proven on a booted box in the **hosted** cloud lane, which runs in CI; the **appliance** medium-lane pass (`sudo make test-medium-qemu`) is still outstanding.
 - **Storage subsystem — the boot half exists, the pooling half does not.** The
   userspace boot chain is real and shipped in `dist/systemd/`
   (`malmo-storage-ready.target`, `malmo-storage-verify.service`,
@@ -197,12 +197,26 @@ So this doc isn't read as a claim about the finished product:
   box↔cloud credential, `NEXT.md` Tier 1), no update notification, and no
   dashboard surface beyond Settings → About reporting the running versions
   (#393).
-- **Health / notifications / telemetry / time / discovery beyond stubs.** The
-  brain doesn't surface health issues, the bell doesn't exist, no telemetry
-  client, no chrony integration.
-- **Login UI.** `Setup` and `Dashboard` render; `Login.vue` is kept in the tree
-  but not routed (single-user dev phase). Cookie sessions and the underlying
-  auth pipeline are real.
+- **Telemetry — consent only, no client.** The first-run consent choice is
+  recorded (`POST /api/v1/system/telemetry` → `box_meta`), but nothing sends
+  anything anywhere: there is no telemetry client and no endpoint to send to
+  (`TELEMETRY.md`). Health, notifications, time and discovery, which used to sit
+  in this bullet, are built — the typed health registry (`internal/health`)
+  raises issues that surface on `GET /api/v1/health` and in the dashboard's
+  `HealthBanner`, the notification centre and its bell are real
+  (`internal/notify`, `NotificationBell.vue`, per-category mute), the
+  `clock-not-synced` detector parses real `chronyc tracking`
+  (`internal/hostagent/clockhealth`), the time zone is settable through
+  host-agent, and Avahi discovery is listed as real in # Components above.
+- **Off-box notification transports.** The bell is dashboard-only. No email and
+  no push, so a box that needs attention while nobody is looking at the
+  dashboard cannot say so (`NOTIFICATIONS.md`, `specs/NEXT.md` Tier 2).
+- **Login UI — rendered, but not a route.** `Login.vue` is real and reachable:
+  `App.vue` picks between `Setup`, `Login` and the dashboard from auth state, so
+  a logged-out appliance box shows the login screen without a route change. What
+  does not exist is a `/login` route — the logged-out screens are app state, not
+  router entries (`/recover` is the one exception). Cookie sessions and the auth
+  pipeline behind it are real.
 - **App store.** Every box syncs the catalog from the control plane (`GET /catalog/sync`) with integrity-digest verification and TLS for authenticity; no catalog is baked into the image, the box keeps no copy on disk (`DECISIONS.md` 2026-08-17), and there is no Ed25519 signature (`DECISIONS.md` 2026-07-02). What remains is cloud-side: the store is the authoring surface. The door-1 app-authoring how-to (`docs/dev/authoring-apps-with-an-agent.md`) is reconciled with that — it authors into `store:apps/<id>/` and keeps the schema, tooling, and gap ledger here.
 
 For where each of these is planned, see the matching `specs/` doc.
