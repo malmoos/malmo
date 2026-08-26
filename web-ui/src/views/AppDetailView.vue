@@ -11,7 +11,7 @@
 //
 // The long description is author markdown rendered to HTML and sanitized before
 // it touches the DOM (catalog text is author-controlled; sanitize anyway).
-import { computed, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { useRoute, RouterLink } from "vue-router";
 import { useQuery } from "@tanstack/vue-query";
 import { marked } from "marked";
@@ -163,15 +163,36 @@ const shotIndex = ref(0);
 // Navigating straight from one detail page to another reuses this component, so
 // the index has to go back to the first shot of the new app.
 watch(manifestId, () => { shotIndex.value = 0; });
-// The page scroll position to restore on close: showModal blocks interaction
-// behind the dialog, but not every browser's wheel scroll, so the document is
-// pinned for as long as the viewer is open.
+// showModal blocks interaction behind the dialog, but not every browser's wheel
+// scroll, so the document is pinned for as long as the viewer is open.
+//
+// The pin is tracked with its own flag rather than lifted on the dialog's close
+// event alone, because a dialog can stop being on screen WITHOUT closing: taking
+// an open <dialog> out of the DOM fires no close event. This view is reached by
+// a router route, so that is an ordinary thing to do here — the Back button
+// unmounts the whole component mid-viewer — where the server-rendered page this
+// was ported from could only ever leave by a full document load. Miss it and the
+// pin outlives the dialog: every other page in the dashboard is then unscrollable
+// until a reload.
 let restoreOverflow = "";
+let scrollPinned = false;
+
+function pinScroll() {
+  if (scrollPinned) return;
+  restoreOverflow = document.documentElement.style.overflow;
+  document.documentElement.style.overflow = "hidden";
+  scrollPinned = true;
+}
+
+function releaseScroll() {
+  if (!scrollPinned) return;
+  document.documentElement.style.overflow = restoreOverflow;
+  scrollPinned = false;
+}
 
 function openShot(i: number) {
   shotIndex.value = i;
-  restoreOverflow = document.documentElement.style.overflow;
-  document.documentElement.style.overflow = "hidden";
+  pinScroll();
   viewer.value?.showModal();
 }
 
@@ -192,11 +213,27 @@ function onViewerKey(e: KeyboardEvent) {
   stepShot(by);
 }
 
-// Every close path lands here — the X, a click on the surround, Esc — so the
-// scroll pin is lifted once, wherever it was released from.
+// Every path that CLOSES the dialog lands here — the X, a click on the surround,
+// Esc. The two paths that end the viewer without closing it are below.
 function onViewerClose() {
-  document.documentElement.style.overflow = restoreOverflow;
+  releaseScroll();
 }
+
+// Leaving the page while the viewer is open (the Back button, a link, a redirect)
+// takes the dialog down with the component and fires no close event.
+onUnmounted(releaseScroll);
+
+// A background refetch can return the same app with fewer screenshots, or none:
+// the v-if then removes the open dialog from the DOM, again with no close event.
+// An index past the end of a shorter list would otherwise render a broken image
+// under a "6 of 3" counter.
+watch(shots, (list) => {
+  if (list.length === 0) {
+    releaseScroll();
+  } else if (shotIndex.value >= list.length) {
+    shotIndex.value = 0;
+  }
+});
 </script>
 
 <template>

@@ -24,7 +24,9 @@ Both changes are in `web-ui/src/views/AppDetailView.vue`. No brain change, no wi
 
 **A full-screen screenshot viewer.** A click on a thumbnail opens that shot fit to the viewport — the whole image, not a zoom of the thumbnail in place — with arrow keys, prev/next buttons, and a live "2 of 3" counter. The index wraps both ways, so the arrows never dead-end and there is no disabled state to keep in sync.
 
-**It is a native `<dialog>`, not the fixed-overlay idiom `AppMenuDialog` uses.** The browser then supplies the top layer, the backdrop, Esc, the focus trap, and focus restore to the thumbnail that opened it, which is most of what that other component hand-writes. What is left here is an index and a `src` swap. `showModal()` blocks interaction behind the dialog but not every browser's wheel scroll, so the document is pinned while the viewer is open and released on `close` — one handler, so every dismissal path (the X, a click on the surround, Esc) lifts the pin.
+**It is a native `<dialog>`, not the fixed-overlay idiom `AppMenuDialog` uses.** The browser then supplies the top layer, the backdrop, Esc, the focus trap, and focus restore to the thumbnail that opened it, which is most of what that other component hand-writes. What is left here is an index and a `src` swap. `showModal()` blocks interaction behind the dialog but not every browser's wheel scroll, so the document is pinned while the viewer is open.
+
+**Lifting that pin is where the port needed more than a translation, and review caught it.** The first version released it on the dialog's `close` event only. A dialog can stop being on screen without closing: taking an open `<dialog>` out of the DOM fires no `close` event. The cloud page is one server-rendered document, so it could only ever be left by a full load; this is a router route, so the Back button unmounts the component mid-viewer. The pin then outlived the dialog and every other page in the dashboard was unscrollable until a reload. The pin is now tracked with its own flag and lifted from three places: the dialog's `close`, `onUnmounted`, and a watcher on the shot list — a background refetch that returns the same app with no screenshots removes the open dialog through the `v-if`, which is the same hole again. That watcher also clamps the index, so a shorter list cannot render a broken image under a "6 of 3" counter.
 
 **One thing was deliberately not ported.** The cloud thumbnails are links to the full-size asset, so a blocked script still opens the image. That page is server-rendered HTML; this one is a Vue view that needs script to exist at all, so the thumbnails are buttons here.
 
@@ -38,6 +40,7 @@ Both changes are in `web-ui/src/views/AppDetailView.vue`. No brain change, no wi
 
 ## Known gaps
 
+- **The stuck-scroll bug above was found by review, not by running it.** It is fixed, but the fix is typechecked rather than clicked — the Back-button path in particular has not been exercised by hand.
 - **Not yet looked at in a browser.** The change is typechecked and built, and the CSS was verified, but nobody has clicked it. `make dev-app APPS="postiz listmonk"` against a store checkout is the run that shows both panels with real data.
 - **No automated test.** `web-ui` has no test runner, so this is covered by the type checker and the build only — the same standing gap every view in this directory has.
 - **The install dialog does not repeat the costs.** Someone who lands straight on Install from a card never passes this panel. Whether a required cost belongs in the consent screen too is a design question, not a wire one.
