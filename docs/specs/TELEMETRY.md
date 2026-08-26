@@ -58,7 +58,7 @@ Crash *bundles* (full diagnostic dumps with logs, configs, container state) are 
 
 ## What identifies a box
 
-**Rotating install ID.** A random 16-byte ID, generated locally, rotated every Monday 00:00 UTC. Persisted in `/var/lib/malmo-state/telemetry.json`. The previous week's ID is *not* retained — there is no client-side bridge from week N to week N+1.
+**Rotating install ID.** A random 16-byte ID, generated locally, rotated every Monday 00:00 UTC. Persisted under the brain's state dir (`/var/lib/malmo/state/`, `STORAGE.md` # mount layout) — there is no separate `/var/lib/malmo-state` root. The previous week's ID is *not* retained — there is no client-side bridge from week N to week N+1.
 
 Consequences:
 

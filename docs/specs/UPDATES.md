@@ -207,7 +207,7 @@ The single biggest gap in image-only rollback is **app-managed schema migrations
 
 Until lifecycle hooks return (`APP_MANIFEST.md` # F, `APP_LIFECYCLE.md` # Deferred: lifecycle hooks), the brain takes a brute-force snapshot before every app update:
 
-1. **Tar the manifest's declared `data_volumes`** to `/var/lib/malmo/instances/<id>/snapshots/pre-update-<old-version>.tar`. `cache_volumes` are excluded — that's literally what the data/cache split is for (`APP_MANIFEST.md` # C).
+1. **Tar the manifest's declared `data_volumes`** to `/var/lib/malmo/state/instances/<id>/snapshots/pre-update-<old-version>.tar`. `cache_volumes` are excluded — that's literally what the data/cache split is for (`APP_MANIFEST.md` # C).
 2. **If the app uses a managed service**, `pg_dump` (or equivalent for the service type) the app's logical database into the same snapshot dir. Cheap, well-bounded, runs in the 03:00 window when nothing else is going on. Applies whether or not the service version moved — protects against app-driven schema changes inside the same major.
 3. **Retain alongside the previous image for 7 days**, then GC.
 

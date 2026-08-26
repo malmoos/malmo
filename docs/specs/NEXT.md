@@ -379,7 +379,7 @@ The per-box acme-dns credentials the brain ingests from the seed are persisted p
 
 `ENVIRONMENT.md` # Per-instance resource limits names a per-app **disk quota** as the third dimension the hosted control plane needs to bound a paying tenant. The memory + CPU cgroup limits landed with #211, but disk quota was deferred: the locked storage stack (`ext4` + Docker's `overlay2`, `STORAGE.md`) cannot enforce a per-container write-layer quota portably. Docker's `--storage-opt size=` works only on `xfs`-with-`pquota` or the `devicemapper`/`btrfs` drivers — none of which the appliance or the cloud image use.
 
-The realistic path is **XFS project quotas** on the data tree, driven through the host-agent (a privileged op — set/clear a project ID + hard limit on an app's `/var/lib/malmo/instances/<id>/` subtree and its bound use-case folders). It needs a `BRAIN_HOST_PROTOCOL.md` verb, a `host-agent-real` implementation, and the same store-backed-policy + reconcile seam the cgroup limits already use (`internal/store` `instance_resource_limits` would gain a `disk_bytes` column). Hosted-only in practice.
+The realistic path is **XFS project quotas** on the data tree, driven through the host-agent (a privileged op — set/clear a project ID + hard limit on an app's `/var/lib/malmo/state/instances/<id>/` subtree and its bound use-case folders). It needs a `BRAIN_HOST_PROTOCOL.md` verb, a `host-agent-real` implementation, and the same store-backed-policy + reconcile seam the cgroup limits already use (`internal/store` `instance_resource_limits` would gain a `disk_bytes` column). Hosted-only in practice.
 
 **Context:** `ENVIRONMENT.md` # Per-instance resource limits, `STORAGE.md`, `BRAIN_HOST_PROTOCOL.md`. Deferred from #211; tracked in #221.
 **Why Tier 3:** out of scope until the cloud image's storage layout is fixed, and that layout choice is what decides whether XFS project quotas are even available. Pin the shape with the layout, not after it.
@@ -437,7 +437,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Egress allowlist for `internet: true`. `APP_ISOLATION.md`.
 - Per-app firewall rules (apps as L4 endpoints). `APP_ISOLATION.md`.
 - Author-declared default/hint for folder source (e.g. an `allow_shared`-style flag) so a manifest can bias the install-time personal-vs-shared toggle without removing the installer's choice. Resolved-for-now as fully installer-elected (`DECISIONS.md` 2026-05-30); revisit if catalog demand appears. `APP_MANIFEST.md` # `folders`.
-- fscrypt coverage for per-user app state under `/var/lib/malmo/instances/<id>/`. When per-home fscrypt lands, does it extend to managed-service data (per-user Postgres, etc.)? `APP_ISOLATION.md` # Managed services placement, `STORAGE.md` # Future: per-user encryption.
+- fscrypt coverage for per-user app state under `/var/lib/malmo/state/instances/<id>/`. When per-home fscrypt lands, does it extend to managed-service data (per-user Postgres, etc.)? `APP_ISOLATION.md` # Managed services placement, `STORAGE.md` # Future: per-user encryption.
 
 **Storage & first-run**
 - UTF-8 filename normalization (NFC vs. NFD) across SMB clients — macOS uses NFD on the wire, Linux stores bytes verbatim; "files-first-class" makes this user-visible. `STORAGE.md`.

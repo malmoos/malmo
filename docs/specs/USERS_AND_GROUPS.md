@@ -80,7 +80,7 @@ If the dashboard is reachable, use it. If it isn't, an admin can:
    - `docker logs malmo-brain --tail 200` — brain logs.
    - `systemctl restart malmo-host-agent` — restart the daemon.
    - `docker restart malmo-brain` — restart the brain.
-4. If the brain's SQLite is corrupt: stop the brain, replace `/var/lib/malmo/brain/state.db` from the most recent snapshot (snapshot/restore story is its own doc — not yet written), restart.
+4. If the brain's SQLite is corrupt: stop the brain, replace `/var/lib/malmo/state/malmo.db` **and its `-wal` sidecar** from the most recent snapshot, restart. Restoring the main file alone leaves the newest commits behind in the WAL and looks fine, because what you get is a valid *older* database (`STORAGE.md` # mount layout; `internal/hostagent/cpupdate` does the same copy around a control-plane update). The wider snapshot/restore story is its own doc — not yet written.
 
 **Factory reset short of reinstall** is deliberately not documented here. We don't have a clean "reset everything except user content" story yet; treat reinstall + restore from backup as the floor.
 

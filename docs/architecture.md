@@ -122,10 +122,10 @@ the `host-agent-real` row in # Components and by # What is not built yet.
   state/
     malmo.db          brain's SQLite (schema in internal/store)
     instances/        per-app state (compose file, .env, digests)
+    services/         managed-service data (postgres-<v>/, valkey-<v>/, …)
+  catalog-cache/      proxied catalog icons + screenshots (24h expiry)
   host-agent          built binary
   brain               built binary
-catalog/
-  whoami/             sample manifest (door-1 source)
 dev/
   caddy.json          Caddy bootstrap config (replaced live via admin API)
   docker-compose.yml  brings up the dev Caddy + malmo-ingress network
@@ -197,6 +197,11 @@ So this doc isn't read as a claim about the finished product:
   box↔cloud credential, `NEXT.md` Tier 1), no update notification, and no
   dashboard surface beyond Settings → About reporting the running versions
   (#393).
+- **File manager.** `FILES.md` is written and `/files` is a routed top-level
+  destination, but nothing behind it exists: the brain registers no
+  `/api/v1/files/*` handlers and host-agent implements none of the
+  `/v1/files/*` ops the protocol reserves. `FilesView.vue` is a
+  "coming soon" stub.
 - **Telemetry — consent only, no client.** The first-run consent choice is
   recorded (`POST /api/v1/system/telemetry` → `box_meta`), but nothing sends
   anything anywhere: there is no telemetry client and no endpoint to send to

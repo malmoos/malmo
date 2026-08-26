@@ -106,7 +106,7 @@ Two kinds of app data, two locations:
 | Kind | Lives at | Survives uninstall? | User sees it? |
 |---|---|---|---|
 | **User content** (photo files, music, notes) | `/home/<user>/Photos/`, etc. | Yes, always | Yes, daily |
-| **App state** (indexes, caches, DBs) | `/var/lib/malmo/instances/<id>/data/` | No (or archived on "keep data") | No, ever |
+| **App state** (indexes, caches, DBs) | `/var/lib/malmo/state/instances/<id>/data/` | No (or archived on "keep data") | No, ever |
 
 ### OS drive
 
@@ -151,10 +151,15 @@ Optional but expected. One or more drives, each ext4 + LUKS + TPM-enrolled indep
   Photos/  Music/  Movies/  Documents/
 
 /var/lib/malmo/                  malmo's bookkeeping (brain SQLite, app instances)
-  brain/state.db
-  instances/<id>/                 app working dirs — never user-facing
-  managed-services/
+  state/                          the brain's state dir (MALMO_STATE_DIR)
+    malmo.db                      brain SQLite (+ the -wal / -shm sidecars)
+    instances/<id>/               app working dirs — never user-facing
+    services/<kind>-<version>/    managed-service data (e.g. postgres-18/data)
+  control-plane/                  staged control-plane compose + images.json
+  seed.json                       provisioning seed (hosted only)
 ```
+
+**These paths are as-built, and the nesting matters.** Everything the brain writes sits under one state dir it is handed as `MALMO_STATE_DIR` (`/var/lib/malmo/state` on a real box; `.dev/state` under `make dev`) — the database, the per-instance dirs and the managed-service data alike. host-agent bind-mounts `/var/lib/malmo` into the brain container at the same path, so the host and the brain see identical paths. Two consequences worth stating because getting them wrong is silent: a restore must put the database back at `state/malmo.db` (**with** its `-wal` sidecar — the brain opens WAL, so copying the main file alone yields a valid database missing its newest commits), and anything reasoning about an app's disk usage must walk `state/instances/<id>/`, not `instances/<id>/`.
 
 The use-case folders (`Photos`, `Music`, `Movies`, `Documents`, `Notes`, `Downloads`) are auto-created at user creation. `~/.config/user-dirs.dirs` is populated so XDG-aware tools resolve them. Users may rename, delete, or add folders — apps resolve canonical paths via XDG so a rename doesn't break them.
 
