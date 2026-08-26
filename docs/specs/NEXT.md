@@ -36,7 +36,7 @@ Shape to decide: does the box get a second, separate credential at provision tim
 The **seed is how it gets there.** It is the only per-box channel a real box has, and it is written once (`ENVIRONMENT.md` # Provisioning & first-boot). So the shape to design is a long-lived per-box secret, plus a way to rotate it on the box.
 
 **Context:** `UPDATES.md` # 8.1, `ENVIRONMENT.md` # Updates (hosted) + # Provisioning, `malmoos/cloud` (the other half lives there).
-**Why Tier 1:** it blocks implementing the hosted update trigger, which is the first slice of the update work. The apply/rollback half can be built without it; the "what should I be running" half cannot.
+**Why Tier 1:** it now blocks the **write** half, not the read half. The trigger itself shipped in #402/#408 on a bare `box_id`, and apply/rollback shipped before it. What cannot be built until this is designed is the box reporting its outcome back (`UPDATES.md` # 8.4 step 5) and the fleet auto-halt that reads those reports (# 8.5). Those are the point of the hosted update path, so the work stops here.
 
 ---
 

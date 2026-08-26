@@ -65,10 +65,17 @@ Plus the **Docker daemon** on the host, which the brain drives with the
   container's health check passes, then flips to the real upstream.
 - **brain → host-agent:** HTTP/JSON over `MALMO_AGENT_SOCK`. Two patterns,
   sync request/response and SSE-streamed jobs (`internal/protocol/host.go`
-  defines the types; `internal/hostclient/` is the brain-side client). Today
-  the routes are `/v1/discovery/{publish,unpublish,state}`, `/v1/system/status`,
-  and `/v1/auth/{verify-password,set-password,set-role,delete-user}`. See
-  `specs/BRAIN_HOST_PROTOCOL.md`.
+  defines the types; `internal/hostclient/` is the brain-side client). The routes
+  the brain calls today, from `internal/hostclient/`:
+  `/v1/auth/{verify-password,set-password,set-role,delete-user}`,
+  `/v1/users/{username}/home`,
+  `/v1/identity/{well-known,app-service,app-service/release}`,
+  `/v1/discovery/{publish,unpublish}`,
+  `/v1/system/{status,resources,gpu,set-timezone}`,
+  `/v1/health/system`, `/v1/journal/follow`, and the job routes
+  `/v1/jobs/system-update` + `/v1/jobs/{id}`. `specs/BRAIN_HOST_PROTOCOL.md`
+  owns the wire and also lists the routes that are specced but not built yet
+  (files, network, terminal, drive jobs).
 
 ## Inside the brain
 
