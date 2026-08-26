@@ -31,8 +31,8 @@ Where the trust model does **not** extend: the network (treated as hostile), app
 |---|---|---|
 | User content (Photos, Documents, …) | `/home/<user>/` (`STORAGE.md`) | Cross-user read; drive theft; ransomware-via-app |
 | PAM credentials | `/etc/shadow` (`AUTH.md`) | Credential theft, offline cracking |
-| App state + per-user managed-service DBs | `/var/lib/malmo/instances/<id>/` (`APP_ISOLATION.md`) | Cross-app / cross-user access |
-| Brain SQLite (accounts, sessions, audit log) | `/var/lib/malmo/brain/state.db` | Tamper (esp. audit log), session theft |
+| App state + per-user managed-service DBs | `/var/lib/malmo/state/instances/<id>/` (`APP_ISOLATION.md`) | Cross-app / cross-user access |
+| Brain SQLite (accounts, sessions, audit log) | `/var/lib/malmo/state/malmo.db` (+ `-wal`) | Tamper (esp. audit log), session theft |
 | LUKS keys / TPM seal | OS drive + TPM (`STORAGE.md`) | Whole-box theft, Secure-Boot subversion |
 | Box network position | nftables, closed-by-default (`MALMO_NETWORK.md`) | Remote exploitation, lateral movement |
 | Privacy metadata (who-runs-what, audit trail, cloud DNS queries) | brain SQLite + cloud (`LOGGING.md`, `MALMO_NETWORK.md`) | Disclosure / correlation |

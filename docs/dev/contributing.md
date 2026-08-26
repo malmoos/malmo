@@ -8,7 +8,7 @@ This guide is written so a contributor **and their coding agent** can both follo
 
 Read in this order. Don't skip [`../../CLAUDE.md`](../../CLAUDE.md) — it holds the load-bearing conventions and overrides default agent behavior.
 
-1. **[`../../CLAUDE.md`](../../CLAUDE.md)** — what malmo is, the audience, the locked decisions, and the code/doc discipline you're held to. The **Documents** section is the annotated map of every spec.
+1. **[`../../CLAUDE.md`](../../CLAUDE.md)** — what malmo is, the audience, the locked decisions, and the code/doc discipline you're held to. The annotated map of every spec lives in [`../README.md`](../README.md) # Specs.
 2. **[`../specs/SPEC.md`](../specs/SPEC.md)** and **[`../specs/CONTROL_PLANE.md`](../specs/CONTROL_PLANE.md)** — the vision and the control-plane architecture (brain + host-agent + Caddy).
 3. **[`../README.md`](../README.md)** — the doc map. You don't read every spec now; you read the one(s) your task touches, end-to-end, when you pick it up.
 4. **[`running-locally.md`](running-locally.md)** — get the stack running natively (no VM) before you write a line.

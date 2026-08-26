@@ -21,6 +21,24 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-08-26 — The brain's state lives under `state/`, and the specs follow the code
+
+**Previously:** `STORAGE.md` # mount layout put the brain's database at `/var/lib/malmo/brain/state.db`. It put app instances at `/var/lib/malmo/instances/<id>/`, and managed-service data under `/var/lib/malmo/managed-services/`. `THREAT_MODEL.md`, `USERS_AND_GROUPS.md` and `LOCAL_ANALYTICS.md` copied those paths. `LOCAL_ANALYTICS.md` had a third version of its own, `/var/lib/malmo-state/brain.db`. `TELEMETRY.md` and `BOOT.md` wrote into a `/var/lib/malmo-state/` root.
+
+**Now:** the paths in the code stand, and the docs move to match them. The brain writes everything under one folder: `/var/lib/malmo/state/malmo.db` with its `-wal` and `-shm` files, `state/instances/<id>/`, and `state/services/<kind>-<version>/`. There is no `managed-services/` folder and no `/var/lib/malmo-state/` root. Neither was ever created. **No code change and no migration.**
+
+**Why:** `/var/lib/malmo/` holds files from two owners. `control-plane/` and `seed.json` are host-agent's. Everything under `state/` is the brain's. So `state/` is the line between them.
+
+Drop that folder and we have to do one of two bad things. Either point `MALMO_STATE_DIR` at `/var/lib/malmo`, which puts host-agent's files inside the brain's folder. Or teach the brain about two roots.
+
+One folder also keeps the rest cheap. The dev loop is just `.dev/state/`. The brain container takes one mount. And `internal/hostagent/cpupdate` copies one folder to snapshot the brain around an update.
+
+The flat spelling in the specs reads a little better. That is the only point on the other side, and it is not worth a migration on boxes that already run. The specs were the stale side, so the docs follow the code (`CLAUDE.md` # Documentation discipline).
+
+One cost was not cosmetic. `USERS_AND_GROUPS.md` gives a recovery step for a corrupt database, and it named a path the brain never reads. Anyone following it would restore nothing and see no error. That step now names the right path, and says to bring the `-wal` file too. The brain uses WAL mode, so restoring the main file alone gives a working database that is missing its newest writes.
+
+**Affected docs:** `STORAGE.md` (# mount layout, rewritten to the real tree plus the two silent failures), `THREAT_MODEL.md` (asset table), `USERS_AND_GROUPS.md` (recovery step, plus WAL), `LOCAL_ANALYTICS.md`, `TELEMETRY.md`, `BOOT.md` (note: the first-run marker is `box_meta.first_run_complete`, not a `.bootstrapped` file), `APP_LIFECYCLE.md`, `APP_MANIFEST.md`, `APP_ISOLATION.md`, `FILES.md`, `UPDATES.md`, `NEXT.md`, `CLAUDE.md`. Older entries in this log keep the paths they were written with.
+
 ## 2026-08-17 — The box keeps no catalog on disk; only icons and screenshots are cached, for 24 hours
 
 **Previously:** the box was a thin client **with a last-good on-disk cache** (`DECISIONS.md` 2026-07-02). It wrote every verified snapshot to `/var/lib/malmo/catalog-cache/catalog.json` and read it back at boot, so a box that had synced once browsed its last-good catalog forever, online or not. Proxied icons and screenshots were cached next to it with no expiry at all.
