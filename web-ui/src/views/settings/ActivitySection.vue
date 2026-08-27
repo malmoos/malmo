@@ -11,6 +11,7 @@ import { computed } from "vue";
 import { useQuery, useInfiniteQuery } from "@tanstack/vue-query";
 import { api, type AuditEvent, type User } from "@/api";
 import { useAuth } from "@/auth";
+import Button from "@/components/ui/Button.vue";
 
 const { currentUser } = useAuth();
 const isAdmin = computed(() => currentUser.value?.role === "admin");
@@ -149,20 +150,12 @@ function exportJson() {
         {{ isAdmin ? "Everything that happened on this box." : "Your account activity." }}
       </p>
       <div class="flex gap-2">
-        <button
-          class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
-          :disabled="events.length === 0"
-          @click="exportCsv"
-        >
+        <Button variant="secondary" size="sm" :disabled="events.length === 0" @click="exportCsv">
           Export CSV
-        </button>
-        <button
-          class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
-          :disabled="events.length === 0"
-          @click="exportJson"
-        >
+        </Button>
+        <Button variant="secondary" size="sm" :disabled="events.length === 0" @click="exportJson">
           Export JSON
-        </button>
+        </Button>
       </div>
     </div>
 
@@ -205,13 +198,14 @@ function exportJson() {
     </div>
 
     <div v-if="audit.hasNextPage.value" class="flex justify-center">
-      <button
-        class="rounded-lg border border-border px-4 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+      <Button
+        variant="secondary"
+        size="sm"
         :disabled="audit.isFetchingNextPage.value"
         @click="audit.fetchNextPage()"
       >
         {{ audit.isFetchingNextPage.value ? "Loading…" : "Load more" }}
-      </button>
+      </Button>
     </div>
   </div>
 </template>
