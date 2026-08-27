@@ -2711,6 +2711,25 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       summary: List provider picker options — id and label only (any authenticated user)
+  /api/v1/mail-providers/verify:
+    post:
+      operationId: verify-mail-provider-config
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MailProviderBody"
+        required: true
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Check an unsaved provider config by connecting and authenticating (admin only)
   /api/v1/mail-providers/{id}:
     delete:
       operationId: delete-mail-provider

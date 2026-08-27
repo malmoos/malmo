@@ -54,6 +54,11 @@ func (s *Server) registerMail(api huma.API) {
 	}, s.deleteMailProvider)
 
 	huma.Register(api, huma.Operation{
+		OperationID: "verify-mail-provider-config", Method: "POST", Path: "/api/v1/mail-providers/verify",
+		Summary: "Check an unsaved provider config by connecting and authenticating (admin only)", DefaultStatus: 204,
+	}, s.verifyMailProviderConfig)
+
+	huma.Register(api, huma.Operation{
 		OperationID: "test-mail-provider", Method: "POST", Path: "/api/v1/mail-providers/{id}/test",
 		Summary: "Send a test email through a provider (admin only)", DefaultStatus: 204,
 	}, s.testMailProvider)
@@ -386,6 +391,38 @@ func (s *Server) deleteMailProvider(ctx context.Context, in *struct {
 	return nil, nil
 }
 
+// verifyMailProviderConfig checks a config the admin has not saved yet, so a
+// provider that cannot connect is never created in the first place. It takes
+// the same body as create rather than an id for exactly that reason.
+//
+// Admin-only but not elevation-class: it stores nothing and sends nothing. It
+// does not audit for the same reason — nothing is mutated and no mail leaves
+// the box, which is what separates it from the test-send next door
+// (CLAUDE.md: pure reads don't audit).
+func (s *Server) verifyMailProviderConfig(ctx context.Context, in *struct {
+	Body MailProviderBody
+}) (*struct{}, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	if err := validateMailProviderBody(&in.Body); err != nil {
+		return nil, err
+	}
+
+	p := store.MailProvider{
+		Label: in.Body.Label, Host: in.Body.Host, Port: in.Body.Port,
+		Username: in.Body.Username, Password: in.Body.Password,
+		FromAddress: in.Body.FromAddress, Encryption: in.Body.Encryption,
+		ProviderType: in.Body.ProviderType,
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, testMailTimeout)
+	defer cancel()
+	if err := verifyMailConfig(checkCtx, p); err != nil {
+		return nil, huma.Error502BadGateway(fmt.Sprintf("could not connect: %v%s", err, blockedPortHint(s.profile, p, err)))
+	}
+	return nil, nil
+}
+
 func (s *Server) testMailProvider(ctx context.Context, in *struct {
 	ID   string `path:"id"`
 	Body struct {
@@ -474,7 +511,10 @@ func (s *Server) setAppMailBinding(ctx context.Context, in *struct {
 // (CLAUDE.md: typed errors at boundaries, not everywhere).
 type dialError struct{ err error }
 
-func (e *dialError) Error() string { return "connect: " + e.err.Error() }
+// No "connect:" prefix — the type carries that meaning now, and both callers
+// already say it in their own words. Prefixing here produced "could not
+// connect: connect: dial tcp ...".
+func (e *dialError) Error() string { return e.err.Error() }
 func (e *dialError) Unwrap() error { return e.err }
 
 // blockedPortHint names the likely cause when a hosted box fails to connect on
@@ -502,7 +542,14 @@ func blockedPortHint(prof profile.Profile, p store.MailProvider, err error) stri
 // sendTestMail dials the provider and delivers a short test message to `to`,
 // exercising exactly what a bound app would use: TCP (or implicit TLS) to
 // host:port, optional STARTTLS, optional AUTH PLAIN, then one DATA round trip.
-func sendTestMail(ctx context.Context, p store.MailProvider, to string) error {
+// connectMail dials the provider and gets as far as an authenticated session:
+// TCP (or implicit TLS), optional STARTTLS, optional AUTH PLAIN. Everything a
+// provider can be misconfigured about — wrong host, blocked port, wrong
+// encryption mode, bad credentials — fails here, which is why the pre-save
+// check and the test-send share it rather than approximating each other.
+//
+// The caller closes the returned client. The connection is closed with it.
+func connectMail(ctx context.Context, p store.MailProvider) (*smtp.Client, error) {
 	addr := net.JoinHostPort(p.Host, strconv.Itoa(p.Port))
 	var conn net.Conn
 	var err error
@@ -513,9 +560,8 @@ func sendTestMail(ctx context.Context, p store.MailProvider, to string) error {
 		conn, err = dialer.DialContext(ctx, "tcp", addr)
 	}
 	if err != nil {
-		return &dialError{err}
+		return nil, &dialError{err}
 	}
-	defer conn.Close()
 	// The smtp.Client has no context support; the connection deadline bounds
 	// every subsequent command instead.
 	if dl, ok := ctx.Deadline(); ok {
@@ -524,19 +570,45 @@ func sendTestMail(ctx context.Context, p store.MailProvider, to string) error {
 
 	c, err := smtp.NewClient(conn, p.Host)
 	if err != nil {
-		return fmt.Errorf("handshake: %w", err)
+		conn.Close()
+		return nil, fmt.Errorf("handshake: %w", err)
 	}
-	defer c.Close()
 	if p.Encryption == store.MailEncryptionSTARTTLS {
 		if err := c.StartTLS(&tls.Config{ServerName: p.Host}); err != nil {
-			return fmt.Errorf("starttls: %w", err)
+			c.Close()
+			return nil, fmt.Errorf("starttls: %w", err)
 		}
 	}
 	if p.Username != "" {
 		if err := c.Auth(smtp.PlainAuth("", p.Username, p.Password, p.Host)); err != nil {
-			return fmt.Errorf("auth: %w", err)
+			c.Close()
+			return nil, fmt.Errorf("auth: %w", err)
 		}
 	}
+	return c, nil
+}
+
+// verifyMailConfig checks a provider end to end short of delivering anything:
+// it connects and authenticates, then hangs up. This is what the "Test
+// configuration" checkbox on the add form runs, and it deliberately sends no
+// message — the admin is validating settings, not mailing someone. The
+// test-send on a saved provider stays the stronger check, since only a
+// delivered message proves the from address is one the provider will accept.
+func verifyMailConfig(ctx context.Context, p store.MailProvider) error {
+	c, err := connectMail(ctx, p)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	return c.Quit()
+}
+
+func sendTestMail(ctx context.Context, p store.MailProvider, to string) error {
+	c, err := connectMail(ctx, p)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
 	if err := c.Mail(p.FromAddress); err != nil {
 		return fmt.Errorf("mail from: %w", err)
 	}

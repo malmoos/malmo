@@ -53,6 +53,32 @@ Logos are bundled, not fetched: a box may have no internet, and the dashboard mu
 
 Styling follows the repo's own idioms rather than new ad-hoc classes: the shared `<Button>` component for every action, and the labelled-stack field pattern (`fieldClass`, label, hint) lifted from `CustomInstallView`. The **Advanced settings** disclosure is now **Server settings**, which says what is inside it.
 
+## Adding an account is two routes, not two states
+
+The picker and the form were local state on one page, so the browser Back button did nothing where it looked like it should. They are now real URLs:
+
+```
+/settings/mail            the account list
+/settings/mail/add        pick a provider
+/settings/mail/add/:preset   fill in what that preset cannot know
+```
+
+Back walks form → picker → list, and a preset form can be linked or reloaded. The picked preset is read from the route rather than held in a ref — that is what makes Back work, not a listener bolted onto it. The **field values are deliberately not in the URL**: a credential must never land in browser history, so a reload re-seeds the form from the preset. A `:preset` that names nothing (a stale link, or a preset we withdraw later) replaces itself with the picker instead of rendering an empty form.
+
+Editing stays inline on its row. No navigation happens there, so there is no Back to get wrong.
+
+The split put the form rules in one place, `src/mailProviderForm.ts` — the shape, the preset seeding, the region→host resolution, the `same_as_password` pairing, the port warning. The add form and the inline edit form have to agree field for field, and they now do so by construction rather than by two copies staying in step.
+
+## Checking a config before it is saved
+
+`POST /api/v1/mail-providers/verify` takes the same body as create rather than an id, and that is the point: it runs before the provider exists, so a config that cannot connect never becomes an account the admin has to find and delete. It connects, does STARTTLS, authenticates, and hangs up. The add form runs it by default, behind a "Test configuration when adding" checkbox, and runs it *before* the elevation prompt — no point asking for a password to save settings that do not work.
+
+It shares the dial-and-auth path with the test-send (`connectMail`) rather than approximating it, so the check cannot drift from what a real send does; it simply stops before `MAIL FROM`. That is also its limit, stated in the code: it cannot prove the provider will accept the **from address**, because most providers only judge that at `MAIL FROM` or at queue time. The per-row test-send stays the stronger check for exactly that reason.
+
+Sending the check mail to a malmo-owned address was considered and rejected. A new Amazon SES account is in sandbox mode and may only send to verified addresses, as is a free Mailgun domain — so a fixed external recipient would fail for the very admins whose config is fine. It would also spend the user's sender reputation on our test (a hard bounce counts against SES's 5% ceiling) and would put malmo in the business of receiving mail, which this doc rules out.
+
+Not audited, and admin-only rather than elevation-class: it stores nothing and sends nothing.
+
 ## Known gaps
 
 - **No live test-send was performed against any provider.** That is the issue's real acceptance gate — a *username* rule can be wrong in a way neither a unit test nor the connectivity probe sees — and it needs a provisioned hosted box plus a real account at each provider. The hosts and ports are now verified live (above); the username rules are verified against current vendor docs and nothing more. The three worth an account are SendGrid (the fixed `apikey`), Brevo (the `xxx@smtp-brevo.com` login, the correction most likely to be wrong) and Postmark (`same_as_password`, the only structurally unusual mode).

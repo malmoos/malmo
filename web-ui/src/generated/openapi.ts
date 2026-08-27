@@ -501,6 +501,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/mail-providers/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check an unsaved provider config by connecting and authenticating (admin only) */
+        post: operations["verify-mail-provider-config"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/mail-providers/{id}": {
         parameters: {
             query?: never;
@@ -2858,6 +2875,37 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["List-mail-provider-optionsResponse"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "verify-mail-provider-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailProviderBody"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

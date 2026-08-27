@@ -5,25 +5,29 @@
 // from their detail page); the brain injects the credentials as MALMO_MAIL_*
 // env vars.
 //
-// Adding an account is two steps: pick a provider from the grid, then fill in
-// only what the preset cannot know — the credential, the from address, a
-// username when the provider does not fix one, and a region for the two
-// providers whose region changes the host. Host, port and encryption are
-// prefilled and live behind an Advanced disclosure, so a non-standard endpoint
-// is never trapped. "Custom SMTP server" is the old seven-field form: the same
-// disclosure, open, with nothing prefilled.
+// This view is the account list. Adding one lives on its own two routes
+// (OutgoingEmailAddSection, /settings/mail/add) so the picker and the form are
+// real pages with working Back. Editing stays inline on the row it belongs to:
+// no navigation happens, so there is no Back to get wrong.
 //
 // Mirrors UsersSection: admin redirect as defence in depth, every mutation
 // wrapped in withElevation, guard rejections surface as inline errors. The
 // test-send is the one non-elevated action (it changes nothing).
 import { ref, computed, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRouter, RouterLink } from "vue-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/vue-query";
-import { api, ApiError, type MailProvider, type MailPreset } from "@/api";
+import { Plus } from "lucide-vue-next";
+import { api, type MailProvider } from "@/api";
 import { withElevation } from "@/elevate";
-import { useAuth, isHosted } from "@/auth";
+import { useAuth } from "@/auth";
 import Button from "@/components/ui/Button.vue";
 import MailProviderLogo from "@/components/MailProviderLogo.vue";
+import paperAirplane from "@/assets/paper-airplane.png";
+import {
+  useMailPresets, emptyForm, syncSameAsPassword, formValid, portWarning,
+  bodyOf, errorMessage, fieldClass,
+  type ProviderForm,
+} from "@/mailProviderForm";
 
 const router = useRouter();
 const qc = useQueryClient();
@@ -38,150 +42,21 @@ watch(
   { immediate: true },
 );
 
-// ── provider list + presets ─────────────────────────────────────────────────────
+// ── provider list ───────────────────────────────────────────────────────────────
 const providers = useQuery({
   queryKey: ["mail-providers"],
   queryFn: () => api.get<{ providers: MailProvider[] }>("/mail-providers"),
 });
 
-// The preset table is static server-side data, so it never needs refetching
-// within a session.
-const presets = useQuery({
-  queryKey: ["mail-presets"],
-  queryFn: () => api.get<{ presets: MailPreset[] }>("/mail-presets"),
-  staleTime: Infinity,
-});
+// The empty state replaces the list entirely, so both the header and the list
+// branch on it.
+const providerList = computed(() => providers.data.value?.providers ?? []);
+const isEmpty = computed(() => !providers.isLoading.value && providerList.value.length === 0);
 
+// Presets back the inline edit form: they decide the credential label and which
+// username field is shown for a typed provider.
+const presets = useMailPresets();
 const presetList = computed(() => presets.data.value?.presets ?? []);
-function presetById(id: string): MailPreset | undefined {
-  return presetList.value.find((p) => p.id === id);
-}
-
-// ── shared form shape (create + edit) ───────────────────────────────────────────
-type ProviderForm = {
-  label: string;
-  host: string;
-  port: number;
-  username: string;
-  password: string;
-  from_address: string;
-  encryption: "none" | "starttls" | "tls";
-  provider_type: string;
-  region: string;
-};
-
-function emptyForm(): ProviderForm {
-  return {
-    label: "", host: "", port: 587, username: "", password: "",
-    from_address: "", encryption: "starttls", provider_type: "custom", region: "",
-  };
-}
-
-// formFromPreset seeds a blank form from the preset the admin picked. The label
-// defaults to the provider name so it stops being a field they must invent; a
-// duplicate surfaces the existing 409.
-function formFromPreset(p: MailPreset): ProviderForm {
-  const f = emptyForm();
-  f.provider_type = p.id;
-  f.label = p.id === "custom" ? "" : p.label;
-  f.port = p.port;
-  f.encryption = p.encryption as ProviderForm["encryption"];
-  f.region = p.region?.default ?? "";
-  f.host = hostFor(p, f.region);
-  if (p.username_mode === "fixed") f.username = p.username_fixed;
-  else if (p.username_mode === "user") f.username = p.username_prefill ?? "";
-  return f;
-}
-
-// hostFor resolves the SMTP host for a preset: the static one, or the host the
-// chosen region option names (SES and Mailgun are the only two, and Mailgun's
-// EU host is a prefix rather than a region code — hence a host per option).
-function hostFor(p: MailPreset, region: string): string {
-  if (!p.region) return p.host;
-  const opts = p.region.options ?? [];
-  const opt = opts.find((o) => o.value === region) ?? opts[0];
-  return opt?.host ?? "";
-}
-
-// Postmark wants the same server token as username and password, so the form
-// keeps the two in step and shows one field.
-//
-// A blank password is never copied across. On edit it means "keep the stored
-// credential", so the paired username has to be kept too — copying the empty
-// value over it would wipe the stored username while leaving the password
-// intact, and the account would fail AUTH on its next send with nothing in the
-// UI to say why.
-function syncSameAsPassword(f: ProviderForm, p: MailPreset | undefined) {
-  if (p?.username_mode === "same_as_password" && f.password !== "") f.username = f.password;
-}
-
-function onRegionChange(f: ProviderForm) {
-  const p = presetById(f.provider_type);
-  if (p) f.host = hostFor(p, f.region);
-}
-
-function formValid(f: ProviderForm): boolean {
-  return !!f.label.trim() && !!f.host.trim() && f.port >= 1 && f.port <= 65535 && f.from_address.includes("@");
-}
-
-// A hosted box reaches 587 and 2525 only — 25 and 465 get no SYN-ACK, so a
-// provider saved on implicit TLS never delivers (SERVICE_PROVISIONING.md # BYO
-// outgoing mail). Warn rather than forbid: an appliance on a home LAN reaches
-// 465 fine, and some providers prefer it.
-function portWarning(f: ProviderForm): string {
-  if (!isHosted()) return "";
-  if (f.port !== 25 && f.port !== 465) return "";
-  return `This box cannot reach port ${f.port}. Use port 587 with STARTTLS — every provider in the list supports it.`;
-}
-
-function errorMessage(e: unknown): string {
-  // A dismissed elevation prompt is a deliberate no-op, not a failure.
-  if (e instanceof ApiError && e.code === "elevation_cancelled") return "";
-  return e instanceof ApiError ? e.message : "Something went wrong.";
-}
-
-// ── create ───────────────────────────────────────────────────────────────────────
-// pickedPreset is null while the grid is showing; picking one opens the form.
-const pickedPreset = ref<MailPreset | null>(null);
-const newForm = ref<ProviderForm>(emptyForm());
-const newAdvancedOpen = ref(false);
-const createError = ref<string | null>(null);
-
-function pickPreset(p: MailPreset) {
-  pickedPreset.value = p;
-  newForm.value = formFromPreset(p);
-  // Custom is the old form: no preset values to hide, so open the disclosure.
-  newAdvancedOpen.value = p.id === "custom";
-  createError.value = null;
-}
-
-function cancelPick() {
-  pickedPreset.value = null;
-  newForm.value = emptyForm();
-  createError.value = null;
-}
-
-const create = useMutation({
-  mutationFn: () => {
-    syncSameAsPassword(newForm.value, pickedPreset.value ?? undefined);
-    return withElevation(() => api.post<MailProvider>("/mail-providers", bodyOf(newForm.value)));
-  },
-  onSuccess: () => {
-    cancelPick();
-    qc.invalidateQueries({ queryKey: ["mail-providers"] });
-  },
-  onError: (e) => {
-    createError.value = errorMessage(e);
-  },
-});
-
-// bodyOf drops the UI-only region field: the brain stores the resolved host, not
-// the region that produced it (the server never re-derives host from a preset,
-// so an advanced override survives — DECISIONS.md 2026-08-27 D3).
-function bodyOf(f: ProviderForm) {
-  const { region: _region, ...body } = f;
-  return body;
-}
 
 // ── per-row state ────────────────────────────────────────────────────────────────
 // Only one expanded panel (edit / test / delete-confirm) per row at a time.
@@ -194,7 +69,7 @@ const testSent = ref<Record<string, string>>({}); // id → "sent to <addr>" con
 const confirmDeleteFor = ref<string | null>(null);
 const rowError = ref<Record<string, string>>({});
 
-const editPreset = computed(() => presetById(editForm.value.provider_type));
+const editPreset = computed(() => presetList.value.find((p) => p.id === editForm.value.provider_type));
 
 function clearRowError(id: string) {
   const next = { ...rowError.value };
@@ -273,13 +148,8 @@ const sendTest = useMutation({
   onError: (e, { id }) => setRowError(id, e),
 });
 
-// One field idiom for the whole section, matching CustomInstallView: a labelled
-// stack, one field per line, inset fill on the card with an olive focus ring.
-const fieldClass =
-  "w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-accent";
-
-// Every input is labelled, so each needs an id unique across the create form and
-// any open edit row.
+// Every input is labelled, so each needs an id unique across whichever rows are
+// open at once.
 function fid(form: "new" | "edit", name: string, rowID = ""): string {
   return `mail-${form}-${name}${rowID ? `-${rowID}` : ""}`;
 }
@@ -287,222 +157,59 @@ function fid(form: "new" | "edit", name: string, rowID = ""): string {
 
 <template>
   <div class="space-y-6">
-    <!-- Add provider -->
+    <!-- Header: the account list is the section; adding lives on its own route. -->
     <section class="space-y-3">
       <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Outgoing email</h2>
       <p class="text-sm text-muted-foreground">
         Add an email account your apps can send from — password resets, reminders, invites. Apps choose an account when you install them.
       </p>
+      <!-- With no accounts the call to action is the empty state below, so the
+           header does not repeat it. -->
+      <RouterLink v-if="!isEmpty" to="/settings/mail/add">
+        <Button>
+          <Plus class="size-4" /> Add account
+        </Button>
+      </RouterLink>
+    </section>
 
-      <!-- Step 1: pick a provider. Each card is a real button — logo, name, and a
-           visible hover / focus / active state, so it reads as clickable. -->
-      <div v-if="!pickedPreset" class="space-y-3 rounded-2xl border border-border bg-card p-5 sm:p-6">
-        <h3 class="text-sm font-semibold text-foreground">Who sends your email?</h3>
-        <p class="text-xs text-muted-foreground">
-          Pick your provider and malmo fills in the server settings for you.
+    <!-- Empty state: the whole main area, with the airplane sitting in the
+         bottom-right corner behind it. A positioned <img> rather than a CSS
+         background so its opacity can drop without fading the text on top. -->
+    <section v-if="isEmpty" class="relative flex min-h-[24rem] items-center justify-center overflow-hidden rounded-2xl border border-border bg-card px-6 py-12">
+      <img
+        :src="paperAirplane"
+        alt=""
+        aria-hidden="true"
+        class="pointer-events-none absolute bottom-0 right-0 w-[30%] opacity-50"
+      />
+      <div class="relative text-center">
+        <h3 class="text-sm font-semibold text-foreground">No email accounts</h3>
+        <p class="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
+          Add the account your apps will send from, and they can start sending password resets, reminders and invites.
         </p>
-        <p v-if="presets.isLoading.value" class="text-sm text-muted-foreground">Loading…</p>
-        <div v-else class="grid gap-3 sm:grid-cols-3">
-          <button
-            v-for="p in presetList"
-            :key="p.id"
-            type="button"
-            class="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-border bg-background px-3 py-5 text-center transition-colors hover:border-accent hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-card active:scale-[0.98]"
-            @click="pickPreset(p)"
-          >
-            <MailProviderLogo :id="p.id" :label="p.label" />
-            <span class="text-sm font-medium text-foreground">{{ p.label }}</span>
-          </button>
-        </div>
-      </div>
-
-      <!-- Step 2: fill in what the preset cannot know. One field per line, each
-           with its own label and, where the name alone is not enough, a hint. -->
-      <div v-else class="space-y-4 rounded-2xl border border-border bg-card p-5 sm:p-6">
-        <div class="flex items-center justify-between gap-3">
-          <div class="flex items-center gap-2.5">
-            <MailProviderLogo :id="pickedPreset.id" :label="pickedPreset.label" />
-            <h3 class="text-sm font-semibold text-foreground">{{ pickedPreset.label }}</h3>
-          </div>
-          <Button variant="ghost" size="sm" @click="cancelPick">Change provider</Button>
-        </div>
-
-        <p class="text-xs text-muted-foreground">
-          {{ pickedPreset.help }}
-          <a
-            v-if="pickedPreset.docs_url"
-            :href="pickedPreset.docs_url"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="underline"
-          >Provider docs</a>
-        </p>
-
-        <!-- Account name. This was the confusing first field: it is malmo's own
-             label for the account, not anything the provider knows about. -->
-        <div class="space-y-1.5">
-          <label class="text-sm font-medium" :for="fid('new', 'label')">Account name</label>
-          <input
-            :id="fid('new', 'label')"
-            v-model="newForm.label"
-            :class="fieldClass"
-            autocomplete="off"
-          />
-          <p class="text-xs text-muted-foreground">
-            What you'll see when an app asks which account to send from. Only you see this.
-          </p>
-        </div>
-
-        <div class="space-y-1.5">
-          <label class="text-sm font-medium" :for="fid('new', 'from')">From address</label>
-          <input
-            :id="fid('new', 'from')"
-            v-model="newForm.from_address"
-            type="email"
-            placeholder="hello@example.com"
-            :class="fieldClass"
-            autocomplete="off"
-          />
-          <p class="text-xs text-muted-foreground">
-            The address your apps' email will come from. Your provider has to allow it.
-          </p>
-        </div>
-
-        <!-- Region: only the presets whose region changes the host carry one. -->
-        <div v-if="pickedPreset.region" class="space-y-1.5">
-          <label class="text-sm font-medium" :for="fid('new', 'region')">
-            {{ pickedPreset.region.label }}
-          </label>
-          <select
-            :id="fid('new', 'region')"
-            v-model="newForm.region"
-            :class="fieldClass"
-            @change="onRegionChange(newForm)"
-          >
-            <option v-for="o in (pickedPreset.region.options ?? [])" :key="o.value" :value="o.value">
-              {{ o.label }}
-            </option>
-          </select>
-          <p class="text-xs text-muted-foreground">
-            Pick the region your account is in — it decides which server malmo connects to.
-          </p>
-        </div>
-
-        <!-- Username: hidden when the provider fixes it or reuses the credential. -->
-        <div v-if="pickedPreset.username_mode === 'user'" class="space-y-1.5">
-          <label class="text-sm font-medium" :for="fid('new', 'username')">Username</label>
-          <input
-            :id="fid('new', 'username')"
-            v-model="newForm.username"
-            :class="fieldClass"
-            autocomplete="off"
-          />
-        </div>
-
-        <div class="space-y-1.5">
-          <label class="text-sm font-medium" :for="fid('new', 'password')">
-            {{ pickedPreset.credential_label }}
-          </label>
-          <input
-            :id="fid('new', 'password')"
-            v-model="newForm.password"
-            type="password"
-            :class="fieldClass"
-            autocomplete="new-password"
-          />
-        </div>
-
-        <!-- Advanced: prefilled and editable, so a non-standard endpoint is never trapped.
-             :open is a one-way binding read at mount only. That holds because this
-             block is v-if-gated and remounts whenever the picked preset changes; a
-             later feature that needs to force the disclosure open after mount must
-             not reuse this binding, because Vue will not notice the user having
-             toggled the native element underneath it. -->
-        <details class="rounded-xl border border-border px-3 py-2" :open="newAdvancedOpen">
-          <summary class="cursor-pointer text-sm font-medium text-muted-foreground">Server settings</summary>
-          <div class="mt-3 space-y-4">
-            <p class="text-xs text-muted-foreground">
-              Filled in for you. Change these only if your provider gave you different values.
-            </p>
-            <div class="space-y-1.5">
-              <label class="text-sm font-medium" :for="fid('new', 'host')">SMTP server</label>
-              <input
-                :id="fid('new', 'host')"
-                v-model="newForm.host"
-                placeholder="smtp.example.com"
-                :class="fieldClass"
-                autocomplete="off"
-              />
-            </div>
-            <div class="space-y-1.5">
-              <label class="text-sm font-medium" :for="fid('new', 'port')">Port</label>
-              <input
-                :id="fid('new', 'port')"
-                v-model.number="newForm.port"
-                type="number"
-                min="1"
-                max="65535"
-                :class="fieldClass"
-              />
-            </div>
-            <div class="space-y-1.5">
-              <label class="text-sm font-medium" :for="fid('new', 'encryption')">Encryption</label>
-              <select :id="fid('new', 'encryption')" v-model="newForm.encryption" :class="fieldClass">
-                <option value="starttls">STARTTLS (usually port 587)</option>
-                <option value="tls">TLS (usually port 465)</option>
-                <option value="none">No encryption</option>
-              </select>
-            </div>
-            <div v-if="pickedPreset.username_mode !== 'user'" class="space-y-1.5">
-              <label class="text-sm font-medium" :for="fid('new', 'adv-username')">Username</label>
-              <input
-                :id="fid('new', 'adv-username')"
-                v-model="newForm.username"
-                :class="fieldClass"
-                autocomplete="off"
-              />
-              <p class="text-xs text-muted-foreground">
-                {{ pickedPreset.username_mode === "fixed"
-                  ? `${pickedPreset.label} requires this exact value.`
-                  : `${pickedPreset.label} uses the same value as the ${pickedPreset.credential_label.toLowerCase()}.` }}
-              </p>
-            </div>
-          </div>
-        </details>
-
-        <p v-if="portWarning(newForm)" class="text-xs text-destructive">{{ portWarning(newForm) }}</p>
-
-        <div class="flex items-center gap-3">
-          <Button
-            :disabled="create.isPending.value || !formValid(newForm)"
-            @click="create.mutate()"
-          >
-            {{ create.isPending.value ? "Adding…" : "Add account" }}
-          </Button>
-          <p v-if="createError" class="text-xs text-destructive">{{ createError }}</p>
+        <div class="mt-6">
+          <RouterLink to="/settings/mail/add">
+            <Button>
+              <Plus class="size-4" /> Add account
+            </Button>
+          </RouterLink>
         </div>
       </div>
     </section>
 
     <!-- Provider list -->
-    <section class="space-y-3">
+    <section v-else class="space-y-3">
       <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Email accounts</h2>
       <p v-if="providers.isLoading.value" class="text-sm text-muted-foreground">Loading…</p>
-      <p
-        v-else-if="(providers.data.value?.providers ?? []).length === 0"
-        class="text-sm text-muted-foreground"
-      >
-        No email accounts yet.
-      </p>
       <ul v-else class="space-y-2">
         <li
-          v-for="p in (providers.data.value?.providers ?? [])"
+          v-for="p in providerList"
           :key="p.id"
           class="space-y-3 rounded-2xl border border-border bg-card p-5 sm:p-6"
         >
           <!-- Main row -->
           <div class="flex flex-wrap items-center gap-3">
-            <MailProviderLogo :id="p.provider_type" :label="p.provider_label" />
+            <MailProviderLogo :id="p.provider_type" :label="p.provider_label" size="inline" />
             <div class="min-w-0 flex-1">
               <div class="text-sm font-medium">{{ p.label }}</div>
               <!-- The provider name reads better than the raw host; a hand-typed

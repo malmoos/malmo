@@ -792,3 +792,85 @@ func TestSendTestMailReportsDialFailuresAsDialError(t *testing.T) {
 		t.Fatalf("dial failure = %T (%v); want *dialError, which blockedPortHint keys off", err, err)
 	}
 }
+
+// --- pre-save config check -------------------------------------------------
+
+func TestVerifyMailProviderConfigConnectsWithoutSending(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+	sink := startSMTPSink(t)
+	host, portStr, _ := net.SplitHostPort(sink.addr)
+	port, _ := strconv.Atoi(portStr)
+
+	resp := h.do("POST", "/api/v1/mail-providers/verify", map[string]any{
+		"label": "sink", "host": host, "port": port,
+		"from_address": "malmo@example.com", "encryption": "none",
+	})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("verify = %d; want 204", resp.StatusCode)
+	}
+
+	// The whole point of the check: it proves the connection without mailing
+	// anyone, so the sink must have taken no message.
+	sink.mu.Lock()
+	from, rcpt, data := sink.from, sink.rcpt, sink.data
+	sink.mu.Unlock()
+	if from != "" || rcpt != "" || data != "" {
+		t.Fatalf("verify delivered a message: from=%q rcpt=%q data=%q", from, rcpt, data)
+	}
+
+	// It stores nothing either — a config that checks out is still not an account.
+	list, err := h.st.ListMailProviders()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("verify created %d providers; want 0", len(list))
+	}
+}
+
+func TestVerifyMailProviderConfigUnreachable502(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+	// A port that was just listening and is now closed: connect refuses fast.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	ln.Close()
+	port, _ := strconv.Atoi(portStr)
+
+	resp := h.do("POST", "/api/v1/mail-providers/verify", map[string]any{
+		"label": "dead", "host": host, "port": port,
+		"from_address": "malmo@example.com", "encryption": "none",
+	})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("verify against a closed port = %d; want 502", resp.StatusCode)
+	}
+}
+
+func TestVerifyMailProviderConfigGuards(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+
+	// Same validation as create — a bad body is a 422, not a dial attempt.
+	bad := providerBody("v")
+	bad["from_address"] = "not-an-email"
+	resp := h.do("POST", "/api/v1/mail-providers/verify", bad)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid body = %d; want 422", resp.StatusCode)
+	}
+
+	// Admin-only: a member cannot register a provider, so cannot probe with one.
+	h.addMember("u_bob", "bob", "bobpass")
+	h.loginAs("bob", "bobpass")
+	resp = h.do("POST", "/api/v1/mail-providers/verify", providerBody("v"))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("member verify = %d; want 403", resp.StatusCode)
+	}
+}
