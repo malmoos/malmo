@@ -22,6 +22,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/vue-query";
 import { api, ApiError, type MailProvider, type MailPreset } from "@/api";
 import { withElevation } from "@/elevate";
 import { useAuth, isHosted } from "@/auth";
+import Button from "@/components/ui/Button.vue";
+import MailProviderLogo from "@/components/MailProviderLogo.vue";
 
 const router = useRouter();
 const qc = useQueryClient();
@@ -271,8 +273,16 @@ const sendTest = useMutation({
   onError: (e, { id }) => setRowError(id, e),
 });
 
-const inputClass =
-  "rounded-lg border border-border bg-background px-3 py-1.5 text-sm outline-none focus:border-accent";
+// One field idiom for the whole section, matching CustomInstallView: a labelled
+// stack, one field per line, inset fill on the card with an olive focus ring.
+const fieldClass =
+  "w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-accent";
+
+// Every input is labelled, so each needs an id unique across the create form and
+// any open edit row.
+function fid(form: "new" | "edit", name: string, rowID = ""): string {
+  return `mail-${form}-${name}${rowID ? `-${rowID}` : ""}`;
+}
 </script>
 
 <template>
@@ -284,29 +294,37 @@ const inputClass =
         Add an email account your apps can send from — password resets, reminders, invites. Apps choose an account when you install them.
       </p>
 
-      <!-- Step 1: pick a provider -->
-      <div v-if="!pickedPreset" class="rounded-xl border border-border bg-card px-4 py-3 space-y-3">
-        <p class="text-sm">Who sends your email?</p>
+      <!-- Step 1: pick a provider. Each card is a real button — logo, name, and a
+           visible hover / focus / active state, so it reads as clickable. -->
+      <div v-if="!pickedPreset" class="space-y-3 rounded-2xl border border-border bg-card p-5 sm:p-6">
+        <h3 class="text-sm font-semibold text-foreground">Who sends your email?</h3>
+        <p class="text-xs text-muted-foreground">
+          Pick your provider and malmo fills in the server settings for you.
+        </p>
         <p v-if="presets.isLoading.value" class="text-sm text-muted-foreground">Loading…</p>
-        <div v-else class="grid gap-2 sm:grid-cols-3">
+        <div v-else class="grid gap-3 sm:grid-cols-3">
           <button
             v-for="p in presetList"
             :key="p.id"
-            class="rounded-lg border border-border px-3 py-2 text-left text-sm hover:bg-muted"
+            type="button"
+            class="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-border bg-background px-3 py-5 text-center transition-colors hover:border-accent hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-card active:scale-[0.98]"
             @click="pickPreset(p)"
           >
-            {{ p.label }}
+            <MailProviderLogo :id="p.id" :label="p.label" />
+            <span class="text-sm font-medium text-foreground">{{ p.label }}</span>
           </button>
         </div>
       </div>
 
-      <!-- Step 2: fill in what the preset cannot know -->
-      <div v-else class="rounded-xl border border-border bg-card px-4 py-3 space-y-3">
+      <!-- Step 2: fill in what the preset cannot know. One field per line, each
+           with its own label and, where the name alone is not enough, a hint. -->
+      <div v-else class="space-y-4 rounded-2xl border border-border bg-card p-5 sm:p-6">
         <div class="flex items-center justify-between gap-3">
-          <h3 class="text-sm font-medium">{{ pickedPreset.label }}</h3>
-          <button class="text-xs text-muted-foreground hover:underline" @click="cancelPick">
-            Choose a different provider
-          </button>
+          <div class="flex items-center gap-2.5">
+            <MailProviderLogo :id="pickedPreset.id" :label="pickedPreset.label" />
+            <h3 class="text-sm font-semibold text-foreground">{{ pickedPreset.label }}</h3>
+          </div>
+          <Button variant="ghost" size="sm" @click="cancelPick">Change provider</Button>
         </div>
 
         <p class="text-xs text-muted-foreground">
@@ -320,41 +338,76 @@ const inputClass =
           >Provider docs</a>
         </p>
 
-        <div class="grid gap-2 sm:grid-cols-2">
-          <input v-model="newForm.label" placeholder="Name" :class="inputClass" autocomplete="off" />
+        <!-- Account name. This was the confusing first field: it is malmo's own
+             label for the account, not anything the provider knows about. -->
+        <div class="space-y-1.5">
+          <label class="text-sm font-medium" :for="fid('new', 'label')">Account name</label>
           <input
-            v-model="newForm.from_address"
-            placeholder="From address (e.g. box@example.com)"
-            :class="inputClass"
+            :id="fid('new', 'label')"
+            v-model="newForm.label"
+            :class="fieldClass"
             autocomplete="off"
           />
+          <p class="text-xs text-muted-foreground">
+            What you'll see when an app asks which account to send from. Only you see this.
+          </p>
+        </div>
 
-          <!-- Region: only the presets whose region changes the host carry one. -->
+        <div class="space-y-1.5">
+          <label class="text-sm font-medium" :for="fid('new', 'from')">From address</label>
+          <input
+            :id="fid('new', 'from')"
+            v-model="newForm.from_address"
+            type="email"
+            placeholder="hello@example.com"
+            :class="fieldClass"
+            autocomplete="off"
+          />
+          <p class="text-xs text-muted-foreground">
+            The address your apps' email will come from. Your provider has to allow it.
+          </p>
+        </div>
+
+        <!-- Region: only the presets whose region changes the host carry one. -->
+        <div v-if="pickedPreset.region" class="space-y-1.5">
+          <label class="text-sm font-medium" :for="fid('new', 'region')">
+            {{ pickedPreset.region.label }}
+          </label>
           <select
-            v-if="pickedPreset.region"
+            :id="fid('new', 'region')"
             v-model="newForm.region"
-            :class="inputClass"
+            :class="fieldClass"
             @change="onRegionChange(newForm)"
           >
             <option v-for="o in (pickedPreset.region.options ?? [])" :key="o.value" :value="o.value">
-              {{ pickedPreset.region.label }}: {{ o.label }}
+              {{ o.label }}
             </option>
           </select>
+          <p class="text-xs text-muted-foreground">
+            Pick the region your account is in — it decides which server malmo connects to.
+          </p>
+        </div>
 
-          <!-- Username: hidden when the provider fixes it or reuses the credential. -->
+        <!-- Username: hidden when the provider fixes it or reuses the credential. -->
+        <div v-if="pickedPreset.username_mode === 'user'" class="space-y-1.5">
+          <label class="text-sm font-medium" :for="fid('new', 'username')">Username</label>
           <input
-            v-if="pickedPreset.username_mode === 'user'"
+            :id="fid('new', 'username')"
             v-model="newForm.username"
-            placeholder="Username"
-            :class="inputClass"
+            :class="fieldClass"
             autocomplete="off"
           />
+        </div>
 
+        <div class="space-y-1.5">
+          <label class="text-sm font-medium" :for="fid('new', 'password')">
+            {{ pickedPreset.credential_label }}
+          </label>
           <input
+            :id="fid('new', 'password')"
             v-model="newForm.password"
             type="password"
-            :placeholder="pickedPreset.credential_label"
-            :class="inputClass"
+            :class="fieldClass"
             autocomplete="new-password"
           />
         </div>
@@ -365,38 +418,67 @@ const inputClass =
              later feature that needs to force the disclosure open after mount must
              not reuse this binding, because Vue will not notice the user having
              toggled the native element underneath it. -->
-        <details class="rounded-lg border border-border px-3 py-2" :open="newAdvancedOpen">
-          <summary class="cursor-pointer text-xs text-muted-foreground">Advanced settings</summary>
-          <div class="mt-2 grid gap-2 sm:grid-cols-2">
-            <input v-model="newForm.host" placeholder="SMTP server" :class="inputClass" autocomplete="off" />
-            <div class="flex gap-2">
-              <input v-model.number="newForm.port" type="number" min="1" max="65535" placeholder="Port" :class="[inputClass, 'w-24']" />
-              <select v-model="newForm.encryption" :class="[inputClass, 'flex-1']">
+        <details class="rounded-xl border border-border px-3 py-2" :open="newAdvancedOpen">
+          <summary class="cursor-pointer text-sm font-medium text-muted-foreground">Server settings</summary>
+          <div class="mt-3 space-y-4">
+            <p class="text-xs text-muted-foreground">
+              Filled in for you. Change these only if your provider gave you different values.
+            </p>
+            <div class="space-y-1.5">
+              <label class="text-sm font-medium" :for="fid('new', 'host')">SMTP server</label>
+              <input
+                :id="fid('new', 'host')"
+                v-model="newForm.host"
+                placeholder="smtp.example.com"
+                :class="fieldClass"
+                autocomplete="off"
+              />
+            </div>
+            <div class="space-y-1.5">
+              <label class="text-sm font-medium" :for="fid('new', 'port')">Port</label>
+              <input
+                :id="fid('new', 'port')"
+                v-model.number="newForm.port"
+                type="number"
+                min="1"
+                max="65535"
+                :class="fieldClass"
+              />
+            </div>
+            <div class="space-y-1.5">
+              <label class="text-sm font-medium" :for="fid('new', 'encryption')">Encryption</label>
+              <select :id="fid('new', 'encryption')" v-model="newForm.encryption" :class="fieldClass">
                 <option value="starttls">STARTTLS (usually port 587)</option>
                 <option value="tls">TLS (usually port 465)</option>
                 <option value="none">No encryption</option>
               </select>
             </div>
-            <input
-              v-if="pickedPreset.username_mode !== 'user'"
-              v-model="newForm.username"
-              placeholder="Username"
-              :class="inputClass"
-              autocomplete="off"
-            />
+            <div v-if="pickedPreset.username_mode !== 'user'" class="space-y-1.5">
+              <label class="text-sm font-medium" :for="fid('new', 'adv-username')">Username</label>
+              <input
+                :id="fid('new', 'adv-username')"
+                v-model="newForm.username"
+                :class="fieldClass"
+                autocomplete="off"
+              />
+              <p class="text-xs text-muted-foreground">
+                {{ pickedPreset.username_mode === "fixed"
+                  ? `${pickedPreset.label} requires this exact value.`
+                  : `${pickedPreset.label} uses the same value as the ${pickedPreset.credential_label.toLowerCase()}.` }}
+              </p>
+            </div>
           </div>
         </details>
 
         <p v-if="portWarning(newForm)" class="text-xs text-destructive">{{ portWarning(newForm) }}</p>
 
         <div class="flex items-center gap-3">
-          <button
-            class="rounded-lg border border-border px-4 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+          <Button
             :disabled="create.isPending.value || !formValid(newForm)"
             @click="create.mutate()"
           >
-            Add
-          </button>
+            {{ create.isPending.value ? "Adding…" : "Add account" }}
+          </Button>
           <p v-if="createError" class="text-xs text-destructive">{{ createError }}</p>
         </div>
       </div>
@@ -416,10 +498,11 @@ const inputClass =
         <li
           v-for="p in (providers.data.value?.providers ?? [])"
           :key="p.id"
-          class="rounded-xl border border-border bg-card px-4 py-3 space-y-3"
+          class="space-y-3 rounded-2xl border border-border bg-card p-5 sm:p-6"
         >
           <!-- Main row -->
-          <div class="flex flex-wrap items-center gap-2">
+          <div class="flex flex-wrap items-center gap-3">
+            <MailProviderLogo :id="p.provider_type" :label="p.provider_label" />
             <div class="min-w-0 flex-1">
               <div class="text-sm font-medium">{{ p.label }}</div>
               <!-- The provider name reads better than the raw host; a hand-typed
@@ -429,26 +512,19 @@ const inputClass =
                 {{ p.provider_type === "custom" ? `${p.host}:${p.port}` : p.provider_label }}
               </div>
             </div>
-            <button
-              class="rounded-lg border border-border px-3 py-1 text-sm hover:bg-muted disabled:opacity-50"
-              :disabled="sendTest.isPending.value"
-              @click="startTest(p.id)"
-            >
+            <Button variant="secondary" size="sm" :disabled="sendTest.isPending.value" @click="startTest(p.id)">
               Send test
-            </button>
-            <button
-              class="rounded-lg border border-border px-3 py-1 text-sm hover:bg-muted"
-              @click="startEdit(p)"
-            >
-              Edit
-            </button>
-            <button
-              class="rounded-lg border border-border px-3 py-1 text-sm text-destructive hover:bg-muted disabled:opacity-50"
+            </Button>
+            <Button variant="secondary" size="sm" @click="startEdit(p)">Edit</Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              class="text-destructive hover:bg-destructive/10"
               :disabled="deleteProvider.isPending.value"
               @click="editFor = null; testFor = null; confirmDeleteFor = confirmDeleteFor === p.id ? null : p.id"
             >
               Delete
-            </button>
+            </Button>
           </div>
 
           <!-- Delete confirmation -->
@@ -457,44 +533,40 @@ const inputClass =
             class="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2"
           >
             <span class="text-sm">Delete <strong>{{ p.label }}</strong>? Apps using it will stop sending email until you pick another account for them.</span>
-            <button
-              class="rounded-lg border border-destructive px-3 py-1 text-sm text-destructive hover:bg-destructive/10 disabled:opacity-50"
+            <Button
+              variant="secondary"
+              size="sm"
+              class="border-destructive text-destructive hover:bg-destructive/10"
               :disabled="deleteProvider.isPending.value"
               @click="deleteProvider.mutate(p.id)"
             >
               Delete
-            </button>
-            <button
-              class="rounded-lg border border-border px-3 py-1 text-sm hover:bg-muted"
-              @click="confirmDeleteFor = null"
-            >
-              Cancel
-            </button>
+            </Button>
+            <Button variant="ghost" size="sm" @click="confirmDeleteFor = null">Cancel</Button>
           </div>
 
           <!-- Inline test-send form -->
           <div v-if="testFor === p.id" class="flex flex-wrap gap-2">
-            <input
-              v-model="testTo"
-              type="email"
-              placeholder="Send a test email to…"
-              :class="[inputClass, 'min-w-48 flex-1']"
-              autocomplete="off"
-              @keydown.enter="!sendTest.isPending.value && testTo.includes('@') && sendTest.mutate({ id: p.id, to: testTo })"
-            />
-            <button
-              class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+            <div class="min-w-48 flex-1 space-y-1.5">
+              <label class="text-sm font-medium" :for="fid('edit', 'testto', p.id)">Send a test email to</label>
+              <input
+                :id="fid('edit', 'testto', p.id)"
+                v-model="testTo"
+                type="email"
+                placeholder="you@example.com"
+                :class="fieldClass"
+                autocomplete="off"
+                @keydown.enter="!sendTest.isPending.value && testTo.includes('@') && sendTest.mutate({ id: p.id, to: testTo })"
+              />
+            </div>
+            <Button
+              class="mt-6"
               :disabled="sendTest.isPending.value || !testTo.includes('@')"
               @click="sendTest.mutate({ id: p.id, to: testTo })"
             >
               {{ sendTest.isPending.value ? "Sending…" : "Send" }}
-            </button>
-            <button
-              class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
-              @click="testFor = null"
-            >
-              Cancel
-            </button>
+            </Button>
+            <Button variant="ghost" class="mt-6" @click="testFor = null">Cancel</Button>
           </div>
 
           <!-- Inline edit form: the same short form the account was created on,
@@ -510,44 +582,94 @@ const inputClass =
                 class="underline"
               >Provider docs</a>
             </p>
-            <div class="grid gap-2 sm:grid-cols-2">
-              <input v-model="editForm.label" placeholder="Name" :class="inputClass" autocomplete="off" />
-              <input v-model="editForm.from_address" placeholder="From address" :class="inputClass" autocomplete="off" />
+            <div class="space-y-1.5">
+              <label class="text-sm font-medium" :for="fid('edit', 'label', p.id)">Account name</label>
               <input
-                v-if="!editPreset || editPreset.username_mode === 'user'"
-                v-model="editForm.username"
-                placeholder="Username"
-                :class="inputClass"
+                :id="fid('edit', 'label', p.id)"
+                v-model="editForm.label"
+                :class="fieldClass"
                 autocomplete="off"
               />
+              <p class="text-xs text-muted-foreground">
+                What you'll see when an app asks which account to send from. Only you see this.
+              </p>
+            </div>
+
+            <div class="space-y-1.5">
+              <label class="text-sm font-medium" :for="fid('edit', 'from', p.id)">From address</label>
               <input
-                v-model="editForm.password"
-                type="password"
-                :placeholder="`${editPreset?.credential_label ?? 'Password'} (unchanged if blank)`"
-                :class="inputClass"
-                autocomplete="new-password"
+                :id="fid('edit', 'from', p.id)"
+                v-model="editForm.from_address"
+                type="email"
+                :class="fieldClass"
+                autocomplete="off"
               />
             </div>
 
-            <details class="rounded-lg border border-border px-3 py-2" :open="editAdvancedOpen">
-              <summary class="cursor-pointer text-xs text-muted-foreground">Advanced settings</summary>
-              <div class="mt-2 grid gap-2 sm:grid-cols-2">
-                <input v-model="editForm.host" placeholder="SMTP server" :class="inputClass" autocomplete="off" />
-                <div class="flex gap-2">
-                  <input v-model.number="editForm.port" type="number" min="1" max="65535" placeholder="Port" :class="[inputClass, 'w-24']" />
-                  <select v-model="editForm.encryption" :class="[inputClass, 'flex-1']">
+            <div v-if="!editPreset || editPreset.username_mode === 'user'" class="space-y-1.5">
+              <label class="text-sm font-medium" :for="fid('edit', 'username', p.id)">Username</label>
+              <input
+                :id="fid('edit', 'username', p.id)"
+                v-model="editForm.username"
+                :class="fieldClass"
+                autocomplete="off"
+              />
+            </div>
+
+            <div class="space-y-1.5">
+              <label class="text-sm font-medium" :for="fid('edit', 'password', p.id)">
+                {{ editPreset?.credential_label ?? "Password" }}
+              </label>
+              <input
+                :id="fid('edit', 'password', p.id)"
+                v-model="editForm.password"
+                type="password"
+                :class="fieldClass"
+                autocomplete="new-password"
+              />
+              <p class="text-xs text-muted-foreground">Leave blank to keep the one you saved.</p>
+            </div>
+
+            <details class="rounded-xl border border-border px-3 py-2" :open="editAdvancedOpen">
+              <summary class="cursor-pointer text-sm font-medium text-muted-foreground">Server settings</summary>
+              <div class="mt-3 space-y-4">
+                <div class="space-y-1.5">
+                  <label class="text-sm font-medium" :for="fid('edit', 'host', p.id)">SMTP server</label>
+                  <input
+                    :id="fid('edit', 'host', p.id)"
+                    v-model="editForm.host"
+                    :class="fieldClass"
+                    autocomplete="off"
+                  />
+                </div>
+                <div class="space-y-1.5">
+                  <label class="text-sm font-medium" :for="fid('edit', 'port', p.id)">Port</label>
+                  <input
+                    :id="fid('edit', 'port', p.id)"
+                    v-model.number="editForm.port"
+                    type="number"
+                    min="1"
+                    max="65535"
+                    :class="fieldClass"
+                  />
+                </div>
+                <div class="space-y-1.5">
+                  <label class="text-sm font-medium" :for="fid('edit', 'encryption', p.id)">Encryption</label>
+                  <select :id="fid('edit', 'encryption', p.id)" v-model="editForm.encryption" :class="fieldClass">
                     <option value="starttls">STARTTLS (usually port 587)</option>
                     <option value="tls">TLS (usually port 465)</option>
                     <option value="none">No encryption</option>
                   </select>
                 </div>
-                <input
-                  v-if="editPreset && editPreset.username_mode !== 'user'"
-                  v-model="editForm.username"
-                  placeholder="Username"
-                  :class="inputClass"
-                  autocomplete="off"
-                />
+                <div v-if="editPreset && editPreset.username_mode !== 'user'" class="space-y-1.5">
+                  <label class="text-sm font-medium" :for="fid('edit', 'adv-username', p.id)">Username</label>
+                  <input
+                    :id="fid('edit', 'adv-username', p.id)"
+                    v-model="editForm.username"
+                    :class="fieldClass"
+                    autocomplete="off"
+                  />
+                </div>
               </div>
             </details>
 
@@ -556,19 +678,10 @@ const inputClass =
               Apps already using this account pick up changes the next time they restart or rebind.
             </p>
             <div class="flex gap-2">
-              <button
-                class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
-                :disabled="update.isPending.value || !formValid(editForm)"
-                @click="update.mutate(p.id)"
-              >
-                Save
-              </button>
-              <button
-                class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
-                @click="editFor = null"
-              >
-                Cancel
-              </button>
+              <Button :disabled="update.isPending.value || !formValid(editForm)" @click="update.mutate(p.id)">
+                {{ update.isPending.value ? "Saving…" : "Save" }}
+              </Button>
+              <Button variant="ghost" @click="editFor = null">Cancel</Button>
             </div>
           </div>
 

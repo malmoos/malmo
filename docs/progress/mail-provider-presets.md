@@ -41,6 +41,18 @@ A sonnet agent reviewed the diff against `docs/dev/code-review.md` and found one
 
 Two Notes were also acted on. `blockedPortHint` matched on the string prefix `"connect: "`, a silent coupling to `sendTestMail`'s error wording that no test would have caught breaking; dial failures are now a typed `*dialError` matched with `errors.As`, and a new test drives the real `sendTestMail` against a closed port to assert the live path still produces one. (Reverting the type makes that test fail, which is the point of it.) The `:open` binding on the two `<details>` disclosures is correct today only because both blocks remount on change; that assumption is now written next to the binding rather than left for the next person to rediscover.
 
+## The form, second pass
+
+The first version of the picker was a grid of bordered text boxes and a two-column form of bare placeholder inputs. Three things were wrong with it and all three are fixed:
+
+- **The cards did not read as clickable.** They are now real buttons carrying the provider's logo above its name, with hover, focus-visible and active states.
+- **The first field was confusing.** It said only "Name", and nothing said whose name. It is now labelled **Account name**, with a hint saying it is malmo's own label for the account and only the admin sees it. Every other input gained a real `<label>` too — no field relies on a placeholder to say what it is.
+- **Two columns made the pairing look meaningful when it was not.** One field per line now.
+
+Logos are bundled, not fetched: a box may have no internet, and the dashboard must not call a CDN on render. They are single-path monochrome marks drawn in `currentColor`, so they inherit the olive tokens. Three providers have no mark available (Postmark, SMTP2GO, Google Workspace) and fall back to a lettermark tile, which reads as a logo slot rather than a missing image; `custom` is not a brand and gets the Lucide server glyph. The paths come from simple-icons, whose icon data is CC0 — the trademarks stay with their owners and identify the provider being chosen.
+
+Styling follows the repo's own idioms rather than new ad-hoc classes: the shared `<Button>` component for every action, and the labelled-stack field pattern (`fieldClass`, label, hint) lifted from `CustomInstallView`. The **Advanced settings** disclosure is now **Server settings**, which says what is inside it.
+
 ## Known gaps
 
 - **No live test-send was performed against any provider.** That is the issue's real acceptance gate — a *username* rule can be wrong in a way neither a unit test nor the connectivity probe sees — and it needs a provisioned hosted box plus a real account at each provider. The hosts and ports are now verified live (above); the username rules are verified against current vendor docs and nothing more. The three worth an account are SendGrid (the fixed `apikey`), Brevo (the `xxx@smtp-brevo.com` login, the correction most likely to be wrong) and Postmark (`same_as_password`, the only structurally unusual mode).
