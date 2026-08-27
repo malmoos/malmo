@@ -29,13 +29,21 @@ The one deviation from the issue text is the region mechanism, above. The other 
 
 ## Verification
 
+**Every preset host was probed live**, using the same library the test-send uses (`net/smtp`): dial, STARTTLS with `ServerName` set, EHLO, read the AUTH extension. All sixteen hostnames — the nine presets plus all eight SES regions — resolve, connect on the port the preset carries, complete TLS with a certificate valid for that exact name, and offer `AUTH PLAIN`, which is the mechanism `sendTestMail` uses. That covers hostname, port, TLS and auth-mechanism compatibility. It does **not** cover the username rules or that mail actually leaves, and it ran from a developer machine, not a hosted box, so it says nothing about the 25/465 block.
+
 `make test-nopam`, `gofmt`, `go vet`, `make openapi` and the web typecheck + production build are green. New tests: the preset table's invariants (a fixed username mode with no value, a region option with no host, a port a hosted box cannot reach), an old row migrating to `custom`, an unknown `provider_type` rejected at both the store and the API, `provider_type` round-tripping without the host being re-derived, `/mail-presets` refused to a member, and the blocked-port hint firing only on a hosted connect failure.
 
 `make check` was not run end to end: this machine cannot build `github.com/msteinert/pam/v2` (`C.RTLD_NEXT`), which fails identically on unmodified `dev`. Everything `check` runs apart from that package was run individually.
 
+## Self-review
+
+A sonnet agent reviewed the diff against `docs/dev/code-review.md` and found one Block, now fixed: **editing a Postmark account wiped its username.** `startEdit` blanks the password field, because an empty password means "keep the stored one"; the update path then copied that empty value across to the username, which `same_as_password` keeps in step. Editing a Postmark account's label was enough to leave it with a stored password and no username, failing AUTH on its next send with nothing in the UI to say why. A blank password is no longer copied across, so the paired username is kept the same way the password is.
+
+Two Notes were also acted on. `blockedPortHint` matched on the string prefix `"connect: "`, a silent coupling to `sendTestMail`'s error wording that no test would have caught breaking; dial failures are now a typed `*dialError` matched with `errors.As`, and a new test drives the real `sendTestMail` against a closed port to assert the live path still produces one. (Reverting the type makes that test fail, which is the point of it.) The `:open` binding on the two `<details>` disclosures is correct today only because both blocks remount on change; that assumption is now written next to the binding rather than left for the next person to rediscover.
+
 ## Known gaps
 
-- **No live test-send was performed against any provider.** That is the issue's real acceptance gate — a hostname or username rule can be wrong in a way no unit test sees — and it needs a provisioned hosted box plus a real account at each of the eight providers. The constants are verified against current vendor docs and nothing more.
+- **No live test-send was performed against any provider.** That is the issue's real acceptance gate — a *username* rule can be wrong in a way neither a unit test nor the connectivity probe sees — and it needs a provisioned hosted box plus a real account at each provider. The hosts and ports are now verified live (above); the username rules are verified against current vendor docs and nothing more. The three worth an account are SendGrid (the fixed `apikey`), Brevo (the `xxx@smtp-brevo.com` login, the correction most likely to be wrong) and Postmark (`same_as_password`, the only structurally unusual mode).
 - **The SES region list is a common subset** (8 of ~19 regions with an SMTP endpoint). Anyone outside them has to type the host into Advanced settings.
 - **Edit does not restore the region select.** Only the resolved host is stored, so editing a SES account shows the host in the advanced fields rather than the region that produced it. Re-picking a region means editing the host.
 - **`web-ui` has no test runner**, so the new form is typechecked and built but not exercised by a test.

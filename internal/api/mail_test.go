@@ -10,6 +10,8 @@ package api
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -740,7 +742,7 @@ func TestMailProviderUnknownTypeIs422(t *testing.T) {
 func TestBlockedPortHint(t *testing.T) {
 	tls465 := store.MailProvider{Port: 465}
 	starttls587 := store.MailProvider{Port: 587}
-	connectErr := fmt.Errorf("connect: dial tcp 1.2.3.4:465: i/o timeout")
+	connectErr := &dialError{fmt.Errorf("dial tcp 1.2.3.4:465: i/o timeout")}
 	authErr := fmt.Errorf("auth: 535 bad credentials")
 
 	if got := blockedPortHint(profile.Hosted, tls465, connectErr); got == "" {
@@ -757,5 +759,36 @@ func TestBlockedPortHint(t *testing.T) {
 	// The port was reachable — auth failed. Naming the port would mislead.
 	if got := blockedPortHint(profile.Hosted, tls465, authErr); got != "" {
 		t.Errorf("auth failure got a blocked-port hint: %q", got)
+	}
+}
+
+// The hint keys off a typed error, so this asserts the live path still produces
+// one: a hand-built error in the test above would keep passing even if
+// sendTestMail stopped reporting dial failures as dialError, and the hint would
+// silently stop firing for the hosted admin it exists for.
+func TestSendTestMailReportsDialFailuresAsDialError(t *testing.T) {
+	// A port that was just listening and is now closed: connect refuses fast.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	host, portStr, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portStr)
+
+	p := store.MailProvider{
+		Host: host, Port: port, FromAddress: "box@example.com",
+		Encryption: store.MailEncryptionNone,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), testMailTimeout)
+	defer cancel()
+	err = sendTestMail(ctx, p, "admin@example.com")
+	if err == nil {
+		t.Fatal("send to a closed port succeeded")
+	}
+	var de *dialError
+	if !errors.As(err, &de) {
+		t.Fatalf("dial failure = %T (%v); want *dialError, which blockedPortHint keys off", err, err)
 	}
 }

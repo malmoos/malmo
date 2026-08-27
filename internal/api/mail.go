@@ -468,6 +468,15 @@ func (s *Server) setAppMailBinding(ctx context.Context, in *struct {
 	return &struct{ Body Job }{Body: job.snapshot()}, nil
 }
 
+// dialError marks a failure to establish the connection at all, as opposed to
+// a failure once the server is already talking. blockedPortHint is the one
+// consumer that has to tell the two apart, which is what earns the type
+// (CLAUDE.md: typed errors at boundaries, not everywhere).
+type dialError struct{ err error }
+
+func (e *dialError) Error() string { return "connect: " + e.err.Error() }
+func (e *dialError) Unwrap() error { return e.err }
+
 // blockedPortHint names the likely cause when a hosted box fails to connect on
 // a port its network blocks. Hosted reaches 587 and 2525 only — 25 and 465 get
 // no SYN-ACK — so a connect failure there surfaces as a bare timeout that says
@@ -482,7 +491,8 @@ func blockedPortHint(prof profile.Profile, p store.MailProvider, err error) stri
 	}
 	// Only a failure to establish the connection points at the port. An auth
 	// or recipient rejection means the port was reachable.
-	if !strings.HasPrefix(err.Error(), "connect: ") {
+	var de *dialError
+	if !errors.As(err, &de) {
 		return ""
 	}
 	return fmt.Sprintf(" — this box cannot reach port %d. Use port 587 with STARTTLS, "+
@@ -503,7 +513,7 @@ func sendTestMail(ctx context.Context, p store.MailProvider, to string) error {
 		conn, err = dialer.DialContext(ctx, "tcp", addr)
 	}
 	if err != nil {
-		return fmt.Errorf("connect: %w", err)
+		return &dialError{err}
 	}
 	defer conn.Close()
 	// The smtp.Client has no context support; the connection deadline bounds

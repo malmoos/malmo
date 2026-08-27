@@ -103,8 +103,14 @@ function hostFor(p: MailPreset, region: string): string {
 
 // Postmark wants the same server token as username and password, so the form
 // keeps the two in step and shows one field.
+//
+// A blank password is never copied across. On edit it means "keep the stored
+// credential", so the paired username has to be kept too — copying the empty
+// value over it would wipe the stored username while leaving the password
+// intact, and the account would fail AUTH on its next send with nothing in the
+// UI to say why.
 function syncSameAsPassword(f: ProviderForm, p: MailPreset | undefined) {
-  if (p?.username_mode === "same_as_password") f.username = f.password;
+  if (p?.username_mode === "same_as_password" && f.password !== "") f.username = f.password;
 }
 
 function onRegionChange(f: ProviderForm) {
@@ -353,7 +359,12 @@ const inputClass =
           />
         </div>
 
-        <!-- Advanced: prefilled and editable, so a non-standard endpoint is never trapped. -->
+        <!-- Advanced: prefilled and editable, so a non-standard endpoint is never trapped.
+             :open is a one-way binding read at mount only. That holds because this
+             block is v-if-gated and remounts whenever the picked preset changes; a
+             later feature that needs to force the disclosure open after mount must
+             not reuse this binding, because Vue will not notice the user having
+             toggled the native element underneath it. -->
         <details class="rounded-lg border border-border px-3 py-2" :open="newAdvancedOpen">
           <summary class="cursor-pointer text-xs text-muted-foreground">Advanced settings</summary>
           <div class="mt-2 grid gap-2 sm:grid-cols-2">
