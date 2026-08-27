@@ -214,6 +214,24 @@ The DSN scheme is `smtps://` for implicit TLS and `smtp://` otherwise (SMTP-URL 
 
 **Port 587 is the only submission port that works on hosted.** Measured 2026-08-27 from a `cx23` in `hel1` on the production Hetzner account: outbound **25 and 465 are both blocked** (no SYN-ACK), while **587 and 2525 are open**. The same-host comparison is what makes this port-based rather than a routing artifact — `smtp.sendgrid.net` and `smtp.gmail.com` each answered on 587 and timed out on 465. So on hosted a provider registered with `encryption: tls` (implicit TLS, port 465) never delivers, and its test-send fails as a bare connection timeout; every provider in the list below offers 587 with STARTTLS, which is the mode to register. This is a **hosted-profile constraint only** — an appliance box on a home LAN reaches 465 normally, and some providers (Fastmail, iCloud) prefer it, so `tls` stays a valid mode and the UI warns rather than forbids. Hetzner will lift the 25/465 block on request; if that is ever filed, this paragraph is what needs re-measuring.
 
+**Providers are picked from a list, not typed from scratch.** For every provider worth presetting the host, port and encryption are fixed constants, and often the username is too; what is genuinely per-user is the credential, the from address, and for two providers a region. So Settings → Outgoing email is a two-step add: pick the provider, then fill in only what is left. Host, port and encryption are prefilled behind an **Advanced settings** disclosure, editable, so a non-standard endpoint is never trapped. `Custom SMTP server` is that same disclosure, open, with nothing prefilled — the old form. The brain persists which preset the admin picked as `provider_type`; it does **not** re-derive the other fields from it, so an advanced override survives (`DECISIONS.md` 2026-08-27, D1–D4). The table lives in `internal/mailpreset` and is served at `GET /api/v1/mail-presets` (admin-only).
+
+| id | Label | Host | Port | Username |
+|---|---|---|---|---|
+| `ses` | Amazon SES | `email-smtp.<region>.amazonaws.com` | 587 | admin's SES SMTP username |
+| `sendgrid` | SendGrid | `smtp.sendgrid.net` | 587 | fixed `apikey` |
+| `mailgun` | Mailgun | `smtp.mailgun.org` (US) / `smtp.eu.mailgun.org` (EU) | 587 | prefilled `postmaster@` |
+| `postmark` | Postmark | `smtp.postmarkapp.com` | 587 | the Server API token, same as the password |
+| `brevo` | Brevo | `smtp-relay.brevo.com` | 587 | the SMTP login, `xxx@smtp-brevo.com` |
+| `resend` | Resend | `smtp.resend.com` | 587 | fixed `resend` |
+| `smtp2go` | SMTP2GO | `mail.smtp2go.com` | 2525 | admin's SMTP user |
+| `google_workspace` | Google Workspace | `smtp.gmail.com` | 587 | the full address |
+| `custom` | Custom SMTP server | — | 587 | admin's |
+
+Every preset is **STARTTLS**, and every port is one a hosted box can reach (see the port paragraph above). SMTP2GO is 2525 because that is the port it recommends as open in the most places. Only SES and Mailgun carry a region, and each region option names the host it resolves to rather than substituting a code into a template — Mailgun's EU host is a prefix, so one substitution rule could not serve both.
+
+**Three providers are excluded on purpose.** **Microsoft 365**: SMTP AUTH is off by default on new tenants, and a preset that leads to a failed test-send is worse than no preset. **Proton**: needs Bridge, so there is no SMTP endpoint to point at. **Fastmail and iCloud**: 465-only in practice, which hosted blocks — revisit with the appliance.
+
 **Propagation:** env is read at container create, so a rebind re-stamps the `.env` and recreates the instance's containers immediately (stopped instances pick it up at next start). Editing or deleting a *provider* does not re-stamp bound apps: they keep the previously injected values until their next rebind or reinstall — v1 accepts this lag, and the Settings UI says so. Deleting a provider unbinds its apps in the brain's state (the next rebind of each app drops the vars).
 
 **Explicitly not in v1** (deferral, not rejection — `NEXT.md` # Outgoing mail): no malmo-run relay/smarthost, no per-app rate limiting or queue, no inbound mail anything. If email grows more surface (a default box-wide provider, brain-sent notification email riding the same providers), this section promotes to its own `OUTGOING_MAIL.md`.

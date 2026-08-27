@@ -449,6 +449,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/mail-presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List built-in outgoing-mail provider presets (admin only) */
+        get: operations["list-mail-presets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/mail-providers": {
         parameters: {
             query?: never;
@@ -1394,6 +1411,15 @@ export interface components {
             readonly $schema?: string;
             apps: components["schemas"]["Entry"][] | null;
         };
+        "List-mail-presetsResponse": {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/List-mail-presetsResponse.json
+             */
+            readonly $schema?: string;
+            presets: components["schemas"]["MailPresetDTO"][] | null;
+        };
         "List-mail-provider-optionsResponse": {
             /**
              * Format: uri
@@ -1462,6 +1488,33 @@ export interface components {
             readonly $schema?: string;
             user: components["schemas"]["UserDTO"];
         };
+        MailPresetDTO: {
+            credential_label: string;
+            docs_url: string;
+            /** @enum {string} */
+            encryption: "none" | "starttls" | "tls";
+            help: string;
+            host: string;
+            id: string;
+            label: string;
+            /** Format: int64 */
+            port: number;
+            region?: components["schemas"]["MailPresetRegionDTO"];
+            username_fixed: string;
+            /** @enum {string} */
+            username_mode: "user" | "fixed" | "same_as_password";
+            username_prefill: string;
+        };
+        MailPresetRegionDTO: {
+            default: string;
+            label: string;
+            options: components["schemas"]["MailPresetRegionOptionDTO"][] | null;
+        };
+        MailPresetRegionOptionDTO: {
+            host: string;
+            label: string;
+            value: string;
+        };
         MailProviderBody: {
             /**
              * Format: uri
@@ -1477,6 +1530,7 @@ export interface components {
             password?: string;
             /** Format: int64 */
             port: number;
+            provider_type?: string;
             username?: string;
         };
         MailProviderDTO: {
@@ -1496,6 +1550,8 @@ export interface components {
             label: string;
             /** Format: int64 */
             port: number;
+            provider_label: string;
+            provider_type: string;
             username: string;
         };
         MailProviderOption: {
@@ -2682,6 +2738,35 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "list-mail-presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["List-mail-presetsResponse"];
+                };
             };
             /** @description Error */
             default: {

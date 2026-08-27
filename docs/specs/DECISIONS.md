@@ -21,6 +21,26 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-08-27 — Outgoing-mail provider presets: hardcoded in the brain, and the picked provider is persisted
+
+**Previously:** Adding an email account meant typing seven fields the admin had to look up in their provider's docs. The brain knew nothing about who the provider was — only a host, a port and a credential.
+
+**Now:** The brain ships a table of built-in presets (`internal/mailpreset`), serves it at `GET /api/v1/mail-presets`, and stores which one the admin picked as `mail_providers.provider_type`.
+
+**D1 — presets are hardcoded in the brain, not catalog-served.** The catalog is an app-distribution channel; these constants change roughly never, and the credential broker's per-provider logic (`NEXT.md` # On-box credential broker) has to be Go anyway. Putting them in the catalog would add a fetch, a schema and a failure mode to data that ships fine in the binary.
+
+**D2 — `provider_type` is persisted, not discarded after create.** It re-renders the right edit form and labels the row, but the real reason is the broker: without it, every provider registered before the broker ships is an untyped row someone has to classify by pattern-matching hostnames.
+
+**D3 — the server stores what the client sends and does not re-derive host, port or encryption from the preset.** Re-deriving would silently undo the Advanced override, which exists so a non-standard endpoint is never trapped. The consequence, accepted on purpose: `provider_type` records what the admin picked, not a guarantee that the other fields still match the preset.
+
+**D4 — no change to `MALMO_MAIL_*` injection.** `mailEnvLines` in `internal/lifecycle/mail.go` is untouched. That function is the seam the broker replaces later, and keeping it out of this change is what makes the two features independent.
+
+**Also:** the region mechanism deviates from the issue's `{region}` host template. Each region option names the host it resolves to instead, because Mailgun's EU host is `smtp.eu.mailgun.org` — a prefix, not a region code — so one substitution rule cannot serve both providers.
+
+**Affected docs:** `SERVICE_PROVISIONING.md` # BYO outgoing mail, `SETTINGS.md`, `NEXT.md` # On-box credential broker.
+
+---
+
 ## 2026-08-26 — The brain's state lives under `state/`, and the specs follow the code
 
 **Previously:** `STORAGE.md` # mount layout put the brain's database at `/var/lib/malmo/brain/state.db`. It put app instances at `/var/lib/malmo/instances/<id>/`, and managed-service data under `/var/lib/malmo/managed-services/`. `THREAT_MODEL.md`, `USERS_AND_GROUPS.md` and `LOCAL_ANALYTICS.md` copied those paths. `LOCAL_ANALYTICS.md` had a third version of its own, `/var/lib/malmo-state/brain.db`. `TELEMETRY.md` and `BOOT.md` wrote into a `/var/lib/malmo-state/` root.

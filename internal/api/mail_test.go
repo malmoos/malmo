@@ -20,6 +20,8 @@ import (
 	"testing"
 
 	"github.com/malmoos/malmo/internal/audit"
+	"github.com/malmoos/malmo/internal/mailpreset"
+	"github.com/malmoos/malmo/internal/profile"
 	"github.com/malmoos/malmo/internal/store"
 )
 
@@ -637,5 +639,123 @@ func TestInstallPlanCarriesMailProviders(t *testing.T) {
 	plan = decodeJSON[InstallPlanDTO](t, resp)
 	if plan.Mail != nil {
 		t.Errorf("non-mail app install plan carries mail block: %+v", plan.Mail)
+	}
+}
+
+// --- provider presets ------------------------------------------------------
+
+func TestListMailPresetsAdminOnly(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+
+	got := decodeJSON[struct {
+		Presets []MailPresetDTO `json:"presets"`
+	}](t, h.do("GET", "/api/v1/mail-presets", nil))
+	if len(got.Presets) == 0 {
+		t.Fatal("no presets served")
+	}
+	var hasCustom bool
+	for _, p := range got.Presets {
+		if p.ID == mailpreset.Custom {
+			hasCustom = true
+		}
+	}
+	if !hasCustom {
+		t.Error("custom missing from the preset list")
+	}
+
+	// A member cannot register a provider, so a member cannot read the presets.
+	h.addMember("u_bob", "bob", "bobpass")
+	h.loginAs("bob", "bobpass")
+	resp := h.do("GET", "/api/v1/mail-presets", nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("member GET /mail-presets = %d; want 403", resp.StatusCode)
+	}
+}
+
+func TestCreateMailProviderPersistsProviderType(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
+
+	b := providerBody("ses account")
+	b["provider_type"] = "ses"
+	p := decodeJSON[MailProviderDTO](t, h.do("POST", "/api/v1/mail-providers", b))
+	if p.ProviderType != "ses" || p.ProviderLabel != "Amazon SES" {
+		t.Fatalf("provider_type round trip = %+v", p)
+	}
+	stored, err := h.st.GetMailProvider(p.ID)
+	if err != nil {
+		t.Fatalf("get stored: %v", err)
+	}
+	if stored.ProviderType != "ses" {
+		t.Fatalf("stored provider_type = %q; want ses", stored.ProviderType)
+	}
+	// D3: the server stores what the client sent. It does not re-derive the
+	// host from the preset, so an advanced override survives.
+	if stored.Host != "smtp.example.com" {
+		t.Fatalf("stored host = %q; the server re-derived it from the preset", stored.Host)
+	}
+}
+
+func TestCreateMailProviderDefaultsProviderTypeToCustom(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
+
+	// An older client sends no provider_type at all.
+	p := h.createProvider("hand typed")
+	if p.ProviderType != mailpreset.Custom {
+		t.Fatalf("provider_type = %q; want custom", p.ProviderType)
+	}
+}
+
+func TestMailProviderUnknownTypeIs422(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
+
+	b := providerBody("bogus")
+	b["provider_type"] = "not-a-provider"
+	resp := h.do("POST", "/api/v1/mail-providers", b)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("unknown provider_type on create = %d; want 422", resp.StatusCode)
+	}
+
+	p := h.createProvider("real")
+	up := providerBody("real")
+	up["provider_type"] = "not-a-provider"
+	resp = h.do("PUT", "/api/v1/mail-providers/"+p.ID, up)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("unknown provider_type on update = %d; want 422", resp.StatusCode)
+	}
+}
+
+// A hosted box cannot reach 465, so the bare connection timeout an admin used
+// to see is replaced by an error that names the port. The appliance reaches
+// 465 fine and must keep the plain error.
+func TestBlockedPortHint(t *testing.T) {
+	tls465 := store.MailProvider{Port: 465}
+	starttls587 := store.MailProvider{Port: 587}
+	connectErr := fmt.Errorf("connect: dial tcp 1.2.3.4:465: i/o timeout")
+	authErr := fmt.Errorf("auth: 535 bad credentials")
+
+	if got := blockedPortHint(profile.Hosted, tls465, connectErr); got == "" {
+		t.Error("hosted connect failure on 465 got no hint")
+	} else if !strings.Contains(got, "587") {
+		t.Errorf("hint does not name the working port: %q", got)
+	}
+	if got := blockedPortHint(profile.Appliance, tls465, connectErr); got != "" {
+		t.Errorf("appliance got a hint it should not: %q", got)
+	}
+	if got := blockedPortHint(profile.Hosted, starttls587, connectErr); got != "" {
+		t.Errorf("port 587 got a blocked-port hint: %q", got)
+	}
+	// The port was reachable — auth failed. Naming the port would mislead.
+	if got := blockedPortHint(profile.Hosted, tls465, authErr); got != "" {
+		t.Errorf("auth failure got a blocked-port hint: %q", got)
 	}
 }

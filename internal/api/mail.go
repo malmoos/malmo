@@ -22,6 +22,8 @@ import (
 	"github.com/malmoos/malmo/internal/audit"
 	"github.com/malmoos/malmo/internal/auth"
 	"github.com/malmoos/malmo/internal/lifecycle"
+	"github.com/malmoos/malmo/internal/mailpreset"
+	"github.com/malmoos/malmo/internal/profile"
 	"github.com/malmoos/malmo/internal/store"
 )
 
@@ -57,6 +59,11 @@ func (s *Server) registerMail(api huma.API) {
 	}, s.testMailProvider)
 
 	huma.Register(api, huma.Operation{
+		OperationID: "list-mail-presets", Method: "GET", Path: "/api/v1/mail-presets",
+		Summary: "List built-in outgoing-mail provider presets (admin only)",
+	}, s.listMailPresets)
+
+	huma.Register(api, huma.Operation{
 		OperationID: "list-mail-provider-options", Method: "GET", Path: "/api/v1/mail-providers/options",
 		Summary: "List provider picker options — id and label only (any authenticated user)",
 	}, s.listMailProviderOptions)
@@ -77,14 +84,20 @@ type MailProviderDTO struct {
 	Username    string `json:"username"`
 	FromAddress string `json:"from_address"`
 	Encryption  string `json:"encryption" enum:"none,starttls,tls"`
-	CreatedAt   int64  `json:"created_at"`
+	// ProviderType is the preset the admin picked, or "custom". The UI uses
+	// it to label the row and to re-open the right form on edit.
+	ProviderType  string `json:"provider_type"`
+	ProviderLabel string `json:"provider_label"`
+	CreatedAt     int64  `json:"created_at"`
 }
 
 func mailProviderDTO(p store.MailProvider) MailProviderDTO {
 	return MailProviderDTO{
 		ID: p.ID, Label: p.Label, Host: p.Host, Port: p.Port,
 		Username: p.Username, FromAddress: p.FromAddress,
-		Encryption: p.Encryption, CreatedAt: p.CreatedAt.Unix(),
+		Encryption:   p.Encryption,
+		ProviderType: p.ProviderType, ProviderLabel: mailpreset.LabelFor(p.ProviderType),
+		CreatedAt: p.CreatedAt.Unix(),
 	}
 }
 
@@ -99,6 +112,11 @@ type MailProviderBody struct {
 	Password    string `json:"password,omitempty"`
 	FromAddress string `json:"from_address"`
 	Encryption  string `json:"encryption" enum:"none,starttls,tls"`
+	// ProviderType names the preset the values came from; empty means custom.
+	// The server stores what the client sends and does not re-derive host,
+	// port or encryption from the preset — re-deriving would silently undo the
+	// advanced override (DECISIONS.md 2026-08-27 D3).
+	ProviderType string `json:"provider_type,omitempty"`
 }
 
 // validateMailProviderBody normalizes and checks the shared create/update
@@ -128,10 +146,92 @@ func validateMailProviderBody(b *MailProviderBody) error {
 	}
 	switch b.Encryption {
 	case store.MailEncryptionNone, store.MailEncryptionSTARTTLS, store.MailEncryptionTLS:
-		return nil
 	default:
 		return huma.Error422UnprocessableEntity("encryption must be none, starttls, or tls")
 	}
+	if b.ProviderType == "" {
+		b.ProviderType = mailpreset.Custom
+	}
+	if !mailpreset.Valid(b.ProviderType) {
+		return huma.Error422UnprocessableEntity("unknown provider_type")
+	}
+	return nil
+}
+
+// MailPresetDTO is the read shape of one built-in provider preset. It mirrors
+// mailpreset.Preset rather than serving that type directly, so the wire shape
+// stays owned by this layer and the OpenAPI schema names stay specific — a
+// bare "Preset" or "Region" would be far too generic for a shared namespace.
+//
+// Host is empty when Region is set: the chosen region option carries the host.
+type MailPresetDTO struct {
+	ID              string               `json:"id"`
+	Label           string               `json:"label"`
+	Host            string               `json:"host"`
+	Port            int                  `json:"port"`
+	Encryption      string               `json:"encryption" enum:"none,starttls,tls"`
+	UsernameMode    string               `json:"username_mode" enum:"user,fixed,same_as_password"`
+	UsernameFixed   string               `json:"username_fixed"`
+	UsernamePrefill string               `json:"username_prefill"`
+	CredentialLabel string               `json:"credential_label"`
+	Help            string               `json:"help"`
+	DocsURL         string               `json:"docs_url"`
+	Region          *MailPresetRegionDTO `json:"region,omitempty"`
+}
+
+// MailPresetRegionDTO is the at-most-one variable a preset carries.
+type MailPresetRegionDTO struct {
+	Label   string                      `json:"label"`
+	Default string                      `json:"default"`
+	Options []MailPresetRegionOptionDTO `json:"options"`
+}
+
+// MailPresetRegionOptionDTO is one region choice and the SMTP host it means.
+type MailPresetRegionOptionDTO struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+	Host  string `json:"host"`
+}
+
+func mailPresetDTO(p mailpreset.Preset) MailPresetDTO {
+	d := MailPresetDTO{
+		ID: p.ID, Label: p.Label, Host: p.Host, Port: p.Port,
+		Encryption: p.Encryption, UsernameMode: p.UsernameMode,
+		UsernameFixed: p.UsernameFixed, UsernamePrefill: p.UsernamePrefill,
+		CredentialLabel: p.CredentialLabel, Help: p.Help, DocsURL: p.DocsURL,
+	}
+	if p.Region != nil {
+		r := &MailPresetRegionDTO{Label: p.Region.Label, Default: p.Region.Default}
+		for _, o := range p.Region.Options {
+			r.Options = append(r.Options, MailPresetRegionOptionDTO{Value: o.Value, Label: o.Label, Host: o.Host})
+		}
+		d.Region = r
+	}
+	return d
+}
+
+// listMailPresets serves the built-in provider table so the add-account form
+// can offer a picker instead of seven blank fields. Admin-only, matching
+// listMailProviders — only an admin can register a provider, so only an admin
+// needs the presets.
+func (s *Server) listMailPresets(ctx context.Context, _ *struct{}) (*struct {
+	Body struct {
+		Presets []MailPresetDTO `json:"presets"`
+	}
+}, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	out := &struct {
+		Body struct {
+			Presets []MailPresetDTO `json:"presets"`
+		}
+	}{}
+	out.Body.Presets = []MailPresetDTO{}
+	for _, p := range mailpreset.List() {
+		out.Body.Presets = append(out.Body.Presets, mailPresetDTO(p))
+	}
+	return out, nil
 }
 
 func (s *Server) listMailProviders(ctx context.Context, _ *struct{}) (*struct {
@@ -203,7 +303,8 @@ func (s *Server) createMailProvider(ctx context.Context, in *struct {
 		ID: newID(), Label: in.Body.Label, Host: in.Body.Host, Port: in.Body.Port,
 		Username: in.Body.Username, Password: in.Body.Password,
 		FromAddress: in.Body.FromAddress, Encryption: in.Body.Encryption,
-		CreatedAt: time.Now(),
+		ProviderType: in.Body.ProviderType,
+		CreatedAt:    time.Now(),
 	}
 	meta := map[string]any{"label": p.Label, "host": p.Host}
 	if err := s.store.CreateMailProvider(p); err != nil {
@@ -242,6 +343,7 @@ func (s *Server) updateMailProvider(ctx context.Context, in *struct {
 	p := existing
 	p.Label, p.Host, p.Port = in.Body.Label, in.Body.Host, in.Body.Port
 	p.Username, p.FromAddress, p.Encryption = in.Body.Username, in.Body.FromAddress, in.Body.Encryption
+	p.ProviderType = in.Body.ProviderType
 	if in.Body.Password != "" {
 		p.Password = in.Body.Password
 	}
@@ -312,7 +414,7 @@ func (s *Server) testMailProvider(ctx context.Context, in *struct {
 	defer cancel()
 	if err := sendTestMail(sendCtx, p, to); err != nil {
 		s.auditor.Record(ctx, audit.ActionMailProviderTest, tgt, meta, false)
-		return nil, huma.Error502BadGateway(fmt.Sprintf("test send failed: %v", err))
+		return nil, huma.Error502BadGateway(fmt.Sprintf("test send failed: %v%s", err, blockedPortHint(s.profile, p, err)))
 	}
 	s.auditor.Record(ctx, audit.ActionMailProviderTest, tgt, meta, true)
 	return nil, nil
@@ -364,6 +466,27 @@ func (s *Server) setAppMailBinding(ctx context.Context, in *struct {
 		return map[string]any{"instance_id": id}, nil
 	})
 	return &struct{ Body Job }{Body: job.snapshot()}, nil
+}
+
+// blockedPortHint names the likely cause when a hosted box fails to connect on
+// a port its network blocks. Hosted reaches 587 and 2525 only — 25 and 465 get
+// no SYN-ACK — so a connect failure there surfaces as a bare timeout that says
+// nothing about why (SERVICE_PROVISIONING.md # BYO outgoing mail). An
+// appliance on a home LAN reaches 465 fine, so the hint is hosted-only.
+func blockedPortHint(prof profile.Profile, p store.MailProvider, err error) string {
+	if prof != profile.Hosted {
+		return ""
+	}
+	if p.Port != 25 && p.Port != 465 {
+		return ""
+	}
+	// Only a failure to establish the connection points at the port. An auth
+	// or recipient rejection means the port was reachable.
+	if !strings.HasPrefix(err.Error(), "connect: ") {
+		return ""
+	}
+	return fmt.Sprintf(" — this box cannot reach port %d. Use port 587 with STARTTLS, "+
+		"which every major provider supports.", p.Port)
 }
 
 // sendTestMail dials the provider and delivers a short test message to `to`,

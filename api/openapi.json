@@ -1625,6 +1625,33 @@
         ],
         "type": "object"
       },
+      "List-mail-presetsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "$schema": {
+            "description": "A URL to the JSON Schema for this object.",
+            "examples": [
+              "https://example.com/schemas/List-mail-presetsResponse.json"
+            ],
+            "format": "uri",
+            "readOnly": true,
+            "type": "string"
+          },
+          "presets": {
+            "items": {
+              "$ref": "#/components/schemas/MailPresetDTO"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "presets"
+        ],
+        "type": "object"
+      },
       "List-mail-provider-optionsResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1822,6 +1849,118 @@
         ],
         "type": "object"
       },
+      "MailPresetDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "credential_label": {
+            "type": "string"
+          },
+          "docs_url": {
+            "type": "string"
+          },
+          "encryption": {
+            "enum": [
+              "none",
+              "starttls",
+              "tls"
+            ],
+            "type": "string"
+          },
+          "help": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "port": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "region": {
+            "$ref": "#/components/schemas/MailPresetRegionDTO"
+          },
+          "username_fixed": {
+            "type": "string"
+          },
+          "username_mode": {
+            "enum": [
+              "user",
+              "fixed",
+              "same_as_password"
+            ],
+            "type": "string"
+          },
+          "username_prefill": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "host",
+          "port",
+          "encryption",
+          "username_mode",
+          "username_fixed",
+          "username_prefill",
+          "credential_label",
+          "help",
+          "docs_url"
+        ],
+        "type": "object"
+      },
+      "MailPresetRegionDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "default": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/MailPresetRegionOptionDTO"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "default",
+          "options"
+        ],
+        "type": "object"
+      },
+      "MailPresetRegionOptionDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "label",
+          "host"
+        ],
+        "type": "object"
+      },
       "MailProviderBody": {
         "additionalProperties": false,
         "properties": {
@@ -1857,6 +1996,9 @@
           "port": {
             "format": "int64",
             "type": "integer"
+          },
+          "provider_type": {
+            "type": "string"
           },
           "username": {
             "type": "string"
@@ -1911,6 +2053,12 @@
             "format": "int64",
             "type": "integer"
           },
+          "provider_label": {
+            "type": "string"
+          },
+          "provider_type": {
+            "type": "string"
+          },
           "username": {
             "type": "string"
           }
@@ -1923,6 +2071,8 @@
           "username",
           "from_address",
           "encryption",
+          "provider_type",
+          "provider_label",
           "created_at"
         ],
         "type": "object"
@@ -3721,6 +3871,34 @@
           }
         },
         "summary": "Revoke the current session"
+      }
+    },
+    "/api/v1/mail-presets": {
+      "get": {
+        "operationId": "list-mail-presets",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/List-mail-presetsResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List built-in outgoing-mail provider presets (admin only)"
       }
     },
     "/api/v1/mail-providers": {
