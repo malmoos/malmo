@@ -53,6 +53,8 @@ web-ui/
     ├── lib/
     │   └── utils.ts        # cn() class-merge helper (shadcn convention)
     │
+    ├── mailProviderForm.ts # outgoing-mail form shape + preset rules, shared by
+    │                       #   the add flow and the inline edit form
     ├── useInstall.ts       # catalog-app install flow (plan fetch, consent dialog,
     │                       #   duplicate/job errors, per-app button state) — shared
     │                       #   by AppDetailView; see "Install flow" below
@@ -70,6 +72,8 @@ web-ui/
     │       ├── InstalledAppsSection.vue  # manage/uninstall/logs list
     │       ├── ActivitySection.vue       # audit-log browser (all users)
     │       ├── UsersSection.vue          # admin-only user management
+    │       ├── OutgoingEmailSection.vue  # admin-only SMTP account list
+    │       ├── OutgoingEmailAddSection.vue # /mail/add + /mail/add/:preset
     │       └── AboutSection.vue          # product identity
     │
     └── components/         # reusable chrome + dialogs
@@ -78,6 +82,8 @@ web-ui/
         ├── AppTile.vue         # dashboard launcher tile (opens the app)
         ├── StoreAppCard.vue    # store browse card (links to the detail page)
         ├── AppGlyph.vue        # icon-less fallback: manifest icon_glyph → Lucide icon, else AppWindow
+        ├── MailProviderLogo.vue # provider mark from assets/mail-providers/, by preset id
+        │                        #   (that folder's README is the how-to for adding one)
         ├── SplitButton.vue
         ├── InstallDialog.vue, ElevateDialog.vue
         └── ToastHost.vue
