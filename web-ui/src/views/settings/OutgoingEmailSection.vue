@@ -71,6 +71,15 @@ const rowError = ref<Record<string, string>>({});
 
 const editPreset = computed(() => presetList.value.find((p) => p.id === editForm.value.provider_type));
 
+// The preset list can be missing: it is a second request, so it may still be in
+// flight when a row is opened, and it can fail on its own. A hand-typed row is
+// safe to edit without it — nothing pairs its fields. A preset row is not: with
+// no preset we cannot tell whether its username is tied to the credential
+// (Postmark), and a blank password on save means "keep the stored one". So the
+// username stays read-only until the list arrives, rather than falling back to
+// the hand-typed form and letting the pair drift apart.
+const editPresetUnknown = computed(() => !editPreset.value && editForm.value.provider_type !== "custom");
+
 function clearRowError(id: string) {
   const next = { ...rowError.value };
   delete next[id];
@@ -313,7 +322,10 @@ function fid(form: "new" | "edit", name: string, rowID = ""): string {
               />
             </div>
 
-            <div v-if="!editPreset || editPreset.username_mode === 'user'" class="space-y-1.5">
+            <div
+              v-if="!editPresetUnknown && (!editPreset || editPreset.username_mode === 'user')"
+              class="space-y-1.5"
+            >
               <label class="text-sm font-medium" :for="fid('edit', 'username', p.id)">Username</label>
               <input
                 :id="fid('edit', 'username', p.id)"
@@ -372,15 +384,29 @@ function fid(form: "new" | "edit", name: string, rowID = ""): string {
                      two fields must stay equal, and a blank password on edit
                      means "keep the stored one", so an edit here would leave the
                      account with a username the credential no longer matches. -->
-                <div v-if="editPreset && editPreset.username_mode !== 'user'" class="space-y-1.5">
+                <div
+                  v-if="editPresetUnknown || (editPreset && editPreset.username_mode !== 'user')"
+                  class="space-y-1.5"
+                >
                   <label class="text-sm font-medium" :for="fid('edit', 'adv-username', p.id)">Username</label>
                   <input
                     :id="fid('edit', 'adv-username', p.id)"
                     v-model="editForm.username"
                     :class="fieldClass"
-                    :disabled="editPreset.username_mode === 'same_as_password'"
+                    :disabled="editPresetUnknown || editPreset?.username_mode === 'same_as_password'"
                     autocomplete="off"
                   />
+                  <p v-if="editPresetUnknown" class="text-xs text-muted-foreground">
+                    {{ presets.isError.value
+                      ? "The provider list did not load, so the username stays locked."
+                      : "Loading the provider settings…" }}
+                    <button
+                      v-if="presets.isError.value"
+                      type="button"
+                      class="underline"
+                      @click="presets.refetch()"
+                    >Try again</button>
+                  </p>
                 </div>
               </div>
             </details>

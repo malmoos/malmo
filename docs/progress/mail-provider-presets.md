@@ -85,13 +85,15 @@ Choosing an account at install time was a plain radio list of account names. An 
 
 This needed one field on the wire. `MailProviderOption`, the id+label shape the install plan and `GET /api/v1/mail-providers/options` both return, gains `provider_type`, which is the preset id the logo is looked up by. It names a brand, not a host or a credential, so it is safe on both non-admin surfaces. `MailProviderLogo` already maps a preset id to a bundled file, so no new asset work was needed.
 
-## Two holes an automated review found
+## Three holes an automated review found
 
-Both are in the add and edit forms, and both fail the same way: quietly.
+All three are in the add and edit forms, and all three fail the same way: quietly.
 
 **A failed preset load left no way forward.** The provider list comes from the server, and "Custom SMTP server" is one of its entries, so a failed `GET /api/v1/mail-presets` rendered an empty grid with no message and nothing to click. A deep link into `/settings/mail/add/<preset>` was worse: it sat on "Loading…" forever, because the "unknown preset" redirect only fires once the list has arrived. Both now say the list could not be loaded and offer a retry.
 
 **The Advanced username could diverge from a paired credential.** For a `same_as_password` preset (Postmark), the username *is* the server token. On the add form an edit there was silently overwritten; on the edit form, where a blank password means "keep the stored one", it was saved on its own and the account started failing AUTH with nothing in the UI to explain it. The field is now shown but disabled for that mode, so the pairing rule is visible instead of enforceable-in-theory. `fixed` presets (SendGrid's literal `apikey`) stay editable: there the username is a real value an admin might need to override.
+
+**The same pairing rule vanished when the preset list was missing.** The first fix only covered the case where the preset resolved. `editPreset` is looked up in the preset list, and that list is a second request: it can still be in flight when a row is opened, and it can fail on its own. With no preset the edit form fell back to the hand-typed form, showed a free username field, and `syncSameAsPassword` had nothing to act on — so a Postmark row could be saved with a new username and, because the password was left blank, the old token. Now a row whose `provider_type` is not `custom` keeps its username read-only until the list arrives, and says whether it is still loading or failed, with a retry. A hand-typed row is unaffected: nothing pairs its fields.
 
 ## Known gaps
 
