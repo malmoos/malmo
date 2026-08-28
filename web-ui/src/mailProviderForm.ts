@@ -94,7 +94,7 @@ export function formValid(f: ProviderForm): boolean {
 export function portWarning(f: ProviderForm): string {
   if (!isHosted()) return "";
   if (f.port !== 25 && f.port !== 465) return "";
-  return `This box cannot reach port ${f.port}. Use port 587 with STARTTLS — every provider in the list supports it.`;
+  return `This box cannot reach port ${f.port}. Use port 587 with STARTTLS. Every provider in the list supports it.`;
 }
 
 // bodyOf drops the UI-only region field: the brain stores the resolved host, not

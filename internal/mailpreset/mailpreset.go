@@ -160,7 +160,7 @@ var presets = []Preset{
 		Encryption:      "starttls",
 		UsernameMode:    UsernameUser,
 		CredentialLabel: "SMTP key",
-		Help:            "Go to SMTP & API in Brevo. The login shown there looks like 12ab34@smtp-brevo.com — that is the username, not your account email. The password is an SMTP key, not an API key.",
+		Help:            "Go to SMTP & API in Brevo. The login shown there looks like 12ab34@smtp-brevo.com. That is the username, not your account email. The password is an SMTP key, not an API key.",
 		DocsURL:         "https://help.brevo.com/hc/en-us/articles/7924908994450-Send-transactional-emails-using-Brevo-SMTP",
 	},
 	{
@@ -194,7 +194,7 @@ var presets = []Preset{
 		Encryption:      "starttls",
 		UsernameMode:    UsernameUser,
 		CredentialLabel: "App password",
-		Help:            "The username is the full Google Workspace address. The password is a 16-character app password, which needs 2-Step Verification turned on for that account — your normal Google password will not work.",
+		Help:            "The username is the full Google Workspace address. The password is a 16-character app password, which needs 2-Step Verification turned on for that account. Your normal Google password will not work.",
 		DocsURL:         "https://knowledge.workspace.google.com/admin/gmail/send-email-from-a-printer-scanner-or-app",
 	},
 	{

@@ -47,7 +47,7 @@ const hasFootprint = computed(
 const downloadLine = computed(() =>
   fp.value.download_bytes > 0
     ? `Download about ${formatSize(fp.value.download_bytes)}.`
-    : "Already downloaded — nothing new to fetch.",
+    : "Already downloaded, nothing new to fetch.",
 );
 // The space line leads with the immediate on-disk image size; working data is a
 // qualitative "grows as you use it" (its concrete estimate feeds only the
@@ -413,7 +413,7 @@ function handleSubmit() {
             v-if="notEnoughSpace"
             class="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
           >
-            This might not fit — only about {{ formatSize(fp.free_bytes) }} free on your box. You can still install.
+            This might not fit. Only about {{ formatSize(fp.free_bytes) }} free on your box. You can still install.
           </p>
         </div>
 

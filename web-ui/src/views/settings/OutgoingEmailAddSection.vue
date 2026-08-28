@@ -217,7 +217,7 @@ function fid(name: string): string {
             </option>
           </select>
           <p class="text-xs text-muted-foreground">
-            Pick the region your account is in — it decides which server malmo connects to.
+            Pick the region your account is in. It decides which server malmo connects to.
           </p>
         </div>
 

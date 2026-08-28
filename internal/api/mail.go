@@ -535,7 +535,7 @@ func blockedPortHint(prof profile.Profile, p store.MailProvider, err error) stri
 	if !errors.As(err, &de) {
 		return ""
 	}
-	return fmt.Sprintf(" — this box cannot reach port %d. Use port 587 with STARTTLS, "+
+	return fmt.Sprintf(". This box cannot reach port %d. Use port 587 with STARTTLS, "+
 		"which every major provider supports.", p.Port)
 }
 
@@ -620,7 +620,7 @@ func sendTestMail(ctx context.Context, p store.MailProvider, to string) error {
 		return fmt.Errorf("data: %w", err)
 	}
 	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: malmo test email\r\nDate: %s\r\n\r\n"+
-		"This is a test email from your malmo box — outgoing-mail provider %q is working.\r\n",
+		"This is a test email from your malmo box. Outgoing-mail provider %q is working.\r\n",
 		p.FromAddress, to, time.Now().Format(time.RFC1123Z), p.Label)
 	if _, err := w.Write([]byte(msg)); err != nil {
 		return fmt.Errorf("send body: %w", err)

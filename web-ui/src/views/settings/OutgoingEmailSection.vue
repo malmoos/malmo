@@ -161,7 +161,7 @@ function fid(form: "new" | "edit", name: string, rowID = ""): string {
     <section class="space-y-3">
       <h2 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Outgoing email</h2>
       <p class="text-sm text-muted-foreground">
-        Add an email account your apps can send from — password resets, reminders, invites. Apps choose an account when you install them.
+        Add an email account your apps can send from: password resets, reminders, invites. Apps choose an account when you install them.
       </p>
       <!-- With no accounts the call to action is the empty state below, so the
            header does not repeat it. -->
@@ -394,7 +394,7 @@ function fid(form: "new" | "edit", name: string, rowID = ""): string {
 
           <!-- Per-row test confirmation / error -->
           <p v-if="testSent[p.id]" class="text-xs text-muted-foreground">
-            Test email sent to {{ testSent[p.id] }} — check that inbox.
+            Test email sent to {{ testSent[p.id] }}. Check that inbox.
           </p>
           <p v-if="rowError[p.id]" class="text-xs text-destructive">{{ rowError[p.id] }}</p>
         </li>
