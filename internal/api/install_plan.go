@@ -59,18 +59,23 @@ type InstallPlanConfigField struct {
 
 // InstallPlanMail is the outgoing-mail picker block, present only when the
 // manifest declares mail support (SERVICE_PROVISIONING.md # BYO outgoing
-// mail). Providers carry id+label only — the full provider settings (host,
-// username) stay on the admin-only CRUD surface; any installer just picks a
-// name. Empty Providers ⇒ the UI renders the picker with only "None".
+// mail). Providers carry id, label and preset only. The full provider settings
+// (host, username) stay on the admin-only CRUD surface; any installer just
+// picks a name. Empty Providers ⇒ the UI renders the picker with only "None".
 type InstallPlanMail struct {
 	Optional  bool                 `json:"optional"`
 	Providers []MailProviderOption `json:"providers"`
 }
 
-// MailProviderOption is one picker entry: the binding handle plus its label.
+// MailProviderOption is one picker entry: the binding handle, its label, and
+// the preset it was created from. ProviderType is the brand behind the account
+// ("postmark", "custom"), which is what lets a picker draw the provider logo
+// next to the account name. It carries no credential and no host, so it is
+// safe on the non-admin surfaces this type serves.
 type MailProviderOption struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
+	ID           string `json:"id"`
+	Label        string `json:"label"`
+	ProviderType string `json:"provider_type"`
 }
 
 // InstallPlanFootprint is the box-specific on-disk estimate the install dialog
@@ -327,7 +332,7 @@ func (s *Server) installPlan(ctx context.Context, in *struct {
 		}
 		mail := &InstallPlanMail{Optional: man.Mail.Optional, Providers: []MailProviderOption{}}
 		for _, p := range providers {
-			mail.Providers = append(mail.Providers, MailProviderOption{ID: p.ID, Label: p.Label})
+			mail.Providers = append(mail.Providers, MailProviderOption{ID: p.ID, Label: p.Label, ProviderType: p.ProviderType})
 		}
 		plan.Mail = mail
 	}

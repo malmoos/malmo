@@ -70,7 +70,7 @@ func (s *Server) registerMail(api huma.API) {
 
 	huma.Register(api, huma.Operation{
 		OperationID: "list-mail-provider-options", Method: "GET", Path: "/api/v1/mail-providers/options",
-		Summary: "List provider picker options — id and label only (any authenticated user)",
+		Summary: "List provider picker options: id, label and provider type (any authenticated user)",
 	}, s.listMailProviderOptions)
 
 	huma.Register(api, huma.Operation{
@@ -263,9 +263,10 @@ func (s *Server) listMailProviders(ctx context.Context, _ *struct{}) (*struct {
 	return out, nil
 }
 
-// listMailProviderOptions is the non-admin sibling of listMailProviders: id +
-// label only, for the rebind picker on an app detail page (a member may rebind
-// their own personal instance, so the names must be readable without admin).
+// listMailProviderOptions is the non-admin sibling of listMailProviders: id,
+// label and provider type only, for the rebind picker on an app detail page (a
+// member may rebind their own personal instance, so the names must be readable
+// without admin).
 // The install dialog's picker rides the install plan instead.
 func (s *Server) listMailProviderOptions(ctx context.Context, _ *struct{}) (*struct {
 	Body struct {
@@ -286,7 +287,7 @@ func (s *Server) listMailProviderOptions(ctx context.Context, _ *struct{}) (*str
 	}{}
 	out.Body.Providers = []MailProviderOption{}
 	for _, p := range providers {
-		out.Body.Providers = append(out.Body.Providers, MailProviderOption{ID: p.ID, Label: p.Label})
+		out.Body.Providers = append(out.Body.Providers, MailProviderOption{ID: p.ID, Label: p.Label, ProviderType: p.ProviderType})
 	}
 	return out, nil
 }

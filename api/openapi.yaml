@@ -1479,9 +1479,12 @@ components:
           type: string
         label:
           type: string
+        provider_type:
+          type: string
       required:
         - id
         - label
+        - provider_type
       type: object
     NotificationDTO:
       additionalProperties: false
@@ -2710,7 +2713,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
-      summary: List provider picker options — id and label only (any authenticated user)
+      summary: "List provider picker options: id, label and provider type (any authenticated user)"
   /api/v1/mail-providers/verify:
     post:
       operationId: verify-mail-provider-config

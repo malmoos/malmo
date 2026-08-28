@@ -491,7 +491,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List provider picker options — id and label only (any authenticated user) */
+        /** List provider picker options: id, label and provider type (any authenticated user) */
         get: operations["list-mail-provider-options"];
         put?: never;
         post?: never;
@@ -1574,6 +1574,7 @@ export interface components {
         MailProviderOption: {
             id: string;
             label: string;
+            provider_type: string;
         };
         NotificationDTO: {
             action_label?: string;

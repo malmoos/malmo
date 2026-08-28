@@ -301,7 +301,7 @@ func TestListMailProviderOptionsMemberVisible(t *testing.T) {
 	}
 	raw, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	// id + label only: no host, no credential.
+	// id, label and provider type only: no host, no credential.
 	if strings.Contains(string(raw), "smtp.example.com") || strings.Contains(string(raw), "s3cret-pass") {
 		t.Fatalf("options response leaks provider details: %s", raw)
 	}

@@ -79,6 +79,12 @@ Sending the check mail to a malmo-owned address was considered and rejected. A n
 
 Not audited, and admin-only rather than elevation-class: it stores nothing and sends nothing.
 
+## The picker inside the install dialog
+
+Choosing an account at install time was a plain radio list of account names. An account name is whatever the admin typed ("Work mail"), so the list did not say which provider actually sends the mail. The dialog now uses the same stacked cards the rest of the dashboard uses for a choice like this: one card per account, the provider logo on the left, the whole card as the hit target, and the selected card carrying an outline. "None" is the first card and stays a normal choice, with "Email features stay off." under it.
+
+This needed one field on the wire. `MailProviderOption`, the id+label shape the install plan and `GET /api/v1/mail-providers/options` both return, gains `provider_type`, which is the preset id the logo is looked up by. It names a brand, not a host or a credential, so it is safe on both non-admin surfaces. `MailProviderLogo` already maps a preset id to a bundled file, so no new asset work was needed.
+
 ## Known gaps
 
 - **No live test-send was performed against any provider.** That is the issue's real acceptance gate — a *username* rule can be wrong in a way neither a unit test nor the connectivity probe sees — and it needs a provisioned hosted box plus a real account at each provider. The hosts and ports are now verified live (above); the username rules are verified against current vendor docs and nothing more. The three worth an account are SendGrid (the fixed `apikey`), Brevo (the `xxx@smtp-brevo.com` login, the correction most likely to be wrong) and Postmark (`same_as_password`, the only structurally unusual mode).
