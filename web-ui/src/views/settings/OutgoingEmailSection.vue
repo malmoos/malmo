@@ -368,12 +368,17 @@ function fid(form: "new" | "edit", name: string, rowID = ""): string {
                     <option value="none">No encryption</option>
                   </select>
                 </div>
+                <!-- Not editable for a same_as_password preset (Postmark): the
+                     two fields must stay equal, and a blank password on edit
+                     means "keep the stored one", so an edit here would leave the
+                     account with a username the credential no longer matches. -->
                 <div v-if="editPreset && editPreset.username_mode !== 'user'" class="space-y-1.5">
                   <label class="text-sm font-medium" :for="fid('edit', 'adv-username', p.id)">Username</label>
                   <input
                     :id="fid('edit', 'adv-username', p.id)"
                     v-model="editForm.username"
                     :class="fieldClass"
+                    :disabled="editPreset.username_mode === 'same_as_password'"
                     autocomplete="off"
                   />
                 </div>

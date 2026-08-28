@@ -140,6 +140,13 @@ function fid(name: string): string {
           Pick your provider and malmo fills in the server settings for you.
         </p>
         <p v-if="presets.isLoading.value" class="text-sm text-muted-foreground">Loading…</p>
+        <!-- The list is server-side, and "Custom SMTP server" is one of its
+             entries, so a failed load leaves nothing to click. Say so and offer
+             a retry rather than rendering an empty grid. -->
+        <div v-else-if="presets.isError.value" class="space-y-2">
+          <p class="text-sm text-destructive">Could not load the provider list.</p>
+          <Button variant="secondary" size="sm" @click="presets.refetch()">Try again</Button>
+        </div>
         <div v-else class="grid gap-3 sm:grid-cols-3">
           <RouterLink
             v-for="p in presetList"
@@ -269,9 +276,19 @@ function fid(name: string): string {
                 <option value="none">No encryption</option>
               </select>
             </div>
+            <!-- A same_as_password preset (Postmark) keeps username and password
+                 equal, so this field is shown but not editable: an independent
+                 edit would be silently overwritten here, and on the edit form it
+                 would diverge from the stored credential and break AUTH. -->
             <div v-if="preset.username_mode !== 'user'" class="space-y-1.5">
               <label class="text-sm font-medium" :for="fid('adv-username')">Username</label>
-              <input :id="fid('adv-username')" v-model="form.username" :class="fieldClass" autocomplete="off" />
+              <input
+                :id="fid('adv-username')"
+                v-model="form.username"
+                :class="fieldClass"
+                :disabled="preset.username_mode === 'same_as_password'"
+                autocomplete="off"
+              />
               <p class="text-xs text-muted-foreground">
                 {{ preset.username_mode === "fixed"
                   ? `${preset.label} requires this exact value.`
@@ -307,7 +324,13 @@ function fid(name: string): string {
       </div>
     </section>
 
-    <!-- Presets still loading on a deep link straight into the form. -->
+    <!-- Deep link straight into a form URL, with no preset to render yet. It
+         is still loading, or the load failed and there is nothing to fall back
+         on, so say which. -->
+    <div v-else-if="presets.isError.value" class="space-y-2">
+      <p class="text-sm text-destructive">Could not load the provider list.</p>
+      <Button variant="secondary" size="sm" @click="presets.refetch()">Try again</Button>
+    </div>
     <p v-else class="text-sm text-muted-foreground">Loading…</p>
   </div>
 </template>

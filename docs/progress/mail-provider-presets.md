@@ -85,6 +85,14 @@ Choosing an account at install time was a plain radio list of account names. An 
 
 This needed one field on the wire. `MailProviderOption`, the id+label shape the install plan and `GET /api/v1/mail-providers/options` both return, gains `provider_type`, which is the preset id the logo is looked up by. It names a brand, not a host or a credential, so it is safe on both non-admin surfaces. `MailProviderLogo` already maps a preset id to a bundled file, so no new asset work was needed.
 
+## Two holes an automated review found
+
+Both are in the add and edit forms, and both fail the same way: quietly.
+
+**A failed preset load left no way forward.** The provider list comes from the server, and "Custom SMTP server" is one of its entries, so a failed `GET /api/v1/mail-presets` rendered an empty grid with no message and nothing to click. A deep link into `/settings/mail/add/<preset>` was worse: it sat on "Loading…" forever, because the "unknown preset" redirect only fires once the list has arrived. Both now say the list could not be loaded and offer a retry.
+
+**The Advanced username could diverge from a paired credential.** For a `same_as_password` preset (Postmark), the username *is* the server token. On the add form an edit there was silently overwritten; on the edit form, where a blank password means "keep the stored one", it was saved on its own and the account started failing AUTH with nothing in the UI to explain it. The field is now shown but disabled for that mode, so the pairing rule is visible instead of enforceable-in-theory. `fixed` presets (SendGrid's literal `apikey`) stay editable: there the username is a real value an admin might need to override.
+
 ## Known gaps
 
 - **No live test-send was performed against any provider.** That is the issue's real acceptance gate — a *username* rule can be wrong in a way neither a unit test nor the connectivity probe sees — and it needs a provisioned hosted box plus a real account at each provider. The hosts and ports are now verified live (above); the username rules are verified against current vendor docs and nothing more. The three worth an account are SendGrid (the fixed `apikey`), Brevo (the `xxx@smtp-brevo.com` login, the correction most likely to be wrong) and Postmark (`same_as_password`, the only structurally unusual mode).

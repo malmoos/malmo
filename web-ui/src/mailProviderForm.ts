@@ -114,4 +114,5 @@ export function errorMessage(e: unknown): string {
 // One field idiom across both views, matching CustomInstallView: a labelled
 // stack, one field per line, inset fill on the card with an olive focus ring.
 export const fieldClass =
-  "w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-accent";
+  "w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-accent " +
+  "disabled:cursor-not-allowed disabled:opacity-60";
