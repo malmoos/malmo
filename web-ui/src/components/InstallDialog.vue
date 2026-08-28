@@ -11,6 +11,8 @@
 import { computed, ref } from "vue";
 import { RouterLink } from "vue-router";
 import { SwitchRoot, SwitchThumb } from "reka-ui";
+import { MailX } from "lucide-vue-next";
+import MailProviderLogo from "./MailProviderLogo.vue";
 import type { InstallPlan, InstallPlanFolder, InstallPlanConfigField, InstallRequest, FolderElection, Scope } from "../api";
 import { useAuth } from "../auth";
 import { formatSize } from "../utils";
@@ -47,7 +49,7 @@ const hasFootprint = computed(
 const downloadLine = computed(() =>
   fp.value.download_bytes > 0
     ? `Download about ${formatSize(fp.value.download_bytes)}.`
-    : "Already downloaded — nothing new to fetch.",
+    : "Already downloaded, nothing new to fetch.",
 );
 // The space line leads with the immediate on-disk image size; working data is a
 // qualitative "grows as you use it" (its concrete estimate feeds only the
@@ -305,35 +307,62 @@ function handleSubmit() {
         </div>
 
         <!-- Outgoing-email picker (mail-capable apps only). None is always a
-             valid choice — the app installs with email features off. -->
+             valid choice: the app installs with email features off.
+             Stacked cards rather than a bare radio list, because the account
+             name alone ("Work mail") does not say which provider sends it —
+             the logo does. The radio covers the whole card, so the card is the
+             hit target and has-checked draws the selected outline. -->
         <div v-if="plan.mail" class="space-y-1.5">
           <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Outgoing email</p>
           <p class="text-sm text-muted-foreground">
-            {{ plan.name }} can send email — things like password resets and reminders. Pick the account it should send from.
+            {{ plan.name }} can send email, like password resets and reminders. Pick the account it should send from.
           </p>
-          <div class="flex flex-col gap-1">
-            <label
-              class="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-2.5 py-1.5 text-sm hover:bg-muted"
-              :class="mailProviderId === '' ? 'border-accent bg-muted' : ''"
-            >
-              <input type="radio" name="mail-provider" value="" v-model="mailProviderId" class="accent-accent" />
-              None — email features stay off
-            </label>
-            <label
-              v-for="p in mailProviders"
-              :key="p.id"
-              class="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-2.5 py-1.5 text-sm hover:bg-muted"
-              :class="mailProviderId === p.id ? 'border-accent bg-muted' : ''"
-            >
-              <input type="radio" name="mail-provider" :value="p.id" v-model="mailProviderId" class="accent-accent" />
-              {{ p.label }}
-            </label>
-          </div>
+          <fieldset :aria-label="`Outgoing email account for ${plan.name}`">
+            <div class="space-y-2">
+              <label
+                class="group relative flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 hover:bg-muted has-checked:outline-2 has-checked:-outline-offset-2 has-checked:outline-accent has-focus-visible:outline-3 has-focus-visible:-outline-offset-1"
+              >
+                <input
+                  type="radio"
+                  name="mail-provider"
+                  value=""
+                  v-model="mailProviderId"
+                  class="absolute inset-0 appearance-none focus:outline-none"
+                />
+                <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                  <MailX class="size-4 stroke-[1.5]" aria-hidden="true" />
+                </span>
+                <span class="flex flex-col text-sm">
+                  <span class="font-medium">None</span>
+                  <span class="text-muted-foreground">Email features stay off.</span>
+                </span>
+              </label>
+              <label
+                v-for="p in mailProviders"
+                :key="p.id"
+                class="group relative flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 hover:bg-muted has-checked:outline-2 has-checked:-outline-offset-2 has-checked:outline-accent has-focus-visible:outline-3 has-focus-visible:-outline-offset-1"
+              >
+                <input
+                  type="radio"
+                  name="mail-provider"
+                  :value="p.id"
+                  v-model="mailProviderId"
+                  class="absolute inset-0 appearance-none focus:outline-none"
+                />
+                <span class="flex size-8 shrink-0 items-center justify-center">
+                  <MailProviderLogo :id="p.provider_type" :label="p.label" size="inline" />
+                </span>
+                <span class="flex flex-col text-sm">
+                  <span class="font-medium">{{ p.label }}</span>
+                </span>
+              </label>
+            </div>
+          </fieldset>
           <p v-if="canAddProvider" class="text-xs text-muted-foreground">
             <RouterLink to="/settings/mail" class="underline hover:text-foreground">
               {{ mailProviders.length === 0 ? "Add an email account in Settings" : "Manage email accounts" }}
             </RouterLink>
-            <template v-if="mailProviders.length === 0"> — you can also bind one later from the app's page.</template>
+            <template v-if="mailProviders.length === 0">. You can also bind one later from the app's page.</template>
           </p>
         </div>
 
@@ -413,7 +442,7 @@ function handleSubmit() {
             v-if="notEnoughSpace"
             class="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
           >
-            This might not fit — only about {{ formatSize(fp.free_bytes) }} free on your box. You can still install.
+            This might not fit. Only about {{ formatSize(fp.free_bytes) }} free on your box. You can still install.
           </p>
         </div>
 

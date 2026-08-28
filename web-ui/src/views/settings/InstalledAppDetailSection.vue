@@ -16,6 +16,7 @@ import { SwitchRoot, SwitchThumb } from "reka-ui";
 import { api, waitForJob, type Instance, type CatalogDetail, type Job, type MailProviderOption, type AppSecrets, type AppSecret, type AppConfig, type AppConfigField, type Exposure } from "@/api";
 import { useAuth, isHosted } from "@/auth";
 import AppLogs from "@/components/AppLogs.vue";
+import Button from "@/components/ui/Button.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -304,55 +305,49 @@ const saveConfig = useMutation({
           :href="app.url"
           target="_blank"
           rel="noopener"
-          class="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-accent-foreground hover:opacity-90"
+          class="inline-flex shrink-0 items-center justify-center rounded-full bg-accent px-4 py-2 text-sm/7 font-medium text-accent-foreground transition-colors hover:bg-olive-800"
         >
           Open
         </a>
 
-        <button
-          v-if="canControl && running"
-          class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
-          :disabled="busy"
-          @click="stop.mutate()"
-        >
+        <Button v-if="canControl && running" variant="secondary" size="sm" :disabled="busy" @click="stop.mutate()">
           {{ stop.isPending.value ? "Stopping…" : "Stop service" }}
-        </button>
-        <button
+        </Button>
+        <Button
           v-else-if="canControl && (stopped || failed)"
-          class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+          variant="secondary"
+          size="sm"
           :disabled="busy"
           @click="start.mutate()"
         >
           <template v-if="failed">{{ start.isPending.value ? "Retrying…" : "Retry" }}</template>
           <template v-else>{{ start.isPending.value ? "Starting…" : "Start service" }}</template>
-        </button>
+        </Button>
 
         <template v-if="canControl">
           <template v-if="confirmingUninstall">
             <span class="text-sm text-muted-foreground">Uninstall {{ app.name }}? This deletes its data.</span>
-            <button
-              class="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/20 disabled:opacity-50"
+            <Button
+              variant="secondary"
+              size="sm"
+              class="border-destructive text-destructive hover:bg-destructive/10"
               :disabled="busy"
               @click="uninstall.mutate()"
             >
               {{ uninstall.isPending.value ? "Uninstalling…" : "Confirm uninstall" }}
-            </button>
-            <button
-              class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
-              :disabled="busy"
-              @click="confirmingUninstall = false"
-            >
-              Cancel
-            </button>
+            </Button>
+            <Button variant="ghost" size="sm" :disabled="busy" @click="confirmingUninstall = false">Cancel</Button>
           </template>
-          <button
+          <Button
             v-else
-            class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+            variant="ghost"
+            size="sm"
+            class="text-destructive hover:bg-destructive/10"
             :disabled="busy"
             @click="confirmingUninstall = true"
           >
             Uninstall
-          </button>
+          </Button>
         </template>
       </section>
 
@@ -382,7 +377,7 @@ const saveConfig = useMutation({
               v-for="opt in exposureOptions"
               :key="opt.value"
               type="button"
-              class="rounded-md px-3 py-1 transition-colors"
+              class="cursor-pointer rounded-md px-3 py-1 transition-colors disabled:cursor-default"
               :class="exposure === opt.value ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground'"
               :aria-pressed="exposure === opt.value"
               :disabled="setExposure.isPending.value || busy || opt.value === exposure"
@@ -447,20 +442,12 @@ const saveConfig = useMutation({
                 {{ revealed.has(s.name) ? s.value : "••••••••••••" }}
               </div>
             </div>
-            <button
-              type="button"
-              class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
-              @click="toggleReveal(s.name)"
-            >
+            <Button type="button" variant="secondary" size="sm" @click="toggleReveal(s.name)">
               {{ revealed.has(s.name) ? "Hide" : "Reveal" }}
-            </button>
-            <button
-              type="button"
-              class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
-              @click="copySecret(s)"
-            >
+            </Button>
+            <Button type="button" variant="secondary" size="sm" @click="copySecret(s)">
               {{ copied === s.name ? "Copied" : "Copy" }}
-            </button>
+            </Button>
           </li>
         </ul>
       </section>
@@ -493,13 +480,9 @@ const saveConfig = useMutation({
             <template v-if="f.secret">
               <div v-if="!replacing.has(f.app_env)" class="flex items-center gap-3">
                 <span class="text-sm text-muted-foreground">{{ f.set ? "•••••••• (set)" : "Not set" }}</span>
-                <button
-                  type="button"
-                  class="rounded-lg border border-border px-3 py-1 text-sm hover:bg-muted"
-                  @click="startReplace(f.app_env)"
-                >
+                <Button type="button" variant="secondary" size="sm" @click="startReplace(f.app_env)">
                   {{ f.set ? "Replace" : "Set" }}
-                </button>
+                </Button>
               </div>
               <div v-else class="flex items-center gap-2">
                 <input
@@ -509,13 +492,7 @@ const saveConfig = useMutation({
                   placeholder="Enter a new value"
                   class="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm outline-none focus:border-accent"
                 />
-                <button
-                  type="button"
-                  class="shrink-0 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
-                  @click="cancelReplace(f.app_env)"
-                >
-                  Cancel
-                </button>
+                <Button type="button" variant="ghost" size="sm" @click="cancelReplace(f.app_env)">Cancel</Button>
               </div>
             </template>
 
@@ -552,14 +529,14 @@ const saveConfig = useMutation({
         </div>
 
         <div class="flex items-center gap-3">
-          <button
+          <Button
             type="button"
-            class="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-accent-foreground hover:opacity-90 disabled:opacity-50"
+            size="sm"
             :disabled="!dirty || !configValid || saveConfig.isPending.value"
             @click="saveConfig.mutate()"
           >
             {{ saveConfig.isPending.value ? "Saving…" : "Save changes" }}
-          </button>
+          </Button>
           <span v-if="saveConfig.isPending.value" class="text-xs text-muted-foreground">
             The app restarts briefly.
           </span>
@@ -575,7 +552,7 @@ const saveConfig = useMutation({
       <section v-if="canControl" class="flex flex-col gap-2">
         <button
           type="button"
-          class="flex w-full shrink-0 items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 text-sm hover:bg-muted"
+          class="flex w-full shrink-0 cursor-pointer items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 text-sm hover:bg-muted"
           :aria-expanded="logsOpen"
           @click="logsOpen = !logsOpen"
         >

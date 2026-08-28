@@ -139,6 +139,20 @@ make dev          # starts Caddy detached, then backgrounds agent + brain + ui
 No extra tools — pure bash supervisor with a `trap` that kills the process
 group on signal.
 
+### Go changes rebuild themselves
+
+Vite watches the UI, and since `dev/dev-go.sh` the Go side is watched too: save a file under `cmd/` or `internal/` and `make dev` rebuilds both binaries and restarts them, printing `[watch]` lines as it goes. Before this, a brain edit only reached the running process on the next `make dev`, and the symptom was never obvious — a route added minutes ago answering 405, a new response field arriving `undefined`.
+
+Three things about how it behaves:
+
+- **The debounce is long: 10 seconds of no further edits before it builds.** Most edits here arrive from a coding agent, which writes a burst of files over several seconds; a short debounce would restart the brain in the middle of one, again and again. Editing by hand? `MALMO_DEV_DEBOUNCE=2 make dev`. `MALMO_DEV_POLL` (default 2s) is how often it looks.
+- **A failed build leaves the running brain alone.** The build goes to `.dev/next/` first, and only a build that succeeded stops anything. A typo costs you a `[watch] build failed` line, not your stack.
+- **A restart drops open SSE streams and kills any install job in flight.** The dashboard reconnects on its own; an install that was running does not resume.
+
+A rebuild is about 7 seconds for a change in `internal/api` (recompile plus linking a 22MB binary), 1–3 seconds for a leaf package, and nothing at all while you are only editing the UI.
+
+The watcher needs GNU `find` (`-newermt`), so it is Linux and WSL. Elsewhere `make dev` prints one line saying Go changes will not rebuild and runs exactly as it did before.
+
 **Four terminals (no extra tools):**
 
 ```bash
