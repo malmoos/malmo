@@ -53,7 +53,7 @@ help:
 	@echo "make check-web   - pre-PR gate for frontend changes: web-ui typecheck + build"
 	@echo "make clean       - stop apps, remove dev state"
 	@echo "make control-plane-images - build malmo-brain + malmo-ui images and docker-save the control-plane bundle to .dev/"
-	@echo "make dev         - all three foreground procs in one terminal (recommended)"
+	@echo "make dev         - all three foreground procs in one terminal (recommended); Go edits rebuild + restart the brain"
 	@echo "make dev-app APP=<id> [STORE=../store] - boot ONE store app under curation: seed its catalog snapshot, then make dev with an inert catalog URL"
 	@echo "make seed-catalog APPS=\"<id> <id> ...\" [HOMEFILE=<path/to/home.yml>] - seed several store apps (+ optionally the curated landing) into a local snapshot file, without starting dev"
 	@echo "make fmt         - rewrite Go sources into gofmt-canonical form (autofix)"
@@ -317,8 +317,7 @@ dev: check-state-owner build caddy
 	@mkdir -p $(STATE_DIR)
 	@cd web-ui && [ -d node_modules ] || npm install
 	@trap 'kill 0' INT TERM EXIT; \
-	  (MALMO_DEV_AVAHI=1 $(DEV_DIR)/host-agent 2>&1 | sed -u 's/^/[agent] /') & \
-	  ($(DEV_DIR)/brain      2>&1 | sed -u 's/^/[brain] /') & \
+	  (GO="$(GO)" DEV_DIR="$(DEV_DIR)" LDFLAGS="$(LDFLAGS)" ./dev/dev-go.sh) & \
 	  (cd web-ui && npm run dev 2>&1 | sed -u 's/^/[ui]    /') & \
 	  wait
 
@@ -431,4 +430,4 @@ clean: stop caddy-down
 	@# where the privileged uninstall path removes it. A plain `rm` as the dev
 	@# user can't, so reclaim it via a throwaway root container first. No sudo.
 	-@docker run --rm -v $(abspath $(DEV_DIR)/state):/state alpine:3 rm -rf /state 2>/dev/null || true
-	rm -rf $(DEV_DIR)/state
+	rm -rf $(DEV_DIR)/state $(DEV_DIR)/next
