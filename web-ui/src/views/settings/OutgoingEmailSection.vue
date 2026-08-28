@@ -180,7 +180,7 @@ function fid(form: "new" | "edit", name: string, rowID = ""): string {
         :src="paperAirplane"
         alt=""
         aria-hidden="true"
-        class="pointer-events-none absolute bottom-0 right-0 w-[30%] opacity-50"
+        class="pointer-events-none absolute bottom-0 right-0 w-[30%] opacity-30"
       />
       <div class="relative text-center">
         <h3 class="text-sm font-semibold text-foreground">No email accounts</h3>
