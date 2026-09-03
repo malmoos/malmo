@@ -166,6 +166,17 @@ const rebindMail = useMutation({
 const NO_PROVIDER = "__none__";
 const mailProviders = computed<MailProviderOption[]>(() => mailOptions.data.value?.providers ?? []);
 const boundProvider = computed(() => mailProviders.value.find((p) => p.id === app.value?.mail_provider_id));
+// The binding and the account list arrive from two different requests, so there
+// is a window where the app IS bound and the list that names the account has not
+// landed yet. The trigger must not fill that window with "None": it is a definite
+// claim, and acting on it costs a rebind and an app restart. Say nothing certain
+// until the list is in, and keep the picker shut while it loads, so the only
+// choice on offer cannot be "unbind".
+const mailLabel = computed(() => {
+  if (boundProvider.value) return boundProvider.value.label;
+  if (!app.value?.mail_provider_id) return "None (email features off)";
+  return mailOptions.isLoading.value ? "Loading…" : "Unknown account";
+});
 
 // ── Setup secrets (#152, SERVICE_PROVISIONING.md # Env-var injection) ─────────
 // Owner-visible per-instance secrets a self-auth app declared `show: true` — the
@@ -465,7 +476,7 @@ const saveConfig = useMutation({
                to reka-ui, which is what this project already ships. -->
           <SelectRoot
             :model-value="app.mail_provider_id || NO_PROVIDER"
-            :disabled="rebindMail.isPending.value || busy"
+            :disabled="rebindMail.isPending.value || busy || mailOptions.isLoading.value"
             @update:model-value="(v) => rebindMail.mutate(v === NO_PROVIDER ? '' : String(v))"
           >
             <SelectTrigger
@@ -476,7 +487,7 @@ const saveConfig = useMutation({
                 <span v-if="boundProvider" class="flex size-5 shrink-0 items-center justify-center">
                   <MailProviderLogo :id="boundProvider.provider_type" :label="boundProvider.label" size="inline" />
                 </span>
-                <span class="truncate">{{ boundProvider?.label ?? "None (email features off)" }}</span>
+                <span class="truncate">{{ mailLabel }}</span>
               </span>
               <ChevronsUpDown class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
             </SelectTrigger>

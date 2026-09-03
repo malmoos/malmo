@@ -15,7 +15,9 @@ When reviewing an already-open PR, also read the existing review comments first 
 
 ## Prior review comments
 
-When the PR already carries review comments — from a human or from an AI code reviewer (Greptile, Copilot, CodeRabbit, and similar) — read them before writing your own findings. Read both the conversation thread *and* the inline review comments left on specific lines. Fetch them with `gh pr view <N> --comments` for the thread and `gh api repos/{owner}/{repo}/pulls/<N>/comments` for the line-level review comments.
+**Every review of an open PR checks the automated reviewers, every time.** Greptile runs on this repo and posts its review as a PR comment. It is slower than a review agent, so on a PR opened moments ago its comment is usually **not there yet** — an empty comment list means "not posted yet", never "nothing found". Check for it before you call the review finished; if it has not landed, wait and check again rather than reporting a clean review it might contradict. A self-review that skipped Greptile is not a finished self-review. This is not hypothetical: on #435 the agent review returned no findings and Greptile then caught a real bug in the same diff.
+
+When the PR carries review comments — from a human or from an AI code reviewer (Greptile, Copilot, CodeRabbit, and similar) — read them before writing your own findings. Read both the conversation thread *and* the inline review comments left on specific lines. Fetch them with `gh pr view <N> --comments` for the thread and `gh api repos/{owner}/{repo}/pulls/<N>/comments` for the line-level review comments.
 
 For each prior comment, do one of three things:
 
