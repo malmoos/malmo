@@ -318,7 +318,7 @@ function fid(name: string): string {
           <Button :disabled="create.isPending.value || !formValid(form)" @click="create.mutate()">
             {{ checking ? "Testing…" : create.isPending.value ? "Adding…" : "Add account" }}
           </Button>
-          <Button variant="ghost" @click="router.push('/settings/mail')">Cancel</Button>
+          <Button variant="ghost" :as="RouterLink" to="/settings/mail">Cancel</Button>
           <p v-if="createError" class="text-xs text-destructive">{{ createError }}</p>
         </div>
       </div>

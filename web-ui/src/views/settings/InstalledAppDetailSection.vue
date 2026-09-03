@@ -11,10 +11,22 @@
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter, RouterLink } from "vue-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/vue-query";
-import { AppWindow, ChevronDown } from "lucide-vue-next";
-import { SwitchRoot, SwitchThumb } from "reka-ui";
+import { AppWindow, Check, ChevronDown, ChevronsUpDown, ExternalLink } from "lucide-vue-next";
+import {
+  SwitchRoot,
+  SwitchThumb,
+  SelectRoot,
+  SelectTrigger,
+  SelectPortal,
+  SelectContent,
+  SelectViewport,
+  SelectItem,
+  SelectItemText,
+  SelectItemIndicator,
+} from "reka-ui";
 import { api, waitForJob, type Instance, type CatalogDetail, type Job, type MailProviderOption, type AppSecrets, type AppSecret, type AppConfig, type AppConfigField, type Exposure } from "@/api";
 import { useAuth, isHosted } from "@/auth";
+import MailProviderLogo from "@/components/MailProviderLogo.vue";
 import AppLogs from "@/components/AppLogs.vue";
 import Button from "@/components/ui/Button.vue";
 
@@ -117,16 +129,18 @@ const setExposure = useMutation({
   onSettled: invalidate,
 });
 // Paths the app's manifest keeps open to anyone even while the app is "Only me"
-// (#415 — an app whose API is token-authed and whose UI is session-authed). The
+// (#415, an app whose API is token-authed and whose UI is session-authed). The
 // label must say so: "Only me" would otherwise claim a narrower app than the box
-// is really serving. Empty for almost every app.
+// is really serving. It says *that* some paths are open, not which ones: the list
+// is manifest detail nobody acts on from this page, and naming it turned one
+// sentence into a wall. Empty for almost every app.
 const publicPaths = computed<string[]>(() => app.value?.public_paths ?? []);
 const accessSummary = computed(() => {
   if (exposure.value === "public") return "Anyone with the link can open it.";
   if (publicPaths.value.length > 0) {
-    return `Only you can open the app — visitors sign in to your box first. These paths stay open to anyone, so tools outside your box can reach them: ${publicPaths.value.join(", ")}`;
+    return "Only you can open the app. Visitors sign in to your box first. Some app paths are open to the public, so tools outside your box can reach them.";
   }
-  return "Only you can open it — visitors sign in to your box first.";
+  return "Only you can open it. Visitors sign in to your box first.";
 });
 
 // ── Outgoing email (SERVICE_PROVISIONING.md # BYO outgoing mail) ─────────────
@@ -144,6 +158,28 @@ const rebindMail = useMutation({
   mutationFn: async (providerId: string) =>
     awaitJob(await api.put<Job>(`/apps/${id.value}/mail-binding`, { provider_id: providerId })),
   onSettled: invalidate,
+});
+
+// "None" needs a value the picker can carry, and reka-ui reserves the empty
+// string (it is how a Select is cleared), so the unbound state travels as this
+// sentinel and turns back into "" on the way to the brain.
+const NO_PROVIDER = "__none__";
+const mailProviders = computed<MailProviderOption[]>(() => mailOptions.data.value?.providers ?? []);
+const boundProvider = computed(() => mailProviders.value.find((p) => p.id === app.value?.mail_provider_id));
+// The binding and the account list arrive from two different requests, so there
+// is a window where the app IS bound and the list that names the account has not
+// landed. The trigger must not fill that window with "None": it is a definite
+// claim, and acting on it costs a rebind and an app restart.
+//
+// The picker opens only once that list has actually arrived — isSuccess, not
+// "not loading". A failed request leaves the same empty list as a pending one,
+// and an enabled picker over an empty list offers exactly one action: unbind.
+const mailListReady = computed(() => mailOptions.isSuccess.value);
+const mailLabel = computed(() => {
+  if (boundProvider.value) return boundProvider.value.label;
+  if (!app.value?.mail_provider_id) return "None (email features off)";
+  if (mailOptions.isError.value) return "Account list unavailable";
+  return mailOptions.isLoading.value ? "Loading…" : "Unknown account";
 });
 
 // ── Setup secrets (#152, SERVICE_PROVISIONING.md # Env-var injection) ─────────
@@ -294,21 +330,33 @@ const saveConfig = useMutation({
           <p v-if="detail?.short_description" class="mt-0.5 text-sm text-muted-foreground">
             {{ detail.short_description }}
           </p>
+          <!-- The app's address, written out. The Open button below is a one-click
+               path, but it hides the URL and only exists while the app runs. This
+               shows the link itself, so it can be opened in a new tab, copied with
+               a right-click, or read out to another device. Clipboard copy is not
+               offered: navigator.clipboard is unavailable on the HTTP-only .local
+               origin, so right-click copy is the reliable path. -->
+          <a
+            v-if="app.url"
+            :href="app.url"
+            target="_blank"
+            rel="noopener"
+            class="mt-1 inline-flex max-w-full items-center gap-1.5 text-sm text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          >
+            <span class="truncate">{{ app.url }}</span>
+            <ExternalLink class="size-3.5 shrink-0" />
+          </a>
           <p class="mt-1 text-xs uppercase tracking-wide text-muted-foreground">{{ app.state }}</p>
         </div>
       </header>
 
       <!-- Action row -->
       <section class="flex flex-wrap items-center gap-2">
-        <a
-          v-if="running"
-          :href="app.url"
-          target="_blank"
-          rel="noopener"
-          class="inline-flex shrink-0 items-center justify-center rounded-full bg-accent px-4 py-2 text-sm/7 font-medium text-accent-foreground transition-colors hover:bg-olive-800"
-        >
+        <!-- A real anchor, so it opens a new tab, but the same pill at the same
+             size as the buttons beside it. -->
+        <Button v-if="running" as="a" size="sm" :href="app.url" target="_blank" rel="noopener">
           Open
-        </a>
+        </Button>
 
         <Button v-if="canControl && running" variant="secondary" size="sm" :disabled="busy" @click="stop.mutate()">
           {{ stop.isPending.value ? "Stopping…" : "Stop service" }}
@@ -386,6 +434,28 @@ const saveConfig = useMutation({
               {{ opt.label }}
             </button>
           </div>
+          <!-- The manifest's own open paths (#415), listed only while the app is
+               Only me: on a Public app every path is open, so naming a few would
+               read as a limit that isn't there. The summary line above says THAT
+               some paths are open; this says which. Badge shape ported from
+               Tailwind Plus (elements/badges 13-small-with-border) with the palette
+               mapped to malmo's tokens, and set in mono because a path is a literal
+               string someone types, like the secrets and env fields below. -->
+          <div
+            v-if="exposure === 'restricted' && publicPaths.length > 0"
+            class="w-full border-t border-border pt-3"
+          >
+            <div class="text-xs text-muted-foreground">These paths stay open to anyone:</div>
+            <ul class="mt-1.5 flex flex-wrap gap-1.5">
+              <li
+                v-for="path in publicPaths"
+                :key="path"
+                class="inline-flex items-center rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs font-medium text-muted-foreground inset-ring inset-ring-border"
+              >
+                {{ path }}
+              </li>
+            </ul>
+          </div>
         </div>
         <p v-if="setExposure.isError.value" class="text-sm text-destructive">
           Couldn't change access: {{ (setExposure.error.value as Error)?.message }}
@@ -399,20 +469,68 @@ const saveConfig = useMutation({
           <div class="min-w-0 flex-1">
             <div class="text-sm font-medium">Send email as</div>
             <div class="text-xs text-muted-foreground">
-              {{ rebindMail.isPending.value ? "Applying — the app restarts briefly." : "Changing this restarts the app briefly." }}
+              {{ rebindMail.isPending.value ? "Applying. The app restarts briefly." : "Changing this restarts the app briefly." }}
             </div>
           </div>
-          <select
-            :value="app.mail_provider_id ?? ''"
-            class="rounded-lg border border-border bg-background px-2 py-1 text-sm outline-none focus:border-accent disabled:opacity-50"
-            :disabled="rebindMail.isPending.value || busy"
-            @change="(e) => rebindMail.mutate((e.target as HTMLSelectElement).value)"
+          <!-- A listbox rather than a native <select>, because the choice is
+               "which of my accounts", and an account is recognised by its
+               provider's logo faster than by a name someone typed. Shape ported
+               from Tailwind Plus (forms/select-menus 05-custom-with-avatar) with
+               the palette on malmo's tokens and the Headless UI primitives mapped
+               to reka-ui, which is what this project already ships. -->
+          <SelectRoot
+            :model-value="app.mail_provider_id || NO_PROVIDER"
+            :disabled="rebindMail.isPending.value || busy || !mailListReady"
+            @update:model-value="(v) => rebindMail.mutate(v === NO_PROVIDER ? '' : String(v))"
           >
-            <option value="">None — email features off</option>
-            <option v-for="p in (mailOptions.data.value?.providers ?? [])" :key="p.id" :value="p.id">
-              {{ p.label }}
-            </option>
-          </select>
+            <SelectTrigger
+              aria-label="Email account"
+              class="inline-flex w-56 max-w-full cursor-pointer items-center justify-between gap-2 rounded-lg border border-border bg-background px-2 py-1 text-left text-sm outline-none focus:border-accent disabled:cursor-default disabled:opacity-50"
+            >
+              <span class="flex min-w-0 items-center gap-2">
+                <span v-if="boundProvider" class="flex size-5 shrink-0 items-center justify-center">
+                  <MailProviderLogo :id="boundProvider.provider_type" :label="boundProvider.label" size="inline" />
+                </span>
+                <span class="truncate">{{ mailLabel }}</span>
+              </span>
+              <ChevronsUpDown class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            </SelectTrigger>
+
+            <SelectPortal>
+              <SelectContent
+                position="popper"
+                :side-offset="4"
+                class="z-50 max-h-56 w-[var(--reka-select-trigger-width)] overflow-auto rounded-xl border border-border bg-card py-1 shadow-lg"
+              >
+                <SelectViewport>
+                  <SelectItem
+                    :value="NO_PROVIDER"
+                    class="relative flex cursor-pointer items-center gap-2 py-2 pl-3 pr-9 text-sm outline-none data-[highlighted]:bg-muted"
+                  >
+                    <span class="size-5 shrink-0" aria-hidden="true" />
+                    <SelectItemText>None (email features off)</SelectItemText>
+                    <SelectItemIndicator class="absolute inset-y-0 right-0 flex items-center pr-3">
+                      <Check class="size-4" aria-hidden="true" />
+                    </SelectItemIndicator>
+                  </SelectItem>
+                  <SelectItem
+                    v-for="p in mailProviders"
+                    :key="p.id"
+                    :value="p.id"
+                    class="relative flex cursor-pointer items-center gap-2 py-2 pl-3 pr-9 text-sm outline-none data-[highlighted]:bg-muted"
+                  >
+                    <span class="flex size-5 shrink-0 items-center justify-center">
+                      <MailProviderLogo :id="p.provider_type" :label="p.label" size="inline" />
+                    </span>
+                    <SelectItemText>{{ p.label }}</SelectItemText>
+                    <SelectItemIndicator class="absolute inset-y-0 right-0 flex items-center pr-3">
+                      <Check class="size-4" aria-hidden="true" />
+                    </SelectItemIndicator>
+                  </SelectItem>
+                </SelectViewport>
+              </SelectContent>
+            </SelectPortal>
+          </SelectRoot>
         </div>
         <p v-if="rebindMail.isError.value" class="text-sm text-destructive">
           Couldn't change the email account: {{ (rebindMail.error.value as Error)?.message }}
