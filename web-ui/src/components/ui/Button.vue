@@ -5,16 +5,17 @@
 // One source of truth for the app's primary/secondary/ghost buttons; every colour
 // flows from the olive semantic tokens (WEB_UI.md # Styling). Native button attrs
 // (type, disabled, @click, …) fall through to the root <button>.
-import { computed, type HTMLAttributes } from "vue";
+import { computed, type Component, type HTMLAttributes } from "vue";
 import { cn } from "@/lib/utils";
 
 const props = withDefaults(
   defineProps<{
     variant?: "primary" | "secondary" | "ghost";
     size?: "sm" | "md" | "icon";
+    as?: string | Component;
     class?: HTMLAttributes["class"];
   }>(),
-  { variant: "primary", size: "md" },
+  { variant: "primary", size: "md", as: "button" },
 );
 
 const base =
@@ -38,7 +39,7 @@ const classes = computed(() => cn(base, variants[props.variant], sizes[props.siz
 </script>
 
 <template>
-  <button :class="classes">
+  <component :is="as" :class="classes">
     <slot />
-  </button>
+  </component>
 </template>

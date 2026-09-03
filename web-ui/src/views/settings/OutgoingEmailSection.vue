@@ -174,11 +174,9 @@ function fid(form: "new" | "edit", name: string, rowID = ""): string {
       </p>
       <!-- With no accounts the call to action is the empty state below, so the
            header does not repeat it. -->
-      <RouterLink v-if="!isEmpty" to="/settings/mail/add">
-        <Button>
-          <Plus class="size-4" /> Add account
-        </Button>
-      </RouterLink>
+      <Button v-if="!isEmpty" :as="RouterLink" to="/settings/mail/add">
+        <Plus class="size-4" /> Add account
+      </Button>
     </section>
 
     <!-- Empty state: the whole main area, with the airplane sitting in the
@@ -197,11 +195,9 @@ function fid(form: "new" | "edit", name: string, rowID = ""): string {
           Add the account your apps will send from, and they can start sending password resets, reminders and invites.
         </p>
         <div class="mt-6">
-          <RouterLink to="/settings/mail/add">
-            <Button>
-              <Plus class="size-4" /> Add account
-            </Button>
-          </RouterLink>
+          <Button :as="RouterLink" to="/settings/mail/add">
+            <Plus class="size-4" /> Add account
+          </Button>
         </div>
       </div>
     </section>

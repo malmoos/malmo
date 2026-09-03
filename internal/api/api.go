@@ -554,7 +554,14 @@ func (s *Server) listApps(ctx context.Context, _ *struct{}) (*struct {
 		if e, err := s.catalog.Entry(i.ManifestID); err == nil {
 			ce = &e
 		}
-		out.Body.Apps = append(out.Body.Apps, s.toDTO(i, names[i.OwnerUserID], ce))
+		dto := s.toDTO(i, names[i.OwnerUserID], ce)
+		// The tile badge is exposure + public paths together, the same pair the
+		// detail page's access label is built from — a list DTO carrying only the
+		// exposure would draw a fully closed app that is in fact partly open.
+		// Costs one manifest read per app; best-effort, so a missing copy just
+		// leaves the field empty.
+		s.withPublicPaths(&dto)
+		out.Body.Apps = append(out.Body.Apps, dto)
 	}
 	return out, nil
 }
