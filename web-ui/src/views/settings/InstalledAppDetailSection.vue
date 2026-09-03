@@ -168,13 +168,17 @@ const mailProviders = computed<MailProviderOption[]>(() => mailOptions.data.valu
 const boundProvider = computed(() => mailProviders.value.find((p) => p.id === app.value?.mail_provider_id));
 // The binding and the account list arrive from two different requests, so there
 // is a window where the app IS bound and the list that names the account has not
-// landed yet. The trigger must not fill that window with "None": it is a definite
-// claim, and acting on it costs a rebind and an app restart. Say nothing certain
-// until the list is in, and keep the picker shut while it loads, so the only
-// choice on offer cannot be "unbind".
+// landed. The trigger must not fill that window with "None": it is a definite
+// claim, and acting on it costs a rebind and an app restart.
+//
+// The picker opens only once that list has actually arrived — isSuccess, not
+// "not loading". A failed request leaves the same empty list as a pending one,
+// and an enabled picker over an empty list offers exactly one action: unbind.
+const mailListReady = computed(() => mailOptions.isSuccess.value);
 const mailLabel = computed(() => {
   if (boundProvider.value) return boundProvider.value.label;
   if (!app.value?.mail_provider_id) return "None (email features off)";
+  if (mailOptions.isError.value) return "Account list unavailable";
   return mailOptions.isLoading.value ? "Loading…" : "Unknown account";
 });
 
@@ -476,7 +480,7 @@ const saveConfig = useMutation({
                to reka-ui, which is what this project already ships. -->
           <SelectRoot
             :model-value="app.mail_provider_id || NO_PROVIDER"
-            :disabled="rebindMail.isPending.value || busy || mailOptions.isLoading.value"
+            :disabled="rebindMail.isPending.value || busy || !mailListReady"
             @update:model-value="(v) => rebindMail.mutate(v === NO_PROVIDER ? '' : String(v))"
           >
             <SelectTrigger
