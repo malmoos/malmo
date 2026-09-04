@@ -35,6 +35,22 @@ services:
     command: ["caddy", "run", "--config", "/etc/caddy/caddy.json"]
     volumes:
       - ./caddy.json:/etc/caddy/caddy.json:ro
+      # Caddy's certificate store. On hosted this holds the ACME account key and
+      # the issued "*.<box-id>.malmo.network" wildcard; without a volume it lives
+      # in the container's writable layer and a recreate throws it away, so the
+      # box has to place a fresh Let's Encrypt order (#433). That order is not a
+      # renewal, so it gets no ARI rate-limit exemption, and every hosted box is
+      # a subdomain of ONE registered domain (malmo.network) whose "50 new
+      # certificates per 7 days" budget the whole fleet shares. Losing the store
+      # is therefore a fleet-wide cost from a per-box event. Named so the volume
+      # is stable whatever the compose project is called, like the network below.
+      - caddy_data:/data
+    # /config holds Caddy's autosave of the last admin-API config. Nothing ever
+    # reads it back — the command loads /etc/caddy/caddy.json explicitly and we
+    # never run `caddy run --resume` — so it must be writable but is worth
+    # nothing across a recreate. tmpfs, not a volume: same call as malmo-ui below.
+    tmpfs:
+      - /config
     ports:
       - "80:80"
       - "443:443"
@@ -55,6 +71,12 @@ services:
       - /config
     networks:
       - malmo
+
+# Caddy's certificate store, kept across container recreates (# caddy, #433).
+# malmo-ui needs no equivalent: its /data is scratch for a static file server.
+volumes:
+  caddy_data:
+    name: malmo-caddy-data
 
 # The malmo network is seeded by host-agent (brainlaunch.EnsureTransport) before
 # the brain starts; reference it as external so this compose attaches to it

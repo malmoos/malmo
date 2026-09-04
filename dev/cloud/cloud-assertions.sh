@@ -569,6 +569,36 @@ seeded)
     wait_brain_log 'caddy: wildcard TLS configured' || \
         fail "brain did not configure wildcard TLS on the seeded boot (#278 — EnsureWildcardTLS not reached/applied)"
     echo "cloud-assertions: wildcard TLS configured (acme-dns DNS-01 issuer + :443 set for *.$box_id.malmo.network)"
+
+    # (c) Caddy's certificate store survives a container recreate (#433). The cert
+    # this box would obtain lands in /data; on the writable layer it dies with the
+    # container and the box has to place a NEW Let's Encrypt order — not a renewal,
+    # so no ARI exemption, and against a "50 new certificates per 7 days" budget
+    # that every hosted box shares because they are all under one registered domain
+    # (malmo.network). This lane is air-gapped, so it cannot watch for the absence
+    # of an issuance; what it CAN prove is the property that absence rests on — the
+    # store is on a named volume with a life of its own, not in the container.
+    mount_name="$(docker inspect malmo-caddy \
+        --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Type}}:{{.Name}}{{end}}{{end}}' 2>/dev/null || true)"
+    [ "$mount_name" = "volume:malmo-caddy-data" ] || \
+        fail "malmo-caddy /data is not the malmo-caddy-data volume: got '${mount_name:-<nothing>}' (#433 — a recreate would drop the wildcard cert)"
+    docker volume inspect malmo-caddy-data >/dev/null 2>&1 || \
+        fail "docker volume malmo-caddy-data does not exist (#433)"
+
+    # The mount is live in both directions, not just declared: a file Caddy writes
+    # under /data is visible to a SEPARATE container mounting the same volume, so it
+    # outlives this container by construction. Reads the image malmo-caddy runs, so
+    # nothing is pulled in the air gap.
+    caddy_img="$(docker inspect malmo-caddy --format '{{.Config.Image}}' 2>/dev/null || true)"
+    [ -n "$caddy_img" ] || fail "could not read the malmo-caddy image ref (#433 probe)"
+    docker exec malmo-caddy sh -c 'echo malmo-433 > /data/.malmo-persist-probe' 2>/dev/null || \
+        fail "could not write a probe into malmo-caddy /data (#433)"
+    probe="$(docker run --rm --entrypoint sh -v malmo-caddy-data:/probe "$caddy_img" \
+        -c 'cat /probe/.malmo-persist-probe' 2>/dev/null || true)"
+    docker exec malmo-caddy rm -f /data/.malmo-persist-probe 2>/dev/null || true
+    [ "$probe" = "malmo-433" ] || \
+        fail "malmo-caddy /data writes do not land in the malmo-caddy-data volume: probe read back '${probe:-<nothing>}' (#433)"
+    echo "cloud-assertions: Caddy cert store on the malmo-caddy-data volume, survives a container recreate (#433)"
     ;;
 frozen:*)
     expect="${MODE#frozen:}"
