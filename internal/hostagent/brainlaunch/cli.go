@@ -80,6 +80,12 @@ func (CLIDocker) Run(ctx context.Context, spec RunSpec) error {
 	for _, e := range spec.Env {
 		args = append(args, "-e", e.Key+"="+e.Value)
 	}
+	for _, c := range spec.CapDrop {
+		args = append(args, "--cap-drop", c)
+	}
+	for _, o := range spec.SecurityOpt {
+		args = append(args, "--security-opt", o)
+	}
 	args = append(args, spec.Image)
 	if out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("docker run %s: %w\n%s", spec.Image, err, out)

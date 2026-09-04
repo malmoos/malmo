@@ -312,6 +312,15 @@ func TestEnsureTransportSeedsNetworkAndProxy(t *testing.T) {
 	if envVal(s.Env, "POST") != "1" || envVal(s.Env, "CONTAINERS") != "1" {
 		t.Errorf("proxy allowlist missing POST/CONTAINERS: %+v", s.Env)
 	}
+	// The container that holds the raw socket runs the app sandbox: every
+	// capability dropped, no-new-privileges (#431). haproxy binds :2375, so it
+	// needs nothing added back.
+	if len(s.CapDrop) != 1 || s.CapDrop[0] != "ALL" {
+		t.Errorf("proxy cap_drop = %v, want [ALL]", s.CapDrop)
+	}
+	if len(s.SecurityOpt) != 1 || s.SecurityOpt[0] != "no-new-privileges:true" {
+		t.Errorf("proxy security_opt = %v, want [no-new-privileges:true]", s.SecurityOpt)
+	}
 }
 
 func TestEnsureTransportProxyExistsIsNoOp(t *testing.T) {

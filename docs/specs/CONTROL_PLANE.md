@@ -183,6 +183,16 @@ Capability dropping (`CapabilityBoundingSet=`) is **not** used — host-agent's 
 - **Why the brain and not host-agent:** the UI version is bound to the brain's API version (the bundle declares the API minor it requires; `WEB_UI.md` # deploy model), and brain+UI update as one stream (`UPDATES.md`). Keeping both launches under the brain means the version pairing is enforced by the actor that already owns it, not split across the host-agent boundary.
 - The LAN-facing Caddy routes `/api/v1/*` (and the SSE/log streams) to `malmo-brain` and everything else to `malmo-ui` (`WEB_UI.md` # deploy model). Both are reconciled by the brain on startup the same way app containers are.
 
+### Locked: control-plane container hardening
+
+Every **app** container gets the same sandbox with no opt-out — `cap_drop: ALL`, `no-new-privileges`, a pinned `user:` — written by the brain into its override file (`APP_LIFECYCLE.md` # Locked: override file contents, `APP_ISOLATION.md` # Capabilities & privilege). The control plane's own containers had none of it until #431, which is backwards: Caddy terminates TLS, holds the hosted wildcard's private key, and carries an unauthenticated admin API. What each container runs now, and why:
+
+- **`caddy` and `malmo-ui`** (declared in `dev/control-plane/compose.yml`): `cap_drop: ALL` plus `cap_add: [NET_BIND_SERVICE]` — both are a Caddy binding `:80` (Caddy also `:443`), which is the one capability either needs — `security_opt: [no-new-privileges:true]`, and `read_only: true`. A read-only root costs Caddy nothing since #433 gave both its write paths somewhere to go: `/data` is the `malmo-caddy-data` volume and `/config` a `tmpfs` (# Locked: Caddy is malmo substrate). The certificate store still works under it — Caddy writes its keys to the volume, not the image layer.
+- **`malmo-docker-proxy`** (launched by host-agent, `internal/hostagent/brainlaunch`): `cap_drop: ALL` + `no-new-privileges`. It needs no capability at all — haproxy binds `:2375`, above the privileged range. This is the container holding the raw Docker socket, so it is where a bug is worth the most. `read_only` is **deliberately not set**: the upstream image's entrypoint writes its generated config to `/tmp` and haproxy writes `/run` and `/var/lib/haproxy`, so a read-only root would mean three `tmpfs` mounts pinned to another project's internal paths, which break silently on an image bump. Capability dropping is the part that carries the value here.
+- **`malmo-brain`**: no capability sandbox. The brain `chown`s app data directories to the uid it elects for an app (`APP_ISOLATION.md` # Runtime identity & data ownership), so `CAP_CHOWN` is load-bearing and `cap_drop: ALL` would break an install. Hardening it means naming the capabilities it does need and proving that set on a booted box. Until then the residual is recorded in `THREAT_MODEL.md` B2.
+
+Two things this does not do. It does not make a Caddy or haproxy bug harmless — it lowers what one is worth. And it applies to containers as they are **created**: host-agent leaves an existing proxy container to Docker rather than recreating it, so a box that already has one keeps the old, unsandboxed container until something recreates it.
+
 ### Locked: implementation specifics
 
 - **Language:** Go. Single binary. Static.

@@ -72,6 +72,12 @@ type RunSpec struct {
 	Aliases []string // extra network aliases (beyond the container name)
 	Mounts  []Mount  // bind mounts
 	Env     []EnvVar
+	// CapDrop lists Linux capabilities to drop, in `docker run` spelling
+	// ("ALL"), and SecurityOpt is passed through as --security-opt. Empty means
+	// "leave Docker's default", which is what the brain still runs with — see
+	// proxyRunSpec for the sandbox the proxy gets and why the brain has none.
+	CapDrop     []string
+	SecurityOpt []string
 }
 
 // Mount is a host→container bind mount.
@@ -292,15 +298,27 @@ func EnsureTransport(ctx context.Context, d Docker, cfg Config) error {
 
 // proxyRunSpec assembles the docker-socket-proxy `docker run`. The raw socket is
 // mounted read-only; the brain reaches the proxy by the docker-proxy alias.
+//
+// It runs under the same sandbox every app container gets — all capabilities
+// dropped, no-new-privileges (APP_ISOLATION.md # Capabilities & privilege, #431).
+// This is the container holding the raw Docker socket, so it is the one where a
+// bug is worth the most. haproxy needs no capability here: it binds :2375, above
+// the privileged range, so not even CAP_NET_BIND_SERVICE. A read-only root is
+// deliberately NOT set — the image's entrypoint writes its generated config to
+// /tmp and haproxy writes /run and /var/lib/haproxy, so read_only would mean
+// three tmpfs mounts pinned to another project's internal paths
+// (CONTROL_PLANE.md # Locked: control-plane container hardening).
 func proxyRunSpec(cfg Config) RunSpec {
 	return RunSpec{
-		Name:    cfg.ProxyContainerName,
-		Image:   cfg.ProxyImage,
-		Restart: "unless-stopped",
-		Network: cfg.Network,
-		Aliases: []string{proxyDialAlias},
-		Mounts:  []Mount{{Source: dockerSockPath, Target: dockerSockPath, ReadOnly: true}},
-		Env:     proxyAllowlist(),
+		Name:        cfg.ProxyContainerName,
+		Image:       cfg.ProxyImage,
+		Restart:     "unless-stopped",
+		Network:     cfg.Network,
+		Aliases:     []string{proxyDialAlias},
+		Mounts:      []Mount{{Source: dockerSockPath, Target: dockerSockPath, ReadOnly: true}},
+		Env:         proxyAllowlist(),
+		CapDrop:     []string{"ALL"},
+		SecurityOpt: []string{"no-new-privileges:true"},
 	}
 }
 
@@ -320,9 +338,17 @@ func RunSpecFor(cfg Config) RunSpec { return runSpec(cfg) }
 // runs with restart=unless-stopped so Docker supervises it after launch. It is
 // deliberately not given the Docker socket — the brain reaches Docker only
 // through the host-agent-seeded socket-proxy at tcp://docker-proxy:2375
-// (CONTROL_PLANE.md # Docker socket exposure). It joins the ingress network so
+// (CONTROL_PLANE.md # Locked: control-plane container hardening). It joins the ingress network so
 // it can reach the proxy + Caddy admin by name, and carries the env that points
 // it at the proxy, Caddy, and the staged control-plane compose.
+//
+// Unlike the proxy, the brain gets no capability sandbox (#431). It chowns app
+// data directories to the uid it elects for an app (lifecycle, APP_ISOLATION.md
+// # Runtime identity & data ownership), so CAP_CHOWN is load-bearing and
+// `cap_drop: ALL` would break an install. Hardening it means naming the
+// capabilities it does need and proving that set on a booted box, which is its
+// own change — CONTROL_PLANE.md # Locked: control-plane container hardening
+// and THREAT_MODEL.md B2 record the residual.
 func runSpec(cfg Config) RunSpec {
 	sockDir := filepath.Dir(cfg.SocketPath)
 	mounts := []Mount{
