@@ -28,7 +28,7 @@ Same rule the acmedns recipe already followed: `ARG` with **no default**, fed by
 ### Two more guards in `imagepins_test.go`
 
 - `CADDY_ACMEDNS_MODULE` must be `module@vX.Y.Z`.
-- **No `FROM` in the three Dockerfiles may name a base directly.** That is the regression this change removes, and it is invisible in a green build — the image simply holds different bytes. The test walks an explicit list of three files rather than the tree, because the working tree also collects gitignored mkosi build residue with Dockerfiles in it.
+- **Every `FROM` in the three Dockerfiles must come from a build arg that is declared with no default and actually passed by a make target.** That is the regression this change removes, and it is invisible in a green build — the image simply holds different bytes. Checking only for `${` would not catch it: `ARG BASE=caddy:2-alpine` interpolates identically, and an arg the Makefile forgot to pass leaves an empty base name. Greptile made this point on the PR and it was right; the first version of the guard checked only the `${`. The test walks an explicit list of three files rather than the tree, because the working tree also collects gitignored mkosi build residue with Dockerfiles in it.
 
 ## How it maps to the specs
 
@@ -38,7 +38,7 @@ Same rule the acmedns recipe already followed: `ARG` with **no default**, fed by
 
 - `make caddy-acmedns-image` rebuilds and the result is unchanged where it should be: `caddy version` → `v2.10.0`, `build-info` → `caddy-dns/acmedns v0.7.0`, `list-modules` → `dns.providers.acmedns`.
 - `make brain-image` builds and the binary still stamps its identity (`malmo 0.10.0 (gc79e058)`), so the ARG rewrite did not disturb the `-ldflags` path. `make ui-image` builds; its runtime Caddy is `v2.11.4`, the pinned `caddy:2-alpine`.
-- Both new guards fail when mutated: an unversioned module pin, and a `FROM caddy:2-alpine` put back into `web-ui/Dockerfile`.
+- Every guard fails when mutated: an unversioned module pin, a `FROM caddy:2-alpine` put back into `web-ui/Dockerfile`, an `ARG UI_RUNTIME_IMAGE=caddy:2-alpine` default, and the Makefile dropping the `--build-arg` that feeds it.
 - Go suite green (`make test-nopam`, `fmt-check`, `openapi-check`). Full `make check` still does not complete locally for the two reasons recorded in the previous entry; CI runs the full gate.
 
 ## Known gaps & deviations

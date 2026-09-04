@@ -92,9 +92,18 @@ func TestAcmednsModuleIsVersionPinned(t *testing.T) {
 }
 
 // Every base image the control-plane Dockerfiles build on has to come in as a
-// build arg. A bare tag in a FROM is the regression this whole change removes,
-// and it is invisible in a green build: the image just holds different bytes.
+// build arg that is declared with no default and actually fed from the pin file.
+// A bare tag in a FROM is the regression this whole change removes, and it is
+// invisible in a green build: the image just holds different bytes. Checking
+// only for "${" would not catch it — `ARG BASE=caddy:2-alpine` interpolates
+// exactly the same way, and an arg the Makefile forgot to pass leaves an empty
+// base name. So all three properties are asserted together.
 func TestDockerfilesTakeTheirBasesAsBuildArgs(t *testing.T) {
+	makefile, err := os.ReadFile(repoPath("Makefile"))
+	if err != nil {
+		t.Fatalf("read Makefile: %v", err)
+	}
+	argRef := regexp.MustCompile(`^\$\{([A-Z0-9_]+)\}$`)
 	// An explicit list, not a walk: the tree also holds gitignored build residue
 	// with Dockerfiles in it that are none of our business.
 	for _, parts := range [][]string{
@@ -107,12 +116,36 @@ func TestDockerfilesTakeTheirBasesAsBuildArgs(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", src, err)
 		}
-		for i, line := range strings.Split(string(b), "\n") {
+		lines := strings.Split(string(b), "\n")
+		for i, line := range lines {
 			if !strings.HasPrefix(line, "FROM ") {
 				continue
 			}
-			if base := strings.Fields(line)[1]; !strings.HasPrefix(base, "${") {
+			base := strings.Fields(line)[1]
+			m := argRef.FindStringSubmatch(base)
+			if m == nil {
 				t.Errorf("%s:%d: FROM %s names a base directly; it must be a build arg fed from %s", src, i+1, base, pinFile)
+				continue
+			}
+			arg := m[1]
+			// Declared, and declared without a default — a default is a second
+			// copy of the pin, free to drift.
+			var declared bool
+			for _, l := range lines {
+				switch {
+				case strings.TrimSpace(l) == "ARG "+arg:
+					declared = true
+				case strings.HasPrefix(strings.TrimSpace(l), "ARG "+arg+"="):
+					t.Errorf("%s: ARG %s has a default; the pin in %s must be the only copy", src, arg, pinFile)
+					declared = true
+				}
+			}
+			if !declared {
+				t.Errorf("%s:%d: FROM uses ${%s} but no ARG declares it, so the base name is empty", src, i+1, arg)
+			}
+			// And something has to pass it, or the build fails on an empty base.
+			if !strings.Contains(string(makefile), "--build-arg "+arg+"=$(") {
+				t.Errorf("%s: no make target passes --build-arg %s=...; it would build with an empty base", src, arg)
 			}
 		}
 	}
