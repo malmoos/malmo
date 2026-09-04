@@ -598,9 +598,12 @@ func (s *Server) getApp(ctx context.Context, in *struct {
 	dto := s.toDTO(i, owner.Username, catEntry)
 	s.withPublicPaths(&dto)
 	// Mail enrichment for the rebind picker. The manifest comes from the
-	// catalog, so a withdrawn app simply hides the picker (the binding itself
-	// keeps working — lifecycle reads the instance dir's own manifest copy).
-	if man, _, err := s.catalog.Load(i.ManifestID); err == nil && man.Mail != nil {
+	// INSTANCE's own copy, the one the installer persisted (#434): the app is
+	// already installed, so asking the catalog service would put a routine page
+	// load behind the network and hide the picker for an app the store no longer
+	// publishes. An unreadable copy leaves the picker hidden rather than failing
+	// the request.
+	if man, err := s.life.InstanceManifest(i.ID); err == nil && man.Mail != nil {
 		dto.MailSupported = true
 		if mp, err := s.store.GetInstanceMailProvider(i.ID); err == nil {
 			dto.MailProviderID = mp.ID
@@ -662,7 +665,7 @@ func (s *Server) installApp(ctx context.Context, in *struct {
 	// Load the manifest to validate the folder elections authoritatively (the
 	// install-plan endpoint is advisory). A validation failure is an
 	// elevation-class mutation rejection, so it audits success=false.
-	man, _, err := s.catalog.Load(manifestID)
+	man, _, err := s.catalog.Load(ctx, manifestID)
 	if errors.Is(err, catalog.ErrNotFound) {
 		return nil, huma.Error404NotFound("no such catalog app")
 	}

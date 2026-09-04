@@ -5,9 +5,10 @@
 // plane or read from a local directory tree.
 //
 // In production every box — appliance and hosted alike — uses the remote client
-// (NewRemote): a thin HTTP consumer of the control plane's /catalog/sync snapshot,
-// held in memory and never written to disk (remote.go; cloud specs/CATALOG.md #
-// Consume). No catalog is baked into the image (cloud #62). The original disk reader (New) is
+// (NewRemote): a thin HTTP consumer of the control plane's catalog API. Browse
+// data (GET /catalog) is held in memory and never written to disk; an app's
+// install payload is fetched per app, at install time (remote.go; cloud
+// specs/CATALOG.md # Consume). No catalog is baked into the image (cloud #62). The original disk reader (New) is
 // retained only as the constructor internal/api and internal/lifecycle tests build
 // a controlled catalog with; it implements the same private source interface, so
 // the rest of the brain holds a *Catalog and is agnostic to which is wired.
@@ -42,7 +43,13 @@ type source interface {
 	Detail(id string) (Detail, error)
 	IconPath(id string) (string, error)
 	ScreenshotPath(id string, i int) (string, error)
-	Load(id string) (*manifest.Manifest, []byte, error)
+	// Load returns the app's install payload: the parsed manifest and the
+	// verbatim compose bytes. It takes a context because the remote source
+	// fetches the two documents over the network (#434) — it is an install-path
+	// call only. For an app that is ALREADY installed, read the manifest the
+	// installer persisted next to it (lifecycle InstanceManifest) instead, so
+	// routine box operation never depends on the catalog service.
+	Load(ctx context.Context, id string) (*manifest.Manifest, []byte, error)
 	// featured returns the curated "top apps" for this box's surface, in the order
 	// they should render (ascending rank). It is the only segmentation input the
 	// facade can't derive from List: the remote source reads it from the synced
@@ -54,11 +61,10 @@ type source interface {
 	// an error: the facade falls back to a readable form of each id.
 	categories() ([]Category, error)
 	// home returns the authored landing page's spotlight app (nil when unset or
-	// not advertised on this surface) and its category groups (a group left with
-	// no advertised apps is dropped), both already environment-filtered. Like
-	// featured, this can't be derived from List: the remote source reads it from
-	// the synced snapshot's home block; the disk source has no curation and
-	// returns nothing.
+	// not carried on this surface) and its category groups (a group left with no
+	// resolvable apps is dropped). Like featured, this can't be derived from
+	// List: the remote source reads it from the synced browse payload's home
+	// block; the disk source has no curation and returns nothing.
 	home() (*Entry, []HomeGroupView, error)
 }
 
@@ -80,7 +86,9 @@ func (c *Catalog) IconPath(id string) (string, error) { return c.src.IconPath(id
 func (c *Catalog) ScreenshotPath(id string, i int) (string, error) {
 	return c.src.ScreenshotPath(id, i)
 }
-func (c *Catalog) Load(id string) (*manifest.Manifest, []byte, error) { return c.src.Load(id) }
+func (c *Catalog) Load(ctx context.Context, id string) (*manifest.Manifest, []byte, error) {
+	return c.src.Load(ctx, id)
+}
 
 // Home / Category / Search are the segmented store views the box UI browses
 // through, mirroring the control plane's public catalog API (cloud

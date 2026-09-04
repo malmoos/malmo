@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -55,7 +56,7 @@ func (d *diskSource) List() ([]Entry, error) {
 		if !dir.IsDir() {
 			continue
 		}
-		man, _, err := d.Load(dir.Name())
+		man, _, err := d.load(dir.Name())
 		if err != nil {
 			continue // skip malformed entries
 		}
@@ -92,7 +93,7 @@ func (d *diskSource) categories() ([]Category, error) { return nil, nil }
 // Load errors are integrity failures. This is the lookup the instance list uses
 // to enrich an installed app; List is the store-facing (filtered) browse.
 func (d *diskSource) Entry(manifestID string) (Entry, error) {
-	man, _, err := d.Load(manifestID)
+	man, _, err := d.load(manifestID)
 	if err != nil {
 		return Entry{}, err
 	}
@@ -106,7 +107,7 @@ func (d *diskSource) Entry(manifestID string) (Entry, error) {
 // catalog shouldn't ship and map to 500. (Installed-instance enrichment must not
 // go through here — use Entry, which doesn't hide unlisted apps.)
 func (d *diskSource) Detail(manifestID string) (Detail, error) {
-	man, _, err := d.Load(manifestID)
+	man, _, err := d.load(manifestID)
 	if err != nil {
 		return Detail{}, err
 	}
@@ -135,7 +136,7 @@ func (d *diskSource) Detail(manifestID string) (Detail, error) {
 // IconPath resolves the on-disk path of an app's icon for serving. ErrNotFound
 // when the manifest declares no icon (or the app is unknown).
 func (d *diskSource) IconPath(manifestID string) (string, error) {
-	man, _, err := d.Load(manifestID)
+	man, _, err := d.load(manifestID)
 	if err != nil {
 		return "", err
 	}
@@ -149,7 +150,7 @@ func (d *diskSource) IconPath(manifestID string) (string, error) {
 // order, 0-based). ErrNotFound when the index is out of range or the app is
 // unknown.
 func (d *diskSource) ScreenshotPath(manifestID string, i int) (string, error) {
-	man, _, err := d.Load(manifestID)
+	man, _, err := d.load(manifestID)
 	if err != nil {
 		return "", err
 	}
@@ -187,8 +188,15 @@ func (d *diskSource) assetPath(manifestID, rel string) (string, error) {
 	return full, nil
 }
 
-// Load returns the parsed manifest and the verbatim compose bytes.
-func (d *diskSource) Load(manifestID string) (*manifest.Manifest, []byte, error) {
+// Load returns the parsed manifest and the verbatim compose bytes. The context
+// is unused — a disk read needs none — but the method takes one because the
+// remote source's Load fetches over the network (source.Load, #434).
+func (d *diskSource) Load(_ context.Context, manifestID string) (*manifest.Manifest, []byte, error) {
+	return d.load(manifestID)
+}
+
+// load is the disk read every other method of this source is built on.
+func (d *diskSource) load(manifestID string) (*manifest.Manifest, []byte, error) {
 	dir := filepath.Join(d.root, manifestID)
 	manBytes, err := os.ReadFile(filepath.Join(dir, "manifest.yml"))
 	if err != nil {

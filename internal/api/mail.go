@@ -476,9 +476,10 @@ func (s *Server) setAppMailBinding(ctx context.Context, in *struct {
 		// Reject a binding on a non-mail app synchronously, mirroring the install
 		// path — without this a direct API caller (the UI hides the picker for
 		// non-mail apps) gets a 200 + job that only fails later in RebindMail. The
-		// manifest comes from the catalog; a withdrawn app falls through to that
-		// backstop, same as getApp's picker enrichment.
-		if man, _, err := s.catalog.Load(inst.ManifestID); err == nil && man.Mail == nil {
+		// manifest comes from the INSTANCE's own persisted copy (#434), not the
+		// catalog: the app is already installed. An unreadable copy falls through
+		// to RebindMail's backstop, same as getApp's picker enrichment.
+		if man, err := s.life.InstanceManifest(inst.ID); err == nil && man.Mail == nil {
 			s.auditor.Record(ctx, audit.ActionAppMailRebind, tgt, meta, false)
 			return nil, huma.Error422UnprocessableEntity("this app does not support outgoing email")
 		}

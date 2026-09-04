@@ -145,7 +145,7 @@ EOF
     cp "${REPO_ROOT}/dev/control-plane/caddy.json"   "$WIRING/var/lib/malmo/control-plane/"
 
     # No catalog is baked into the image (cloud #62). The brain syncs the store from
-    # the control plane's public-read catalog API (GET /catalog/sync, MALMO_CATALOG_URL
+    # the control plane's public-read catalog API (GET /catalog, MALMO_CATALOG_URL
     # default the apex) and holds it in memory; only proxied icons and screenshots are
     # cached, under /var/lib/malmo/catalog-cache. A box that cannot reach the control
     # plane shows an empty store (the documented, accepted behavior — installing an app

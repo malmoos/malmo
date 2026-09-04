@@ -1,5 +1,6 @@
-// Command mkcatalog generates a control-plane catalog snapshot (the /catalog/sync
-// wire format) from one or more on-disk app packages, optionally with a curated
+// Command mkcatalog generates a control-plane catalog snapshot (the GET /catalog
+// browse wire format, with each app's manifest and compose inlined for the seed
+// seam) from one or more on-disk app packages, optionally with a curated
 // landing page. The brain reads that snapshot once at boot (MALMO_CATALOG_FILE,
 // internal/catalog/remote.go # loadSnapshotFile) and installs an app from it, so
 // this exercises the real remote read path (verify → project → Load) with no
@@ -32,11 +33,10 @@
 //
 // The apps + optional home block are built as internal/catalog's own exported
 // SnapshotApp / SnapshotHome types (aliases of its wire shape) and handed to
-// catalog.BuildSnapshot, which stamps the schema version, computes the index
-// digest and marshals — so this tool no longer re-declares the wire shape at
-// all. Keeping the shape in exactly one place (internal/catalog/wire.go) is
-// what makes the digest reproduce: the brain recomputes SHA-256 over
-// json.Marshal of the parsed app index and checks it against IndexSHA256.
+// catalog.BuildSnapshot, which stamps the schema version and the version token
+// and marshals — so this tool never re-declares the wire shape. Keeping the
+// shape in exactly one place (internal/catalog/wire.go) is what keeps a seed
+// file readable by the brain that parses it.
 package main
 
 import (
@@ -88,7 +88,6 @@ func (p *pkgList) Set(v string) error {
 func main() {
 	var (
 		pkgs    pkgList
-		envList = flag.String("environments", "appliance,hosted", "comma-separated environments the app(s) are visible in")
 		out     = flag.String("out", "", "output snapshot path (default: stdout)")
 		homeArg = flag.String("home", "", "path to a store home.yml to carry as the snapshot's curated landing page (optional)")
 		catsArg = flag.String("categories", "", "path to a store categories.yml to carry as the snapshot's category vocabulary (optional)")
@@ -99,10 +98,9 @@ func main() {
 		fatal("mkcatalog: at least one -pkg is required")
 	}
 
-	environments := splitEnvs(*envList)
 	apps := make([]catalog.SnapshotApp, 0, len(pkgs))
 	for _, pkgDir := range pkgs {
-		apps = append(apps, loadApp(pkgDir, environments))
+		apps = append(apps, loadApp(pkgDir))
 	}
 
 	var home catalog.SnapshotHome
@@ -129,11 +127,16 @@ func main() {
 
 // loadApp parses one package directory's manifest + compose into the wire app
 // shape, carrying the author/links display metadata too, so the store card an
-// author eyeballs during a curation boot is the real one. Assets (icon_file /
-// screenshots) are deliberately omitted: the box proxies those from the control
-// plane, and the seed path has no asset server behind the inert URL, so a
-// filename here would only 404 (docs/dev/authoring-apps-with-an-agent.md).
-func loadApp(pkgDir string, environments []string) catalog.SnapshotApp {
+// author eyeballs during a curation boot is the real one. Assets (icon_url /
+// screenshot_urls) are deliberately omitted: the box proxies those from the
+// control plane, and the seed path has no asset server behind the inert URL, so
+// a URL here would only 404 (docs/dev/authoring-apps-with-an-agent.md).
+//
+// The manifest and compose are inlined on the record. A published record carries
+// manifest_url / compose_url instead and the box fetches them at install time
+// (#434), but a staged seed file has no control plane behind it to serve those
+// routes, so the inline fields are the seed seam (internal/catalog/wire.go).
+func loadApp(pkgDir string) catalog.SnapshotApp {
 	manBytes, err := os.ReadFile(filepath.Join(pkgDir, "manifest.yml"))
 	if err != nil {
 		fatal("read manifest: %v", err)
@@ -158,7 +161,6 @@ func loadApp(pkgDir string, environments []string) catalog.SnapshotApp {
 		License:          man.License,
 		ChangelogURL:     man.ChangelogURL,
 		Footprint:        man.Footprint(),
-		Environments:     environments,
 		Manifest:         string(manBytes),
 		Compose:          string(composeBytes),
 	}
@@ -228,16 +230,6 @@ func loadCategories(path string) []catalog.SnapshotCategory {
 			fatal("categories %q: every entry needs an id and a label (got id=%q label=%q)", path, c.ID, c.Label)
 		}
 		out = append(out, catalog.SnapshotCategory{ID: c.ID, Label: c.Label})
-	}
-	return out
-}
-
-func splitEnvs(s string) []string {
-	var out []string
-	for _, e := range strings.Split(s, ",") {
-		if e = strings.TrimSpace(e); e != "" {
-			out = append(out, e)
-		}
 	}
 	return out
 }

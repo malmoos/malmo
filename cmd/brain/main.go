@@ -101,8 +101,9 @@ func main() {
 
 	// Catalog source (CATALOG step 3, cloud #62). Every box — appliance and hosted
 	// alike — is a thin client of the control plane's public-read catalog API: it
-	// fetches the /catalog/sync snapshot, verifies its integrity digest, holds it in
-	// memory, and projects the six-method surface locally (cloud specs/CATALOG.md #
+	// fetches the GET /catalog browse payload for its own environment, holds it in
+	// memory, and projects the six-method surface locally; each app's manifest and
+	// compose are fetched only when that app is installed (cloud specs/CATALOG.md #
 	// Consume). The box keeps no copy of the catalog on disk, so it always renders
 	// what the endpoint serves now; before the first sync lands the store is empty
 	// (the documented, accepted behavior — the catalog API is public-read precisely
@@ -552,7 +553,7 @@ func loadConfig() config {
 		listen:   env("MALMO_LISTEN", ":8080"),
 		stateDir: env("MALMO_STATE_DIR", "./.dev/state"),
 		// Control-plane catalog: the public-read catalog origin every box syncs the
-		// /catalog/sync snapshot from (CATALOG step 3, cloud #62). Served on the apex
+		// GET /catalog browse payload from (CATALOG step 3, cloud #62). Served on the apex
 		// (cloud specs/CATALOG.md), overridable to point a box at staging or an inert
 		// address (the air-gapped test lane). The asset cache dir holds proxied icons
 		// and screenshots only — never the snapshot, which the box holds in memory and

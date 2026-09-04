@@ -10,19 +10,31 @@ import (
 	"github.com/malmoos/malmo/internal/manifest"
 )
 
-// wire.go mirrors the control plane's published catalog wire format so a box can
-// consume the /catalog/sync snapshot as a thin client (cloud specs/CATALOG.md #
-// Consume). The shapes here are a byte-faithful mirror of the cloud
-// internal/catalog CatalogFile / App (../cloud internal/catalog/published.go):
-// same fields, same JSON tags, same declaration order — because the integrity
-// digest is computed over json.Marshal of the app index, so the box must
-// re-marshal to the identical bytes to reproduce (and verify) it. The seed
-// contract aside, this is the box↔cloud catalog contract; a breaking change to it
-// is coordinated across both repos like any two-side change (cloud CLAUDE.md).
+// wire.go models the control plane's published catalog API as the box consumes
+// it (cloud specs/CATALOG.md # Consume). The box fetches browse data and install
+// payloads on two different routes:
 //
-// The four nested display shapes (Author, Links, Footprint, ImageRef) are the os
-// manifest types the cloud itself mirrored, so reusing them here is what
-// reproduces the cloud's marshalling exactly — not a coincidental match.
+//	GET /catalog?env=<environment>   browse records, home, categories, version
+//	GET /catalog/apps/{id}/manifest  verbatim manifest.yml, application/yaml
+//	GET /catalog/apps/{id}/compose   verbatim compose.yml, application/yaml
+//
+// so a box downloads ~100KB of browse data plus the two documents of each app it
+// actually installs, instead of every app's install payload up front (#434).
+//
+// The shapes below are NOT a byte-faithful mirror of the control plane's own
+// types any more, and they no longer need to be. The published record used to
+// carry an index digest the box recomputed by re-marshalling what it parsed,
+// which made field order load-bearing and turned ANY new published field into a
+// flag day: the recomputed digest stopped matching, the snapshot was refused,
+// and the store went empty. That digest was doing cache work, not security work
+// — TLS authenticates the origin and HTTP framing catches truncation — so it is
+// gone. What replaces it is `version`, an opaque token the box uses as an ETag
+// and as a change signal and never recomputes. Unknown keys are now ignored the
+// way encoding/json ignores them everywhere else, so the control plane can add a
+// display field without waiting for the fleet.
+//
+// The schema_version refusal stays: a snapshot stamped with a format this box
+// cannot project is still refused rather than half-read.
 
 // wireSchemaVersion is the published-catalog wire format this box can read. It
 // tracks the cloud's catalog.SchemaVersion; a snapshot stamped with anything else
@@ -30,32 +42,30 @@ import (
 // the cloud designed the version stamp for.
 const wireSchemaVersion = 1
 
-// catalogFile is the whole published catalog as served byte-for-byte by GET
-// /catalog/sync — the versioned index the box holds in memory and projects
-// locally. Mirror of cloud catalog.CatalogFile.
+// catalogFile is the browse payload served by GET /catalog?env=<environment>:
+// the app records this box's surface may show, the curated landing page, and the
+// category vocabulary. It carries no install payloads — those are two separate
+// routes per app (see wireApp.ManifestURL / ComposeURL).
 type catalogFile struct {
 	SchemaVersion int       `json:"schema_version"`
 	GeneratedAt   time.Time `json:"generated_at"`
 	StoreRef      string    `json:"store_ref,omitempty"`
-	// IndexSHA256 is the hex SHA-256 over the canonical JSON of Apps; verify
-	// recomputes it. It catches a truncated or corrupted snapshot; authenticity
-	// (that the bytes came from the real control plane) is provided by TLS on the
-	// fetch, so there is no separate signature (owner decision, cloud #62).
-	IndexSHA256 string    `json:"index_sha256"`
-	Apps        []wireApp `json:"apps"`
+	// Version is the catalog's opaque change token, served as the response's
+	// ETag and honoured on If-None-Match. The box treats it as bytes: it stores
+	// it, sends it back, and compares it for equality. It NEVER recomputes it —
+	// that is the whole point of the field (see the file comment).
+	Version string    `json:"version"`
+	Apps    []wireApp `json:"apps"`
 	// Home is the authored recommended-apps page (a curated home.yml): a
 	// spotlight app plus ordered category groups. Carried verbatim, not derived —
 	// the landing page's shape is a curation decision the store curation source
-	// owns. It plays no part in IndexSHA256 (that digest covers Apps only), so
-	// adding this field does not change the box's index-digest contract with the
-	// control plane. Mirror of the control plane's own CatalogFile.Home.
+	// owns. Mirror of the control plane's own CatalogFile.Home.
 	Home wireHomePage `json:"home"`
 	// Categories is the authored category vocabulary: every category id an app may
 	// claim, with the display label the store surfaces render and the order they
 	// are authored in. Carried, never derived — before it was on the wire the box
 	// invented display text from the id ("developer-tools" -> "developer tools",
-	// "ai" -> "ai") and disagreed with the other store surface doing the same. Like
-	// Home it plays no part in IndexSHA256 (that digest covers Apps only).
+	// "ai" -> "ai") and disagreed with the other store surface doing the same.
 	Categories []wireCategory `json:"categories"`
 }
 
@@ -67,9 +77,7 @@ type wireCategory struct {
 }
 
 // wireHomePage / wireHomeGroup mirror the control plane's own HomePage / HomeGroup
-// shapes, field-for-field and json-tag-for-json-tag, for the same reason the rest
-// of this file mirrors the control plane's shapes: the box re-parses exactly what
-// the sync tool published.
+// shapes, so the box re-parses exactly what the sync tool published.
 type wireHomePage struct {
 	Spotlight string          `json:"spotlight"`
 	Groups    []wireHomeGroup `json:"groups"`
@@ -82,11 +90,18 @@ type wireHomeGroup struct {
 	Apps     []string `json:"apps"`
 }
 
-// wireApp is one published app: the display metadata the box store surfaces plus
-// the verbatim manifest.yml / compose.yml the box install path re-parses. Mirror
-// of cloud catalog.App — the field order is load-bearing (see the digest note
-// above). Featured/Rank/Images are carried for wire fidelity (they participate in
-// the digest) but the box's Entry/Detail do not surface them.
+// wireApp is one published app's BROWSE record: the display metadata the box's
+// store surfaces render, plus the URLs to follow for everything that is not
+// display — the icon, the screenshots, and the two install documents.
+//
+// Every URL on this record is opaque. The box follows what it is given (resolved
+// against the catalog base URL when relative) and never assembles a path of its
+// own, so the control plane can move assets to object storage at an absolute URL
+// without a box-side change.
+//
+// Featured/Rank drive the curated rows; the box's Entry/Detail do not surface
+// them. The record carries no environments list: GET /catalog is filtered by the
+// ?env= the box sends, so everything it receives is already showable here.
 type wireApp struct {
 	ID               string             `json:"id"`
 	Name             string             `json:"name"`
@@ -102,33 +117,36 @@ type wireApp struct {
 	Footprint        manifest.Footprint `json:"footprint"`
 
 	// ExternalCosts is money a THIRD PARTY charges to make the app useful (a
-	// model-provider API key, a mail provider). Declaration order is load-bearing
-	// like every field here: it sits between Footprint and IconFile because the
-	// control plane's App declares it there, and the index digest is computed over
-	// json.Marshal of this array.
-	//
-	// It is NOT what malmo charges for the app. That is authored in the curation
-	// source next to listed/environments and is not on this wire.
+	// model-provider API key, a mail provider). It is NOT what malmo charges for
+	// the app — that is authored in the curation source next to
+	// listed/environments and is not on this wire.
 	ExternalCosts []ExternalCost `json:"external_costs,omitempty"`
 
-	// IconFile / Screenshots are the asset filenames under the control plane's
-	// per-app assets tree (e.g. "icon.png", "screenshots/0.png"), which the box
-	// proxies+caches through its own /api/v1/catalog asset routes.
-	IconFile    string   `json:"icon_file,omitempty"`
-	Screenshots []string `json:"screenshots,omitempty"`
+	// IconURL / ScreenshotURLs are where the artwork lives on the control plane.
+	// The box proxies and caches them behind its OWN /api/v1/catalog asset routes,
+	// so the UI never leaves the box origin (AUTH_AND_ACCESS.md). Empty icon ⇒ the
+	// store falls back to the glyph.
+	IconURL        string   `json:"icon_url,omitempty"`
+	ScreenshotURLs []string `json:"screenshot_urls,omitempty"`
 
-	// Environments is the per-app visibility list ("appliance", "hosted"): the box
-	// shows an app iff this contains the box's own environment.
-	Environments []string `json:"environments"`
-	Featured     bool     `json:"featured,omitempty"`
-	Rank         *int     `json:"rank,omitempty"`
+	// ManifestURL / ComposeURL are the app's two install documents, served as
+	// application/yaml with the verbatim file as the body. Fetched only when the
+	// box actually installs this app (remoteSource.Load), which is what keeps the
+	// browse payload small.
+	ManifestURL string `json:"manifest_url,omitempty"`
+	ComposeURL  string `json:"compose_url,omitempty"`
 
-	// Manifest / Compose are the verbatim manifest.yml / compose.yml bytes — the
-	// install payload the box re-parses with its own manifest.Parse, staying the
-	// sole enforcer of the manifest contract (cloud specs/CATALOG.md # The shape).
-	Manifest string                       `json:"manifest"`
-	Compose  string                       `json:"compose"`
-	Images   map[string]manifest.ImageRef `json:"images,omitempty"`
+	Featured bool `json:"featured,omitempty"`
+	Rank     *int `json:"rank,omitempty"`
+
+	// Manifest / Compose are the DEV AND TEST SEED SEAM ONLY, and the published
+	// catalog never carries them. A staged snapshot file (MALMO_CATALOG_FILE —
+	// dev/mkcatalog, dev/test-qemu, dev/cloud/test) has no control plane behind
+	// it to serve the two document routes, so it inlines the verbatim bytes here
+	// and Load reads them instead of fetching. A record from a real control plane
+	// leaves them empty and Load follows ManifestURL / ComposeURL.
+	Manifest string `json:"manifest,omitempty"`
+	Compose  string `json:"compose,omitempty"`
 }
 
 // ExternalCost is one third-party charge an app depends on: what someone OTHER
@@ -173,42 +191,20 @@ func externalCostsOf(costs []manifest.ExternalCost) []ExternalCost {
 	return out
 }
 
-// indexDigest is the hex SHA-256 over the canonical JSON of the app index — the
-// box side of the cloud's IndexDigest (../cloud internal/catalog/integrity.go).
-// encoding/json is deterministic for this input (struct fields serialize in
-// declaration order, map keys sort), so a byte-faithful mirror of the App shape
-// reproduces the exact digest the sync tool stamped.
-func indexDigest(apps []wireApp) (string, error) {
-	b, err := json.Marshal(apps)
-	if err != nil {
-		return "", fmt.Errorf("marshal catalog index: %w", err)
-	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:]), nil
-}
-
-// verify refuses a snapshot the box can't trust: a schema version it can't read,
-// or an index digest that doesn't match the stamped one (a truncated or corrupted
-// fetch). It is an integrity check; authenticity comes from TLS on the fetch (no
-// separate signature — cloud #62). Called on every snapshot before it is projected,
-// so a bad one never becomes the read source.
+// verify refuses a snapshot the box can't project: a schema version it can't
+// read. There is no digest check — see the file comment on why the index digest
+// is gone. Integrity of the bytes is HTTP's job (framing catches a truncated
+// body) and authenticity is TLS's (cloud #62).
 func (f catalogFile) verify() error {
 	if f.SchemaVersion != wireSchemaVersion {
 		return fmt.Errorf("catalog schema version %d, want %d", f.SchemaVersion, wireSchemaVersion)
 	}
-	got, err := indexDigest(f.Apps)
-	if err != nil {
-		return err
-	}
-	if got != f.IndexSHA256 {
-		return fmt.Errorf("catalog index digest mismatch: snapshot has %q, recomputed %q", f.IndexSHA256, got)
-	}
 	return nil
 }
 
-// parseSnapshot unmarshals raw /catalog/sync bytes and verifies them in one step —
-// the only way a snapshot enters the box, whether fetched from the control plane or
-// read from a staged local file (the dev/test seam, MALMO_CATALOG_FILE).
+// parseSnapshot unmarshals raw GET /catalog bytes and verifies them in one step —
+// the only way a browse payload enters the box, whether fetched from the control
+// plane or read from a staged local file (the dev/test seam, MALMO_CATALOG_FILE).
 func parseSnapshot(data []byte) (catalogFile, error) {
 	var f catalogFile
 	if err := json.Unmarshal(data, &f); err != nil {
@@ -233,17 +229,18 @@ type (
 	SnapshotCategory  = wireCategory
 )
 
-// BuildSnapshot assembles a /catalog/sync-shaped snapshot from already-built
-// apps (and an optional curated landing page) and marshals it to the exact
-// bytes a box can parse and verify: it stamps SchemaVersion, GeneratedAt and
-// StoreRef, computes IndexSHA256 over the apps array (parseSnapshot / verify
-// recompute the same digest on the read side), and marshals the whole thing.
-// This is the one seam a snapshot-building tool needs — it builds SnapshotApp
-// values from its own source (a manifest+compose pair, a home.yml) and calls
-// this once, instead of re-declaring the wire shape to do its own digest +
-// marshal.
+// BuildSnapshot assembles a GET /catalog-shaped browse payload from already-built
+// apps (and an optional curated landing page) and marshals it to the exact bytes a
+// box can parse: it stamps SchemaVersion, GeneratedAt, StoreRef and Version, and
+// marshals the whole thing. This is the one seam a snapshot-building tool needs —
+// it builds SnapshotApp values from its own source (a manifest+compose pair, a
+// home.yml) and calls this once, instead of re-declaring the wire shape.
+//
+// A tool building a snapshot for the local seed seam (dev/mkcatalog) inlines each
+// app's Manifest/Compose, because there is no control plane behind a staged file
+// to serve the two document routes.
 func BuildSnapshot(apps []SnapshotApp, home SnapshotHome, cats []SnapshotCategory, storeRef string) ([]byte, error) {
-	digest, err := indexDigest(apps)
+	version, err := contentToken(apps)
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +248,7 @@ func BuildSnapshot(apps []SnapshotApp, home SnapshotHome, cats []SnapshotCategor
 		SchemaVersion: wireSchemaVersion,
 		GeneratedAt:   time.Now().UTC(),
 		StoreRef:      storeRef,
-		IndexSHA256:   digest,
+		Version:       version,
 		Apps:          apps,
 		Home:          home,
 		Categories:    cats,
@@ -261,4 +258,17 @@ func BuildSnapshot(apps []SnapshotApp, home SnapshotHome, cats []SnapshotCategor
 		return nil, fmt.Errorf("marshal catalog snapshot: %w", err)
 	}
 	return b, nil
+}
+
+// contentToken derives an opaque change token for a built snapshot, so two builds
+// of the same apps stamp the same Version and a box seeded from one recognises the
+// other as unchanged. It is a BUILD-side convenience only: no reader recomputes
+// it, and the control plane is free to mint its token any other way.
+func contentToken(apps []SnapshotApp) (string, error) {
+	b, err := json.Marshal(apps)
+	if err != nil {
+		return "", fmt.Errorf("marshal catalog index: %w", err)
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]), nil
 }

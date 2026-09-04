@@ -376,7 +376,7 @@ type Owner struct {
 }
 
 func (m *Manager) Install(ctx context.Context, manifestID string, owner Owner, scope string, mounts []FolderMount, mailProviderID string, config []store.InstanceConfig, progress func(step string)) (store.Instance, error) {
-	man, composeBytes, err := m.catalog.Load(manifestID)
+	man, composeBytes, err := m.catalog.Load(ctx, manifestID)
 	if err != nil {
 		return store.Instance{}, err
 	}

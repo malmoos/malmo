@@ -1,15 +1,10 @@
 package catalog
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"flag"
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,116 +12,117 @@ import (
 	"github.com/malmoos/malmo/internal/manifest"
 )
 
-// updateFixture rewrites the fixture's stamped digest from its own apps array,
-// so editing the shape by hand does not mean computing a SHA-256 by hand:
-//
-//	go test ./internal/catalog -run TestVerifyFixtureSnapshot -update
-//
-// It only ever touches the index_sha256 value. Every other byte of the fixture
-// stays as authored, which is what keeps TestNoUnmodeledFields honest — see the
-// note on hand-authoring there.
-var updateFixture = flag.Bool("update", false, "rewrite testdata/snapshot.json's index_sha256 from its own apps array")
-
-// fixturePath is the pinned snapshot both this file's fixture-reading tests use.
+// fixturePath is the pinned browse payload this file's fixture-reading tests use.
 var fixturePath = filepath.Join("testdata", "snapshot.json")
 
-// digestRe matches the fixture's stamped digest field, so -update can replace
-// that one value without re-marshalling (and thereby reordering and reformatting)
-// the hand-authored file around it.
-var digestRe = regexp.MustCompile(`"index_sha256":\s*"[0-9a-f]*"`)
-
-// TestVerifyFixtureSnapshot is the box side of the box↔cloud digest contract: a
-// byte-faithful mirror of the cloud App shape must reproduce the exact index
-// digest the sync tool stamps, or the box would reject every snapshot it is
-// served.
+// TestParseFixtureSnapshot reads the pinned browse payload the way a box reads
+// one served by the control plane, and checks the fields the box projects from.
 //
-// testdata/snapshot.json is a SYNTHETIC snapshot: fake apps, written here, in
-// the published wire shape. It is not a copy of any catalog the control plane
-// serves — app manifests and compose files are authored in the store, and this
-// repo holds none of them (CLAUDE.md # Catalog apps). What the fixture pins is
-// the SHAPE, which is all these tests need.
-func TestVerifyFixtureSnapshot(t *testing.T) {
+// testdata/snapshot.json is a SYNTHETIC payload: fake apps, written here, in the
+// published wire shape. It is not a copy of any catalog the control plane serves
+// — app manifests and compose files are authored in the store, and this repo
+// holds none of them (CLAUDE.md # Catalog apps). What the fixture pins is the
+// SHAPE, which is all these tests need.
+func TestParseFixtureSnapshot(t *testing.T) {
 	data, err := os.ReadFile(fixturePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *updateFixture {
-		var raw catalogFile
-		if err := json.Unmarshal(data, &raw); err != nil {
-			t.Fatal(err)
-		}
-		digest, err := indexDigest(raw.Apps)
-		if err != nil {
-			t.Fatal(err)
-		}
-		updated := digestRe.ReplaceAll(data, []byte(`"index_sha256": "`+digest+`"`))
-		if !digestRe.Match(data) {
-			t.Fatalf("%s has no index_sha256 field to update", fixturePath)
-		}
-		if err := os.WriteFile(fixturePath, updated, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("rewrote %s index_sha256 to %s", fixturePath, digest)
-		data = updated
-	}
 	f, err := parseSnapshot(data)
 	if err != nil {
-		t.Fatalf("fixture snapshot must parse and verify (re-stamp it with -update): %v", err)
+		t.Fatalf("fixture snapshot must parse: %v", err)
 	}
 	if len(f.Apps) == 0 {
 		t.Fatal("fixture snapshot carries no apps")
 	}
-	// Re-marshalling the parsed index must reproduce the stamped digest byte for
-	// byte — the invariant the whole thin-client integrity check rests on.
-	got, err := indexDigest(f.Apps)
-	if err != nil {
-		t.Fatal(err)
+	if f.Version == "" {
+		t.Error("fixture snapshot carries no version token; it is the ETag the box sends back")
 	}
-	if got != f.IndexSHA256 {
-		t.Fatalf("digest mismatch: recomputed %q, stamped %q", got, f.IndexSHA256)
+	a := f.Apps[0]
+	if a.ManifestURL == "" || a.ComposeURL == "" {
+		t.Errorf("app %q carries no install-document URLs: %+v", a.ID, a)
+	}
+	if a.IconURL == "" || len(a.ScreenshotURLs) != 2 {
+		t.Errorf("app %q asset URLs not carried: icon=%q screenshots=%v", a.ID, a.IconURL, a.ScreenshotURLs)
+	}
+	// The browse payload must carry no install payload: that is the whole point
+	// of the split (#434). A published record leaves these empty; only a staged
+	// local seed file inlines them.
+	if a.Manifest != "" || a.Compose != "" {
+		t.Errorf("app %q inlines an install payload; the published browse record must not", a.ID)
 	}
 }
 
-// TestVerifyRejects covers the two ways a snapshot is refused before it can become
-// the read source: a schema version the box can't read, and a digest that doesn't
-// match the bytes (truncation / corruption / tamper).
-func TestVerifyRejects(t *testing.T) {
+// TestVerifyRejectsSchemaVersion covers the one refusal left on the browse
+// payload: a schema version the box cannot project. The index digest that used to
+// sit beside it is gone — it made field order load-bearing and turned any new
+// published field into a flag day (#434) — so a payload the box can read is
+// accepted on its own bytes.
+func TestVerifyRejectsSchemaVersion(t *testing.T) {
 	base := catalogFile{
 		SchemaVersion: wireSchemaVersion,
+		Version:       "v1",
 		Apps:          []wireApp{{ID: "a", Name: "A", Version: "1"}},
 	}
-	digest, err := indexDigest(base.Apps)
-	if err != nil {
-		t.Fatal(err)
-	}
-	base.IndexSHA256 = digest
 	if err := base.verify(); err != nil {
-		t.Fatalf("well-formed snapshot must verify: %v", err)
+		t.Fatalf("well-formed payload must verify: %v", err)
 	}
 
-	t.Run("wrong schema", func(t *testing.T) {
-		bad := base
-		bad.SchemaVersion = wireSchemaVersion + 1
-		if err := bad.verify(); err == nil {
-			t.Fatal("want error for unreadable schema version")
-		}
-	})
+	bad := base
+	bad.SchemaVersion = wireSchemaVersion + 1
+	if err := bad.verify(); err == nil {
+		t.Fatal("want error for unreadable schema version")
+	}
 
-	t.Run("digest mismatch", func(t *testing.T) {
-		bad := base
-		bad.Apps = append([]wireApp(nil), base.Apps...)
-		bad.Apps[0].Name = "tampered" // digest no longer matches the stamped one
-		if err := bad.verify(); err == nil {
-			t.Fatal("want error for digest mismatch")
-		}
-	})
+	b, _ := json.Marshal(base)
+	if _, err := parseSnapshot(b[:len(b)/2]); err == nil {
+		t.Fatal("want error for truncated payload body")
+	}
+}
 
-	t.Run("parseSnapshot rejects truncated json", func(t *testing.T) {
-		b, _ := json.Marshal(base)
-		if _, err := parseSnapshot(b[:len(b)/2]); err == nil {
-			t.Fatal("want error for truncated snapshot body")
-		}
-	})
+// TestUnknownFieldsAreIgnored is the behaviour change #434 bought. An unknown
+// key — top-level OR inside an app — is now dropped the way encoding/json drops
+// one everywhere else, so the control plane can add a display field and publish
+// it before the fleet has updated.
+//
+// It used to be asymmetric: a per-app unknown key rejected the whole payload,
+// because verify() recomputed the index digest by re-marshalling what it parsed
+// and a dropped key could not reproduce it. That made every published field a
+// coordinated release, and a box that met one showed an empty store.
+func TestUnknownFieldsAreIgnored(t *testing.T) {
+	raw := []byte(`{"schema_version":` + strconv.Itoa(wireSchemaVersion) +
+		`,"version":"v9","not_modelled_here":{"any":"shape"},"apps":[{` +
+		`"id":"alpha","name":"Alpha","version":"1.0",` +
+		`"footprint":{"image_download_bytes":0,"image_disk_bytes":0},` +
+		`"manifest_url":"/catalog/apps/alpha/manifest",` +
+		`"compose_url":"/catalog/apps/alpha/compose",` +
+		`"not_modelled_here":{"any":"shape"},"also_new":42}]}`)
+	f, err := parseSnapshot(raw)
+	if err != nil {
+		t.Fatalf("unknown keys must be dropped, not rejected: %v", err)
+	}
+	if len(f.Apps) != 1 || f.Apps[0].ID != "alpha" {
+		t.Fatalf("apps = %+v, want the one app with its modelled fields intact", f.Apps)
+	}
+	if f.Version != "v9" {
+		t.Errorf("version = %q, want v9", f.Version)
+	}
+}
+
+// TestVersionIsOpaque pins that the box treats the version token as bytes. It
+// stores whatever the payload carries and hands it straight back as the
+// If-None-Match validator, with no recomputation and no shape requirement — the
+// control plane may mint it any way it likes.
+func TestVersionIsOpaque(t *testing.T) {
+	raw := []byte(`{"schema_version":` + strconv.Itoa(wireSchemaVersion) +
+		`,"version":"2026-09-04T10:00:00Z/17","apps":[]}`)
+	f, err := parseSnapshot(raw)
+	if err != nil {
+		t.Fatalf("a non-hex version token must parse: %v", err)
+	}
+	if got := quoteETag(f.Version); got != `"2026-09-04T10:00:00Z/17"` {
+		t.Errorf("ETag = %s, want the token quoted verbatim", got)
+	}
 }
 
 // jsonKeys returns the set of JSON object keys a struct type will unmarshal
@@ -157,7 +153,7 @@ func jsonKeys(t reflect.Type) map[string]bool {
 var ignoredTopLevelKeys = map[string]string{
 	// os_capabilities_version is a publish-side provenance stamp: which
 	// capability set the control plane admitted apps against when it built this
-	// snapshot. It has no box-side meaning — the box enforces admission against
+	// payload. It has no box-side meaning — the box enforces admission against
 	// its own manifest.Version each time it parses one, not against a
 	// catalog-wide stamp — so there is nothing for the box to do with it.
 	"os_capabilities_version": "publish-side provenance stamp, no box-side meaning",
@@ -166,28 +162,19 @@ var ignoredTopLevelKeys = map[string]string{
 // TestNoUnmodeledFields asserts that the wire shape written down in the fixture
 // and the wire shape the box's types model are the same set of keys. It parses
 // the fixture into a generic map[string]any and fails on any top-level or
-// per-app key that catalogFile / wireApp (plus the nested
-// footprint/author/links/images shapes) do not declare a json tag for.
+// per-app key that catalogFile / wireApp (plus the nested footprint/author/links
+// shapes) do not declare a json tag for.
 //
-// Read what this does and does not catch. The fixture is hand-authored, so this
-// is a check between two things kept in this repo: it catches a json tag renamed
-// or dropped in wire.go without the pinned shape following, and it makes the
-// shape the box believes in reviewable as one file. It CANNOT tell you that the
-// published shape moved — the box does not hold a published snapshot to compare
-// against, by design. Noticing that a newly published field is one the box does
-// not model is a publish-side check, on the side that has the published
-// snapshot.
+// This is no longer a correctness gate — an unknown key is dropped harmlessly
+// now (TestUnknownFieldsAreIgnored), so a published field the box does not model
+// costs a feature, not a working store. What it still buys is that the shape the
+// box believes in stays reviewable as one readable file, and that a json tag
+// renamed in wire.go without the fixture following is caught here.
 //
-// Because the fixture is hand-authored, keep it that way: never regenerate it
-// from the Go types in this package. A fixture generated from the very structs
-// it is checked against agrees with them always, and this test becomes a test of
-// nothing. -update (see TestVerifyFixtureSnapshot) re-stamps the digest only,
-// for that reason.
-//
-// When the box starts modelling a new field, add it here in the fixture too, so
-// the shape stays written down in one readable place. When the box deliberately
-// does not model a top-level field, record it in ignoredTopLevelKeys with the
-// reason. Don't delete or weaken this test to make it pass.
+// The fixture is hand-authored; keep it that way. Never regenerate it from the
+// Go types in this package — a fixture generated from the very structs it is
+// checked against agrees with them always, and this test becomes a test of
+// nothing.
 func TestNoUnmodeledFields(t *testing.T) {
 	data, err := os.ReadFile(fixturePath)
 	if err != nil {
@@ -220,7 +207,6 @@ func TestNoUnmodeledFields(t *testing.T) {
 	knownFootprint := jsonKeys(reflect.TypeOf(manifest.Footprint{}))
 	knownAuthor := jsonKeys(reflect.TypeOf(manifest.Author{}))
 	knownLinks := jsonKeys(reflect.TypeOf(manifest.Links{}))
-	knownImageRef := jsonKeys(reflect.TypeOf(manifest.ImageRef{}))
 
 	checkNested := func(id, label string, obj map[string]any, known map[string]bool) {
 		for key := range obj {
@@ -255,30 +241,17 @@ func TestNoUnmodeledFields(t *testing.T) {
 		if li, ok := app["links"].(map[string]any); ok {
 			checkNested(id, "links", li, knownLinks)
 		}
-		if images, ok := app["images"].(map[string]any); ok {
-			for imgRef, v := range images {
-				if ir, ok := v.(map[string]any); ok {
-					checkNested(id, fmt.Sprintf("images[%q]", imgRef), ir, knownImageRef)
-				}
-			}
-		}
 	}
 }
 
-// TestExternalCostsSurviveTheDigest is the byte-fidelity proof for the newest
-// field on the wire. No published app declares a cost yet, so the pinned fixture
-// cannot exercise it — this builds a snapshot that does, the way the control
-// plane marshals one, and checks the box reproduces the digest over it and
-// projects it onto the detail page.
-//
-// The digest is computed over json.Marshal of the app array, so a mirror that
-// declared ExternalCosts in a different position than the control plane's App
-// would still parse and still pass every field-level assertion, and only fail
-// here. That is the failure this test exists to catch.
-func TestExternalCostsSurviveTheDigest(t *testing.T) {
+// TestExternalCostsProjectOntoDetail checks the newest display field survives the
+// round trip from published bytes to the detail page, and stays off the grid card
+// — a cost is a paragraph of reading, not something a card can hold.
+func TestExternalCostsProjectOntoDetail(t *testing.T) {
 	apps := []wireApp{{
 		ID: "openclaw", Name: "OpenClaw", Version: "1.0",
-		Environments: []string{"appliance", "hosted"},
+		ManifestURL: "/catalog/apps/openclaw/manifest",
+		ComposeURL:  "/catalog/apps/openclaw/compose",
 		ExternalCosts: []ExternalCost{{
 			ID:              "model-access",
 			Title:           "Model access",
@@ -287,15 +260,10 @@ func TestExternalCostsSurviveTheDigest(t *testing.T) {
 			Estimate:        "$3 per million tokens (long agent runs use many times more)",
 			EstimateChecked: "2026-08-10",
 		}},
-		Manifest: "id: openclaw\n", Compose: "services: {}\n",
 	}}
-	digest, err := indexDigest(apps)
-	if err != nil {
-		t.Fatal(err)
-	}
 	raw, err := json.Marshal(catalogFile{
 		SchemaVersion: wireSchemaVersion,
-		IndexSHA256:   digest,
+		Version:       "v1",
 		Apps:          apps,
 	})
 	if err != nil {
@@ -303,7 +271,7 @@ func TestExternalCostsSurviveTheDigest(t *testing.T) {
 	}
 	f, err := parseSnapshot(raw)
 	if err != nil {
-		t.Fatalf("snapshot carrying external_costs must parse and verify: %v", err)
+		t.Fatalf("payload carrying external_costs must parse: %v", err)
 	}
 	got := detailOfApp(&f.Apps[0])
 	if len(got.ExternalCosts) != 1 {
@@ -316,7 +284,6 @@ func TestExternalCostsSurviveTheDigest(t *testing.T) {
 	if c.Estimate != "$3 per million tokens (long agent runs use many times more)" {
 		t.Errorf("estimate not carried verbatim: %q", c.Estimate)
 	}
-	// The grid card must stay free of it: a cost is a paragraph of reading.
 	entry, err := json.Marshal(entryOfApp(&f.Apps[0]))
 	if err != nil {
 		t.Fatal(err)
@@ -326,48 +293,45 @@ func TestExternalCostsSurviveTheDigest(t *testing.T) {
 	}
 }
 
-// TestUnknownFieldAsymmetry pins the rule in APP_STORE.md # What the box models:
-// an unknown field OUTSIDE the app array is dropped harmlessly, while an unknown
-// field INSIDE an app rejects the whole snapshot. The two cases behave in
-// opposite ways, and the difference decides whether a publish-side change can
-// ship before the fleet updates or must wait for a release.
-//
-// The reason is that verify() recomputes the digest by re-marshalling what it
-// parsed: a per-app key the box does not model is absent from the re-marshal, so
-// the digest cannot reproduce. This test exists because the spec used to state
-// the harmless half as if it covered both, and a per-app field was added on that
-// reading — the box rejected the whole snapshot instead of dropping a field.
-func TestUnknownFieldAsymmetry(t *testing.T) {
-	// The published bytes, as the control plane would marshal them: one app
-	// carrying a per-app key this box does not model.
-	appsJSON := []byte(`[{"id":"alpha","name":"Alpha","version":"1.0",` +
-		`"footprint":{"image_download_bytes":0,"image_disk_bytes":0},` +
-		`"environments":["hosted"],"not_modelled_here":{"any":"shape"},` +
-		`"manifest":"id: alpha\n","compose":"services: {}\n"}]`)
-	sum := sha256.Sum256(appsJSON)
-	stamped := hex.EncodeToString(sum[:])
-
-	perApp := []byte(`{"schema_version":` + strconv.Itoa(wireSchemaVersion) +
-		`,"index_sha256":"` + stamped + `","apps":` + string(appsJSON) + `}`)
-	if _, err := parseSnapshot(perApp); err == nil {
-		t.Error("a per-app field the box does not model was accepted; it must reject the snapshot, " +
-			"which is why adding one is a coordinated release and not a publish-side change")
-	} else {
-		t.Logf("per-app unknown field rejects the snapshot, as documented: %v", err)
+// TestBuildSnapshotRoundTrips covers the seed-building seam (dev/mkcatalog): what
+// BuildSnapshot writes, parseSnapshot must read back, including the inlined
+// install payload a staged file carries because it has no control plane behind it.
+func TestBuildSnapshotRoundTrips(t *testing.T) {
+	apps := []SnapshotApp{{
+		ID: "alpha", Name: "Alpha", Version: "1.0",
+		Manifest: "id: alpha\n", Compose: "services: {}\n",
+	}}
+	b, err := BuildSnapshot(apps, SnapshotHome{Spotlight: "alpha"},
+		[]SnapshotCategory{{ID: "tools", Label: "Tools"}}, "abc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := parseSnapshot(b)
+	if err != nil {
+		t.Fatalf("a built snapshot must parse: %v", err)
+	}
+	if f.Version == "" {
+		t.Error("BuildSnapshot must stamp a version token")
+	}
+	if len(f.Apps) != 1 || f.Apps[0].Manifest != "id: alpha\n" || f.Apps[0].Compose != "services: {}\n" {
+		t.Fatalf("inline install payload not round-tripped: %+v", f.Apps)
+	}
+	if f.StoreRef != "abc123" || f.Home.Spotlight != "alpha" || len(f.Categories) != 1 {
+		t.Errorf("built snapshot lost its curation: %+v", f)
 	}
 
-	// Same snapshot without the unmodelled per-app key, plus an unmodelled
-	// TOP-LEVEL key. That one sits outside the digest, so it is dropped and the
-	// snapshot still verifies — the case the publish side may ship ahead of boxes.
-	cleanApps := []byte(`[{"id":"alpha","name":"Alpha","version":"1.0",` +
-		`"footprint":{"image_download_bytes":0,"image_disk_bytes":0},` +
-		`"environments":["hosted"],` +
-		`"manifest":"id: alpha\n","compose":"services: {}\n"}]`)
-	sum = sha256.Sum256(cleanApps)
-	topLevel := []byte(`{"schema_version":` + strconv.Itoa(wireSchemaVersion) +
-		`,"index_sha256":"` + hex.EncodeToString(sum[:]) +
-		`","not_modelled_here":{"any":"shape"},"apps":` + string(cleanApps) + `}`)
-	if _, err := parseSnapshot(topLevel); err != nil {
-		t.Errorf("a top-level field the box does not model must be dropped, not rejected: %v", err)
+	// The token is content-derived on the build side, so an unchanged catalog
+	// stamps an unchanged version and a seeded box reads a rebuild as a no-op.
+	again, err := BuildSnapshot(apps, SnapshotHome{Spotlight: "alpha"},
+		[]SnapshotCategory{{ID: "tools", Label: "Tools"}}, "abc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f2, err := parseSnapshot(again)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f2.Version != f.Version {
+		t.Errorf("version = %q then %q; the same apps must stamp the same token", f.Version, f2.Version)
 	}
 }

@@ -1,0 +1,54 @@
+# Catalog client: browse data and install payloads are two fetches
+
+- **Status:** done
+- **Date:** 2026-09-04
+- **Specs touched:** `docs/specs/APP_STORE.md`, `docs/specs/DECISIONS.md` (2026-09-04), `docs/specs/NEXT.md`, `docs/architecture.md`
+
+Closes #434. Follows [catalog-no-box-side-copy.md](catalog-no-box-side-copy.md), which made the box hold the snapshot in memory only; this splits what it holds.
+
+## What was done
+
+The box used to pull one bulk snapshot, `GET /catalog/sync`, carrying every published app's verbatim `manifest.yml`, `compose.yml` and resolved images map. On a 43-app catalog that was 614KB, of which 77% was install payload for apps the box would never install. It now fetches on two seams.
+
+**Browse.** `GET /catalog?env=<environment>` returns display records, the landing page, the category vocabulary, and a `version` token. `remoteSource.syncOnce` sends the box's own environment on the query string, uses the response `ETag` (falling back to the quoted `version`) as its `If-None-Match` validator, and swaps the parsed payload in under the write lock, as before.
+
+**Install.** `Load` is now `Load(ctx, id)`. It looks the app up in the browse payload and follows that record's `manifest_url` and `compose_url`, one `GET` each, capped at `maxDocumentBytes`. The body is the verbatim file; the content type is not asserted on, so the control plane restating `text/yaml` as `application/yaml` cannot break a box. A `404` on a document route maps to `ErrNotFound` (the API's 404); anything else is a plain error (500), because the app exists and the box simply could not get its payload. A record with no document URL is also a plain error — the store offered the app and then could not say where its payload lives.
+
+**The digest is gone.** `index_sha256` was recomputed by re-marshalling the parsed app index, which is why `wire.go` documented field order as load-bearing, and why **any** new published field was a flag day: the recomputed digest stopped matching, `verify()` refused the snapshot, and the box showed an empty store. It was doing cache work, not security work — TLS authenticates the origin and HTTP framing catches truncation. `version` replaces it as an opaque token the box stores, echoes, and never recomputes. Unknown keys, top-level and per-app alike, are now dropped the way `encoding/json` drops them everywhere else. The `schema_version` refusal stays as the one thing a box genuinely cannot read past.
+
+**Installed apps read their own copy.** This is the load-bearing part. `Load` was never install-only: `internal/api/api.go` (the app detail page's mail picker) and `internal/api/mail.go` (the rebind pre-check) called it for apps that are already installed, and turning those into live network calls would have put a routine page load behind the catalog service. Both now read `s.life.InstanceManifest(id)` — the manifest the installer already writes at `<state>/instances/<id>/manifest.yml` (`writeInstanceDir`, unchanged). That also fixes a pre-existing bug: an installed app's manifest used to disappear out from under it the moment the app was unpublished. The three remaining `Load` callers (`lifecycle.Install`, `installApp`, `installPlan`) are all pre-install and all had a context to pass.
+
+**URLs are opaque.** `icon_file` / `screenshots` (filenames the box assembled a control-plane path from) became `icon_url` / `screenshot_urls`, joining `manifest_url` / `compose_url`. The box resolves each against the catalog base URL and follows it, so an absolute URL on another origin works unchanged — which is the point: artwork or documents can move to object storage without a box-side change. The asset cache filename is now derived from the URL (`assetCacheName`: 8 bytes of its SHA-256 plus the URL's own extension, kept only when it is a plain one so `http.ServeFile` still gets the content type right), so no byte of a published URL lands in a path segment. The app **id** is still published data and still names a directory, so `assetCachePath` cleans it against a virtual root and checks the result stays under the cache — a containment check the old `safeJoin` guarded the filename with but not the id.
+
+**Environment filtering moved server-side.** The box sends `?env=` and shows what it receives; `visibleIn` and the `environments` field are gone. `Detail` and `Entry` are now the same lookup.
+
+**Dev and test lanes.** `MALMO_CATALOG_FILE` still seeds a staged snapshot, and `dev/mkcatalog` still builds one. A staged file has no control plane behind it to serve the two document routes, so `wireApp` keeps optional `manifest` / `compose` fields as the **seed seam** — `Load` uses them when present and fetches otherwise. The published catalog never carries them, and the fixture asserts that. `mkcatalog` lost its `-environments` flag (the box no longer reads that field); `Makefile`, `dev/test-qemu/bootstrap.sh` and `dev/cloud/test/bootstrap.sh` were updated with it. `BuildSnapshot` stamps a content-derived `version` so a rebuild of unchanged apps stamps an unchanged token.
+
+## How it maps to the specs
+
+- `APP_STORE.md` # What the box models is rewritten. The old asymmetry — a top-level unknown key dropped, a per-app one rejecting the whole catalog — was a real, measured failure (`external_costs` at `e825e9f`), and it is now one rule: unknown keys are dropped. The section keeps the history, because the reasoning for removing the digest is the history.
+- `APP_STORE.md` # Failure modes gains two entries: an install payload that cannot be fetched, and an installed app that leaves the box's surface.
+- `APP_STORE.md` # Locked decisions: browse and install are separate fetches; environment filtering is server-side; every published URL is opaque; no signing **and** no integrity digest; manifest + compose are persisted next to the installation.
+- `DECISIONS.md` 2026-09-04 records the flip. The 2026-07-02 entry's "TLS + integrity digest" trust story loses its second half.
+
+## Known gaps & deviations
+
+- **An installed app that leaves the catalog loses its card metadata.** The issue offered two answers — persist the display record too, or accept and document the degradation — and this takes the second. With filtering server-side, `GET /catalog?env=` no longer carries a record for such an app, so `Entry(id)` cannot resolve it and the card falls back to the instance row's own name and version with no icon. The install itself is untouched: the manifest and compose live next to it. Persisting a copy of the display record buys a card icon and costs a second copy to keep fresh, and no view is broken without it.
+- **The real control plane's routes are not exercised here.** The new API is being built in the private cloud repo, so what this side is proven against is an in-process fake in the unit tests plus a stand-in HTTP endpoint in the inner loop. Both were run for real: `make dev` against real Docker and real Caddy installed `whoami` end-to-end twice — once from a `mkcatalog` seed file (the air-gapped lane's path) and once against an endpoint serving `GET /catalog?env=`, `GET /catalog/apps/whoami/manifest` and `/compose` — and the app answered through Caddy on `whoami.local` both times. What that cannot prove is the shape the real endpoint will serve. The two-repo seam is a coordinated change and cannot be checked by reading this diff.
+
+  That live run also showed an install does **four** document fetches, not two: `installApp` calls `Load` to validate the folder elections, then the install job calls `Manager.Install`, which calls it again. Correct but wasteful — see What's next.
+- **No boot-lane run.** `dev/test-qemu` and `dev/cloud/test` need root + KVM (+ swtpm for the medium lane) and are not in the normal loop. Both bootstrap scripts were changed (dropping one flag) and are `bash -n` clean; `dev/mkcatalog` was run for real against `dev/test-qemu/catalog/whoami` and the seed it produced parses, carries its inline payload, and installs through `Load` in test. The end-to-end air-gapped install is validated on the next `CI / Cloud image` run.
+- **`internal/hostagent/pamverifier` and `cmd/host-agent-real` were not run**, for the usual missing-`libpam0g-dev` reason; neither is touched by this change. Everything else in `go test ./...` is green.
+
+## Review findings addressed
+
+The pre-PR self-review (`/code-review low`) raised two, both fixed on this branch with tests:
+
+- **`assetCachePath` containment.** The first cut hashed the asset URL but still joined the app id into the path raw, and deleted `safeJoin` while claiming nothing publisher-controlled reached a path segment. The id is publisher-controlled: an id carrying `..` would have written outside the asset cache. (The old code had the same hole — `safeJoin`'s base was `<cache>/assets/<id>` with the id already joined raw — so this closes a pre-existing gap rather than one this change opened.) `TestAssetCachePathContainsTheAppID`.
+- **Empty screenshot slots.** `detailOfApp` emitted a URL for every index including blank ones, while `ScreenshotPath` returns `ErrNotFound` for exactly those — one broken image per empty slot. Blank slots are skipped now, and the slots that remain keep their **own** record index, because that is what `ScreenshotPath` resolves by; renumbering would point each surviving screenshot at the wrong picture. `TestDetailSkipsEmptyScreenshotSlots`.
+
+## What's next
+
+1. **The cloud side of the seam.** `GET /catalog` must actually filter by `?env=`, serve `version` as its `ETag`, honour `If-None-Match`, and stop carrying `manifest` / `compose` / `images`. Until it does, a box on this code against the old endpoint parses a payload with no document URLs and fails at install, not at browse.
+2. **Decide whether the card needs its icon.** If the degradation above turns out to matter in the dashboard, the answer is to persist the display record alongside the manifest at install time, not to reintroduce a box-side environment filter.
+3. **Collapse the duplicate install-time document fetches.** One install is four document fetches, measured in the inner loop: `installApp` calls `Load` to validate the folder elections and `Manager.Install` calls it again moments later, and a plan-then-install adds two more from `installPlan`. Either pass the loaded pair down from the API layer or hold a short-lived per-app cache. Not fixed here: it is a change to the install call chain, which is outside this issue.

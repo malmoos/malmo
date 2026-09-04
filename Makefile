@@ -330,7 +330,11 @@ dev: check-state-owner build caddy
 # normal dev stack with MALMO_CATALOG_FILE pointing at it. The brain reads that
 # file once at boot (internal/catalog/remote.go # loadSnapshotFile) and installs
 # the app from it. The file is an input the brain never writes back — a box keeps
-# no catalog on disk.
+# no catalog on disk. A seed inlines each app's manifest and compose, because a
+# staged file has no control plane behind it to serve the per-app document routes
+# a real box fetches an install payload from (#434). Environment visibility is not
+# in the seed either: a real box gets it from the ?env= on its own fetch, so a
+# seeded store shows every app it was given.
 #
 # `make seed-catalog APPS="<id> <id> ..." [HOMEFILE=<path/to/home.yml>]` is the
 # multi-app form: it seeds every named package into one snapshot and, when
@@ -367,8 +371,8 @@ seed-catalog:
 	  catsflag=""; \
 	  [ ! -f "$(STORE)/categories.yml" ] || catsflag="-categories $(STORE)/categories.yml"; \
 	  mkdir -p $(DEV_DIR) && \
-	  $(GO) run ./dev/mkcatalog $$pkgflags -environments appliance,hosted -out $(CATALOG_SEED) $$homeflag $$catsflag && \
-	  echo "seeded [$$ids] -> $(CATALOG_SEED) (visible on: appliance, hosted)$${homeflag:+, landing from $(HOMEFILE)}$${catsflag:+, category labels from $(STORE)/categories.yml}"
+	  $(GO) run ./dev/mkcatalog $$pkgflags -out $(CATALOG_SEED) $$homeflag $$catsflag && \
+	  echo "seeded [$$ids] -> $(CATALOG_SEED)$${homeflag:+, landing from $(HOMEFILE)}$${catsflag:+, category labels from $(STORE)/categories.yml}"
 
 # The inert catalog URL and the seed file are target-specific, exported
 # variables, so they are in effect for the `dev` prerequisite's recipe too — the
