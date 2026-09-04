@@ -42,7 +42,7 @@ func TestInstallGPU_OverrideBindsDRIAndRenderGroup(t *testing.T) {
 	e.writeCatalogApp(t, "gpuapp", migrateJobCompose, gpuManifest)
 	e.docker.digests[testImage] = testDigest
 
-	inst, err := e.m.Install(context.Background(), "gpuapp",
+	inst, err := e.m.Install(context.Background(), mustLoadApp(t, e.m, "gpuapp"),
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
@@ -78,7 +78,7 @@ func TestInstallGPU_RefusedWhenHostHasNoGPU(t *testing.T) {
 	e.writeCatalogApp(t, "gpuapp", migrateJobCompose, gpuManifest)
 	e.docker.digests[testImage] = testDigest
 
-	_, err := e.m.Install(context.Background(), "gpuapp",
+	_, err := e.m.Install(context.Background(), mustLoadApp(t, e.m, "gpuapp"),
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if !errors.Is(err, ErrNoGPU) {
 		t.Fatalf("install = %v, want ErrNoGPU", err)
@@ -99,7 +99,7 @@ func TestInstallGPU_HostErrorFailsInstall(t *testing.T) {
 	e.writeCatalogApp(t, "gpuapp", migrateJobCompose, gpuManifest)
 	e.docker.digests[testImage] = testDigest
 
-	_, err := e.m.Install(context.Background(), "gpuapp",
+	_, err := e.m.Install(context.Background(), mustLoadApp(t, e.m, "gpuapp"),
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err == nil {
 		t.Fatal("want install failure on GPU capability host error, got nil")
@@ -118,7 +118,7 @@ func TestInstallGPU_PresentButNoRenderGroup_FailsInstall(t *testing.T) {
 	e.writeCatalogApp(t, "gpuapp", migrateJobCompose, gpuManifest)
 	e.docker.digests[testImage] = testDigest
 
-	_, err := e.m.Install(context.Background(), "gpuapp",
+	_, err := e.m.Install(context.Background(), mustLoadApp(t, e.m, "gpuapp"),
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err == nil {
 		t.Fatal("want install failure on present GPU with no render group, got nil")
@@ -143,7 +143,7 @@ func TestInstallNoGPUPermission_NoStanzaNoQuery(t *testing.T) {
 	e.writeCatalogApp(t, "whoami", whoamiCompose, whoamiManifest(testDigest))
 	e.docker.digests[testImage] = testDigest
 
-	inst, err := e.m.Install(context.Background(), "whoami",
+	inst, err := e.m.Install(context.Background(), mustLoadApp(t, e.m, "whoami"),
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)

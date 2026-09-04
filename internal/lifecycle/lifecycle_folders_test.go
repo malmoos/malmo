@@ -57,7 +57,7 @@ func installFolders(t *testing.T, e *testEnv, scope string, owner Owner, manYAML
 	e.writeCatalogApp(t, "filesapp", foldersCompose, manYAML)
 	e.docker.digests[testImage] = testDigest
 
-	inst, err := e.m.Install(context.Background(), "filesapp", owner, scope, mounts, "", nil, nil)
+	inst, err := e.m.Install(context.Background(), mustLoadApp(t, e.m, "filesapp"), owner, scope, mounts, "", nil, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestInstallFolders_DeletedOwnerRollsBack(t *testing.T) {
 	e.writeCatalogApp(t, "filesapp", foldersCompose, foldersManifest("read", "whole"))
 	e.docker.digests[testImage] = testDigest
 
-	_, err := e.m.Install(context.Background(), "filesapp",
+	_, err := e.m.Install(context.Background(), mustLoadApp(t, e.m, "filesapp"),
 		Owner{UserID: "u_ghost", Username: "ghost"}, store.ScopePersonal,
 		[]FolderMount{{Folder: "documents", Source: sourcePersonal}}, "", nil, nil)
 	if err == nil {
@@ -161,7 +161,7 @@ func TestInstallFolders_FolderlessRunsAsBrainIdentity(t *testing.T) {
 	e.writeCatalogApp(t, "whoami", whoamiCompose, whoamiManifest(testDigest))
 	e.docker.digests[testImage] = testDigest
 
-	inst, err := e.m.Install(context.Background(), "whoami",
+	inst, err := e.m.Install(context.Background(), mustLoadApp(t, e.m, "whoami"),
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
@@ -285,7 +285,7 @@ func TestInstallPreparesAllRelativeBindDirs(t *testing.T) {
 	e.writeCatalogApp(t, "multidir", multiDirCompose, multiDirManifest())
 	e.docker.digests[testImage] = testDigest
 
-	inst, err := e.m.Install(context.Background(), "multidir",
+	inst, err := e.m.Install(context.Background(), mustLoadApp(t, e.m, "multidir"),
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)

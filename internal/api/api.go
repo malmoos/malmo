@@ -665,7 +665,11 @@ func (s *Server) installApp(ctx context.Context, in *struct {
 	// Load the manifest to validate the folder elections authoritatively (the
 	// install-plan endpoint is advisory). A validation failure is an
 	// elevation-class mutation rejection, so it audits success=false.
-	man, _, err := s.catalog.Load(ctx, manifestID)
+	// ONE load for the whole install. The elections below are validated against
+	// this exact manifest, and this exact pair is handed to the job that runs the
+	// transaction — the job must never re-fetch, or it could install a payload
+	// nothing validated (lifecycle.CatalogApp).
+	app, err := s.life.LoadCatalogApp(ctx, manifestID)
 	if errors.Is(err, catalog.ErrNotFound) {
 		return nil, huma.Error404NotFound("no such catalog app")
 	}
@@ -673,6 +677,7 @@ func (s *Server) installApp(ctx context.Context, in *struct {
 		slog.Error("install: catalog entry failed to load", "manifest_id", manifestID, "err", err)
 		return nil, huma.Error500InternalServerError("catalog entry is malformed")
 	}
+	man := app.Manifest
 	// An unlisted app (`listed: false`) is pulled from the store: not installable.
 	// Treat it as absent — same 404 as a missing manifest — so a stale store link
 	// or direct API call can't install a deliberately-withdrawn app.
@@ -717,7 +722,7 @@ func (s *Server) installApp(ctx context.Context, in *struct {
 	}
 	jobCtx := ctx // capture for audit inside the job goroutine
 	job := s.jobs.run("app-install", func(job *Job) (map[string]any, error) {
-		inst, err := s.life.Install(context.Background(), manifestID, owner, scope, mounts, mailProviderID, config, job.setStep)
+		inst, err := s.life.Install(context.Background(), app, owner, scope, mounts, mailProviderID, config, job.setStep)
 		target := audit.Target{Kind: "app"}
 		// confirm records a deliberate override of the duplicate-install warning,
 		// so the Activity view can see "installed a second copy on purpose".

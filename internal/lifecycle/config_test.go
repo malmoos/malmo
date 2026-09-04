@@ -86,7 +86,7 @@ func installConfigApp(t *testing.T, e *testEnv) store.Instance {
 		{AppEnv: "OPENAI_MODEL", Value: "gpt-4o"},
 		{AppEnv: "WORKER_TOKEN", Value: "wt-123"},
 	}
-	inst, err := e.m.Install(context.Background(), "configapp",
+	inst, err := e.m.Install(context.Background(), mustLoadApp(t, e.m, "configapp"),
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", cfg, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
@@ -227,7 +227,7 @@ config:
 `
 	e.writeCatalogApp(t, "badcfg", configCompose, badManifest)
 	e.docker.digests[testImage] = testDigest
-	_, err := e.m.Install(context.Background(), "badcfg",
+	_, err := e.m.Install(context.Background(), mustLoadApp(t, e.m, "badcfg"),
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "",
 		[]store.InstanceConfig{{AppEnv: "TOKEN", Value: "x"}}, nil)
 	if err == nil {

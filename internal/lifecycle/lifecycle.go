@@ -366,7 +366,6 @@ func (m *Manager) instanceDir(id string) string {
 	return filepath.Join(m.stateDir, "instances", id)
 }
 
-// Install runs the install transaction for a catalog (Door-1) manifest_id.
 // Owner identifies the user an instance is installed for. Username is the
 // trailing label in a personal instance's `<slug>--<user>` slug; UserID is the
 // stable owner reference persisted on the row.
@@ -375,12 +374,38 @@ type Owner struct {
 	Username string
 }
 
-func (m *Manager) Install(ctx context.Context, manifestID string, owner Owner, scope string, mounts []FolderMount, mailProviderID string, config []store.InstanceConfig, progress func(step string)) (store.Instance, error) {
+// CatalogApp is one catalog app's install payload: the parsed manifest and the
+// verbatim compose, loaded together and carried as ONE value from validation
+// through to the install transaction.
+//
+// It exists because those two documents are now two separate fetches (#434), and
+// an install reads them twice — once in the request, to validate the folder,
+// mail and config elections against the manifest, and once in the async job that
+// runs the transaction. Loading twice means the job can install a payload the
+// request never validated: an app republished between the two reads could drop a
+// folder the elections still name, add a required config field the request never
+// asked for, or pair one publication's manifest with another's compose. Loading
+// once and passing the pair down closes that window.
+type CatalogApp struct {
+	Manifest *manifest.Manifest
+	Compose  []byte
+}
+
+// LoadCatalogApp fetches an app's install payload. Call it ONCE per install, in
+// the request, and hand the result to Install — see CatalogApp on why.
+func (m *Manager) LoadCatalogApp(ctx context.Context, manifestID string) (CatalogApp, error) {
 	man, composeBytes, err := m.catalog.Load(ctx, manifestID)
 	if err != nil {
-		return store.Instance{}, err
+		return CatalogApp{}, err
 	}
-	return m.install(ctx, man, composeBytes, owner, scope, mounts, mailProviderID, config, progress)
+	return CatalogApp{Manifest: man, Compose: composeBytes}, nil
+}
+
+// Install runs the install transaction for an already-loaded catalog (Door-1)
+// app. It takes the payload rather than an id so the manifest it installs is
+// byte-for-byte the one the caller validated the elections against.
+func (m *Manager) Install(ctx context.Context, app CatalogApp, owner Owner, scope string, mounts []FolderMount, mailProviderID string, config []store.InstanceConfig, progress func(step string)) (store.Instance, error) {
+	return m.install(ctx, app.Manifest, app.Compose, owner, scope, mounts, mailProviderID, config, progress)
 }
 
 // CustomSpec is a user-pasted (Door-2) app: a raw compose plus the bits the
