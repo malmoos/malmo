@@ -37,7 +37,7 @@ A new guard test (`internal/hostagent/controlplane`) parses the **committed** co
 
 ## Known gaps & deviations
 
-- **The brain container is not hardened.** It `chown`s app data directories to the uid it elects for an app (`internal/lifecycle`), so `CAP_CHOWN` is load-bearing and `cap_drop: ALL` would break an install. Doing it properly means naming the set it does need and proving that set on a booted box — the QEMU lane, not a unit test. Recorded in the spec and B2, and filed as a follow-up issue.
+- **The brain container is not hardened.** It `chown`s app data directories to the uid it elects for an app (`internal/lifecycle`), so `CAP_CHOWN` is load-bearing and `cap_drop: ALL` would break an install. Doing it properly means naming the set it does need and proving that set on a booted box — the QEMU lane, not a unit test. Recorded in the spec and B2, and filed as #442.
 - **The socket proxy keeps a writable root.** `read_only` was tried against the real image and it exits 1: the entrypoint writes `/tmp/haproxy.cfg`, and haproxy wants `/run` and `/var/lib/haproxy`. Three `tmpfs` mounts pinned to another project's internal paths would break silently on an image bump, so only the capability half was taken.
 - **This applies to containers as they are created.** `EnsureTransport` leaves an existing proxy container to Docker rather than recreating it, so a box that already has one keeps the old, unsandboxed container until something recreates it. Compose does recreate `caddy` and `malmo-ui` when their config changes, so those two convert on the next `up -d`.
 - **No QEMU lane run here**, appliance or hosted. The evidence above is real Docker on the dev host with the committed compose; the new cloud-lane assertion is written but has only been run by CI, not locally, and a booted box was not exercised here.
@@ -47,5 +47,5 @@ A new guard test (`internal/hostagent/controlplane`) parses the **committed** co
 
 ## What's next
 
-1. **Harden the brain container** — name the capability set it actually needs (`CAP_CHOWN` at minimum), add it to `runSpec`, and prove it on a booted box. Filed as a follow-up issue.
+1. **Harden the brain container** (#442) — name the capability set it actually needs (`CAP_CHOWN` at minimum), add it to `runSpec`, and prove it on a booted box.
 2. **Decide whether the control-plane containers should run as a non-root `user:`.** Needs `NET_BIND_SERVICE` on a non-root process to keep working, and an owner for the volume's files.
