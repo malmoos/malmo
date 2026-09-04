@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/malmoos/malmo/internal/protocol"
 )
@@ -319,6 +320,18 @@ func EnsureTransport(ctx context.Context, d Docker, cfg Config) error {
 		if err := d.Remove(ctx, cfg.ProxyContainerName); err != nil {
 			return fmt.Errorf("remove unsandboxed proxy container %q: %w", cfg.ProxyContainerName, err)
 		}
+		// From here the box has NO Docker transport until the run below
+		// succeeds, and nothing retries it before the next host-agent start —
+		// so a daemon that is briefly busy would cost the box its transport for
+		// the rest of the boot. There is nothing to fall back to (the old
+		// container is gone), so try more than once.
+		if err := runProxyWithRetry(ctx, d, cfg); err != nil {
+			return fmt.Errorf("relaunch proxy container %q after removing the unsandboxed one (the box has no Docker transport until host-agent starts again): %w",
+				cfg.ProxyContainerName, err)
+		}
+		slog.Info("socket-proxy recreated with the container sandbox",
+			"container", cfg.ProxyContainerName, "image", cfg.ProxyImage)
+		return nil
 	}
 	if err := d.Run(ctx, proxyRunSpec(cfg)); err != nil {
 		return fmt.Errorf("run proxy container: %w", err)
@@ -326,6 +339,38 @@ func EnsureTransport(ctx context.Context, d Docker, cfg Config) error {
 	slog.Info("socket-proxy launched",
 		"container", cfg.ProxyContainerName, "image", cfg.ProxyImage)
 	return nil
+}
+
+// proxyRunRetries / proxyRunRetryDelay bound the retry the recreate path uses.
+// A var, not a const, so a test can drop the wait to zero.
+var (
+	proxyRunRetries    = 3
+	proxyRunRetryDelay = 2 * time.Second
+)
+
+// runProxyWithRetry runs the hardened proxy, retrying a bounded number of times.
+// Only the recreate path uses it: there the old container is already removed, so
+// giving up on the first error leaves the box with no path to Docker. A first
+// launch has no such asymmetry — nothing was taken away — and keeps its single
+// attempt.
+func runProxyWithRetry(ctx context.Context, d Docker, cfg Config) error {
+	var err error
+	for attempt := 1; attempt <= proxyRunRetries; attempt++ {
+		if err = d.Run(ctx, proxyRunSpec(cfg)); err == nil {
+			return nil
+		}
+		slog.Warn("relaunching the socket-proxy failed",
+			"container", cfg.ProxyContainerName, "attempt", attempt, "err", err)
+		if attempt == proxyRunRetries {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(proxyRunRetryDelay):
+		}
+	}
+	return err
 }
 
 // proxyRunSpec assembles the docker-socket-proxy `docker run`. The raw socket is

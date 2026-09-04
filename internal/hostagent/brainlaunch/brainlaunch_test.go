@@ -33,6 +33,7 @@ type fakeDocker struct {
 	removeCalls  int
 	lastRemove   string
 	runErr       error
+	runErrs      []error
 	netErr       error
 	loadCalls    int
 	loadPaths    []string
@@ -70,6 +71,13 @@ func (f *fakeDocker) Run(_ context.Context, spec RunSpec) error {
 	f.runCalls++
 	f.lastRun = spec
 	f.runSpecs = append(f.runSpecs, spec)
+	// runErrs, when set, gives a per-call answer (so a test can fail the first
+	// run and succeed on the retry); runErr is the same answer every time.
+	if len(f.runErrs) > 0 {
+		err := f.runErrs[0]
+		f.runErrs = f.runErrs[1:]
+		return err
+	}
 	return f.runErr
 }
 func (f *fakeDocker) ContainerSandboxed(context.Context, string) (bool, error) {
@@ -375,6 +383,43 @@ func TestEnsureTransportRecreatesUnsandboxedProxy(t *testing.T) {
 	}
 	if len(f.lastRun.CapDrop) != 1 || f.lastRun.CapDrop[0] != "ALL" {
 		t.Errorf("relaunched proxy cap_drop = %v, want [ALL]", f.lastRun.CapDrop)
+	}
+}
+
+// The recreate path removes a working container before it can start its
+// replacement, so a run that fails on a busy daemon would cost the box its
+// Docker transport for the rest of the boot. It retries; a run that succeeds on
+// the second attempt leaves the box with a hardened proxy and no error.
+func TestEnsureTransportRetriesTheRecreatedProxy(t *testing.T) {
+	prev := proxyRunRetryDelay
+	proxyRunRetryDelay = 0
+	t.Cleanup(func() { proxyRunRetryDelay = prev })
+
+	f := newFake()
+	f.exists = true
+	f.sandboxed = false
+	f.runErrs = []error{errors.New("docker daemon busy")} // first attempt only
+
+	if err := EnsureTransport(context.Background(), f, testConfig()); err != nil {
+		t.Fatalf("EnsureTransport: %v, want the retry to carry it", err)
+	}
+	if f.runCalls != 2 {
+		t.Errorf("run calls = %d, want 2 (one failure, then the retry)", f.runCalls)
+	}
+}
+
+// A first launch keeps its single attempt: nothing was taken away, so there is
+// no transport to lose by giving up.
+func TestEnsureTransportFirstLaunchDoesNotRetry(t *testing.T) {
+	f := newFake()
+	f.exists = false
+	f.runErr = errors.New("docker daemon busy")
+
+	if err := EnsureTransport(context.Background(), f, testConfig()); err == nil {
+		t.Fatal("EnsureTransport: want the run error to propagate")
+	}
+	if f.runCalls != 1 {
+		t.Errorf("run calls = %d, want 1 (a first launch does not retry)", f.runCalls)
 	}
 }
 
