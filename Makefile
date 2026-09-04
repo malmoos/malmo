@@ -111,8 +111,18 @@ fmt-check:
 	    echo "Fix with: make fmt"; exit 1; \
 	  fi
 
+# `go vet ./...` does NOT compile a test file behind a build tag — it is excluded
+# from the build, so a signature change can leave it uncompilable and the gate
+# stays green. That is not hypothetical: the #434 lifecycle.Install signature
+# change left dockerlive_test.go broken through a full green `make check`, and a
+# PR reviewer caught it. Vet the tagged variants too. These need no hardware and
+# run no test — vet only type-checks — so they are cheap and belong in the gate;
+# actually RUNNING them still needs the real system each tag names (TESTING.md).
+VET_TAGS := dockerlive usermgrtest avahitest nmtest pamtest
+
 vet:
 	$(GO) vet ./...
+	@for tag in $(VET_TAGS); do 	  echo "$(GO) vet -tags $$tag ./..."; 	  $(GO) vet -tags $$tag ./... || exit 1; 	done
 
 # `build` stays host-agent (fake) + brain, unchanged from before this slice.
 # host-agent-real is deliberately NOT folded in: it's Linux + CGO +
