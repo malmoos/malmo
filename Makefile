@@ -38,7 +38,7 @@ export MALMO_STATE_DIR := $(STATE_DIR)
 # store offline. To boot against a local snapshot instead, see `make dev-app`.
 export MALMO_CATALOG_CACHE_DIR := ./.dev/catalog-cache
 
-.PHONY: build host-agent brain host-agent-real host-agent-real-hosted brain-image ui-image control-plane-images build-cloud-image check check-web fmt fmt-check vet test test-nopam test-caddy test-avahi test-netstate test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu test-cloud-qemu run-agent run-brain net caddy caddy-down ui dev dev-app seed-catalog stop openapi openapi-check clean check-state-owner help
+.PHONY: build host-agent brain host-agent-real host-agent-real-hosted brain-image ui-image control-plane-images caddy-acmedns-image build-cloud-image check check-web fmt fmt-check vet test test-nopam test-caddy test-avahi test-netstate test-health test-usermgr test-usermgr-nspawn test-boot-chain-nspawn test-medium-qemu test-cloud-qemu run-agent run-brain net caddy caddy-down ui dev dev-app seed-catalog stop openapi openapi-check clean check-state-owner help
 
 # msteinert/pam v2.1.0 uses RTLD_NEXT, a GNU extension that requires
 # _GNU_SOURCE at C compile time. Apply globally; harmless to non-cgo builds.
@@ -53,6 +53,7 @@ help:
 	@echo "make check-web   - pre-PR gate for frontend changes: web-ui typecheck + build"
 	@echo "make clean       - stop apps, remove dev state"
 	@echo "make control-plane-images - build malmo-brain + malmo-ui images and docker-save the control-plane bundle to .dev/"
+	@echo "make caddy-acmedns-image  - build the hosted Caddy (stock Caddy + the caddy-dns/acmedns module)"
 	@echo "make dev         - all three foreground procs in one terminal (recommended); Go edits rebuild + restart the brain"
 	@echo "make dev-app APP=<id> [STORE=../store] - boot ONE store app under curation: seed its catalog snapshot, then make dev with an inert catalog URL"
 	@echo "make seed-catalog APPS=\"<id> <id> ...\" [HOMEFILE=<path/to/home.yml>] - seed several store apps (+ optionally the curated landing) into a local snapshot file, without starting dev"
@@ -159,7 +160,7 @@ brain:
 
 # ---- Control-plane images (M0, #163) -----------------------------------
 # Build the two malmo OCI images and `docker save` them — together with the two
-# third-party control-plane images the brain's compose pulls — into a tarball
+# third-party control-plane images the brain's compose names — into a tarball
 # bundle under .dev/ (BUILD.md # 5 / # 5b; TESTING.md # Full-stack control-plane
 # integration). The medium-lane VM bakes this bundle and docker-loads it at
 # first boot; it has no network, so the third-party images must be in the bundle
@@ -167,8 +168,17 @@ brain:
 CP_IMAGE_DIR := $(DEV_DIR)/control-plane
 BRAIN_IMAGE  := malmo-brain:dev
 UI_IMAGE     := malmo-ui:dev
-CADDY_IMAGE  := caddy:2-alpine
-PROXY_IMAGE  := tecnativa/docker-socket-proxy:v0.4.2
+CADDY_ACMEDNS_IMAGE := malmo-caddy-acmedns:dev
+# The third-party pins (CADDY_IMAGE, PROXY_IMAGE, CADDY_ACMEDNS_*_IMAGE) live in
+# one checked-in file so a shipped box can be traced back to the exact bytes it
+# runs (#432; BUILD.md # Third-party image pins). Each is name:tag@sha256:...
+include dev/control-plane/images.lock
+# The tag half of a pin. We pull by digest but save under the plain tag, because
+# a box loads the tarball and the compose file names the image by tag
+# (dev/control-plane/compose.yml) — it never pulls, so the digest cannot be its
+# lookup key there.
+CADDY_TAG := $(firstword $(subst @, ,$(CADDY_IMAGE)))
+PROXY_TAG := $(firstword $(subst @, ,$(PROXY_IMAGE)))
 
 brain-image:
 	docker build -f cmd/brain/Dockerfile --build-arg MALMO_COMMIT=$(MALMO_COMMIT) -t $(BRAIN_IMAGE) .
@@ -180,11 +190,24 @@ control-plane-images: brain-image ui-image
 	@mkdir -p $(CP_IMAGE_DIR)
 	docker pull $(CADDY_IMAGE)
 	docker pull $(PROXY_IMAGE)
+	docker tag $(CADDY_IMAGE) $(CADDY_TAG)
+	docker tag $(PROXY_IMAGE) $(PROXY_TAG)
 	docker save $(BRAIN_IMAGE) -o $(CP_IMAGE_DIR)/malmo-brain.tar
 	docker save $(UI_IMAGE)    -o $(CP_IMAGE_DIR)/malmo-ui.tar
-	docker save $(CADDY_IMAGE) -o $(CP_IMAGE_DIR)/caddy.tar
-	docker save $(PROXY_IMAGE) -o $(CP_IMAGE_DIR)/docker-socket-proxy.tar
+	docker save $(CADDY_TAG)   -o $(CP_IMAGE_DIR)/caddy.tar
+	docker save $(PROXY_TAG)   -o $(CP_IMAGE_DIR)/docker-socket-proxy.tar
 	@echo "saved control-plane image bundle to $(CP_IMAGE_DIR)/"
+
+# The hosted profile's Caddy: stock Caddy plus the caddy-dns/acmedns module, for
+# the wildcard cert's ACME DNS-01 (ENVIRONMENT.md # Networking & discovery). Both
+# halves of the xcaddy build come from the pin file, so the Dockerfile carries no
+# unpinned default — build it through this target, not `docker build` by hand.
+# dev/cloud/stage-control-plane.sh calls it, then docker-saves the result.
+caddy-acmedns-image:
+	docker build \
+	  --build-arg CADDY_ACMEDNS_BUILDER_IMAGE=$(CADDY_ACMEDNS_BUILDER_IMAGE) \
+	  --build-arg CADDY_ACMEDNS_BASE_IMAGE=$(CADDY_ACMEDNS_BASE_IMAGE) \
+	  -t $(CADDY_ACMEDNS_IMAGE) dev/control-plane/caddy-acmedns/
 
 # Run the full suite. Requires libpam0g-dev for the pamverifier package.
 # GOTESTFLAGS passes extra flags through to `go test` — CI sets it to -v so
