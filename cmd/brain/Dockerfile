@@ -1,14 +1,20 @@
+# check=skip=InvalidDefaultArgInFrom
 # malmo-brain control-plane image (BUILD.md # 5; DECISIONS.md 2026-06-13).
-# Build context is the repo root:  docker build -f cmd/brain/Dockerfile -t malmo-brain:dev .
+# Build context is the repo root, through `make brain-image` — that target feeds
+# the two base images in from dev/control-plane/images.lock. They have no default
+# here on purpose: a default is a second copy of a pin, free to drift, and a bare
+# `docker build` would then bake unpinned bytes (#432; BUILD.md # 5c).
 #
 #   build   — compile the brain as a static binary. CGO is off: the brain's only
 #             sqlite is modernc.org/sqlite (pure Go), so nothing links libc.
-#   runtime — debian:trixie-slim with the docker CLI + compose plugin bundled.
+#   runtime — a debian slim base with the docker CLI + compose plugin bundled.
 #             NOT distroless: the brain orchestrates apps by shelling out to
 #             `docker` / `docker compose` (internal/lifecycle/docker.go), which a
 #             shell-less distroless runtime cannot host (DECISIONS.md 2026-06-13).
 
-FROM golang:1.25-bookworm AS build
+ARG BRAIN_BUILDER_IMAGE
+ARG BRAIN_RUNTIME_IMAGE
+FROM ${BRAIN_BUILDER_IMAGE} AS build
 WORKDIR /src
 # Resolve the module graph before copying the tree so the download layer caches
 # across source-only changes.
@@ -25,7 +31,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w \
       -X github.com/malmoos/malmo/internal/version.Commit=${MALMO_COMMIT}" \
       -o /out/malmo-brain ./cmd/brain
 
-FROM debian:trixie-slim AS runtime
+FROM ${BRAIN_RUNTIME_IMAGE} AS runtime
 # docker-ce-cli + docker-compose-plugin from Docker's official apt repo — the
 # same trusted source as the host engine (BUILD.md # Docker package source). The
 # repo codename is read from /etc/os-release so this tracks the base image.

@@ -13,7 +13,7 @@ This doc is **draft / option-survey**. Most sections present alternatives with a
 - The installer — what runs between USB-boot and reboot-to-disk.
 - `host-agent` packaging and how it lands on disk.
 - `malmo-brain` image build, distribution, first-boot pull.
-- How third-party control-plane images are pinned and how a pin gets bumped.
+- How third-party build inputs are pinned and how a pin gets bumped.
 - Versioning and release artifacts.
 
 What it does **not** cover: update mechanics post-install (separate doc), CI/CD specifics, signing infrastructure (deferred until we have a release to sign).
@@ -246,7 +246,7 @@ The dashboard ships as a **second OCI image**, built and distributed the same wa
 
 ### Build
 
-- Base `caddy:alpine`, with the built UI bundle (`web-ui/dist`) baked in at `/srv/ui` and the trivial SPA Caddyfile (serve `/srv/ui`, fallback to `index.html`, gzip/brotli/ETag on by default). No build-stage Go compile — the bundle is produced by the UI's own `vite build` upstream of the image build (`WEB_UI.md`).
+- Base Caddy (the same digest-pinned `CADDY_IMAGE` the proxy runs — # 5c), with the built UI bundle (`web-ui/dist`) baked in at `/srv/ui` and the trivial SPA Caddyfile (serve `/srv/ui`, fallback to `index.html`, gzip/brotli/ETag on by default). No build-stage Go compile — the bundle is produced by the UI's own `vite build` upstream of the image build (`WEB_UI.md`).
 - Output is a single OCI image, tagged `vX.Y.Z` and `latest` (latest only on stable channel) — the same `vX.Y.Z` as the brain, one repo version (# Versioning, above; `WEB_UI.md` # deploy + update flow).
 
 ### Distribution
@@ -259,18 +259,20 @@ Same as the brain (# 5 Distribution): **bundled in the ISO for offline first-boo
 
 ---
 
-## 5c. Third-party image pins
+## 5c. Pinned third-party build inputs
 
-Two of the images a box runs are not ours: stock **Caddy** (the reverse proxy) and **`tecnativa/docker-socket-proxy`** (the container that fronts the raw Docker socket — `CONTROL_PLANE.md` # Docker socket exposure). The hosted profile also builds its own Caddy from two more upstream images, a `caddy:*-builder` and a `caddy:*-alpine` base (`dev/control-plane/caddy-acmedns/`).
+Most of what a malmo build consumes is not ours. Two of the images a box runs are upstream outright: stock **Caddy** (the reverse proxy) and **`tecnativa/docker-socket-proxy`** (the container that fronts the raw Docker socket — `CONTROL_PLANE.md` # Docker socket exposure). The hosted profile also builds its own Caddy from two more upstream images, a `caddy:*-builder` and a `caddy:*-alpine` base (`dev/control-plane/caddy-acmedns/`), with one upstream Go module compiled in. And the two images that *are* ours are built on three more upstream bases (`golang:*`, `debian:*-slim`, `node:*-alpine`).
 
-These are pulled at **image-build** time and `docker save`d into the offline bundle, so a box never pulls them — it loads the tarballs. That makes a mutable tag a build problem, not a live-box problem, but a real one: `caddy:2-alpine` is rebuilt upstream whenever its base is patched, so two builds of the same malmo commit weeks apart would contain different Caddy bytes with nothing recording which. It is the same reasoning the catalog already applies to every app image (`APP_LIFECYCLE.md` # Locked: image digest pinning).
+The two shipped images are pulled at **image-build** time and `docker save`d into the offline bundle, so a box never pulls them — it loads the tarballs. The bases and the module are consumed even earlier, while the images are being built. That makes a mutable tag a build problem, not a live-box problem, but a real one: `caddy:2-alpine` is rebuilt upstream whenever its base is patched, so two builds of the same malmo commit weeks apart would contain different Caddy bytes with nothing recording which. It is the same reasoning the catalog already applies to every app image (`APP_LIFECYCLE.md` # Locked: image digest pinning).
 
-**As-built (#432):** every third-party control-plane image is pinned by digest in one checked-in file, [`dev/control-plane/images.lock`](../../dev/control-plane/images.lock).
+**As-built (#432):** every third-party build input the control plane has is pinned in one checked-in file, [`dev/control-plane/images.lock`](../../dev/control-plane/images.lock) — the four images above by digest, the three base images `malmo-brain` and `malmo-ui` are built from by digest, and the one Go module compiled into the hosted Caddy by version.
 
 - The file holds plain `NAME=name:tag@sha256:...` lines. The `Makefile` `include`s it and is the only reader; everything else that builds one of these images goes through a make target, `dev/cloud/stage-control-plane.sh` included. The plain form is also `source`-able, so a script can read a pin directly if one ever needs to. The tag half stays readable as a label; the digest decides the bytes. Each digest is the multi-arch **index** digest, so the pin does not assume an architecture.
 - `make control-plane-images` pulls by digest, then re-tags to the plain tag before `docker save`. The saved tag matters: a box loads the tarball offline and the control-plane compose names the image by tag (`dev/control-plane/compose.yml`), so the digest cannot be its lookup key there.
 - The hosted Caddy is built by `make caddy-acmedns-image`, which passes both pinned base images in as build args. Its Dockerfile carries **no default** for them — a default would be a second copy of the pin, free to drift, and a bare `docker build` would then quietly bake unpinned bytes.
 - `internal/hostagent/controlplane/imagepins_test.go` fails if a pin loses its digest, or if a pinned tag stops matching the files that name that image by tag.
+- **The two malmo images take their bases as build args too.** `cmd/brain/Dockerfile` and `web-ui/Dockerfile` name no base directly; `make brain-image` / `make ui-image` feed them from the pin file, and `malmo-ui`'s runtime base is the *same* `CADDY_IMAGE` the proxy runs, so the box never holds two different Caddys. This is **pinning, not reproducibility**: the brain's runtime stage still `apt-get`s `docker-ce-cli` from a live index, so two builds of one commit can still differ. It fixes the base bytes and records them, which is what a supply-chain question actually asks.
+- **The hosted Caddy's plugin is version-pinned**, not only its two base images. `xcaddy build --with <module>` with no version takes the latest release that day, so the plugin could change under two frozen bases. Caddy's own version needs no argument — it comes from the pinned builder image (the shipped binary reports `v2.10.0`, matching `caddy:2.10.0-builder`).
 - **Recording:** the file is checked in, so `git show v0.4.0:dev/control-plane/images.lock` answers "which Caddy was in v0.4.0?" from a version number alone. The digests are deliberately **not** added to the release manifest, which stays about the two images an update can move (`RELEASE_MANIFEST.md` # Fields); these bytes only change when someone edits the pin file.
 
 **How to bump a pin.** Read the new digest, paste it into `images.lock`, and commit it on its own saying why:
@@ -279,7 +281,7 @@ These are pulled at **image-build** time and `docker save`d into the offline bun
 docker buildx imagetools inspect caddy:2-alpine | awk '/^Digest:/{print $2; exit}'
 ```
 
-The case that matters is an **upstream Caddy security release**: bump `CADDY_IMAGE` and both `CADDY_ACMEDNS_*` pins together, since they are the same upstream project. Nothing bumps a pin automatically — that is the point of a pin — so a security release is a normal PR like any other.
+The case that matters is an **upstream Caddy security release**: bump `CADDY_IMAGE` and both `CADDY_ACMEDNS_*_IMAGE` pins together, since they are the same upstream project. `CADDY_ACMEDNS_MODULE` is a Go module version, so it is read from the module's releases rather than from a registry. Nothing bumps a pin automatically — that is the point of a pin — so a security release is a normal PR like any other.
 
 ---
 
@@ -359,7 +361,7 @@ GitHub Actions or self-hosted CI — TBD, not architecturally interesting at thi
 - **`host-agent` ships as a Debian package** from our own apt repo, not as a container.
 - **`malmo-brain` ships as an OCI image**, `debian:trixie-slim` runtime with the `docker` CLI + Compose plugin bundled (the brain shells out to them; distroless can't host them — `DECISIONS.md` 2026-06-13), from our own registry, also bundled in the ISO for offline first-boot.
 - **`malmo-ui` ships as a second OCI image** (`caddy:alpine` + baked UI bundle), from our own registry, also bundled in the ISO. Launched by the brain, not host-agent (`CONTROL_PLANE.md`).
-- **Third-party control-plane images are digest-pinned in one checked-in file** (`dev/control-plane/images.lock`, #432). Same reasoning as app images: a tag is not a lookup key. See # 5c for how to bump one.
+- **Every third-party build input is pinned in one checked-in file** (`dev/control-plane/images.lock`, #432): upstream images by digest, base images by digest, the hosted Caddy's plugin by module version. Same reasoning as app images: a tag is not a lookup key. See # 5c for how to bump one.
 - **Same root filesystem serves both the live (installer) environment and the installed system.**
 - **SSH daemon enabled at boot; no account can authenticate until per-user opt-in** (`AUTH.md` # SSH access). Root login disabled.
 - **Channels: stable only in v1, no beta, no nightly.** Beta is additive when triggered (see `RELEASE_MANIFEST.md`).

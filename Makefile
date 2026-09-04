@@ -169,9 +169,10 @@ CP_IMAGE_DIR := $(DEV_DIR)/control-plane
 BRAIN_IMAGE  := malmo-brain:dev
 UI_IMAGE     := malmo-ui:dev
 CADDY_ACMEDNS_IMAGE := malmo-caddy-acmedns:dev
-# The third-party pins (CADDY_IMAGE, PROXY_IMAGE, CADDY_ACMEDNS_*_IMAGE) live in
-# one checked-in file so a shipped box can be traced back to the exact bytes it
-# runs (#432; BUILD.md # Third-party image pins). Each is name:tag@sha256:...
+# Every third-party build input — the two images the box ships, the bases all
+# four malmo/hosted images are built on, and the module compiled into the hosted
+# Caddy — lives in one checked-in file, so a shipped box can be traced back to
+# the exact bytes it runs (#432; BUILD.md # 5c).
 include dev/control-plane/images.lock
 # The tag half of a pin. We pull by digest but save under the plain tag, because
 # a box loads the tarball and the compose file names the image by tag
@@ -181,10 +182,18 @@ CADDY_TAG := $(firstword $(subst @, ,$(CADDY_IMAGE)))
 PROXY_TAG := $(firstword $(subst @, ,$(PROXY_IMAGE)))
 
 brain-image:
-	docker build -f cmd/brain/Dockerfile --build-arg MALMO_COMMIT=$(MALMO_COMMIT) -t $(BRAIN_IMAGE) .
+	docker build -f cmd/brain/Dockerfile --build-arg MALMO_COMMIT=$(MALMO_COMMIT) \
+	  --build-arg BRAIN_BUILDER_IMAGE=$(BRAIN_BUILDER_IMAGE) \
+	  --build-arg BRAIN_RUNTIME_IMAGE=$(BRAIN_RUNTIME_IMAGE) \
+	  -t $(BRAIN_IMAGE) .
 
+# malmo-ui's runtime base is CADDY_IMAGE, the same pin the proxy runs — one Caddy
+# for both, not two pins to keep level.
 ui-image:
-	docker build -f web-ui/Dockerfile -t $(UI_IMAGE) web-ui
+	docker build -f web-ui/Dockerfile \
+	  --build-arg UI_BUILDER_IMAGE=$(UI_BUILDER_IMAGE) \
+	  --build-arg UI_RUNTIME_IMAGE=$(CADDY_IMAGE) \
+	  -t $(UI_IMAGE) web-ui
 
 control-plane-images: brain-image ui-image
 	@mkdir -p $(CP_IMAGE_DIR)
@@ -200,13 +209,14 @@ control-plane-images: brain-image ui-image
 
 # The hosted profile's Caddy: stock Caddy plus the caddy-dns/acmedns module, for
 # the wildcard cert's ACME DNS-01 (ENVIRONMENT.md # Networking & discovery). Both
-# halves of the xcaddy build come from the pin file, so the Dockerfile carries no
-# unpinned default — build it through this target, not `docker build` by hand.
+# halves of the xcaddy build and the plugin module come from the pin file, so the
+# Dockerfile carries no unpinned default — build it through this target, not `docker build` by hand.
 # dev/cloud/stage-control-plane.sh calls it, then docker-saves the result.
 caddy-acmedns-image:
 	docker build \
 	  --build-arg CADDY_ACMEDNS_BUILDER_IMAGE=$(CADDY_ACMEDNS_BUILDER_IMAGE) \
 	  --build-arg CADDY_ACMEDNS_BASE_IMAGE=$(CADDY_ACMEDNS_BASE_IMAGE) \
+	  --build-arg CADDY_ACMEDNS_MODULE=$(CADDY_ACMEDNS_MODULE) \
 	  -t $(CADDY_ACMEDNS_IMAGE) dev/control-plane/caddy-acmedns/
 
 # Run the full suite. Requires libpam0g-dev for the pamverifier package.
