@@ -11,11 +11,13 @@
 # digest decides the bytes. Each digest is the multi-arch *index* digest, so the
 # pin is arch-independent.
 #
-# This file is both make-includable and shell-sourceable, so keep every line a
-# plain NAME=value with no spaces around the `=`. Readers:
-#   - Makefile              (control-plane-images, caddy-acmedns-image)
-#   - dev/control-plane/caddy-acmedns/Dockerfile, via --build-arg from the above
-#   - internal/hostagent/controlplane/imagepins_test.go (guards the pin form)
+# The Makefile is the only reader: it `include`s this file, and passes the two
+# acmedns pins to that Dockerfile as build args. Everything else that builds an
+# image goes through a make target, dev/cloud/stage-control-plane.sh included.
+# Keep every line a plain NAME=value with no spaces around the `=` — that is what
+# make's `include` accepts, and it also keeps the file `source`-able if a script
+# ever needs to read a pin without going through make.
+# internal/hostagent/controlplane/imagepins_test.go guards that form.
 #
 # How to bump a pin (BUILD.md # Third-party image pins):
 #   docker buildx imagetools inspect <name:tag> | awk '/^Digest:/{print $2; exit}'

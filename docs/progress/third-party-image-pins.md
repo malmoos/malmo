@@ -18,7 +18,7 @@ The issue asked to confirm its claims against the tree first. All of them hold, 
 
 ### One pin file (`dev/control-plane/images.lock`)
 
-Four `NAME=name:tag@sha256:...` lines, one per third-party image, with the reasoning and the bump recipe in the header. Plain `NAME=value` with no spaces, so the same file is `include`-d by the `Makefile` and `source`-d by shell. Each digest is the multi-arch **index** digest, so a pin does not assume an architecture.
+Four `NAME=name:tag@sha256:...` lines, one per third-party image, with the reasoning and the bump recipe in the header. The `Makefile` `include`s it and is the only reader — everything else that builds one of these images goes through a make target, `stage-control-plane.sh` included. The lines are plain `NAME=value` with no spaces, which is what `include` accepts and also keeps the file `source`-able if a script ever needs a pin without going through make. Each digest is the multi-arch **index** digest, so a pin does not assume an architecture.
 
 Recording the digests is the file itself: it is checked in, so `git show v0.4.0:dev/control-plane/images.lock` answers "which Caddy was in v0.4.0?" from a version number alone. They are deliberately kept **out** of the release manifest, which is about the two images an update can move (`RELEASE_MANIFEST.md` # Fields); these bytes change only when someone edits this file, which is exactly what git already records.
 

@@ -9,10 +9,10 @@ import (
 )
 
 // dev/control-plane/images.lock pins every third-party control-plane image by
-// digest (#432). Nothing in Go reads that file — the Makefile and the cloud
-// staging script do — so this guard lives with the other tests that read the
-// committed dev/control-plane/ files (see stageRealCompose). It catches the two
-// ways the pin file goes wrong silently:
+// digest (#432). Nothing in Go reads that file — the Makefile does — so this
+// guard lives with the other tests that read the committed dev/control-plane/
+// files (see stageRealCompose). It catches the two ways the pin file goes wrong
+// silently:
 //
 //  1. an entry loses its digest and goes back to a mutable tag, and
 //  2. a tag is bumped in the pin file but not in the places a box names the
@@ -48,7 +48,7 @@ func readPins(t *testing.T) map[string]string {
 			t.Fatalf("%s:%d: not a NAME=value line: %q", src, i+1, line)
 		}
 		if name != strings.TrimSpace(name) || value != strings.TrimSpace(value) {
-			t.Errorf("%s:%d: spaces around `=` break `make include` and `sh` sourcing: %q", src, i+1, line)
+			t.Errorf("%s:%d: spaces around `=` break `make include` (and `sh` sourcing, if a script ever needs one): %q", src, i+1, line)
 		}
 		pins[name] = value
 	}
