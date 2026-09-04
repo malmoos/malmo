@@ -299,7 +299,7 @@ func (s *Server) installPlan(ctx context.Context, in *struct {
 	if !ok {
 		return nil, huma.Error401Unauthorized("unauthenticated")
 	}
-	man, _, err := s.catalog.Load(in.ID)
+	man, _, err := s.catalog.Load(ctx, in.ID)
 	if errors.Is(err, catalog.ErrNotFound) {
 		// Normal client outcome (stale id, typo) — 404 without logging, like getApp.
 		return nil, huma.Error404NotFound("no such catalog app")

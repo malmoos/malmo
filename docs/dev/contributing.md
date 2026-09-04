@@ -1,6 +1,6 @@
 # Working on malmo
 
-The end-to-end loop for contributing an implementation slice: get oriented, pick a task, branch, build, test, document, open a PR. Read this once; it links out to the docs that own each step rather than repeating them.
+The end-to-end loop for contributing an implementation slice: get oriented, pick a task, branch, build, test, document, open a PR, review it. Read this once; it links out to the docs that own each step rather than repeating them.
 
 This guide is written so a contributor **and their coding agent** can both follow it. If you're driving Claude Code, point it here first — most of what an agent needs to not go off the rails (conventions, where docs live, the definition of done) is one hop from this page.
 
@@ -102,21 +102,7 @@ A change is not complete until its docs are in the **same change** (CLAUDE.md # 
 3. **Update the spec** you touched if behavior realized or diverged from it. Update the root [`../../README.md`](../../README.md) quickstart if the dev workflow changed.
 4. **Markdown style:** no line wrapping (continuous lines, not ~70-char breaks). Never use the `§` symbol — write `#`.
 
-## Step 6 — Review it
-
-Before opening the PR, run a self-contained code review using a fresh agent. The agent receives only the diff and your progress document — no conversation history — so it has no attachment to the implementation choices you made.
-
-In Claude Code, run:
-
-```
-/code-review low Read docs/progress/<your-slug>.md first for context, then review the diff per docs/dev/code-review.md.
-```
-
-`/code-review low` spawns a fresh subagent with no access to your conversation history, which is what makes it impartial. The `low` effort level limits output to high-confidence findings — fast and cheap. Use `high` or `max` for a particularly complex or risky slice.
-
-Address every **Block** finding before opening the PR. If you disagree with a finding, note it in the progress entry's "Known gaps" section — never silently ignore it.
-
-## Step 7 — Open the PR
+## Step 6 — Open the PR
 
 ```bash
 git push -u origin <your-branch>
@@ -125,7 +111,27 @@ gh pr create --base dev --fill         # then flesh out the body
 
 PR body must include **`Closes #<N>`** — do not delete this line. It is the only thing that tells GitHub to auto-close the linked issue when the PR merges; without it the issue stays open and the board goes stale. Replace `<N>` with the issue number. Also include: the spec(s) touched, what you tested (and against what — real Docker? a VM boot?), and any known gaps. If your work unblocks a dependent issue, drop its `blocked` label (`gh issue edit <N> --remove-label blocked`).
 
+**The PR comes before the review, on purpose.** Greptile only runs on an open PR, so a review done before you push cannot include it — and Greptile is not optional (see Step 7). Opening the PR first is what makes the two halves of the review available at all. A PR under review is not a PR asking to be merged; say so in the body if the branch is still moving.
+
 **Don't merge your own PR** unless the maintainer has said to. PRs into `dev` get a review pass first; merging closes the linked issue automatically.
+
+## Step 7 — Review it
+
+A finished self-review has **two halves**, and the PR is not ready for the maintainer until both have been read and acted on.
+
+**Half 1 — a fresh review agent.** It receives only the diff and your progress document — no conversation history — so it has no attachment to the implementation choices you made. In Claude Code, run:
+
+```
+/code-review low Read docs/progress/<your-slug>.md first for context, then review the diff per docs/dev/code-review.md.
+```
+
+`/code-review low` spawns a fresh subagent with no access to your conversation history, which is what makes it impartial. The `low` effort level limits output to high-confidence findings — fast and cheap. Use `high` or `max` for a particularly complex or risky slice.
+
+**Half 2 — Greptile.** It runs automatically on the open PR and posts its review as a **PR comment a few minutes after the PR opens**, so it is usually not there the moment you look. Read it with `gh pr view <N> --comments` (plus `gh api repos/{owner}/{repo}/pulls/<N>/comments` for line-level comments), then confirm, dismiss, or extend each finding per [`code-review.md`](code-review.md) # Prior review comments.
+
+**An empty comment list means "not posted yet", never "nothing found."** If it has not landed, wait and check again rather than reporting a clean review it might contradict. This is not hypothetical: on #435 the agent review returned no findings and Greptile then caught a real bug in the same diff.
+
+Address every **Block** finding from either half before the PR merges, with **fixup commits on the same branch** — never a second PR (see Step 2). If you disagree with a finding, note it in the progress entry's "Known gaps" section — never silently ignore it.
 
 ## Release model
 
@@ -153,7 +159,7 @@ Contributors never push directly to `main`; the tag and the GitHub Release are c
 - [ ] Schema changes additive-only; no dropped or renamed columns.
 - [ ] No swallowed errors (`_ = err`); user-facing error messages are plain English, not raw Go error strings.
 - [ ] Commits are logical units with "why" messages; no micro-commit or WIP history.
-- [ ] Self-review run (`/code-review low` with progress doc as context per [`code-review.md`](code-review.md)); all Block findings addressed, disagreements noted in Known gaps.
+- [ ] PR opened first, then self-review run — **both halves**: the fresh agent (`/code-review low` with the progress doc as context per [`code-review.md`](code-review.md)) **and** Greptile's PR comment, which lands minutes after the PR opens and is not optional. All Block findings addressed, disagreements noted in Known gaps.
 - [ ] Branched off a fresh `dev` (`git checkout dev && git pull` before branching); branch named `<area>/<N>-<short-slug>`.
 - [ ] One PR closes exactly one issue; if scope grew, the issue was split first.
 - [ ] Review feedback addressed with fixup commits on the existing branch, not a new PR; if the PR was replaced, the old one was closed first with "Supersedes #<N>".

@@ -410,7 +410,6 @@ docker save traefik/whoami:v1.10.3 \
 mkdir -p "$EXTRA/var/lib/malmo"
 "$GO" -C "$REPO_ROOT" run ./dev/mkcatalog \
     -pkg "${TEST_DIR}/catalog/whoami" \
-    -environments appliance,hosted \
     -out "$EXTRA/var/lib/malmo/catalog-seed.json"
 
 # Stage the control-plane compose + caddy.json at /var/lib/malmo/control-plane/

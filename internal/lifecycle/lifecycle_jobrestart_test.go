@@ -151,7 +151,7 @@ func TestOverrideExemptsTerminatingJobs(t *testing.T) {
 	e.writeCatalogApp(t, "jobapp", migrateJobCompose, migrateJobManifest)
 	e.docker.digests[testImage] = testDigest
 
-	inst, err := e.m.Install(context.Background(), "jobapp",
+	inst, err := e.m.Install(context.Background(), mustLoadApp(t, e.m, "jobapp"),
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
@@ -185,7 +185,7 @@ services:
 	e.writeCatalogApp(t, "jobapp", compose, migrateJobManifest)
 	e.docker.digests[testImage] = testDigest
 
-	inst, err := e.m.Install(context.Background(), "jobapp",
+	inst, err := e.m.Install(context.Background(), mustLoadApp(t, e.m, "jobapp"),
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
@@ -200,7 +200,7 @@ func TestOverrideForcesOrdinaryService(t *testing.T) {
 	e.writeCatalogApp(t, "whoami", whoamiCompose, whoamiManifest(testDigest))
 	e.docker.digests[testImage] = testDigest
 
-	inst, err := e.m.Install(context.Background(), "whoami",
+	inst, err := e.m.Install(context.Background(), mustLoadApp(t, e.m, "whoami"),
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
@@ -227,7 +227,7 @@ func TestComposeUpBoundedByHealthWait(t *testing.T) {
 	}
 
 	start := time.Now()
-	_, err := e.m.Install(context.Background(), "whoami",
+	_, err := e.m.Install(context.Background(), mustLoadApp(t, e.m, "whoami"),
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err == nil {
 		t.Fatalf("want install failure from a hung compose up")

@@ -12,9 +12,9 @@ import (
 // unranked app omits the field).
 func rankPtr(i int) *int { return &i }
 
-// segApps is the segmentation fixture: two featured apps at different ranks across
-// different surfaces, plus one unfeatured app, so featured order, env filtering,
-// and the category/search projections all have something to bite on.
+// segApps is the segmentation fixture: two featured apps at different ranks, plus
+// one unfeatured app, so featured order and the category/search projections all
+// have something to bite on.
 //
 //	alpha — appliance+hosted, categories {tools, media}, featured rank 2
 //	beta  — hosted only,      categories {media},        featured rank 1
@@ -25,30 +25,53 @@ func segApps() []wireApp {
 			ID: "alpha", Name: "Alpha", Version: "1.0",
 			ShortDescription: "the first app",
 			Categories:       []string{"tools", "media"},
-			IconFile:         "icon.png",
-			Environments:     []string{"appliance", "hosted"},
+			IconURL:          "/catalog/assets/alpha/icon.png",
 			Featured:         true, Rank: rankPtr(2),
-			Manifest: validManifest("alpha", "Alpha"),
-			Compose:  "services:\n  web:\n    image: alpha:1\n",
+			ManifestURL: "/catalog/apps/alpha/manifest",
+			ComposeURL:  "/catalog/apps/alpha/compose",
 		},
 		{
 			ID: "beta", Name: "Beta", Version: "2.0",
 			ShortDescription: "streams media",
 			Categories:       []string{"media"},
-			Environments:     []string{"hosted"},
 			Featured:         true, Rank: rankPtr(1),
-			Manifest: validManifest("beta", "Beta"),
-			Compose:  "services:\n  web:\n    image: beta:2\n",
+			ManifestURL: "/catalog/apps/beta/manifest",
+			ComposeURL:  "/catalog/apps/beta/compose",
 		},
 		{
 			ID: "gamma", Name: "Gamma", Version: "3.0",
 			ShortDescription: "a utility",
 			Categories:       []string{"tools"},
-			Environments:     []string{"appliance", "hosted"},
-			Manifest:         validManifest("gamma", "Gamma"),
-			Compose:          "services:\n  web:\n    image: gamma:3\n",
+			ManifestURL:      "/catalog/apps/gamma/manifest",
+			ComposeURL:       "/catalog/apps/gamma/compose",
 		},
 	}
+}
+
+// segAppEnvs is which surfaces each fixture app is advertised on. It lives in the
+// test, not on the wire record, because environment filtering is the control
+// plane's job now (#434): GET /catalog returns only the apps for the ?env= it was
+// asked for, and the box shows what it is given. advertisedIn is what the fake
+// control plane below applies, so these tests still prove the two surfaces render
+// differently — they just prove it through the seam that now does the filtering.
+var segAppEnvs = map[string][]string{
+	"alpha": {"appliance", "hosted"},
+	"beta":  {"hosted"},
+	"gamma": {"appliance", "hosted"},
+}
+
+// advertisedIn returns the apps a control plane would serve to a box on env.
+func advertisedIn(apps []wireApp, env string) []wireApp {
+	var out []wireApp
+	for _, a := range apps {
+		for _, e := range segAppEnvs[a.ID] {
+			if e == env {
+				out = append(out, a)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // syncedCatalog builds the Catalog facade over a freshly synced remote source for
@@ -56,7 +79,7 @@ func segApps() []wireApp {
 // snapshot without a background loop racing them.
 func syncedCatalog(t *testing.T, apps []wireApp, env string) *Catalog {
 	t.Helper()
-	cp := newFakeCP(t, apps)
+	cp := newFakeCP(t, advertisedIn(apps, env))
 	srv := cp.server()
 	t.Cleanup(srv.Close)
 	rs := newRemote(srv.URL, env, t.TempDir())
@@ -92,16 +115,16 @@ func homeFixture() wireHomePage {
 // exercise the landing-page projection.
 func makeSnapshotHome(t *testing.T, apps []wireApp, home wireHomePage) (body []byte, etag string) {
 	t.Helper()
-	digest, err := indexDigest(apps)
+	version, err := contentToken(apps)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := catalogFile{SchemaVersion: wireSchemaVersion, IndexSHA256: digest, Apps: apps, Home: home}
+	f := catalogFile{SchemaVersion: wireSchemaVersion, Version: version, Apps: apps, Home: home}
 	b, err := json.Marshal(f)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return b, `"` + digest + `"`
+	return b, `"` + version + `"`
 }
 
 // newFakeCPHome is newFakeCP plus a home block on the served snapshot.
@@ -114,7 +137,7 @@ func newFakeCPHome(t *testing.T, apps []wireApp, home wireHomePage) *fakeCP {
 // snapshot.
 func syncedCatalogWithHome(t *testing.T, apps []wireApp, home wireHomePage, env string) *Catalog {
 	t.Helper()
-	cp := newFakeCPHome(t, apps, home)
+	cp := newFakeCPHome(t, advertisedIn(apps, env), home)
 	srv := cp.server()
 	t.Cleanup(srv.Close)
 	rs := newRemote(srv.URL, env, t.TempDir())
@@ -303,20 +326,20 @@ func TestSegmentedEmptyStoreNoError(t *testing.T) {
 // label tests, where what the snapshot says a category is called is the subject.
 func makeSnapshotFull(t *testing.T, apps []wireApp, home wireHomePage, cats []wireCategory) (body []byte, etag string) {
 	t.Helper()
-	digest, err := indexDigest(apps)
+	version, err := contentToken(apps)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := json.Marshal(catalogFile{SchemaVersion: wireSchemaVersion, IndexSHA256: digest, Apps: apps, Home: home, Categories: cats})
+	b, err := json.Marshal(catalogFile{SchemaVersion: wireSchemaVersion, Version: version, Apps: apps, Home: home, Categories: cats})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return b, `"` + digest + `"`
+	return b, `"` + version + `"`
 }
 
 func syncedCatalogWithCats(t *testing.T, apps []wireApp, home wireHomePage, cats []wireCategory, env string) *Catalog {
 	t.Helper()
-	body, etag := makeSnapshotFull(t, apps, home, cats)
+	body, etag := makeSnapshotFull(t, advertisedIn(apps, env), home, cats)
 	cp := &fakeCP{body: body, etag: etag, asset: []byte("\x89PNG-fake-bytes")}
 	srv := cp.server()
 	t.Cleanup(srv.Close)

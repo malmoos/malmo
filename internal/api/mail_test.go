@@ -11,6 +11,7 @@ package api
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -548,9 +549,12 @@ func TestSetAppMailBindingMemberOwnPersonal(t *testing.T) {
 // fails later inside RebindMail.
 func TestSetAppMailBindingNonMailApp422(t *testing.T) {
 	h := newHarness(t)
-	writeManifestFixture(t, h.catalogDir, "whoami", minimalManifestYML)
 	h.setupAdmin("alice", "pass1")
 	h.seedInstance("i1", "whoami", "whoami", "u_admin", store.ScopeHousehold)
+	// The check reads the INSTANCE's persisted manifest, not the catalog (#434),
+	// and the catalog is left empty here to prove it: an app already installed
+	// must not need the catalog service to answer this.
+	h.seedInstanceManifest("i1", minimalManifestYML)
 
 	resp := h.do("PUT", "/api/v1/apps/i1/mail-binding", map[string]string{"provider_id": "mp_x"})
 	resp.Body.Close()
@@ -872,5 +876,39 @@ func TestVerifyMailProviderConfigGuards(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("member verify = %d; want 403", resp.StatusCode)
+	}
+}
+
+// The mail picker on an installed app's detail page is driven by the INSTANCE's
+// own persisted manifest (#434). The catalog is empty here, which is what a box
+// looks like before its first sync, or after the app is unpublished: the picker
+// must still appear, because the binding it edits still works.
+func TestGetAppMailSupportedComesFromTheInstanceManifest(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+
+	h.seedInstance("i_mail", "mailer", "mailer", "u_admin", store.ScopeHousehold)
+	h.seedInstanceManifest("i_mail", mailManifestYML)
+	h.seedInstance("i_plain", "whoami", "whoami", "u_admin", store.ScopeHousehold)
+	h.seedInstanceManifest("i_plain", minimalManifestYML)
+
+	for _, tc := range []struct {
+		id   string
+		want bool
+	}{{"i_mail", true}, {"i_plain", false}} {
+		resp := h.do("GET", "/api/v1/apps/"+tc.id, nil)
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			t.Fatalf("GET %s = %d; want 200", tc.id, resp.StatusCode)
+		}
+		var dto InstanceDTO
+		if err := json.NewDecoder(resp.Body).Decode(&dto); err != nil {
+			t.Fatalf("decode %s: %v", tc.id, err)
+		}
+		resp.Body.Close()
+		if dto.MailSupported != tc.want {
+			t.Errorf("%s mail_supported = %v, want %v (read from the persisted manifest, catalog is empty)",
+				tc.id, dto.MailSupported, tc.want)
+		}
 	}
 }

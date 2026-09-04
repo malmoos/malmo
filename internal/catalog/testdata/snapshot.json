@@ -3,7 +3,7 @@
   "generated_at": "2026-08-17T09:00:00Z",
   "store_ref": "0000000000000000000000000000000000000000",
   "os_capabilities_version": 1,
-  "index_sha256": "b024dbc254dac94e1ed8719cbad2e2bab8069a351f30c1799798eb9ddf2aba20",
+  "version": "b024dbc254dac94e1ed8719cbad2e2bab8069a351f30c1799798eb9ddf2aba20",
   "apps": [
     {
       "id": "alpha-notes",
@@ -39,38 +39,32 @@
           "estimate_checked": "2026-08-17"
         }
       ],
-      "icon_file": "icon.png",
-      "screenshots": ["screenshots/0.png", "screenshots/1.png"],
-      "environments": ["appliance", "hosted"],
+      "icon_url": "/catalog/assets/alpha-notes/icon.png",
+      "screenshot_urls": [
+        "/catalog/assets/alpha-notes/screenshots/0.png",
+        "/catalog/assets/alpha-notes/screenshots/1.png"
+      ],
+      "manifest_url": "/catalog/apps/alpha-notes/manifest",
+      "compose_url": "/catalog/apps/alpha-notes/compose",
       "featured": true,
-      "rank": 1,
-      "manifest": "schema_version: 1\nid: alpha-notes\nname: Alpha Notes\nversion: 1.4.0\nmain_service: app\nmain_port: 8080\ncompose_file: compose.yml\n",
-      "compose": "services:\n  app:\n    image: traefik/whoami:v1.10.3\n    command: [\"--port=8080\"]\n",
-      "images": {
-        "traefik/whoami:v1.10.3": {
-          "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
-          "download_bytes": 12345678,
-          "disk_bytes": 23456789
-        }
-      }
+      "rank": 1
     },
     {
       "id": "beta-media",
       "name": "Beta Media",
       "version": "0.9.1",
-      "short_description": "A synthetic media app that is advertised on one surface only.",
+      "short_description": "A synthetic media app whose assets are served from another origin.",
       "categories": ["media"],
       "icon_glyph": "film",
       "footprint": {
         "image_download_bytes": 2222222,
         "image_disk_bytes": 3333333
       },
-      "icon_file": "icon.svg",
-      "environments": ["hosted"],
+      "icon_url": "https://assets.example.invalid/beta-media/icon.svg",
+      "manifest_url": "/catalog/apps/beta-media/manifest",
+      "compose_url": "/catalog/apps/beta-media/compose",
       "featured": true,
-      "rank": 2,
-      "manifest": "schema_version: 1\nid: beta-media\nname: Beta Media\nversion: 0.9.1\nmain_service: app\nmain_port: 8080\ncompose_file: compose.yml\n",
-      "compose": "services:\n  app:\n    image: traefik/whoami:v1.10.3\n    command: [\"--port=8080\"]\n"
+      "rank": 2
     },
     {
       "id": "gamma-demo",
@@ -80,9 +74,8 @@
         "image_download_bytes": 0,
         "image_disk_bytes": 0
       },
-      "environments": ["appliance"],
-      "manifest": "schema_version: 1\nid: gamma-demo\nname: Gamma Demo\nversion: 2.0.0\nmain_service: app\nmain_port: 8080\ncompose_file: compose.yml\n",
-      "compose": "services:\n  app:\n    image: traefik/whoami:v1.10.3\n    command: [\"--port=8080\"]\n"
+      "manifest_url": "/catalog/apps/gamma-demo/manifest",
+      "compose_url": "/catalog/apps/gamma-demo/compose"
     }
   ],
   "home": {

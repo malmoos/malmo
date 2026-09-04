@@ -134,7 +134,7 @@ type Config struct {
 	// ACME — so the var is only emitted when set.
 	CaddyImage string
 	// CatalogURL is the control-plane catalog origin the brain syncs the Door-1
-	// catalog from (GET /catalog/sync), passed as MALMO_CATALOG_URL. Empty leaves
+	// catalog from (GET /catalog), passed as MALMO_CATALOG_URL. Empty leaves
 	// the brain on its own default (the public control plane). The air-gapped test
 	// lane points it at an inert address and seeds the store from a staged
 	// snapshot file instead (CatalogFile).

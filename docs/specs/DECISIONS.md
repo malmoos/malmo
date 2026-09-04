@@ -21,6 +21,23 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-09-04 — Catalog: browse and install are two fetches, and the index digest is gone (#434)
+
+**Previously:** the box pulled one bulk snapshot, `GET /catalog/sync`, that carried every published app's verbatim `manifest.yml`, `compose.yml` and resolved images map, whether or not the box would ever install them. The snapshot was stamped with `index_sha256`, a SHA-256 over the app index that the box **recomputed** by re-marshalling what it had parsed, and refused the whole snapshot on a mismatch. Environment visibility was filtered on the box (`visibleIn`).
+
+**Now:** two seams. `GET /catalog?env=<environment>` returns browse data only — display records, the landing page, the category vocabulary, and an opaque `version` token served as the `ETag`. An app's install payload is fetched per app, at install time, from `GET /catalog/apps/{id}/manifest` and `/compose` (`application/yaml`, verbatim), by following the `manifest_url` / `compose_url` the record carries. Every published URL is opaque: the box follows it, never assembles it. The digest is **removed** — `version` is a change token the box stores and echoes and never recomputes — and unknown keys are dropped the way `encoding/json` drops them everywhere else. The schema-version refusal stays. Environment filtering moved to the control plane. An app's manifest and compose are **persisted next to the installation**, and every brain path that needs an installed app's manifest reads that copy.
+
+**Why:**
+- **The bulk snapshot was mostly waste.** On a 43-app catalog it was 614KB, of which **77% was install payloads** for apps the box would never install; the browse data the store actually renders was 106KB. Every box paid the full 614KB on first sync and on every catalog change.
+- **The digest was doing cache work while wearing an integrity label.** Recomputing it meant the box had to re-marshal to byte-identical JSON, which made field order load-bearing and made **any** new published field a flag day: the digest stopped matching, `verify()` refused the snapshot, and the box showed an empty store. Measured, not theoretical — `external_costs` did exactly this. It closed no threat TLS (origin) and HTTP framing (truncation) do not already close, so it is removed rather than reworked.
+- **Routine box operation must not depend on the catalog service.** `Load` was never install-only: the app detail page, the mail picker and the install plan all called it. Turning it into a live fetch would have put a page load behind the network. Writing the manifest and compose next to the installation fixes that and a pre-existing bug with it — an installed app's manifest used to disappear the moment the app was unpublished.
+
+**Trade accepted:** with filtering server-side, an installed app that leaves the box's surface (or the catalog) is no longer in the browse response, so `Entry(id)` cannot resolve its card. The install is unaffected — the manifest lives next to it — but the card loses its catalog-supplied icon and falls back to the instance row's own name. Persisting the display record too was the alternative; it buys an icon and costs a second copy to keep fresh.
+
+**Affected docs:** `docs/specs/APP_STORE.md` (banners, Failure modes, What we run, Landing page, Category labels, What the box models, Locked decisions); `docs/architecture.md` (catalog package row + app-store bullet). Progress: `catalog-split-browse-and-install.md`.
+
+---
+
 ## 2026-08-27 — Outgoing-mail provider presets: hardcoded in the brain, and the picked provider is persisted
 
 **Previously:** Adding an email account meant typing seven fields the admin had to look up in their provider's docs. The brain knew nothing about who the provider was — only a host, a port and a credential.
