@@ -61,6 +61,14 @@ type Docker interface {
 	// success (idempotent). host-agent seeds the shared ingress network the
 	// proxy, brain, Caddy and UI all attach to.
 	NetworkCreate(ctx context.Context, name string) error
+	// ContainerSandboxed reports whether an existing container already runs
+	// with the capability sandbox proxyRunSpec asks for. A container's
+	// capabilities are fixed at create time, so this is the only way to tell a
+	// proxy created before the sandbox landed from one created after (#431).
+	ContainerSandboxed(ctx context.Context, name string) (bool, error)
+	// Remove force-removes a container by name, treating "no such container"
+	// as success.
+	Remove(ctx context.Context, name string) error
 }
 
 // RunSpec is one `docker run -d` invocation — a container host-agent launches.
@@ -284,9 +292,33 @@ func EnsureTransport(ctx context.Context, d Docker, cfg Config) error {
 		return fmt.Errorf("check proxy container %q: %w", cfg.ProxyContainerName, err)
 	}
 	if exists {
-		slog.Info("proxy container already present; leaving it to Docker",
+		// A container's capability set is fixed when it is created, so a proxy
+		// that predates #431 keeps Docker's full default set for as long as it
+		// lives — a restart does not re-apply the flags, and nothing else
+		// recreates this container. Left alone, the hardening would reach new
+		// boxes only. Recreate it once, here, before the brain is launched
+		// (Launch runs after EnsureTransport), and it converges on the next
+		// host-agent start. An already-running brain loses its Docker transport
+		// for the moment the container is gone; its Docker calls are per-request
+		// HTTP, so an in-flight one fails and the next succeeds.
+		sandboxed, err := d.ContainerSandboxed(ctx, cfg.ProxyContainerName)
+		if err != nil {
+			// Not fatal: a hardening check must not be the thing that stops a
+			// box booting. Keep the container we have and say why.
+			slog.Warn("could not read the proxy container's sandbox; leaving it as it is",
+				"container", cfg.ProxyContainerName, "err", err)
+			return nil
+		}
+		if sandboxed {
+			slog.Info("proxy container already present; leaving it to Docker",
+				"container", cfg.ProxyContainerName)
+			return nil
+		}
+		slog.Info("proxy container predates the container sandbox; recreating it",
 			"container", cfg.ProxyContainerName)
-		return nil
+		if err := d.Remove(ctx, cfg.ProxyContainerName); err != nil {
+			return fmt.Errorf("remove unsandboxed proxy container %q: %w", cfg.ProxyContainerName, err)
+		}
 	}
 	if err := d.Run(ctx, proxyRunSpec(cfg)); err != nil {
 		return fmt.Errorf("run proxy container: %w", err)

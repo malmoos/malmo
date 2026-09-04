@@ -27,6 +27,11 @@ type fakeDocker struct {
 	labelErr     error
 	exists       bool
 	existsErr    error
+	sandboxed    bool
+	sandboxedErr error
+	removeErr    error
+	removeCalls  int
+	lastRemove   string
 	runErr       error
 	netErr       error
 	loadCalls    int
@@ -66,6 +71,14 @@ func (f *fakeDocker) Run(_ context.Context, spec RunSpec) error {
 	f.lastRun = spec
 	f.runSpecs = append(f.runSpecs, spec)
 	return f.runErr
+}
+func (f *fakeDocker) ContainerSandboxed(context.Context, string) (bool, error) {
+	return f.sandboxed, f.sandboxedErr
+}
+func (f *fakeDocker) Remove(_ context.Context, name string) error {
+	f.removeCalls++
+	f.lastRemove = name
+	return f.removeErr
 }
 func (f *fakeDocker) NetworkCreate(_ context.Context, name string) error {
 	f.netCalls++
@@ -325,7 +338,8 @@ func TestEnsureTransportSeedsNetworkAndProxy(t *testing.T) {
 
 func TestEnsureTransportProxyExistsIsNoOp(t *testing.T) {
 	f := newFake()
-	f.exists = true // proxy already running (host-agent restart)
+	f.exists = true    // proxy already running (host-agent restart)
+	f.sandboxed = true // and already created with the sandbox
 
 	if err := EnsureTransport(context.Background(), f, testConfig()); err != nil {
 		t.Fatalf("EnsureTransport: %v", err)
@@ -335,6 +349,47 @@ func TestEnsureTransportProxyExistsIsNoOp(t *testing.T) {
 	}
 	if f.runCalls != 0 {
 		t.Errorf("run calls = %d, want 0 (existing proxy left to Docker)", f.runCalls)
+	}
+	if f.removeCalls != 0 {
+		t.Errorf("remove calls = %d, want 0 (a sandboxed proxy is not recreated)", f.removeCalls)
+	}
+}
+
+// A proxy created before #431 keeps Docker's full default capability set for as
+// long as the container lives — a restart does not re-apply flags. Without this
+// path the hardening would reach new boxes only, which is how a change ships and
+// does nothing (#404). host-agent recreates it once, then converges.
+func TestEnsureTransportRecreatesUnsandboxedProxy(t *testing.T) {
+	f := newFake()
+	f.exists = true     // proxy from before the sandbox landed
+	f.sandboxed = false // …created without it
+
+	if err := EnsureTransport(context.Background(), f, testConfig()); err != nil {
+		t.Fatalf("EnsureTransport: %v", err)
+	}
+	if f.removeCalls != 1 || f.lastRemove != "malmo-docker-proxy" {
+		t.Fatalf("remove calls=%d last=%q, want 1 malmo-docker-proxy", f.removeCalls, f.lastRemove)
+	}
+	if f.runCalls != 1 {
+		t.Fatalf("run calls = %d, want 1 (proxy relaunched hardened)", f.runCalls)
+	}
+	if len(f.lastRun.CapDrop) != 1 || f.lastRun.CapDrop[0] != "ALL" {
+		t.Errorf("relaunched proxy cap_drop = %v, want [ALL]", f.lastRun.CapDrop)
+	}
+}
+
+// The sandbox check must never be the reason a box fails to boot: an unreadable
+// container leaves the proxy exactly as it was, and the boot carries on.
+func TestEnsureTransportSandboxCheckFailureKeepsProxy(t *testing.T) {
+	f := newFake()
+	f.exists = true
+	f.sandboxedErr = errors.New("docker inspect: no such object")
+
+	if err := EnsureTransport(context.Background(), f, testConfig()); err != nil {
+		t.Fatalf("EnsureTransport: %v, want the boot to carry on", err)
+	}
+	if f.removeCalls != 0 || f.runCalls != 0 {
+		t.Errorf("remove=%d run=%d, want 0/0 (an unreadable proxy is left alone)", f.removeCalls, f.runCalls)
 	}
 }
 
