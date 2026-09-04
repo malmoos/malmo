@@ -270,6 +270,31 @@ done
     fail "journalctl CONTAINER_NAME=malmo-brain returned nothing after 60s — container stdout is not reaching journald, so the per-app Logs tab will hang for every app"
 echo "cloud-assertions: container logs readable via journalctl CONTAINER_NAME= (driver=journald)"
 
+# --- 5c. the control-plane containers run the app sandbox (#431). Apps get
+# cap_drop ALL + no-new-privileges from the brain's override, in code; the
+# control plane declares the same posture by hand (compose for caddy + malmo-ui,
+# brainlaunch.proxyRunSpec for the proxy), so this checks what the box actually
+# booted rather than what the file says. Caddy binds :80/:443, so it keeps
+# CAP_NET_BIND_SERVICE and nothing else; the proxy needs no capability at all.
+# The brain is knowingly absent from this list — it needs CAP_CHOWN for app data
+# dirs (CONTROL_PLANE.md # Locked: control-plane container hardening).
+for c in malmo-caddy malmo-ui malmo-docker-proxy; do
+    caps="$(docker inspect "$c" --format '{{json .HostConfig.CapDrop}}' 2>/dev/null || true)"
+    [ "$caps" = '["ALL"]' ] || \
+        fail "$c cap_drop is '${caps:-<nothing>}', want [\"ALL\"] (#431 — the control-plane sandbox is gone)"
+    secopt="$(docker inspect "$c" --format '{{json .HostConfig.SecurityOpt}}' 2>/dev/null || true)"
+    grep -q 'no-new-privileges:true' <<<"$secopt" || \
+        fail "$c security_opt is '${secopt:-<nothing>}', want no-new-privileges:true (#431)"
+done
+for c in malmo-caddy malmo-ui; do
+    ro="$(docker inspect "$c" --format '{{.HostConfig.ReadonlyRootfs}}' 2>/dev/null || true)"
+    [ "$ro" = true ] || fail "$c does not have a read-only root filesystem (#431)"
+    capadd="$(docker inspect "$c" --format '{{json .HostConfig.CapAdd}}' 2>/dev/null || true)"
+    [ "$capadd" = '["NET_BIND_SERVICE"]' ] || [ "$capadd" = '["CAP_NET_BIND_SERVICE"]' ] || \
+        fail "$c cap_add is '${capadd:-<nothing>}', want only NET_BIND_SERVICE (#431)"
+done
+echo "cloud-assertions: control-plane containers sandboxed — cap_drop ALL, no-new-privileges, read-only root on caddy + malmo-ui (#431)"
+
 # --- 6. proxy boundary: the brain reaches Docker only through the socket-proxy,
 # never the raw socket (CONTROL_PLANE.md # Docker socket exposure).
 brain_sock="$(docker inspect malmo-brain --format '{{range .Mounts}}{{println .Source}}{{end}}' 2>/dev/null | grep -c 'docker.sock' || true)"

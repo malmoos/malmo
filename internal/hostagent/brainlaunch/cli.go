@@ -80,9 +80,46 @@ func (CLIDocker) Run(ctx context.Context, spec RunSpec) error {
 	for _, e := range spec.Env {
 		args = append(args, "-e", e.Key+"="+e.Value)
 	}
+	for _, c := range spec.CapDrop {
+		args = append(args, "--cap-drop", c)
+	}
+	for _, o := range spec.SecurityOpt {
+		args = append(args, "--security-opt", o)
+	}
 	args = append(args, spec.Image)
 	if out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("docker run %s: %w\n%s", spec.Image, err, out)
+	}
+	return nil
+}
+
+// ContainerSandboxed reads the container's capability drop set and security
+// options and reports whether both halves of proxyRunSpec's sandbox are there.
+// It reads the container, not the image or the spec: capabilities are decided at
+// create time, so this is what the container actually runs with (#431).
+func (CLIDocker) ContainerSandboxed(ctx context.Context, name string) (bool, error) {
+	const format = `{{json .HostConfig.CapDrop}} {{json .HostConfig.SecurityOpt}}`
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "--format", format, name).Output()
+	if err != nil {
+		return false, fmt.Errorf("docker inspect %s: %w", name, err)
+	}
+	// Docker renders a dropped "ALL" verbatim and prefixes named capabilities
+	// with CAP_, so a substring match is enough for both halves and does not
+	// care about ordering or how many entries there are.
+	got := string(out)
+	return strings.Contains(got, `"ALL"`) && strings.Contains(got, "no-new-privileges:true"), nil
+}
+
+// Remove force-removes a container. `docker rm -f` on a name that is already
+// gone exits non-zero with "No such container", which is the state the caller
+// wanted, so it counts as success.
+func (CLIDocker) Remove(ctx context.Context, name string) error {
+	out, err := exec.CommandContext(ctx, "docker", "rm", "-f", name).CombinedOutput()
+	if err != nil && strings.Contains(string(out), "No such container") {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("docker rm -f %s: %w\n%s", name, err, out)
 	}
 	return nil
 }
