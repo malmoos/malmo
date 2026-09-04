@@ -1,0 +1,36 @@
+# Pinned third-party control-plane images (os #432; BUILD.md # Third-party image pins).
+#
+# The bytes of every third-party image the control plane ships are decided here,
+# by digest. A tag is not a lookup key: `caddy:2-alpine` is rebuilt upstream
+# whenever its base is patched, so two builds of the same malmo commit weeks
+# apart would otherwise contain different Caddy bytes with nothing recording
+# which. This is the same rule the catalog already applies to every app image
+# (APP_LIFECYCLE.md # Locked: image digest pinning).
+#
+# The `name:tag@sha256:...` form keeps the tag readable as a label while the
+# digest decides the bytes. Each digest is the multi-arch *index* digest, so the
+# pin is arch-independent.
+#
+# This file is both make-includable and shell-sourceable, so keep every line a
+# plain NAME=value with no spaces around the `=`. Readers:
+#   - Makefile              (control-plane-images, caddy-acmedns-image)
+#   - dev/control-plane/caddy-acmedns/Dockerfile, via --build-arg from the above
+#   - internal/hostagent/controlplane/imagepins_test.go (guards the pin form)
+#
+# How to bump a pin (BUILD.md # Third-party image pins):
+#   docker buildx imagetools inspect <name:tag> | awk '/^Digest:/{print $2; exit}'
+# then paste the digest here, in its own commit, saying why. The case that
+# matters is an upstream Caddy security release: bump CADDY_IMAGE and both
+# CADDY_ACMEDNS_* pins together, since they are the same upstream project.
+
+# Stock Caddy — the reverse proxy the appliance profile runs (the hosted profile
+# swaps in the acmedns build below).
+CADDY_IMAGE=caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+
+# The container that fronts the raw Docker socket for the brain (CONTROL_PLANE.md # Docker socket exposure).
+PROXY_IMAGE=tecnativa/docker-socket-proxy:v0.4.2@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476
+
+# The two halves of the hosted Caddy build (dev/control-plane/caddy-acmedns/).
+# Held at 2.10.0 on purpose — see that Dockerfile's header for the Go-toolchain reason.
+CADDY_ACMEDNS_BUILDER_IMAGE=caddy:2.10.0-builder@sha256:fe8d0d6cdbfd382197c4d715ffd5b41210165e2f64a81ce546ae63eeef35873a
+CADDY_ACMEDNS_BASE_IMAGE=caddy:2.10.0-alpine@sha256:ae4458638da8e1a91aafffb231c5f8778e964bca650c8a8cb23a7e8ac557aa3c

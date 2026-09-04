@@ -133,7 +133,9 @@ EOF
     # regardless of filename (build-host network only; the VM never pulls).
     local caddy_acmedns_image="malmo-caddy-acmedns:dev"
     echo "building hosted Caddy with the caddy-dns/acmedns module (xcaddy)..."
-    docker build -t "$caddy_acmedns_image" "${REPO_ROOT}/dev/control-plane/caddy-acmedns/"
+    # Through make, not `docker build`: the target feeds the Dockerfile its two
+    # digest-pinned base images from dev/control-plane/images.lock (#432).
+    make -C "$REPO_ROOT" caddy-acmedns-image CADDY_ACMEDNS_IMAGE="$caddy_acmedns_image"
     docker save "$caddy_acmedns_image" -o "$WIRING/var/lib/malmo/control-plane-images/caddy.tar"
     cp "${REPO_ROOT}/dev/test-qemu/load-control-plane-images.sh" "$WIRING/usr/lib/malmo/"
     chmod 0755 "$WIRING/usr/lib/malmo/load-control-plane-images.sh"
