@@ -19,8 +19,8 @@
 #   make caddy-acmedns-image
 # The real DNS-01 issuance path is exercised end-to-end in the cloud on-ramp
 # (cloud #6 / CL6), not the inner loop (no real ACME/DNS locally).
-# Both base images are digest-pinned in dev/control-plane/images.lock and passed
-# in as build args (#432; BUILD.md # Third-party image pins). They have NO
+# Both base images and the plugin module are pinned in dev/control-plane/images.lock
+# and passed in as build args (#432; BUILD.md # 5c). They have NO
 # default on purpose: a default would be a second copy of the pin, free to drift,
 # and a bare `docker build` here would then quietly bake unpinned bytes. Build it
 # with `make caddy-acmedns-image`, which reads the pin file.
@@ -32,7 +32,11 @@
 ARG CADDY_ACMEDNS_BUILDER_IMAGE
 ARG CADDY_ACMEDNS_BASE_IMAGE
 FROM ${CADDY_ACMEDNS_BUILDER_IMAGE} AS builder
-RUN xcaddy build --with github.com/caddy-dns/acmedns
+# The module is version-pinned too: without a version xcaddy takes whatever is
+# latest that day, so the plugin could change while both base images stayed put.
+# Caddy's own version needs no argument here — it comes from the builder image.
+ARG CADDY_ACMEDNS_MODULE
+RUN xcaddy build --with ${CADDY_ACMEDNS_MODULE}
 
 FROM ${CADDY_ACMEDNS_BASE_IMAGE}
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
