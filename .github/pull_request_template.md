@@ -1,4 +1,4 @@
-<!-- See docs/dev/contributing.md # Step 7 + Definition of done. Fill every section; delete the comments. -->
+<!-- See docs/dev/contributing.md # Step 6 + Definition of done. Fill every section; delete the comments. -->
 <!-- Branch should be named <area>/<N>-<short-slug> (e.g. feat/12-health-banners). One PR closes exactly one issue. -->
 
 ## What & why
