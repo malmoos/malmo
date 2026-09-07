@@ -23,7 +23,7 @@ Each entry: one-sentence shape, the doc it touches, and *why this tier*. The doc
 
 ### Box ↔ cloud API authentication (hosted)
 
-`UPDATES.md` # 8 locks the hosted update trigger: the box polls the cloud control plane for its per-box target version, outbound-only. **What authenticates that call is undesigned.** The `enrollment` block the box receives in `seed.json` (`ENVIRONMENT.md` # Admin bootstrap — as built) is an acme-dns account — scoped to writing one DNS TXT record, not to a general control-plane API. So the hosted update path has a designed trigger and no credential to make the call with.
+`UPDATES.md` # 8 locks the hosted update trigger: the box polls the cloud control plane for its per-box target version, outbound-only. **What authenticates that call is undesigned.** The `enrollment` block the box receives in `seed.json` (`ENVIRONMENT.md` # Owner sign-in & seed ingestion — as built) is an acme-dns account — scoped to writing one DNS TXT record, not to a general control-plane API. So the hosted update path has a designed trigger and no credential to make the call with.
 
 **Where this stands as built (#408).** A hosted box now says which box it is when it asks for its update target: `GET <target-url>?box_id=<id>` (`UPDATES.md` # 8.1). That endpoint is public and needs no login, so the identity is a claim, not proof. Anyone who learns a box-id can read what that box is told to run, and can ask as that box.
 
