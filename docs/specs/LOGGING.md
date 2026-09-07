@@ -156,7 +156,7 @@ The following `action` strings are the pinned v1 set. Defined as exported consts
 | Action | When |
 |--------|------|
 | `setup.complete` | First admin bootstrapped via `/v1/setup`. |
-| `setup.failure` | `/v1/setup` refused or failed — including every call on a hosted box, where `/setup` is disabled (`ENVIRONMENT.md` # Owner sign-in & seed ingestion — as built). |
+| `setup.failure` | A `/v1/setup` call that got past input validation and then failed: the hosted 403 (`/setup` is disabled there — `ENVIRONMENT.md` # Owner sign-in & seed ingestion — as built), a store conflict or error on the admin row, a host-agent 502 with rollback, and a failure to issue the session. Validation 422s do **not** audit, and neither does a recovery-code generation error, so this is not a complete record of refused requests. |
 | `sso.success` | Hosted owner signed in through the portal-to-box handshake at `/_malmo/sso`; on the first one it also created the founding admin. |
 | `sso.failure` | A portal assertion was refused — bad signature, expired, replayed, wrong box or issuer, or not the box owner. Mirrors `login.failure`. |
 | `login.success` | Dashboard password login succeeded. |
