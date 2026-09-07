@@ -3,6 +3,7 @@ package brainlaunch
 import (
 	"context"
 	"errors"
+	"sort"
 	"testing"
 
 	"github.com/malmoos/malmo/internal/protocol"
@@ -595,6 +596,49 @@ func TestLaunchRunErrorPropagates(t *testing.T) {
 	if f.runCalls != 1 {
 		t.Errorf("run calls = %d, want 1 (run was attempted)", f.runCalls)
 	}
+}
+
+// TestProxyAllowlistIsMinimal pins the socket-proxy allowlist to the exact set
+// #430 measured as load-bearing. The proxy filters by URL prefix and method
+// only — it never reads request bodies — so granting CONTAINERS+POST is already
+// a host-root escape for anyone who can reach :2375 (a privileged, host-bind
+// POST /containers/create passes through). Widening this set makes that worse
+// and can only reduce again by dropping a family the brain needs. So this is a
+// guard, not a snapshot: a diff that changes it should send the author back to
+// #430 and CONTROL_PLANE.md # Locked: Docker socket exposure. In particular EXEC
+// must never appear here — it is denied precisely by being absent.
+func TestProxyAllowlistIsMinimal(t *testing.T) {
+	want := map[string]string{
+		"POST": "1", "PING": "1", "VERSION": "1", "INFO": "1",
+		"CONTAINERS": "1", "IMAGES": "1", "NETWORKS": "1", "VOLUMES": "1",
+	}
+	got := map[string]string{}
+	for _, e := range proxyAllowlist() {
+		if _, dup := got[e.Key]; dup {
+			t.Errorf("duplicate allowlist key %q", e.Key)
+		}
+		got[e.Key] = e.Value
+	}
+	if _, banned := got["EXEC"]; banned {
+		t.Error("EXEC is in the allowlist — it must stay denied (#430); managed DB runs a one-shot container, not docker exec")
+	}
+	if len(got) != len(want) {
+		t.Fatalf("allowlist keys = %v, want %v", keysOf(got), keysOf(want))
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("allowlist[%q] = %q, want %q", k, got[k], v)
+		}
+	}
+}
+
+func keysOf(m map[string]string) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
 }
 
 func hasMount(ms []Mount, src, tgt string) bool {
