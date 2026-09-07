@@ -270,6 +270,18 @@ The deeper point: verifying a promise *after* pulling a tag was never the trust 
 
 ---
 
+## 2026-06-28 — Hosted first admin comes from the portal sign-in handshake; the admin-bootstrap secret is gone (#275)
+
+**Previously:** the two entries below (2026-06-20 and 2026-06-26) locked a one-time **admin-bootstrap secret** as the hosted gate: the seed carried `admin_bootstrap_secret`, the brain stored its SHA-256 hash, `POST /setup` took the secret in a `bootstrap_secret` body field and constant-time-compared it, and the operator got the plaintext out-of-band from the cloud console (later prefilled into `/setup` from a link fragment).
+
+**Now:** none of that exists in the code. The seed carries `assertion_verification_key` — the portal's Ed25519 **public** key — and the hosted owner signs in through the **portal-to-box SSO handshake**: the portal mints a short-lived signed ownership assertion, the box verifies it against the seeded key at `GET /_malmo/sso`, and the **first** valid assertion auto-creates the founding PAM admin. `POST /setup` is **disabled on hosted** (403, audited), and there is no hosted setup or login page at all — an unauthenticated visitor is bounced to the portal.
+
+**Why:** the owner already has a `malmo.network` account, so making them copy a second one-time secret into a box form was a step that bought no trust the portal session did not already carry. A signed assertion also removes the shared secret from the seed, the brain's SQLite and the operator's clipboard, and it is what the cloud half was built to send. The flip shipped with the code in #275 (`docs/progress/portal-box-sso.md`), but `ENVIRONMENT.md` and `FIRST_RUN.md` were never updated, so both pages went on describing a login path that could not happen — the same drift as #404 → #407 (#412).
+
+**Affected docs:** `ENVIRONMENT.md` (# Provisioning & first-boot; "Admin bootstrap — as built" renamed to "Owner sign-in & seed ingestion — as built" and rewritten), `FIRST_RUN.md` (# Step 2 hosted note), `NEXT.md` (section cross-reference), `docs/dev/hosted-boot-proof.md` (seed field list). The two entries below stay as written — they record what we believed then. Progress: `docs/progress/portal-box-sso.md`, `docs/progress/hosted-seed-doc-drift.md`.
+
+---
+
 ## 2026-06-26 — User-supplied app config injected under the app's own var name, no `MALMO_*` indirection (#264)
 
 **Previously:** malmo had no surface for a value only the user can supply — a third-party API token, an external connection string, a provider selector. The catalog coined this the `operator-env-config` gap (`docs/dev/catalog-import-gaps.md`) and it became the single largest class of rejected/degraded apps (browser-use, hayhooks, dub, betterbox, cube, beeper-bridge-manager, valour, formbricks integrations, …): "no install-form field, no post-install editor, and SSH is rescue-only." Every other injected value rides the `MALMO_*` family (`MALMO_SERVICE_*`, `MALMO_SECRET_*`, `MALMO_FOLDER_*`, `MALMO_MAIL_*`) — a brain-owned stable name the app's compose maps to whatever it expects.

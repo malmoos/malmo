@@ -156,6 +156,9 @@ The following `action` strings are the pinned v1 set. Defined as exported consts
 | Action | When |
 |--------|------|
 | `setup.complete` | First admin bootstrapped via `/v1/setup`. |
+| `setup.failure` | `/v1/setup` refused or failed — including every call on a hosted box, where `/setup` is disabled (`ENVIRONMENT.md` # Owner sign-in & seed ingestion — as built). |
+| `sso.success` | Hosted owner signed in through the portal-to-box handshake at `/_malmo/sso`; on the first one it also created the founding admin. |
+| `sso.failure` | A portal assertion was refused — bad signature, expired, replayed, wrong box or issuer, or not the box owner. Mirrors `login.failure`. |
 | `login.success` | Dashboard password login succeeded. |
 | `login.failure` | Dashboard password login failed (bad credentials). |
 | `login.lockout` | Per-username failure counter crossed the 15-minute lock threshold (`AUTH.md` # Rate limiting). Emitted once per lock at the crossing failure; `success=false`. |
