@@ -326,18 +326,22 @@ func (l *Loop) Tick(ctx context.Context) {
 	// reports the hour it would update in. The log line is deduped, so resolving
 	// it every tick costs nothing.
 	w, windowFrom := l.windowFor(t)
-	l.record(OutcomeOK, t, w, windowFrom, nil)
 
 	brain, ui, err := l.Current.Running()
 	if err != nil {
 		// The box could not read its own declaration, so it cannot tell whether
 		// the answer is a change. The answer itself was fine, so the snapshot
 		// keeps it and reports the read failure alongside.
+		//
+		// One tick writes one snapshot. Recording the good answer here and
+		// overwriting it below would publish an intermediate "all fine" state
+		// that a concurrent reader can catch.
 		l.record(OutcomeUnreachable, t, w, windowFrom, err)
 		l.quiet(slog.LevelWarn, "running-err:"+err.Error(),
 			"update target: cannot read what this box is running", "err", err)
 		return
 	}
+	l.record(OutcomeOK, t, w, windowFrom, nil)
 	if brain == t.BrainImage && ui == t.UIImage {
 		// The overwhelmingly common case. No pull, no work, and one line the
 		// first time it is true.

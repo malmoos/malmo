@@ -31,6 +31,30 @@ const fetchTimeout = 30 * time.Second
 // and neither deserves the box's memory.
 const maxBodyBytes = 64 << 10
 
+// RedactURL strips any credentials from a URL before it is written anywhere a
+// person will read it — a log line, or the diagnostic this box serves at
+// GET /v1/system/update-target.
+//
+// The update-target URL is operator-settable (a seed field, or
+// MALMO_UPDATE_TARGET_URL), so nothing stops someone pointing a box at
+// `https://user:secret@host/target`. The errors below name the URL they failed
+// on, which is what makes a broken source fixable — and, unredacted, is also
+// what would carry that password into an API response.
+//
+// A URL that will not parse is not passed through: the bytes we could not read
+// are exactly the bytes we cannot prove are safe. The caller's own message says
+// which setting was at fault, which is the part that fixes a typo.
+func RedactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "(unreadable URL)"
+	}
+	if u.User != nil {
+		u.User = url.User("redacted")
+	}
+	return u.String()
+}
+
 // Doer is the HTTP surface this source needs. Consumer-side (CLAUDE.md # Go code
 // discipline), and small enough that a test drives it with httptest.
 type Doer interface {
@@ -70,7 +94,7 @@ func (s HTTPSource) requestURL() (string, error) {
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("updatetarget: %s is not a URL: %w", raw, err)
+		return "", fmt.Errorf("updatetarget: %s is not a URL: %w", RedactURL(raw), err)
 	}
 	q := u.Query()
 	q.Set("box_id", s.BoxID)
@@ -119,7 +143,7 @@ func (s HTTPSource) Target(ctx context.Context) (Target, error) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return Target{}, fmt.Errorf("updatetarget: build request for %s: %w", url, err)
+		return Target{}, fmt.Errorf("updatetarget: build request for %s: %w", RedactURL(url), err)
 	}
 	client := s.HTTP
 	if client == nil {
@@ -127,25 +151,25 @@ func (s HTTPSource) Target(ctx context.Context) (Target, error) {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return Target{}, fmt.Errorf("updatetarget: fetch %s: %w", url, err)
+		return Target{}, fmt.Errorf("updatetarget: fetch %s: %w", RedactURL(url), err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
 		return Target{}, ErrNoTarget
 	}
 	if resp.StatusCode != http.StatusOK {
-		return Target{}, fmt.Errorf("updatetarget: fetch %s: HTTP %d", url, resp.StatusCode)
+		return Target{}, fmt.Errorf("updatetarget: fetch %s: HTTP %d", RedactURL(url), resp.StatusCode)
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
 	if err != nil {
-		return Target{}, fmt.Errorf("updatetarget: read %s: %w", url, err)
+		return Target{}, fmt.Errorf("updatetarget: read %s: %w", RedactURL(url), err)
 	}
 	if len(b) > maxBodyBytes {
-		return Target{}, fmt.Errorf("updatetarget: %s answered more than %d bytes", url, maxBodyBytes)
+		return Target{}, fmt.Errorf("updatetarget: %s answered more than %d bytes", RedactURL(url), maxBodyBytes)
 	}
 	var w wireTarget
 	if err := json.Unmarshal(b, &w); err != nil {
-		return Target{}, fmt.Errorf("updatetarget: parse the answer from %s: %w", url, err)
+		return Target{}, fmt.Errorf("updatetarget: parse the answer from %s: %w", RedactURL(url), err)
 	}
 	return Target{
 		Version:     w.Version,

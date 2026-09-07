@@ -49,6 +49,10 @@ func startUpdateTarget(brainCfg brainlaunch.Config, a *hostagent.Agent, poller *
 			running:     running,
 			window:      window,
 			windowFrom:  windowFrom,
+			// The profile is a build-time fact, so it survives a source this
+			// box could not build. autoApply is left false on purpose: nothing
+			// on this box will apply anything, whatever profile it is.
+			profile: buildProfile,
 		}
 		return func() {}
 	}

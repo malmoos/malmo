@@ -98,7 +98,10 @@ type ControlPlanePairDTO struct {
 // is where the update window came from ("answer", "env", "default") — a window
 // can come from the source's answer, a URL never can.
 type UpdateTargetDTO struct {
-	State      string                `json:"state"`
+	// The enum tag is what makes the generated client a union of the seven
+	// values rather than a bare string, so a dashboard that forgets one of them
+	// fails to typecheck instead of falling through at runtime.
+	State      string                `json:"state" enum:"current,available,none,unreachable,refused,disabled,unknown"`
 	Running    ControlPlanePairDTO   `json:"running"`
 	Target     *UpdateTargetOfferDTO `json:"target,omitempty"`
 	CheckedAt  string                `json:"checked_at,omitempty"`

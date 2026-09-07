@@ -1866,7 +1866,8 @@ export interface components {
             from?: string;
             profile?: string;
             running: components["schemas"]["ControlPlanePairDTO"];
-            state: string;
+            /** @enum {string} */
+            state: "current" | "available" | "none" | "unreachable" | "refused" | "disabled" | "unknown";
             target?: components["schemas"]["UpdateTargetOfferDTO"];
             window?: string;
             window_from?: string;

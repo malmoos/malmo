@@ -10,6 +10,11 @@ import (
 	"github.com/malmoos/malmo/internal/profile"
 )
 
+// buildProfile is the environment profile this binary was built for. It is a
+// build-time fact, not a source-time one, so the disabled path can still report
+// it after updateTargetSource has refused to produce a source at all.
+const buildProfile = string(profile.Hosted)
+
 // updateTargetSource is the **hosted** half of the update-target seam: the box
 // reads its target from the cloud over its existing outbound path (UPDATES.md
 // # 8.1 — the box asks, nothing connects in), and applies it without a prompt
@@ -46,6 +51,9 @@ func updateTargetSource(*relmanifest.Poller) (targetSource, error) {
 	if shown == "" {
 		shown = updatetarget.DefaultURL
 	}
+	// Redacted: an operator-set URL may carry credentials, and this line is the
+	// one place the whole URL is written out.
+	shown = updatetarget.RedactURL(shown)
 	if from == fromDefault {
 		slog.Info("update target resolved", "url", shown, "from", from, "box_id", boxID)
 	} else {
@@ -57,7 +65,7 @@ func updateTargetSource(*relmanifest.Poller) (targetSource, error) {
 	return targetSource{
 		Source:    updatetarget.HTTPSource{URL: target, BoxID: boxID},
 		AutoApply: true,
-		Profile:   string(profile.Hosted),
+		Profile:   buildProfile,
 		From:      from,
 	}, nil
 }

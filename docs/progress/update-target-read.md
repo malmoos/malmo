@@ -42,6 +42,14 @@ The fake host-agent defaults to `none` — the honest answer for a dev box with 
 - Against a real socket: the fake binary was run for each `MALMO_FAKE_UPDATE_TARGET` value and the payload read over the UNIX socket with `curl --unix-socket`.
 - `fmt-check`, `vet`, `openapi-check` and the full Go suite green. `make check`'s `vet ./...` step fails on this machine for an unrelated reason — a gitignored `dev/cloud/mkosi.tools/` left over from an old local mkosi build contains vendored Go with unreachable code — so vet and the suite were run over the real package list instead. CI checks out clean and does not see it.
 
+## What the review changed
+
+Four findings, all taken. The fresh agent found two: `disabled` was losing to an unreadable declaration (the running-pair read returned before the `loop == nil` check, so a box with a bad seed **and** a missing compose reported the transient-looking fault instead of the permanent one), and the `target` field's doc claimed it is present only for `current` and `available` when `refused` carries it too — a client trusting that comment would read a rejected answer as an applicable pair.
+
+Greptile found the one that matters. **The update-target URL is operator-settable, so it can carry credentials, and the errors that name it now reach an API response.** This change had deliberately kept the URL off the wire for exactly that reason, and then leaked it anyway through `detail`: `HTTPSource.Target` formats `fetch %s` with the raw URL, and `checkTargetURL` quotes the seeded value verbatim into what becomes the `disabled` state's reason. `updatetarget.RedactURL` now strips userinfo everywhere the URL is written for a person to read, including the two startup log lines — so the journal is covered too, where the exposure already existed before this change. A URL that will not parse is replaced rather than passed through: bytes we could not read are bytes we cannot prove are safe, and the caller's own message already names the setting at fault.
+
+Two smaller ones from the same review: one tick now writes **one** snapshot (recording the good answer and then overwriting it published an intermediate "all fine" a concurrent reader could catch), and `state` carries an `enum` tag, so the generated client is a union of the seven values and a dashboard that forgets one fails to typecheck. The disabled path also reports its `profile` now, taken from a build-tagged constant — the profile is a build-time fact, so it survives a source the box could not build.
+
 ## Known gaps & deviations
 
 - **Not run in the QEMU cloud lane.** The `update` boot gains four assertions (the read reports the refusal and `from=seed`, refuses an unauthenticated caller, and names the pinned pair the in-guest source served before the apply lands), and they are written but unproven — that lane needs root and `/dev/kvm`, or a `CI / Cloud image` run. This is the issue's real acceptance gate for the hosted half.

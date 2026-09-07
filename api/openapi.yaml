@@ -1986,6 +1986,14 @@ components:
         running:
           $ref: "#/components/schemas/ControlPlanePairDTO"
         state:
+          enum:
+            - current
+            - available
+            - none
+            - unreachable
+            - refused
+            - disabled
+            - unknown
           type: string
         target:
           $ref: "#/components/schemas/UpdateTargetOfferDTO"

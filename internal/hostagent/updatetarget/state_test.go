@@ -3,6 +3,7 @@ package updatetarget
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -140,4 +141,46 @@ func TestSnapshot_ConcurrentReadAndTick(t *testing.T) {
 		}
 	}()
 	wg.Wait()
+}
+
+// The update-target URL is operator-settable, so it can carry credentials, and
+// the errors that name it now reach an API response as `detail` (#443). None of
+// them may carry the password.
+func TestRedactURL(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"https://user:secret@malmo.example/target", "https://redacted@malmo.example/target"},
+		{"https://malmo.example/target?box_id=b1", "https://malmo.example/target?box_id=b1"},
+		{"", ""},
+		{"://nope", "(unreadable URL)"},
+	}
+	for _, c := range cases {
+		if got := RedactURL(c.in); got != c.want {
+			t.Errorf("RedactURL(%q) = %q, want %q", c.in, got, c.want)
+		}
+		if strings.Contains(RedactURL(c.in), "secret") {
+			t.Errorf("RedactURL(%q) leaked the password", c.in)
+		}
+	}
+}
+
+// The redaction has to hold on the path that actually reaches the report: a
+// source that cannot be reached, whose error names the URL it failed on.
+func TestSnapshot_UnreachableDetailCarriesNoPassword(t *testing.T) {
+	src := HTTPSource{
+		URL:  "https://user:secret@127.0.0.1:1/target",
+		HTTP: &http.Client{Timeout: time.Second},
+	}
+	l := newLoop(src, fakeRunning{brain: brainRef, ui: uiRef}, &fakeApplier{}, ptr(at(12, 3, 30)))
+	l.Tick(context.Background())
+
+	s := l.Snapshot()
+	if s.Outcome != OutcomeUnreachable {
+		t.Fatalf("outcome = %q, want %q", s.Outcome, OutcomeUnreachable)
+	}
+	if strings.Contains(s.Err, "secret") {
+		t.Fatalf("the recorded reason leaks the password: %q", s.Err)
+	}
+	if !strings.Contains(s.Err, "redacted@127.0.0.1:1") {
+		t.Errorf("the recorded reason = %q, want it to still name the redacted URL", s.Err)
+	}
 }

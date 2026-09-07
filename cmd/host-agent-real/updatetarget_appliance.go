@@ -8,6 +8,10 @@ import (
 	"github.com/malmoos/malmo/internal/profile"
 )
 
+// buildProfile is the environment profile this binary was built for. See the
+// hosted half for why it is separate from the source.
+const buildProfile = string(profile.Appliance)
+
 // updateTargetSource is the **appliance** half of the update-target seam: the
 // target comes from the signed release manifest this box already polls
 // (RELEASE_MANIFEST.md), read straight off that poller.
@@ -29,6 +33,6 @@ import (
 func updateTargetSource(p *relmanifest.Poller) (targetSource, error) {
 	return targetSource{
 		Source:  updatetarget.ManifestSource{Poller: p},
-		Profile: string(profile.Appliance),
+		Profile: buildProfile,
 	}, nil
 }
