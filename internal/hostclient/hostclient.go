@@ -191,6 +191,19 @@ func (c *Client) SystemGPU(ctx context.Context) (protocol.SystemGPU, error) {
 	return out, err
 }
 
+// SystemUpdateTarget returns what the box's update-target loop last decided
+// (GET /v1/system/update-target, UPDATES.md # 8.4). A pure read — it starts
+// nothing; StartSystemUpdate is the trigger.
+//
+// host-agent always answers 200 with a parseable payload, so a transport error
+// here is genuinely "host-agent unreachable" and never "there is no update".
+// Every way the box can fail to know its target is a state inside the payload.
+func (c *Client) SystemUpdateTarget(ctx context.Context) (protocol.UpdateTarget, error) {
+	var out protocol.UpdateTarget
+	err := c.do(ctx, "GET", "/v1/system/update-target", nil, &out)
+	return out, err
+}
+
 // SystemHealth returns host-agent's locus-B findings report across categories
 // (HEALTH.md # Detector catalog, BRAIN_HOST_PROTOCOL.md). host-agent always
 // returns 200 with a parseable payload, so a transport error here is genuinely

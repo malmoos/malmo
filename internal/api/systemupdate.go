@@ -40,6 +40,111 @@ func (s *Server) registerSystemUpdate(api huma.API) {
 		OperationID: "get-system-update", Method: "GET", Path: "/api/v1/system/update/{job_id}",
 		Summary: "Status of a control-plane update job (admin only)",
 	}, s.getSystemUpdate)
+	huma.Register(api, huma.Operation{
+		OperationID: "get-system-update-target", Method: "GET", Path: "/api/v1/system/update-target",
+		Summary: "What this box could be running, and why it is not (admin only)",
+	}, s.getSystemUpdateTarget)
+}
+
+// UpdateTargetOfferDTO is a target the box's source named: the version for
+// display, and the two pinned references that would be pulled. Never a tag —
+// the box refuses an unpinned answer before it reaches this endpoint.
+type UpdateTargetOfferDTO struct {
+	Version     string `json:"version,omitempty"`
+	BrainImage  string `json:"brain_image"`
+	UIImage     string `json:"ui_image"`
+	PublishedAt string `json:"published_at,omitempty"`
+}
+
+// ControlPlanePairDTO is the brain + UI image pair the box is running, read
+// from the box's own declaration.
+type ControlPlanePairDTO struct {
+	Brain string `json:"brain,omitempty"`
+	UI    string `json:"ui,omitempty"`
+}
+
+// UpdateTargetDTO is the GET /api/v1/system/update-target body: what the box's
+// update-target loop last decided (UPDATES.md # 8.4).
+//
+// State is the whole answer in one word, and the seven values stay apart on
+// purpose:
+//
+//   - "current" — the target is what the box already runs. The healthy answer.
+//   - "available" — a different control plane is on offer. On hosted it applies
+//     itself in the window; on appliance it waits for an admin (# 8.2).
+//   - "none" — the source has nothing to offer. Normal, not a failure: most
+//     boxes are in this state.
+//   - "unreachable" — the box could not complete a check. It keeps running what
+//     it runs; it never degrades because it could not ask.
+//   - "refused" — the source answered and the box rejected the answer (a tag,
+//     the wrong repository, half an answer). Nothing was pulled. A source stuck
+//     on a bad answer is a fleet problem; a source that is down is not.
+//   - "disabled" — this box has no update loop at all, because its configured
+//     target is unusable. The only state here that needs a human.
+//   - "unknown" — nothing has been measured yet. Never "you are up to date".
+//
+// Detail is a diagnostic, not UI copy: it carries the box's underlying error
+// text, which is what makes a broken source fixable. The dashboard writes its
+// own sentence from State and shows Detail as the technical reason underneath.
+//
+// From and WindowFrom are two different settings whose values only look alike.
+// From is where the box's update-target URL came from ("seed", "env",
+// "default"), and is empty on an appliance, which has no such URL. WindowFrom
+// is where the update window came from ("answer", "env", "default") — a window
+// can come from the source's answer, a URL never can.
+type UpdateTargetDTO struct {
+	State      string                `json:"state"`
+	Running    ControlPlanePairDTO   `json:"running"`
+	Target     *UpdateTargetOfferDTO `json:"target,omitempty"`
+	CheckedAt  string                `json:"checked_at,omitempty"`
+	Detail     string                `json:"detail,omitempty"`
+	From       string                `json:"from,omitempty"`
+	Window     string                `json:"window,omitempty"`
+	WindowFrom string                `json:"window_from,omitempty"`
+	AutoApply  bool                  `json:"auto_apply"`
+	Profile    string                `json:"profile,omitempty"`
+}
+
+// getSystemUpdateTarget reports what the box could be running. A pure read, so
+// it does not audit, and admin-only for the same reason the update trigger is:
+// what a box is being moved to is admin business.
+//
+// A host-agent that cannot be reached is a 502. That is not the posture of
+// systemVersion, which degrades to a partial answer, because there is no
+// partial answer here — every field comes from the host, and an empty payload
+// would render as "nothing to offer", which is a different and much calmer
+// claim than "we could not ask".
+func (s *Server) getSystemUpdateTarget(ctx context.Context, _ *struct{}) (*struct {
+	Body UpdateTargetDTO
+}, error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	t, err := s.host.SystemUpdateTarget(ctx)
+	if err != nil {
+		slog.Error("system-update: host update-target read failed", "err", err)
+		return nil, huma.Error502BadGateway("could not read what this box could be running")
+	}
+	out := UpdateTargetDTO{
+		State:      t.State,
+		Running:    ControlPlanePairDTO{Brain: t.Running.Brain, UI: t.Running.UI},
+		CheckedAt:  t.CheckedAt,
+		Detail:     t.Detail,
+		From:       t.From,
+		Window:     t.Window,
+		WindowFrom: t.WindowFrom,
+		AutoApply:  t.AutoApply,
+		Profile:    t.Profile,
+	}
+	if t.Target != nil {
+		out.Target = &UpdateTargetOfferDTO{
+			Version:     t.Target.Version,
+			BrainImage:  t.Target.BrainImage,
+			UIImage:     t.Target.UIImage,
+			PublishedAt: t.Target.PublishedAt,
+		}
+	}
+	return &struct{ Body UpdateTargetDTO }{Body: out}, nil
 }
 
 // SystemUpdateRequestDTO is the POST body: the target pair. An empty ref means

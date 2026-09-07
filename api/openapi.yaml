@@ -276,6 +276,14 @@ components:
         mail_provider_id:
           type: string
       type: object
+    ControlPlanePairDTO:
+      additionalProperties: false
+      properties:
+        brain:
+          type: string
+        ui:
+          type: string
+      type: object
     Create-userRequest:
       additionalProperties: false
       properties:
@@ -1955,6 +1963,56 @@ components:
       required:
         - role
       type: object
+    UpdateTargetDTO:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/UpdateTargetDTO.json
+          format: uri
+          readOnly: true
+          type: string
+        auto_apply:
+          type: boolean
+        checked_at:
+          type: string
+        detail:
+          type: string
+        from:
+          type: string
+        profile:
+          type: string
+        running:
+          $ref: "#/components/schemas/ControlPlanePairDTO"
+        state:
+          type: string
+        target:
+          $ref: "#/components/schemas/UpdateTargetOfferDTO"
+        window:
+          type: string
+        window_from:
+          type: string
+      required:
+        - state
+        - running
+        - auto_apply
+      type: object
+    UpdateTargetOfferDTO:
+      additionalProperties: false
+      properties:
+        brain_image:
+          type: string
+        published_at:
+          type: string
+        ui_image:
+          type: string
+        version:
+          type: string
+      required:
+        - brain_image
+        - ui_image
+      type: object
     UserDTO:
       additionalProperties: false
       properties:
@@ -3149,6 +3207,23 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       summary: Move the control plane to the given brain/UI image pair (admin only)
+  /api/v1/system/update-target:
+    get:
+      operationId: get-system-update-target
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateTargetDTO"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: What this box could be running, and why it is not (admin only)
   /api/v1/system/update/{job_id}:
     get:
       operationId: get-system-update
