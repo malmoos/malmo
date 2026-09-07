@@ -50,9 +50,15 @@ Greptile found the one that matters. **The update-target URL is operator-settabl
 
 Two smaller ones from the same review: one tick now writes **one** snapshot (recording the good answer and then overwriting it published an intermediate "all fine" a concurrent reader could catch), and `state` carries an `enum` tag, so the generated client is a union of the seven values and a dashboard that forgets one fails to typecheck. The disabled path also reports its `profile` now, taken from a build-tagged constant — the profile is a build-time fact, so it survives a source the box could not build.
 
+## What the cloud lane found
+
+The first `CI / Cloud image` run on this branch went **red on my own assertion**, and the verdict was misleading in a way worth recording: `the brain did not serve /api/v1/system/update-target (status='HTTP/1.0 502 Bad Gateway')`. The endpoint was fine. The read lands moments after step 5 recreates the brain on a deliberately failed update **and** after step 6a restarts host-agent — one second apart in the journal — so the box was simply not serving yet, and a 502 from Caddy and a 502 from the handler are the same bytes.
+
+The assertion now asks `/api/v1/me` first, with the budget the script's other HTTP polls use, and fails with "the box is not serving the API after the host-agent restart" when that is what happened. Two different failures no longer arrive through one status line, and both failure paths now dump `docker ps` so the next red boot is readable from the serial log. The lane's image canary is bumped, since `cloud-assertions.sh` is baked into the boot-proof image and a cached local build would otherwise run the old assertions.
+
 ## Known gaps & deviations
 
-- **Not run in the QEMU cloud lane.** The `update` boot gains four assertions (the read reports the refusal and `from=seed`, refuses an unauthenticated caller, and names the pinned pair the in-guest source served before the apply lands), and they are written but unproven — that lane needs root and `/dev/kvm`, or a `CI / Cloud image` run. This is the issue's real acceptance gate for the hosted half.
+- **The cloud lane has not gone green yet.** `CI / Go` and `CI / web-ui` are green. `CI / Cloud image` failed once on the assertion's own timing (above) and the fix is pushed but unproven — that boot is the issue's real acceptance gate for the hosted half, and until it passes the four new assertions are written and not demonstrated.
 - **No UI.** By design. Nothing in `web-ui` reads the endpoint; only the generated client moved.
 - **An appliance with a signing key would sit on `refused`, permanently.** The manifest names versions, not pinned references, so `ManifestSource` answers `ErrNotPinned` — an error, which lands in `refused` rather than `none`. No build bakes a key today, so every appliance reads `none`; the moment appliance signing lands, the read says `refused` until #400 is unparked. That is honest, and it is why the state is on the wire rather than flattened, but the later UI slice has to know it before writing the copy.
 - **The read says nothing about whether the last update worked.** Job records are in-memory in host-agent and die with it, which is the open `NEXT.md` item on where a control-plane update's outcome lives. The endpoint is named `update-target` and not `update-status` so it does not appear to answer that.

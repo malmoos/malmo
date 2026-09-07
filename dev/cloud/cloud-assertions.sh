@@ -1222,7 +1222,23 @@ EOF
     #     through the brain. A refusal is the sharpest case to prove it on: the
     #     box is running fine and its source is up, so anything that flattened
     #     "refused" into "nothing to offer" would look healthy right here.
-    # Polled, not read once: the loop ticks at host-agent startup, so a slow boot
+    # **Wait for the box to be serving first, and say so separately.** This read
+    # lands moments after the revert above recreated the brain and after
+    # host-agent was restarted, so "the box is not up yet" and "the endpoint is
+    # wrong" are two different failures arriving through the same 502. Asking
+    # /api/v1/me first splits them: a red boot then names the one that happened.
+    # The first run of this assertion needed exactly that — it read 502 for a
+    # minute and the verdict blamed the endpoint.
+    api_up=""
+    for _i in $(seq 1 120); do
+        grep -q ' 200' <<<"$(status_of "$(full_get /api/v1/me "$apex" "$session_cookie" 2>/dev/null || true)")" \
+            && { api_up=yes; break; }
+        sleep 1
+    done
+    [ -n "$api_up" ] \
+        || fail "update-target: the box is not serving the API after the host-agent restart, so the read cannot be judged: $(docker ps --format '{{.Names}} {{.Status}}' 2>&1 | tr '\n' '; ')"
+
+    # Polled, not read once: the loop ticks at host-agent startup, so a slow box
     # can serve "unknown" for a moment before the first tick finishes.
     target_read=""
     for _i in $(seq 1 60); do
@@ -1231,7 +1247,7 @@ EOF
         sleep 1
     done
     grep -q ' 200' <<<"$(status_of "$target_read")" \
-        || fail "update-target: the brain did not serve /api/v1/system/update-target (status='$(status_of "$target_read")')"
+        || fail "update-target: the brain did not serve /api/v1/system/update-target (status='$(status_of "$target_read")'): $(docker ps --format '{{.Names}} {{.Status}}' 2>&1 | tr '\n' '; ')"
     grep -q '"state":"refused"' <<<"$target_read" \
         || fail "update-target: the read does not report the refusal: $(tail -1 <<<"$target_read")"
     # The channel, again through the read: from=seed is how an operator sees that
@@ -1286,7 +1302,7 @@ EOF
         sleep 1
     done
     [ -n "$target_offer" ] \
-        || fail "update-target: the brain never reported the pinned pair the source served (last read: $(tail -1 <<<"$target_read"))"
+        || fail "update-target: the brain never reported the pinned pair the source served (last status='$(status_of "$target_read")', last read: $(tail -1 <<<"$target_read"))"
     grep -qE '"state":"(available|current)"' <<<"$target_read" \
         || fail "update-target: the read names the target but not a usable state: $(tail -1 <<<"$target_read")"
     grep -q '"window_from":"answer"' <<<"$target_read" \
