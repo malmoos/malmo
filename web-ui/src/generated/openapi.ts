@@ -826,6 +826,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/update-target": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What this box could be running, and why it is not (admin only) */
+        get: operations["get-system-update-target"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/system/update/{job_id}": {
         parameters: {
             query?: never;
@@ -1039,6 +1056,10 @@ export interface components {
             };
             folders?: components["schemas"]["FolderElection"][] | null;
             mail_provider_id?: string;
+        };
+        ControlPlanePairDTO: {
+            brain?: string;
+            ui?: string;
         };
         "Create-userRequest": {
             /**
@@ -1831,6 +1852,31 @@ export interface components {
              */
             readonly $schema?: string;
             role: string;
+        };
+        UpdateTargetDTO: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/UpdateTargetDTO.json
+             */
+            readonly $schema?: string;
+            auto_apply: boolean;
+            checked_at?: string;
+            detail?: string;
+            from?: string;
+            profile?: string;
+            running: components["schemas"]["ControlPlanePairDTO"];
+            /** @enum {string} */
+            state: "current" | "available" | "none" | "unreachable" | "refused" | "disabled" | "unknown";
+            target?: components["schemas"]["UpdateTargetOfferDTO"];
+            window?: string;
+            window_from?: string;
+        };
+        UpdateTargetOfferDTO: {
+            brain_image: string;
+            published_at?: string;
+            ui_image: string;
+            version?: string;
         };
         UserDTO: {
             /**
@@ -3520,6 +3566,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SystemUpdateJobDTO"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "get-system-update-target": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateTargetDTO"];
                 };
             };
             /** @description Error */

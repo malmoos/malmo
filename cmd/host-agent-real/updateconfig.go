@@ -150,6 +150,11 @@ func updateTarget() (target, from, boxID string, err error) {
 	return "", fromDefault, boxID, nil
 }
 
+// checkTargetURL rejects anything the box could not actually fetch from. Its
+// messages name the offending value through updatetarget.RedactURL, because
+// this error becomes the `detail` of the disabled state on the socket read
+// (#443) and a seeded URL may carry credentials.
+//
 // checkTargetURL rejects anything the box could not actually fetch from. It is
 // deliberately shallow (an absolute http or https URL with a host) because the point
 // is to catch a provisioning mistake (a hostname with no scheme, a pasted shell
@@ -157,13 +162,17 @@ func updateTarget() (target, from, boxID string, err error) {
 func checkTargetURL(s string) error {
 	u, err := url.Parse(s)
 	if err != nil {
-		return fmt.Errorf("seed update_target_url is not a URL: %w", err)
+		// The parser's own error carries the raw URL, password and all, and
+		// this message becomes the disabled state's `detail` on the socket read
+		// (#443). Name the redacted URL and keep only the reason.
+		return fmt.Errorf("seed update_target_url is not a URL (%s): %w",
+			updatetarget.RedactURL(s), updatetarget.CauseOf(err))
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("seed update_target_url must be an http or https URL, got %q", s)
+		return fmt.Errorf("seed update_target_url must be an http or https URL, got %q", updatetarget.RedactURL(s))
 	}
 	if u.Host == "" {
-		return fmt.Errorf("seed update_target_url has no host: %q", s)
+		return fmt.Errorf("seed update_target_url has no host: %q", updatetarget.RedactURL(s))
 	}
 	return nil
 }

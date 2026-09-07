@@ -26,6 +26,10 @@ type updateHarness struct {
 	requests []protocol.SystemUpdateRequest
 	// startStatus, when non-zero, is the status the fake start route answers.
 	startStatus int
+	// target is what the fake update-target route answers, and targetStatus,
+	// when non-zero, is a failure status it answers instead.
+	target       protocol.UpdateTarget
+	targetStatus int
 }
 
 func newUpdateHarness(t *testing.T) *updateHarness {
@@ -73,6 +77,14 @@ func newUpdateHarness(t *testing.T) *updateHarness {
 				BrainChanged: true, Reverted: true, FailureMode: "health",
 			},
 		})
+	})
+	mux.HandleFunc("GET /v1/system/update-target", func(w http.ResponseWriter, r *http.Request) {
+		if h.targetStatus != 0 {
+			w.WriteHeader(h.targetStatus)
+			_ = json.NewEncoder(w).Encode(protocol.Error{Code: "boom", Message: "host is unwell"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(h.target)
 	})
 	hostHTTP := &http.Server{Handler: mux}
 	go func() { _ = hostHTTP.Serve(ln) }()
@@ -265,4 +277,102 @@ func TestGetUpdate_MemberForbidden(t *testing.T) {
 		JobID string `path:"job_id"`
 	}{JobID: "j_abc123"})
 	assertStatus(t, err, http.StatusForbidden)
+}
+
+// --- the update-target read (#443) ---
+
+func (h *updateHarness) readTarget(ctx context.Context) (*struct{ Body UpdateTargetDTO }, error) {
+	return h.srv.getSystemUpdateTarget(ctx, &struct{}{})
+}
+
+// The happy path: the host's answer reaches the caller unchanged, states and
+// pinned refs included. The brain is a pass-through here on purpose — it has no
+// second opinion about what the box could be running.
+func TestUpdateTarget_Available(t *testing.T) {
+	h := newUpdateHarness(t)
+	h.target = protocol.UpdateTarget{
+		State:      protocol.UpdateTargetAvailable,
+		Running:    protocol.ControlPlanePair{Brain: "ghcr.io/malmoos/brain@sha256:aa", UI: "ghcr.io/malmoos/ui@sha256:bb"},
+		Target:     &protocol.ControlPlaneOffer{Version: "v0.8.0", BrainImage: "ghcr.io/malmoos/brain@sha256:cc", UIImage: "ghcr.io/malmoos/ui@sha256:dd"},
+		CheckedAt:  "2026-09-07T02:45:00Z",
+		From:       "seed",
+		Window:     "03:00-04:00",
+		WindowFrom: "answer",
+		AutoApply:  true,
+		Profile:    "hosted",
+	}
+	out, err := h.readTarget(adminCtx("u_admin"))
+	if err != nil {
+		t.Fatalf("getSystemUpdateTarget: %v", err)
+	}
+	b := out.Body
+	if b.State != protocol.UpdateTargetAvailable {
+		t.Fatalf("state = %q, want %q", b.State, protocol.UpdateTargetAvailable)
+	}
+	if b.Target == nil || b.Target.BrainImage != "ghcr.io/malmoos/brain@sha256:cc" {
+		t.Errorf("target = %+v, want the pinned brain ref", b.Target)
+	}
+	if b.Running.Brain != "ghcr.io/malmoos/brain@sha256:aa" {
+		t.Errorf("running = %+v, want the box's declared pair", b.Running)
+	}
+	// The two sources are separate fields with lookalike values. Merging them is
+	// the mistake this guards: a URL can come from the seed, a window cannot.
+	if b.From != "seed" || b.WindowFrom != "answer" {
+		t.Errorf("from/window_from = %q/%q, want seed/answer", b.From, b.WindowFrom)
+	}
+	if !b.AutoApply || b.Profile != "hosted" {
+		t.Errorf("auto_apply/profile = %v/%q, want true/hosted", b.AutoApply, b.Profile)
+	}
+}
+
+// "Nothing to offer" is an ordinary answer with no target attached, not an
+// error. Most boxes are in this state.
+func TestUpdateTarget_NoneIsNotAnError(t *testing.T) {
+	h := newUpdateHarness(t)
+	h.target = protocol.UpdateTarget{State: protocol.UpdateTargetNone, CheckedAt: "2026-09-07T02:45:00Z"}
+	out, err := h.readTarget(adminCtx("u_admin"))
+	if err != nil {
+		t.Fatalf("getSystemUpdateTarget: %v", err)
+	}
+	if out.Body.State != protocol.UpdateTargetNone || out.Body.Target != nil {
+		t.Fatalf("body = %+v, want none with no target", out.Body)
+	}
+}
+
+// A source that could not be read stays distinguishable from one with nothing
+// to offer, and carries the reason as a diagnostic under the state.
+func TestUpdateTarget_UnreachableKeepsItsReason(t *testing.T) {
+	h := newUpdateHarness(t)
+	h.target = protocol.UpdateTarget{
+		State:  protocol.UpdateTargetUnreachable,
+		Detail: "updatetarget: fetch https://malmo.network/api/updates/target: dial tcp: connection refused",
+	}
+	out, err := h.readTarget(adminCtx("u_admin"))
+	if err != nil {
+		t.Fatalf("getSystemUpdateTarget: %v", err)
+	}
+	if out.Body.State != protocol.UpdateTargetUnreachable || out.Body.Detail == "" {
+		t.Fatalf("body = %+v, want unreachable with a reason", out.Body)
+	}
+}
+
+// Admin-only, same as the trigger: what a box is being moved to is admin
+// business. A pure read, so nothing is audited either way.
+func TestUpdateTarget_MemberForbidden(t *testing.T) {
+	h := newUpdateHarness(t)
+	_, err := h.readTarget(memberCtx("u_bob"))
+	assertStatus(t, err, http.StatusForbidden)
+	if rows := h.auditRows(t); len(rows) != 0 {
+		t.Fatalf("audit rows = %+v, want none — a read does not audit", rows)
+	}
+}
+
+// A host-agent that cannot answer is a 502, not an empty payload. An empty one
+// would render as "nothing to offer", which is a much calmer claim than "we
+// could not ask".
+func TestUpdateTarget_HostFailureIs502(t *testing.T) {
+	h := newUpdateHarness(t)
+	h.targetStatus = http.StatusInternalServerError
+	_, err := h.readTarget(adminCtx("u_admin"))
+	assertStatus(t, err, http.StatusBadGateway)
 }

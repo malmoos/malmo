@@ -1217,6 +1217,16 @@ EOF
         || fail "update-target: the box acted on an UNPINNED answer — the brain container was replaced"
     echo "cloud-assertions: update-target — REFUSAL OK (a tagged answer was refused, box unchanged)"
 
+    # The brain-side read of this refusal is NOT asserted here, and that is a
+    # finding rather than a gap: restarting host-agent above leaves the brain
+    # unable to reach it at all until the brain container is recreated
+    # (os#447 - RuntimeDirectory=malmo makes systemd recreate /run/malmo, and
+    # the brain's bind mount still points at the deleted inode). Every
+    # host-backed brain call answers 502 in this window, so a read asserted
+    # here would be asserting os#447, not this endpoint. The refusal itself is
+    # proven by the journal line above; the read is asserted after the apply
+    # below, where the brain has been recreated and can reach host-agent.
+
     # 6b. THE APPLY. A pinned gen-3 pair, published and dropped locally like the
     #     ones above, so the loop's apply is a real registry pull.
     brain_v3="$(publish_gen "$(docker inspect -f '{{.Config.Image}}' malmo-brain)" malmo-brain:v3 'LABEL malmo.test.generation=v3')" \
@@ -1269,6 +1279,40 @@ EOF
     grep -q ' 200' <<<"$me_after" \
         || fail "update-target: after the target-driven update the box does not answer an authenticated /api/v1/me (status='$me_after')"
     echo "cloud-assertions: update-target — APPLY OK (the box read its target, pulled the pinned pair and applied it with no prompt)"
+
+    # 6c. THE READ (os#443). Everything above is journal lines and container
+    #     state. The dashboard reads neither, so the same facts have to come
+    #     back through the brain. Asserted here, after the apply, because the
+    #     apply recreated the brain container - which is what lets it reach the
+    #     restarted host-agent at all (os#447).
+    #
+    #     The claim is end-to-end: the pair the in-guest control plane served is
+    #     the pair the brain names. The box is on that pair now, so the state is
+    #     `current`; `available` is accepted too, for the tick that has not
+    #     re-read the ledger yet.
+    target_read=""
+    for _i in $(seq 1 120); do
+        target_read="$(full_get /api/v1/system/update-target "$apex" "$session_cookie" 2>/dev/null || true)"
+        grep -qE '"state":"(available|current)"' <<<"$target_read" && break
+        sleep 1
+    done
+    grep -q ' 200' <<<"$(status_of "$target_read")" \
+        || fail "update-target: the brain did not serve /api/v1/system/update-target (status='$(status_of "$target_read")'): $(docker ps --format '{{.Names}} {{.Status}}' 2>&1 | tr '\n' '; ')"
+    grep -qF "$brain_v3" <<<"$target_read" && grep -qF "$ui_v3" <<<"$target_read" \
+        || fail "update-target: the read does not name the pinned pair the source served: $(tail -1 <<<"$target_read")"
+    # The channel, through the read: from=seed is how an operator sees that this
+    # box is not following the fleet without opening the journal (os#407).
+    grep -q '"from":"seed"' <<<"$target_read" \
+        || fail "update-target: the read does not name the seed as the target's source: $(tail -1 <<<"$target_read")"
+    # The window came from the answer, and it is a separate field from the one
+    # above - two settings whose values only look alike (os#443).
+    grep -q '"window_from":"answer"' <<<"$target_read" \
+        || fail "update-target: the read does not say the window came from the answer: $(tail -1 <<<"$target_read")"
+    # A caller with no session must not learn what this box is being moved to.
+    anon_read="$(status_of "$(full_get /api/v1/system/update-target "$apex" "" 2>/dev/null || true)")"
+    grep -qE ' (401|403)' <<<"$anon_read" \
+        || fail "update-target: the read answered an unauthenticated caller (status='$anon_read')"
+    echo "cloud-assertions: update-target — READ OK (the brain reports the pinned pair the in-guest source served, from=seed, window from the answer, admin-only)"
     ;;
 *)
     fail "unknown assert mode '$MODE'"

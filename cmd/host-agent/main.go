@@ -27,6 +27,12 @@
 //	MALMO_FAKE_NO_GPU — when "1", GET /v1/system/gpu reports no usable GPU
 //	                    instead of the default synthetic Intel iGPU, so the
 //	                    `gpu: true` install refusal is exercisable in dev.
+//	MALMO_FAKE_UPDATE_TARGET — the state GET /v1/system/update-target reports:
+//	                    "none" (default), "available", "current", "refused",
+//	                    "unreachable" or "disabled". The dev loop has no control
+//	                    plane to update, so the honest default is "nothing to
+//	                    offer"; the other values exist so the dashboard's update
+//	                    surfaces can be built against every state.
 package main
 
 import (
@@ -136,6 +142,7 @@ func main() {
 	// keeps GET /v1/discovery/state's interfaces field stable regardless of
 	// the dev box's real network.
 	a.Net = hostagent.NewFakeNetState(netstate.LANInterface{Name: "eth0", Index: 2, IPv4: "192.168.1.20"})
+	a.UpdateTarget = hostagent.NewFakeUpdateTargetReporter(fakeUpdateTarget())
 
 	mux := http.NewServeMux()
 	a.Mount(mux)
