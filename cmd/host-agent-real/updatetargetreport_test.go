@@ -250,3 +250,40 @@ func TestReport_TheTwoFromsStayApart(t *testing.T) {
 		t.Errorf("auto_apply/profile = %v/%q, want true/hosted", got.AutoApply, got.Profile)
 	}
 }
+
+// A box can have two faults at once: a seeded target it refused at startup, and
+// a declaration it cannot read. Only the first is why this box will never
+// update, so it wins the state — reporting the read failure instead would hide
+// a permanent fault behind one that looks transient. The second is not dropped.
+func TestReport_DisabledOutranksAnUnreadablePair(t *testing.T) {
+	got := updateTargetReport{
+		disabledErr: `seed update_target_url has no host: "malmo.example"`,
+		running:     stubRunning{err: errors.New("read control-plane compose: no such file")},
+	}.Read()
+
+	if got.State != protocol.UpdateTargetDisabled {
+		t.Fatalf("state = %q, want %q", got.State, protocol.UpdateTargetDisabled)
+	}
+	if !strings.Contains(got.Detail, "no host") {
+		t.Errorf("detail = %q, want the reason the box has no update loop", got.Detail)
+	}
+	if !strings.Contains(got.Detail, "no such file") {
+		t.Errorf("detail = %q, want the read failure carried along too", got.Detail)
+	}
+}
+
+// The refused answer is on the wire, and it may name a tag — naming one is a
+// way to get refused. State is what says whether a target is applicable.
+func TestReport_RefusedTargetIsNotApplicable(t *testing.T) {
+	unpinned := goodOffer()
+	unpinned.BrainImage = "ghcr.io/malmoos/brain:v0.8.0"
+	running := stubRunning{brain: runningBrain, ui: runningUI}
+	got := updateTargetReport{loop: tickedLoop(t, stubSource{target: unpinned}, running), running: running}.Read()
+
+	if got.State != protocol.UpdateTargetRefused {
+		t.Fatalf("state = %q, want %q", got.State, protocol.UpdateTargetRefused)
+	}
+	if got.Target == nil || got.Target.BrainImage != unpinned.BrainImage {
+		t.Fatalf("target = %+v, want the refused answer verbatim", got.Target)
+	}
+}

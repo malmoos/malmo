@@ -47,8 +47,13 @@ func (s *Server) registerSystemUpdate(api huma.API) {
 }
 
 // UpdateTargetOfferDTO is a target the box's source named: the version for
-// display, and the two pinned references that would be pulled. Never a tag —
-// the box refuses an unpinned answer before it reaches this endpoint.
+// display, and the two references that would be pulled.
+//
+// Read State first. On "current" and "available" this is a validated,
+// digest-pinned pair. On "refused" it is the answer the box **rejected**, and
+// it may well name a tag — naming one is a way to get refused. It is carried
+// there so an operator can see what a broken source is serving; nothing acted
+// on it.
 type UpdateTargetOfferDTO struct {
 	Version     string `json:"version,omitempty"`
 	BrainImage  string `json:"brain_image"`

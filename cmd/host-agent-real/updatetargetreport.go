@@ -52,21 +52,30 @@ func (r updateTargetReport) Read() protocol.UpdateTarget {
 		Profile:    r.profile,
 		AutoApply:  r.autoApply,
 	}
+	var runErr error
 	if r.running != nil {
 		brain, ui, err := r.running.Running()
-		out.Running = protocol.ControlPlanePair{Brain: brain, UI: ui}
-		if err != nil {
-			// The box cannot read its own declaration, so it cannot say whether
-			// a target is a change. That is the one failure this report has
-			// that the loop's snapshot cannot describe, so it wins the state.
-			out.State = protocol.UpdateTargetUnreachable
-			out.Detail = err.Error()
-			return out
-		}
+		out.Running, runErr = protocol.ControlPlanePair{Brain: brain, UI: ui}, err
 	}
+
+	// disabled outranks everything, including an unreadable declaration. Both
+	// are true on a box with a bad seed and a missing compose, and only one of
+	// them is the reason this box will never update — reporting the read
+	// failure instead would hide the fault that needs a human behind one that
+	// looks transient. The read failure is not dropped: it rides along in
+	// detail, because a box with two faults must not report one of them.
 	if r.loop == nil {
-		out.State = protocol.UpdateTargetDisabled
-		out.Detail = r.disabledErr
+		out.State, out.Detail = protocol.UpdateTargetDisabled, r.disabledErr
+		if runErr != nil {
+			out.Detail += "; the box also cannot read what it is running: " + runErr.Error()
+		}
+		return out
+	}
+	if runErr != nil {
+		// The box cannot read its own declaration, so it cannot say whether a
+		// target is a change. That is the one failure this report has that the
+		// loop's snapshot cannot describe, so it wins over the tick's outcome.
+		out.State, out.Detail = protocol.UpdateTargetUnreachable, runErr.Error()
 		return out
 	}
 

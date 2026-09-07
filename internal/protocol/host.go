@@ -460,9 +460,12 @@ type UpdateTarget struct {
 	// staged compose for the UI). Read when the request arrives, not carried
 	// from the last tick, because a tick that ended early never read it.
 	Running ControlPlanePair `json:"running"`
-	// Target is what the source offered, present only when the offer was read
-	// and passed validation (states current and available). Never a tag — the
-	// box refuses an answer that is not pinned to a digest before it gets here.
+	// Target is what the source offered. Present for current and available,
+	// where it is a validated, digest-pinned pair the box could apply — and
+	// also for **refused**, where it is the answer the box rejected and must
+	// not be treated as applicable. It can be a tag there, because naming a tag
+	// is one of the things that gets an answer refused. Read State before
+	// reading this: only current and available mean "this is a usable pair".
 	Target *ControlPlaneOffer `json:"target,omitempty"`
 	// CheckedAt is when the loop last asked its source, RFC3339. Empty means it
 	// has never finished a tick (states unknown and disabled).
