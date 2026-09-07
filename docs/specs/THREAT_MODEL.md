@@ -71,14 +71,14 @@ The richest boundary. The right question is not "can an app be compromised" (ass
 
 | Threat | Mitigation (owner) | Residual |
 |---|---|---|
-| Container escape to host root | `cap_drop: ALL`; `privileged`, docker socket, `SYS_ADMIN` admission-rejected for **both doors**; Docker default seccomp/AppArmor (`APP_ISOLATION.md` # Forbidden for both doors, # Capabilities) | No userns remap, no custom seccomp in v1 (Docker defaults deemed sufficient) |
+| Container escape to host root | `cap_drop: ALL`; `privileged`, docker socket, `SYS_ADMIN` admission-rejected for **both doors**; Docker default seccomp/AppArmor (`APP_ISOLATION.md` # Forbidden for both doors, # Capabilities) | No userns remap, no custom seccomp in v1 (Docker defaults deemed sufficient). **Admission blocks escape via an app's *own* compose only — it does nothing about reaching the socket-proxy over the network at runtime; see the Brain↔Docker row, a live gap until #187.** |
 | App lies about declared permissions | Enforced at kernel/Docker layer, not metadata — violations silently fail + log (`APP_ISOLATION.md` # Failure mode) | — |
 | Compromised app reads beyond its scope | Per-app bridge (no inter-app traffic); bind-mounts limited to the declared `folders` at their elected source (one user's home, or the household-shared tree the owner can already reach); other homes not on its filesystem (`APP_ISOLATION.md` # Filesystem) | Blast radius = the app's declared permissions + its mounted folders + its own managed DB. An app *can* read everything its grants allow — that's the grant, not a leak |
-| Brain↔Docker control-plane abuse | Brain talks to Docker via socket-proxy, not raw socket (`CONTROL_PLANE.md`) | — |
+| Brain↔Docker control-plane abuse | Brain talks to Docker via socket-proxy, not raw socket (`CONTROL_PLANE.md` # Locked: Docker socket exposure) | **Live gap, pending #187.** The proxy is body-blind — an allowed `POST /containers/create` can carry `Privileged:true` + `Binds:["/:/host"]`, then `/start`, and run as host root. Measured on a real box (#430). The proxy sits on `malmo-ingress`, which app `main_service` containers also join, so any compromised app reaches `docker-proxy:2375` with `curl`. Not closable by the allowlist (the brain needs `CONTAINERS`+`POST`); the fix is network isolation — #187 takes apps off `malmo-ingress`, leaving only the brain able to reach `:2375` |
 | Compromised control-plane container (Caddy, `malmo-ui`, socket-proxy) | Same sandbox app containers get: `cap_drop: ALL` (Caddy keeps only `NET_BIND_SERVICE`), `no-new-privileges`, read-only root on Caddy + `malmo-ui` (`CONTROL_PLANE.md` # Locked: control-plane container hardening, #431) | The **brain** container is not sandboxed — it needs `CAP_CHOWN` to own app data dirs, so its capability set has to be named and proven on a booted box first. The socket-proxy runs with a writable root (its image writes `/tmp`, `/run`, `/var/lib/haproxy`) |
 | Privileged Door-2 app | **Rejected** — admission is door-symmetric; `privileged`/socket/`cap_add`/host-ports/host-namespaces are refused for custom compose exactly as for store apps, because a container escape on a multi-user box hits every member, not just the (admin-only) installer (`APP_ISOLATION.md` # Trust tiers, `DECISIONS.md` 2026-06-02) | An admin who needs such a container runs it over SSH (`AUTH.md` # SSH is rescue) — deliberate, not one-paste; that residual is the box owner's own root access |
 
-**Blast-radius summary:** one compromised store app reaches its own data, its user's declared folders, and the internet (if granted) — **not** host root, other users' homes, or other apps. That containment is the security claim; preventing the compromise itself is curation's job, not the sandbox's.
+**Blast-radius summary:** one compromised store app reaches its own data, its user's declared folders, and the internet (if granted) — **not** host root, other users' homes, or other apps. That containment is the security claim; preventing the compromise itself is curation's job, not the sandbox's. **One caveat holds this open today:** the socket-proxy is reachable from app containers on `malmo-ingress`, and reaching it is host root (Brain↔Docker row). The claim is true once #187 closes that network path; until then it is the box's most severe open gap.
 
 ### B3 — Member ↔ admin
 
@@ -165,6 +165,10 @@ The honest list, gathered from across the spec so it lives in one place:
 11. A compromised brain compromises the host.
 
 Each is defensible under the household trust model and the v1 scope; each has a named future upgrade where one exists.
+
+One item on this list is **not** knowingly accepted — it is a live gap with a fix in flight, listed here so a reader scanning this section does not miss the box's most severe current exposure:
+
+- **A compromised *app* can escape to host root via the socket-proxy, until #187.** The proxy is body-blind and shares `malmo-ingress` with app `main_service` containers, so any compromised app can reach `docker-proxy:2375` and start a privileged, host-bind-mounted container (measured, #430; B2 Brain↔Docker row). This is item 11 widened from "the brain" to "any app," and it closes when #187 takes apps off that network — not a residual we accept, a bug we are fixing.
 
 ## Methodology note
 

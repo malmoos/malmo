@@ -246,10 +246,25 @@ const dockerSockPath = "/var/run/docker.sock"
 
 // proxyAllowlist is the docker-socket-proxy env allowlist — the endpoint
 // families the brain needs to manage app + control-plane containers, kept in
-// sync with dev/control-plane/compose.yml. EXEC and host-bind mounts stay denied
-// (the proxy defaults them off); managed-DB provisioning runs the engine's
-// client in a one-shot `docker run` container (CONTAINERS/POST), not `docker
-// exec`, so it needs no EXEC (DECISIONS.md 2026-06-15 — re-architected off exec).
+// sync with dev/control-plane/compose.yml. Every family here is load-bearing:
+// dropping any of them breaks a real brain path, so the list is already as
+// narrow as it can be (measured, #430).
+//
+// The flags gate by URL prefix and method only. tecnativa/docker-socket-proxy
+// never reads request bodies, so it CANNOT filter what an allowed request asks
+// for: a permitted POST /containers/create with Privileged:true and
+// Binds:["/:/host"] passes straight through and, once started, is host root.
+// So granting CONTAINERS+POST is a container escape for anyone who can reach
+// :2375 — confirmed on a real box (#430). The only control on that is network
+// reachability: nothing but the brain may reach the proxy. That is not yet true
+// (the proxy shares malmo-ingress with app main_service containers); #187 is the
+// fix that takes apps off that network. See CONTROL_PLANE.md # Locked: Docker
+// socket exposure and THREAT_MODEL.md B2.
+//
+// EXEC, by contrast, IS denied — it is a URL family this allowlist omits, not a
+// body field. That is why managed-DB provisioning runs the engine's client in a
+// one-shot `docker run` container (CONTAINERS/POST), not `docker exec`
+// (DECISIONS.md 2026-06-15 — re-architected off exec).
 func proxyAllowlist() []EnvVar {
 	return []EnvVar{
 		{Key: "POST", Value: "1"},
