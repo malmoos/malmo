@@ -50,13 +50,13 @@ Step 6c's comment was corrected too: it credited the apply's brain recreate for 
 
 ## Known gaps & deviations
 
-- **Not run on a booted box by me.** The fix is a unit-file directive, so `make check` cannot exercise it; the lane assertion needs `CI / Cloud image` (root + KVM). The systemd behaviour is measured above on real systemd and the Docker behaviour is measured in #447, but the two have not been observed together on a malmo box. That is what the `update` boot proves, and it should be read before this merges.
+- **Verified on a booted box.** `CI / Cloud image` (`publish=false`, run 34167696070) is green and the log carries `cloud-assertions: update-target — SOCKET SURVIVES OK`, so the assertion **ran** rather than being skipped into a green result. That is the whole Done-when of #447.
+- **The negative control was run by #446, not by me.** A passing assertion on a fixed build does not prove it catches the bug. I did not re-run the lane on an unfixed build, because that run already exists: [update-target-read.md](update-target-read.md) tried to read this endpoint at this exact point in the `update` boot, got a 502 for a solid minute, and moved the read after the apply because of it. That is this assertion failing on the unfixed build. The container-id half is a strict addition on top and can only make it harder to pass.
 - **The health finding #447 also asked for is not here.** "A brain that cannot reach host-agent is a health finding, not a quiet degrade" — today `pullSystemHealth` logs `slog.Warn("system health: host-agent unreachable; skipping")` and returns (`cmd/brain/main.go`). Making that an issue means a new issue type, a `HEALTH.md` locus-C catalog row, a debounce policy and UI copy, which is past what #447 was sized and accepted as. Filed separately (see What's next) on the maintainer's call, rather than grown into this PR.
 - **The two `mkosi.extra` copies were edited before I noticed they were gitignored.** They are regenerated from `dist/` by the staging scripts on the next build, so the edit is inert either way, but it is not part of the diff and should not be read as one.
 - **`dist/systemd/host-agent.service` still diverges from `CONTROL_PLANE.md` in the ways it already did** — the spec locks `Type=notify` + `Restart=always` + `WatchdogSec=`, the unit ships `Type=simple` + `Restart=on-failure` and a comment deferring the rest. Untouched here; out of scope.
 
 ## What's next
 
-1. Read the `CI / Cloud image` `update` boot for the new 6a-bis assertion (`gh workflow run "CI / Cloud image" --ref fix/447-runtime-dir-preserve -f publish=false`).
-2. Brain-side `host-agent-unreachable` health finding, so this class cannot degrade silently again — the piece of #447 carved out above.
-3. Socket activation, if the ~2s restart window ever matters. `NEXT.md` already tracks it; the note in `CONTROL_PLANE.md` now records what it would actually buy.
+1. Brain-side `host-agent-unreachable` health finding, so this class cannot degrade silently again — the piece of #447 carved out above.
+2. Socket activation, if the ~2s restart window ever matters. `NEXT.md` already tracks it; the note in `CONTROL_PLANE.md` now records what it would actually buy.
