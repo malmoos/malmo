@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/malmoos/malmo/internal/protocol"
 )
@@ -61,6 +62,14 @@ type Docker interface {
 	// success (idempotent). host-agent seeds the shared ingress network the
 	// proxy, brain, Caddy and UI all attach to.
 	NetworkCreate(ctx context.Context, name string) error
+	// ContainerSandboxed reports whether an existing container already runs
+	// with the capability sandbox proxyRunSpec asks for. A container's
+	// capabilities are fixed at create time, so this is the only way to tell a
+	// proxy created before the sandbox landed from one created after (#431).
+	ContainerSandboxed(ctx context.Context, name string) (bool, error)
+	// Remove force-removes a container by name, treating "no such container"
+	// as success.
+	Remove(ctx context.Context, name string) error
 }
 
 // RunSpec is one `docker run -d` invocation — a container host-agent launches.
@@ -72,6 +81,12 @@ type RunSpec struct {
 	Aliases []string // extra network aliases (beyond the container name)
 	Mounts  []Mount  // bind mounts
 	Env     []EnvVar
+	// CapDrop lists Linux capabilities to drop, in `docker run` spelling
+	// ("ALL"), and SecurityOpt is passed through as --security-opt. Empty means
+	// "leave Docker's default", which is what the brain still runs with — see
+	// proxyRunSpec for the sandbox the proxy gets and why the brain has none.
+	CapDrop     []string
+	SecurityOpt []string
 }
 
 // Mount is a host→container bind mount.
@@ -278,8 +293,44 @@ func EnsureTransport(ctx context.Context, d Docker, cfg Config) error {
 		return fmt.Errorf("check proxy container %q: %w", cfg.ProxyContainerName, err)
 	}
 	if exists {
-		slog.Info("proxy container already present; leaving it to Docker",
+		// A container's capability set is fixed when it is created, so a proxy
+		// that predates #431 keeps Docker's full default set for as long as it
+		// lives — a restart does not re-apply the flags, and nothing else
+		// recreates this container. Left alone, the hardening would reach new
+		// boxes only. Recreate it once, here, before the brain is launched
+		// (Launch runs after EnsureTransport), and it converges on the next
+		// host-agent start. An already-running brain loses its Docker transport
+		// for the moment the container is gone; its Docker calls are per-request
+		// HTTP, so an in-flight one fails and the next succeeds.
+		sandboxed, err := d.ContainerSandboxed(ctx, cfg.ProxyContainerName)
+		if err != nil {
+			// Not fatal: a hardening check must not be the thing that stops a
+			// box booting. Keep the container we have and say why.
+			slog.Warn("could not read the proxy container's sandbox; leaving it as it is",
+				"container", cfg.ProxyContainerName, "err", err)
+			return nil
+		}
+		if sandboxed {
+			slog.Info("proxy container already present; leaving it to Docker",
+				"container", cfg.ProxyContainerName)
+			return nil
+		}
+		slog.Info("proxy container predates the container sandbox; recreating it",
 			"container", cfg.ProxyContainerName)
+		if err := d.Remove(ctx, cfg.ProxyContainerName); err != nil {
+			return fmt.Errorf("remove unsandboxed proxy container %q: %w", cfg.ProxyContainerName, err)
+		}
+		// From here the box has NO Docker transport until the run below
+		// succeeds, and nothing retries it before the next host-agent start —
+		// so a daemon that is briefly busy would cost the box its transport for
+		// the rest of the boot. There is nothing to fall back to (the old
+		// container is gone), so try more than once.
+		if err := runProxyWithRetry(ctx, d, cfg); err != nil {
+			return fmt.Errorf("relaunch proxy container %q after removing the unsandboxed one (the box has no Docker transport until host-agent starts again): %w",
+				cfg.ProxyContainerName, err)
+		}
+		slog.Info("socket-proxy recreated with the container sandbox",
+			"container", cfg.ProxyContainerName, "image", cfg.ProxyImage)
 		return nil
 	}
 	if err := d.Run(ctx, proxyRunSpec(cfg)); err != nil {
@@ -290,17 +341,61 @@ func EnsureTransport(ctx context.Context, d Docker, cfg Config) error {
 	return nil
 }
 
+// proxyRunRetries / proxyRunRetryDelay bound the retry the recreate path uses.
+// A var, not a const, so a test can drop the wait to zero.
+var (
+	proxyRunRetries    = 3
+	proxyRunRetryDelay = 2 * time.Second
+)
+
+// runProxyWithRetry runs the hardened proxy, retrying a bounded number of times.
+// Only the recreate path uses it: there the old container is already removed, so
+// giving up on the first error leaves the box with no path to Docker. A first
+// launch has no such asymmetry — nothing was taken away — and keeps its single
+// attempt.
+func runProxyWithRetry(ctx context.Context, d Docker, cfg Config) error {
+	var err error
+	for attempt := 1; attempt <= proxyRunRetries; attempt++ {
+		if err = d.Run(ctx, proxyRunSpec(cfg)); err == nil {
+			return nil
+		}
+		slog.Warn("relaunching the socket-proxy failed",
+			"container", cfg.ProxyContainerName, "attempt", attempt, "err", err)
+		if attempt == proxyRunRetries {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(proxyRunRetryDelay):
+		}
+	}
+	return err
+}
+
 // proxyRunSpec assembles the docker-socket-proxy `docker run`. The raw socket is
 // mounted read-only; the brain reaches the proxy by the docker-proxy alias.
+//
+// It runs under the same sandbox every app container gets — all capabilities
+// dropped, no-new-privileges (APP_ISOLATION.md # Capabilities & privilege, #431).
+// This is the container holding the raw Docker socket, so it is the one where a
+// bug is worth the most. haproxy needs no capability here: it binds :2375, above
+// the privileged range, so not even CAP_NET_BIND_SERVICE. A read-only root is
+// deliberately NOT set — the image's entrypoint writes its generated config to
+// /tmp and haproxy writes /run and /var/lib/haproxy, so read_only would mean
+// three tmpfs mounts pinned to another project's internal paths
+// (CONTROL_PLANE.md # Locked: control-plane container hardening).
 func proxyRunSpec(cfg Config) RunSpec {
 	return RunSpec{
-		Name:    cfg.ProxyContainerName,
-		Image:   cfg.ProxyImage,
-		Restart: "unless-stopped",
-		Network: cfg.Network,
-		Aliases: []string{proxyDialAlias},
-		Mounts:  []Mount{{Source: dockerSockPath, Target: dockerSockPath, ReadOnly: true}},
-		Env:     proxyAllowlist(),
+		Name:        cfg.ProxyContainerName,
+		Image:       cfg.ProxyImage,
+		Restart:     "unless-stopped",
+		Network:     cfg.Network,
+		Aliases:     []string{proxyDialAlias},
+		Mounts:      []Mount{{Source: dockerSockPath, Target: dockerSockPath, ReadOnly: true}},
+		Env:         proxyAllowlist(),
+		CapDrop:     []string{"ALL"},
+		SecurityOpt: []string{"no-new-privileges:true"},
 	}
 }
 
@@ -320,9 +415,17 @@ func RunSpecFor(cfg Config) RunSpec { return runSpec(cfg) }
 // runs with restart=unless-stopped so Docker supervises it after launch. It is
 // deliberately not given the Docker socket — the brain reaches Docker only
 // through the host-agent-seeded socket-proxy at tcp://docker-proxy:2375
-// (CONTROL_PLANE.md # Docker socket exposure). It joins the ingress network so
+// (CONTROL_PLANE.md # Locked: control-plane container hardening). It joins the ingress network so
 // it can reach the proxy + Caddy admin by name, and carries the env that points
 // it at the proxy, Caddy, and the staged control-plane compose.
+//
+// Unlike the proxy, the brain gets no capability sandbox (#431). It chowns app
+// data directories to the uid it elects for an app (lifecycle, APP_ISOLATION.md
+// # Runtime identity & data ownership), so CAP_CHOWN is load-bearing and
+// `cap_drop: ALL` would break an install. Hardening it means naming the
+// capabilities it does need and proving that set on a booted box, which is its
+// own change — CONTROL_PLANE.md # Locked: control-plane container hardening
+// and THREAT_MODEL.md B2 record the residual.
 func runSpec(cfg Config) RunSpec {
 	sockDir := filepath.Dir(cfg.SocketPath)
 	mounts := []Mount{

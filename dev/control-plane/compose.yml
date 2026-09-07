@@ -51,6 +51,20 @@ services:
     # nothing across a recreate. tmpfs, not a volume: same call as malmo-ui below.
     tmpfs:
       - /config
+    # The same sandbox every app container gets (APP_ISOLATION.md # Capabilities
+    # & privilege), which Caddy itself did without until #431. It binds :80 and
+    # :443, so CAP_NET_BIND_SERVICE is kept and every other capability dropped —
+    # it needs none of them to proxy. read_only is affordable because both write
+    # paths now land somewhere real: /data is the volume above and /config the
+    # tmpfs (#433). A read-only root also means a Caddy bug cannot leave anything
+    # behind in the image layer, so a recreate is a clean container.
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - "no-new-privileges:true"
     ports:
       - "80:80"
       - "443:443"
@@ -69,6 +83,15 @@ services:
     tmpfs:
       - /data
       - /config
+    # Same sandbox as caddy above (#431). The bundle is served by a Caddy that
+    # listens on :80 inside the container, so this one also keeps
+    # CAP_NET_BIND_SERVICE and nothing else.
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - "no-new-privileges:true"
     networks:
       - malmo
 

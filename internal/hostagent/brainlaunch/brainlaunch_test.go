@@ -27,7 +27,13 @@ type fakeDocker struct {
 	labelErr     error
 	exists       bool
 	existsErr    error
+	sandboxed    bool
+	sandboxedErr error
+	removeErr    error
+	removeCalls  int
+	lastRemove   string
 	runErr       error
+	runErrs      []error
 	netErr       error
 	loadCalls    int
 	loadPaths    []string
@@ -65,7 +71,22 @@ func (f *fakeDocker) Run(_ context.Context, spec RunSpec) error {
 	f.runCalls++
 	f.lastRun = spec
 	f.runSpecs = append(f.runSpecs, spec)
+	// runErrs, when set, gives a per-call answer (so a test can fail the first
+	// run and succeed on the retry); runErr is the same answer every time.
+	if len(f.runErrs) > 0 {
+		err := f.runErrs[0]
+		f.runErrs = f.runErrs[1:]
+		return err
+	}
 	return f.runErr
+}
+func (f *fakeDocker) ContainerSandboxed(context.Context, string) (bool, error) {
+	return f.sandboxed, f.sandboxedErr
+}
+func (f *fakeDocker) Remove(_ context.Context, name string) error {
+	f.removeCalls++
+	f.lastRemove = name
+	return f.removeErr
 }
 func (f *fakeDocker) NetworkCreate(_ context.Context, name string) error {
 	f.netCalls++
@@ -312,11 +333,21 @@ func TestEnsureTransportSeedsNetworkAndProxy(t *testing.T) {
 	if envVal(s.Env, "POST") != "1" || envVal(s.Env, "CONTAINERS") != "1" {
 		t.Errorf("proxy allowlist missing POST/CONTAINERS: %+v", s.Env)
 	}
+	// The container that holds the raw socket runs the app sandbox: every
+	// capability dropped, no-new-privileges (#431). haproxy binds :2375, so it
+	// needs nothing added back.
+	if len(s.CapDrop) != 1 || s.CapDrop[0] != "ALL" {
+		t.Errorf("proxy cap_drop = %v, want [ALL]", s.CapDrop)
+	}
+	if len(s.SecurityOpt) != 1 || s.SecurityOpt[0] != "no-new-privileges:true" {
+		t.Errorf("proxy security_opt = %v, want [no-new-privileges:true]", s.SecurityOpt)
+	}
 }
 
 func TestEnsureTransportProxyExistsIsNoOp(t *testing.T) {
 	f := newFake()
-	f.exists = true // proxy already running (host-agent restart)
+	f.exists = true    // proxy already running (host-agent restart)
+	f.sandboxed = true // and already created with the sandbox
 
 	if err := EnsureTransport(context.Background(), f, testConfig()); err != nil {
 		t.Fatalf("EnsureTransport: %v", err)
@@ -326,6 +357,84 @@ func TestEnsureTransportProxyExistsIsNoOp(t *testing.T) {
 	}
 	if f.runCalls != 0 {
 		t.Errorf("run calls = %d, want 0 (existing proxy left to Docker)", f.runCalls)
+	}
+	if f.removeCalls != 0 {
+		t.Errorf("remove calls = %d, want 0 (a sandboxed proxy is not recreated)", f.removeCalls)
+	}
+}
+
+// A proxy created before #431 keeps Docker's full default capability set for as
+// long as the container lives — a restart does not re-apply flags. Without this
+// path the hardening would reach new boxes only, which is how a change ships and
+// does nothing (#404). host-agent recreates it once, then converges.
+func TestEnsureTransportRecreatesUnsandboxedProxy(t *testing.T) {
+	f := newFake()
+	f.exists = true     // proxy from before the sandbox landed
+	f.sandboxed = false // …created without it
+
+	if err := EnsureTransport(context.Background(), f, testConfig()); err != nil {
+		t.Fatalf("EnsureTransport: %v", err)
+	}
+	if f.removeCalls != 1 || f.lastRemove != "malmo-docker-proxy" {
+		t.Fatalf("remove calls=%d last=%q, want 1 malmo-docker-proxy", f.removeCalls, f.lastRemove)
+	}
+	if f.runCalls != 1 {
+		t.Fatalf("run calls = %d, want 1 (proxy relaunched hardened)", f.runCalls)
+	}
+	if len(f.lastRun.CapDrop) != 1 || f.lastRun.CapDrop[0] != "ALL" {
+		t.Errorf("relaunched proxy cap_drop = %v, want [ALL]", f.lastRun.CapDrop)
+	}
+}
+
+// The recreate path removes a working container before it can start its
+// replacement, so a run that fails on a busy daemon would cost the box its
+// Docker transport for the rest of the boot. It retries; a run that succeeds on
+// the second attempt leaves the box with a hardened proxy and no error.
+func TestEnsureTransportRetriesTheRecreatedProxy(t *testing.T) {
+	prev := proxyRunRetryDelay
+	proxyRunRetryDelay = 0
+	t.Cleanup(func() { proxyRunRetryDelay = prev })
+
+	f := newFake()
+	f.exists = true
+	f.sandboxed = false
+	f.runErrs = []error{errors.New("docker daemon busy")} // first attempt only
+
+	if err := EnsureTransport(context.Background(), f, testConfig()); err != nil {
+		t.Fatalf("EnsureTransport: %v, want the retry to carry it", err)
+	}
+	if f.runCalls != 2 {
+		t.Errorf("run calls = %d, want 2 (one failure, then the retry)", f.runCalls)
+	}
+}
+
+// A first launch keeps its single attempt: nothing was taken away, so there is
+// no transport to lose by giving up.
+func TestEnsureTransportFirstLaunchDoesNotRetry(t *testing.T) {
+	f := newFake()
+	f.exists = false
+	f.runErr = errors.New("docker daemon busy")
+
+	if err := EnsureTransport(context.Background(), f, testConfig()); err == nil {
+		t.Fatal("EnsureTransport: want the run error to propagate")
+	}
+	if f.runCalls != 1 {
+		t.Errorf("run calls = %d, want 1 (a first launch does not retry)", f.runCalls)
+	}
+}
+
+// The sandbox check must never be the reason a box fails to boot: an unreadable
+// container leaves the proxy exactly as it was, and the boot carries on.
+func TestEnsureTransportSandboxCheckFailureKeepsProxy(t *testing.T) {
+	f := newFake()
+	f.exists = true
+	f.sandboxedErr = errors.New("docker inspect: no such object")
+
+	if err := EnsureTransport(context.Background(), f, testConfig()); err != nil {
+		t.Fatalf("EnsureTransport: %v, want the boot to carry on", err)
+	}
+	if f.removeCalls != 0 || f.runCalls != 0 {
+		t.Errorf("remove=%d run=%d, want 0/0 (an unreadable proxy is left alone)", f.removeCalls, f.runCalls)
 	}
 }
 
