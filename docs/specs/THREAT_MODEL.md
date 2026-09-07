@@ -166,6 +166,10 @@ The honest list, gathered from across the spec so it lives in one place:
 
 Each is defensible under the household trust model and the v1 scope; each has a named future upgrade where one exists.
 
+One item on this list is **not** knowingly accepted — it is a live gap with a fix in flight, listed here so a reader scanning this section does not miss the box's most severe current exposure:
+
+- **A compromised *app* can escape to host root via the socket-proxy, until #187.** The proxy is body-blind and shares `malmo-ingress` with app `main_service` containers, so any compromised app can reach `docker-proxy:2375` and start a privileged, host-bind-mounted container (measured, #430; B2 Brain↔Docker row). This is item 11 widened from "the brain" to "any app," and it closes when #187 takes apps off that network — not a residual we accept, a bug we are fixing.
+
 ## Methodology note
 
 The per-boundary tables above are the deliverable. **STRIDE** (Spoofing, Tampering, Repudiation, Information disclosure, Denial of service, Elevation of privilege) was walked across each boundary as a behind-the-scenes checklist to avoid missing a category — not rendered as a cell-by-cell matrix, which reads worse as a spec doc. Tampering of the **audit log** specifically is addressed by append-only SQLite triggers (`LOGGING.md` # Tamper-evidence); Repudiation by the audit trail itself (`LOGGING.md`); the hash-chain integrity guarantee is deferred (`NEXT.md`). A light **privacy pass** (LINDDUN-flavored) on the metadata assets is covered by the closed-by-default posture, telemetry-off-by-default (`TELEMETRY.md`), and local-analytics-never-leave-the-box (`LOCAL_ANALYTICS.md`).
