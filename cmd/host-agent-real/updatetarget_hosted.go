@@ -37,10 +37,10 @@ import (
 // The release-manifest poller is unused here and is always nil on this build:
 // a hosted box has one opinion about its target, and a signed public broadcast
 // would be a second.
-func updateTargetSource(*relmanifest.Poller) (src updatetarget.Source, autoApply bool, name string, err error) {
+func updateTargetSource(*relmanifest.Poller) (targetSource, error) {
 	target, from, boxID, err := updateTarget()
 	if err != nil {
-		return nil, false, "", err
+		return targetSource{}, err
 	}
 	shown := target
 	if shown == "" {
@@ -54,5 +54,10 @@ func updateTargetSource(*relmanifest.Poller) (src updatetarget.Source, autoApply
 		// it has to be visible without knowing to go looking for it.
 		slog.Warn("this box is not following the fleet update target", "url", shown, "from", from, "box_id", boxID)
 	}
-	return updatetarget.HTTPSource{URL: target, BoxID: boxID}, true, string(profile.Hosted), nil
+	return targetSource{
+		Source:    updatetarget.HTTPSource{URL: target, BoxID: boxID},
+		AutoApply: true,
+		Profile:   string(profile.Hosted),
+		From:      from,
+	}, nil
 }

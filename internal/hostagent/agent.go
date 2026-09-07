@@ -189,6 +189,25 @@ type RebootReporter interface {
 	Read() []protocol.Finding
 }
 
+// UpdateTargetReporter is a consumer-side interface for GET
+// /v1/system/update-target: what the update-target loop last decided
+// (UPDATES.md # 8.4). Provider packages return concrete types — the adapter in
+// cmd/host-agent-real, which reads the live loop and the box's own control-plane
+// declaration; a canned reporter in the fake binary and tests.
+//
+// Read always returns a usable report and never errors. Every way this can go
+// wrong is already a state on the wire: a box with no loop reports "disabled",
+// a source that could not be read reports "unreachable". An HTTP error here
+// would tell the brain "ask again later" about facts that are not going to
+// change on their own.
+//
+// When nil (no reporter wired), the endpoint reports "unknown" — "not
+// measured", matching the other nil-able reporters. It is never read as "you
+// are up to date".
+type UpdateTargetReporter interface {
+	Read() protocol.UpdateTarget
+}
+
 // UserManager is a consumer-side interface for the system-level user account
 // operations behind /v1/auth/set-password (and, later, /set-role and
 // /delete-user). Provider packages (usermgr.LinuxUserManager) export concrete
@@ -357,6 +376,12 @@ type Agent struct {
 	// (jobs.go). Always non-nil — New builds it.
 	jobs *jobRegistry
 
+	// UpdateTarget, when non-nil, backs GET /v1/system/update-target — what the
+	// update-target loop last decided. Swapped per binary: the live-loop adapter
+	// in cmd/host-agent-real vs a canned reporter in the fake binary. When nil,
+	// the endpoint reports state "unknown".
+	UpdateTarget UpdateTargetReporter
+
 	// Net, when non-nil, backs the interfaces field of GET /v1/discovery/state
 	// with the LAN set. Swapped per binary: netstate.NMProvider (NetworkManager
 	// over DBus) vs FakeNetState. When nil, interfaces reports empty — "not
@@ -397,6 +422,7 @@ func (a *Agent) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/system/status", a.systemStatus)
 	mux.HandleFunc("GET /v1/system/resources", a.systemResources)
 	mux.HandleFunc("GET /v1/system/gpu", a.systemGPU)
+	mux.HandleFunc("GET /v1/system/update-target", a.systemUpdateTarget)
 	mux.HandleFunc("POST /v1/auth/verify-password", a.verifyPassword)
 	mux.HandleFunc("POST /v1/auth/set-password", a.setPassword)
 	mux.HandleFunc("POST /v1/auth/set-role", a.setRole)
@@ -562,6 +588,22 @@ func (a *Agent) systemGPU(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, protocol.SystemGPU{})
+}
+
+// systemUpdateTarget reports what the update-target loop last decided
+// (UPDATES.md # 8.4). A pure read: it starts nothing, and the trigger stays
+// POST /v1/jobs/system-update.
+//
+// 200 always, like systemHealth and for the same reason — every failure this
+// endpoint can have is a state in the payload, not an HTTP status. A nil
+// reporter reports "unknown" rather than an error, because a brain that reads a
+// 501 has learned nothing it can show anyone.
+func (a *Agent) systemUpdateTarget(w http.ResponseWriter, r *http.Request) {
+	if a.UpdateTarget != nil {
+		writeJSON(w, http.StatusOK, a.UpdateTarget.Read())
+		return
+	}
+	writeJSON(w, http.StatusOK, protocol.UpdateTarget{State: protocol.UpdateTargetUnknown})
 }
 
 // systemHealth returns the locus-B findings report across categories

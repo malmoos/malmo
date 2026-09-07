@@ -23,6 +23,12 @@ import (
 // The error is always nil here: the appliance source is the poller this box
 // already runs, so there is no per-box configuration to get wrong. It exists so
 // the hosted half can refuse an unusable seeded update target.
-func updateTargetSource(p *relmanifest.Poller) (src updatetarget.Source, autoApply bool, name string, err error) {
-	return updatetarget.ManifestSource{Poller: p}, false, string(profile.Appliance), nil
+//
+// From is left empty: an appliance has no update-target URL to have a source
+// for. Its target comes from the signed manifest this box already polls.
+func updateTargetSource(p *relmanifest.Poller) (targetSource, error) {
+	return targetSource{
+		Source:  updatetarget.ManifestSource{Poller: p},
+		Profile: string(profile.Appliance),
+	}, nil
 }

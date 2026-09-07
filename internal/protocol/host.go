@@ -441,3 +441,123 @@ type Job struct {
 	Error      *Error              `json:"error,omitempty"`
 	Result     *SystemUpdateResult `json:"result,omitempty"`
 }
+
+// UpdateTarget is GET /v1/system/update-target: what the update-target loop
+// last decided (UPDATES.md # 8.4). A **read**. Nothing here starts, stops or
+// changes an update — the trigger is POST /v1/jobs/system-update.
+//
+// It is the box's own view of one question: what am I running, what could I be
+// running, and why is the difference not closed yet. The loop decides that every
+// 15 minutes and used to say it only to the journal, which meant the appliance
+// prompt UPDATES.md # 3 promises had nothing to read.
+type UpdateTarget struct {
+	// State is the whole answer in one word. See the UpdateTargetState
+	// constants: the seven values are seven different things to tell an
+	// operator, and flattening any pair of them loses the one that matters.
+	State string `json:"state"`
+	// Running is the control-plane pair this box is running right now, read
+	// from the box's own declaration (the images.json ledger for the brain, the
+	// staged compose for the UI). Read when the request arrives, not carried
+	// from the last tick, because a tick that ended early never read it.
+	Running ControlPlanePair `json:"running"`
+	// Target is what the source offered, present only when the offer was read
+	// and passed validation (states current and available). Never a tag — the
+	// box refuses an answer that is not pinned to a digest before it gets here.
+	Target *ControlPlaneOffer `json:"target,omitempty"`
+	// CheckedAt is when the loop last asked its source, RFC3339. Empty means it
+	// has never finished a tick (states unknown and disabled).
+	CheckedAt string `json:"checked_at,omitempty"`
+	// Detail is why the last check produced no usable target. Set for
+	// unreachable, refused and disabled; empty otherwise.
+	//
+	// It is a **diagnostic**, not UI copy: it carries the underlying error text
+	// verbatim, which is what makes a broken source fixable. State is the field
+	// the dashboard writes its sentence from (CLAUDE.md — no raw Go error
+	// strings as user-facing text), and this is what an admin reads underneath
+	// it.
+	Detail string `json:"detail,omitempty"`
+	// From is where the box got its update-target URL: "seed", "env" or
+	// "default" (UPDATES.md # 8.4). Anything but "default" means this box is
+	// not following the fleet, which is the first thing worth knowing when one
+	// box behaves unlike the rest.
+	//
+	// The URL itself is deliberately not on the wire. "from" already carries
+	// the fact worth showing, and an operator's hand-edited URL is the one
+	// place a credential could turn up in a payload the dashboard renders.
+	From string `json:"from,omitempty"`
+	// Window is the update window in force, "HH:MM-HH:MM" local, and WindowFrom
+	// is where it came from: "answer", "env" or "default". These are a
+	// **separate** setting from From above, with values that only look alike —
+	// a window can come from the source's answer, a URL never can.
+	Window     string `json:"window,omitempty"`
+	WindowFrom string `json:"window_from,omitempty"`
+	// AutoApply is the UPDATES.md # 8.2 difference between the profiles: a
+	// hosted box applies its target in the window on its own, an appliance
+	// waits for an admin. It is what decides whether the dashboard says "this
+	// installs tonight" or "install now".
+	AutoApply bool `json:"auto_apply"`
+	// Profile is the environment profile that made the decision, "appliance" or
+	// "hosted" (ENVIRONMENT.md).
+	Profile string `json:"profile,omitempty"`
+}
+
+// ControlPlanePair is a brain + UI image reference pair. Empty fields mean the
+// box could not read that half of its own declaration.
+type ControlPlanePair struct {
+	Brain string `json:"brain,omitempty"`
+	UI    string `json:"ui,omitempty"`
+}
+
+// ControlPlaneOffer is a target the source named: the version for display, and
+// the two pinned references that would actually be pulled.
+type ControlPlaneOffer struct {
+	// Version is for display and nothing else. Nothing pulls by it.
+	Version string `json:"version,omitempty"`
+	// BrainImage / UIImage are full pinned references, repository@sha256:…
+	BrainImage string `json:"brain_image"`
+	UIImage    string `json:"ui_image"`
+	// PublishedAt is when the release was published, RFC3339. Informational,
+	// and empty when the source did not say.
+	PublishedAt string `json:"published_at,omitempty"`
+}
+
+// The UpdateTarget states. They are ordered here the way an operator reads
+// them: first the two that mean the loop is not answering, then the three that
+// mean it asked and got nothing usable, then the two real answers.
+const (
+	// UpdateTargetDisabled means there is no loop on this box. host-agent
+	// refused an unusable seeded update target and did not start one
+	// (UPDATES.md # 8.4 — refused, never resolved away), so the box will not
+	// update itself until that is fixed. Detail says what was wrong.
+	//
+	// This is deliberately not folded into "unknown": a box that will never
+	// check and a box that has not checked yet look identical on the wire
+	// otherwise, and the first one needs a human.
+	UpdateTargetDisabled = "disabled"
+	// UpdateTargetUnknown means the loop is running but has not finished its
+	// first tick. It ticks immediately at startup, so this is a state of
+	// seconds, not minutes.
+	UpdateTargetUnknown = "unknown"
+	// UpdateTargetNone means the source answered and has nothing to offer. A
+	// normal state, not a failure: most boxes are in it.
+	UpdateTargetNone = "none"
+	// UpdateTargetUnreachable means the check could not be completed: the
+	// source could not be read (DNS, a refused connection, a 500, a body that
+	// is not JSON), or the box could not read its own running pair. Detail says
+	// which. The box keeps running what it runs; it never degrades because it
+	// could not ask.
+	UpdateTargetUnreachable = "unreachable"
+	// UpdateTargetRefused means the source answered and the box rejected the
+	// answer: not pinned to a digest, an unexpected repository, only one of the
+	// two images, or a digest that disagrees with its own reference. Nothing
+	// was pulled. Distinct from unreachable on purpose — a source stuck on a
+	// bad answer is a fleet-wide problem, and a source that is down is not.
+	UpdateTargetRefused = "refused"
+	// UpdateTargetCurrent means the target is what the box is already running.
+	// The overwhelmingly common answer on a healthy box.
+	UpdateTargetCurrent = "current"
+	// UpdateTargetAvailable means the target differs from the running pair. On
+	// hosted it applies in the next window on its own; on appliance it waits
+	// for an admin.
+	UpdateTargetAvailable = "available"
+)
