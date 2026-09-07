@@ -3,6 +3,7 @@ package updatetarget
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,19 +32,30 @@ const fetchTimeout = 30 * time.Second
 // and neither deserves the box's memory.
 const maxBodyBytes = 64 << 10
 
-// RedactURL strips any credentials from a URL before it is written anywhere a
-// person will read it — a log line, or the diagnostic this box serves at
-// GET /v1/system/update-target.
+// RedactURL reduces a URL to the part that is safe to write where a person will
+// read it — a log line, or the diagnostic this box serves at
+// GET /v1/system/update-target. It keeps the scheme, host and path, and drops
+// **both** places a secret can hide.
 //
 // The update-target URL is operator-settable (a seed field, or
-// MALMO_UPDATE_TARGET_URL), so nothing stops someone pointing a box at
-// `https://user:secret@host/target`. The errors below name the URL they failed
-// on, which is what makes a broken source fixable — and, unredacted, is also
-// what would carry that password into an API response.
+// MALMO_UPDATE_TARGET_URL), so nothing stops a box being pointed at
+// `https://user:secret@host/target` or at `https://host/target?token=secret`.
+// The errors below name the URL they failed on, which is what makes a broken
+// source fixable — and, unredacted, is what would carry that secret into an API
+// response.
 //
-// A URL that will not parse is not passed through: the bytes we could not read
-// are exactly the bytes we cannot prove are safe. The caller's own message says
-// which setting was at fault, which is the part that fixes a typo.
+// Measured, because the defaults are not obvious: `http.Client.Do` returns a
+// *url.Error that strips the password (`user:***`) and keeps the whole query,
+// and `url.Parse` returns one that keeps everything, password included. Neither
+// is safe to pass through, which is why callers pair this with CauseOf below.
+//
+// A query is replaced rather than deleted, so a diagnostic still says one was
+// there — a box asking `?channel=candidate` and a box asking nothing are
+// different situations, and the difference is worth keeping.
+//
+// A URL that will not parse is not passed through at all: the bytes we could
+// not read are exactly the bytes we cannot prove are safe. The caller's own
+// message says which setting was at fault, which is the part that fixes a typo.
 func RedactURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -52,7 +64,22 @@ func RedactURL(raw string) string {
 	if u.User != nil {
 		u.User = url.User("redacted")
 	}
+	if u.RawQuery != "" {
+		u.RawQuery = "redacted"
+	}
+	u.Fragment = ""
 	return u.String()
+}
+
+// CauseOf unwraps a *url.Error to the failure underneath it, dropping the URL
+// that type carries. Callers name the URL themselves, through RedactURL; this
+// is what stops the raw one riding in alongside it.
+func CauseOf(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) && ue.Err != nil {
+		return ue.Err
+	}
+	return err
 }
 
 // Doer is the HTTP surface this source needs. Consumer-side (CLAUDE.md # Go code
@@ -94,7 +121,7 @@ func (s HTTPSource) requestURL() (string, error) {
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("updatetarget: %s is not a URL: %w", RedactURL(raw), err)
+		return "", fmt.Errorf("updatetarget: %s is not a URL: %w", RedactURL(raw), CauseOf(err))
 	}
 	q := u.Query()
 	q.Set("box_id", s.BoxID)
@@ -143,7 +170,7 @@ func (s HTTPSource) Target(ctx context.Context) (Target, error) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return Target{}, fmt.Errorf("updatetarget: build request for %s: %w", RedactURL(url), err)
+		return Target{}, fmt.Errorf("updatetarget: build request for %s: %w", RedactURL(url), CauseOf(err))
 	}
 	client := s.HTTP
 	if client == nil {
@@ -151,7 +178,7 @@ func (s HTTPSource) Target(ctx context.Context) (Target, error) {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return Target{}, fmt.Errorf("updatetarget: fetch %s: %w", RedactURL(url), err)
+		return Target{}, fmt.Errorf("updatetarget: fetch %s: %w", RedactURL(url), CauseOf(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {

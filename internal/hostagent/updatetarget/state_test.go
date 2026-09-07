@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -149,7 +150,13 @@ func TestSnapshot_ConcurrentReadAndTick(t *testing.T) {
 func TestRedactURL(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"https://user:secret@malmo.example/target", "https://redacted@malmo.example/target"},
-		{"https://malmo.example/target?box_id=b1", "https://malmo.example/target?box_id=b1"},
+		// A secret hides in the query as readily as in the userinfo, and this
+		// is the likelier shape: a box pointed at a signed or tokenized source.
+		{"https://malmo.example/target?token=secret", "https://malmo.example/target?redacted"},
+		// The query is replaced, not deleted: "this box asks with parameters"
+		// and "this box asks with none" are different situations.
+		{"https://malmo.example/target", "https://malmo.example/target"},
+		{"https://malmo.example/target#secret", "https://malmo.example/target"},
 		{"", ""},
 		{"://nope", "(unreadable URL)"},
 	}
@@ -158,8 +165,25 @@ func TestRedactURL(t *testing.T) {
 			t.Errorf("RedactURL(%q) = %q, want %q", c.in, got, c.want)
 		}
 		if strings.Contains(RedactURL(c.in), "secret") {
-			t.Errorf("RedactURL(%q) leaked the password", c.in)
+			t.Errorf("RedactURL(%q) leaked a secret", c.in)
 		}
+	}
+}
+
+// CauseOf is what stops the raw URL riding in on the wrapped error. Both
+// standard-library paths carry one, and neither is safe: http.Client.Do strips
+// the password but keeps the whole query, and url.Parse keeps everything.
+func TestCauseOf(t *testing.T) {
+	inner := errors.New("connection refused")
+	wrapped := &url.Error{Op: "Get", URL: "https://user:secret@host/x?token=secret", Err: inner}
+	if got := CauseOf(wrapped); got != inner {
+		t.Fatalf("CauseOf = %v, want the inner cause", got)
+	}
+	if strings.Contains(CauseOf(wrapped).Error(), "secret") {
+		t.Error("the unwrapped cause still carries a secret")
+	}
+	if got := CauseOf(inner); got != inner {
+		t.Errorf("CauseOf(plain error) = %v, want it unchanged", got)
 	}
 }
 
@@ -167,7 +191,7 @@ func TestRedactURL(t *testing.T) {
 // source that cannot be reached, whose error names the URL it failed on.
 func TestSnapshot_UnreachableDetailCarriesNoPassword(t *testing.T) {
 	src := HTTPSource{
-		URL:  "https://user:secret@127.0.0.1:1/target",
+		URL:  "https://user:secret@127.0.0.1:1/target?token=querysecret",
 		HTTP: &http.Client{Timeout: time.Second},
 	}
 	l := newLoop(src, fakeRunning{brain: brainRef, ui: uiRef}, &fakeApplier{}, ptr(at(12, 3, 30)))
@@ -177,10 +201,16 @@ func TestSnapshot_UnreachableDetailCarriesNoPassword(t *testing.T) {
 	if s.Outcome != OutcomeUnreachable {
 		t.Fatalf("outcome = %q, want %q", s.Outcome, OutcomeUnreachable)
 	}
-	if strings.Contains(s.Err, "secret") {
-		t.Fatalf("the recorded reason leaks the password: %q", s.Err)
+	// Both hiding places, and the box id the source appends to the query.
+	for _, leak := range []string{"secret", "querysecret"} {
+		if strings.Contains(s.Err, leak) {
+			t.Fatalf("the recorded reason leaks %q: %q", leak, s.Err)
+		}
 	}
 	if !strings.Contains(s.Err, "redacted@127.0.0.1:1") {
 		t.Errorf("the recorded reason = %q, want it to still name the redacted URL", s.Err)
+	}
+	if !strings.Contains(s.Err, "connection refused") {
+		t.Errorf("the recorded reason = %q, want it to still say what went wrong", s.Err)
 	}
 }
