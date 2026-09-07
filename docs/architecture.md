@@ -204,7 +204,14 @@ So this doc isn't read as a claim about the finished product:
   `NEXT.md`), no per-box targeting or report-back on hosted (blocked on the
   box↔cloud credential, `NEXT.md` Tier 1), no update notification, and no
   dashboard surface beyond Settings → About reporting the running versions
-  (#393).
+  (#393). **What the seam decided is now readable** (#443):
+  `GET /v1/system/update-target` on the host socket, re-served admin-only as
+  `GET /api/v1/system/update-target`, answering what the box runs, what it could
+  run, where the target and the window came from, when it last checked and why
+  the last check produced nothing. One `state` field carries the whole answer,
+  and it keeps "nothing on offer", "could not ask", "answer refused" and "this
+  box has no update loop at all" apart. No UI reads it yet — it is what the
+  dashboard prompt will consume.
 - **File manager.** `FILES.md` is written, and `/files` is a real top-level
   route. Nothing behind it is built. The brain registers no `/api/v1/files/*`
   handlers, and host-agent implements none of the `/v1/files/*` ops the protocol

@@ -1217,6 +1217,33 @@ EOF
         || fail "update-target: the box acted on an UNPINNED answer — the brain container was replaced"
     echo "cloud-assertions: update-target — REFUSAL OK (a tagged answer was refused, box unchanged)"
 
+    # 6a-bis. THE READ (os#443). Everything asserted above is a journal line. The
+    #     dashboard cannot read the journal, so the same facts have to come back
+    #     through the brain. A refusal is the sharpest case to prove it on: the
+    #     box is running fine and its source is up, so anything that flattened
+    #     "refused" into "nothing to offer" would look healthy right here.
+    # Polled, not read once: the loop ticks at host-agent startup, so a slow boot
+    # can serve "unknown" for a moment before the first tick finishes.
+    target_read=""
+    for _i in $(seq 1 60); do
+        target_read="$(full_get /api/v1/system/update-target "$apex" "$session_cookie" 2>/dev/null || true)"
+        grep -q '"state":"refused"' <<<"$target_read" && break
+        sleep 1
+    done
+    grep -q ' 200' <<<"$(status_of "$target_read")" \
+        || fail "update-target: the brain did not serve /api/v1/system/update-target (status='$(status_of "$target_read")')"
+    grep -q '"state":"refused"' <<<"$target_read" \
+        || fail "update-target: the read does not report the refusal: $(tail -1 <<<"$target_read")"
+    # The channel, again through the read: from=seed is how an operator sees that
+    # this box is not following the fleet without opening the journal (os#407).
+    grep -q '"from":"seed"' <<<"$target_read" \
+        || fail "update-target: the read does not name the seed as the target's source: $(tail -1 <<<"$target_read")"
+    # A member must not learn what this box is being moved to.
+    member_read="$(status_of "$(full_get /api/v1/system/update-target "$apex" "" 2>/dev/null || true)")"
+    grep -qE ' (401|403)' <<<"$member_read" \
+        || fail "update-target: the read answered an unauthenticated caller (status='$member_read')"
+    echo "cloud-assertions: update-target — READ OK (the brain reports the refusal and the seeded source, admin-only)"
+
     # 6b. THE APPLY. A pinned gen-3 pair, published and dropped locally like the
     #     ones above, so the loop's apply is a real registry pull.
     brain_v3="$(publish_gen "$(docker inspect -f '{{.Config.Image}}' malmo-brain)" malmo-brain:v3 'LABEL malmo.test.generation=v3')" \
@@ -1239,6 +1266,32 @@ EOF
     [ -n "$window_taken" ] \
         || fail "update-target: host-agent did not take the update window from the answer: $(journalctl -u host-agent.service -b --no-pager 2>&1 | grep -i 'update target\|window' | tail -5)"
     echo "cloud-assertions: update-target — WINDOW OK (the answer's window outranked MALMO_UPDATE_WINDOW)"
+
+    # 6b-bis. THE READ, on a real answer. Checked BEFORE the apply lands: once it
+    #     does, the box is on the target and the state is "current" by
+    #     definition, which would prove nothing about what the source served.
+    #     The refs are what the in-guest source was told to publish, so this is
+    #     the end-to-end claim — what the control plane serves is what the brain
+    #     reports.
+    target_offer=""
+    for _i in $(seq 1 120); do
+        target_read="$(full_get /api/v1/system/update-target "$apex" "$session_cookie" 2>/dev/null || true)"
+        if grep -qF "$brain_v3" <<<"$target_read" && grep -qF "$ui_v3" <<<"$target_read"; then
+            target_offer=yes
+            break
+        fi
+        # The apply may already have landed on a slow boot; that is not a
+        # failure of this assertion, so stop waiting for a window that closed.
+        grep -qF "$brain_v3" "$ledger" 2>/dev/null && break
+        sleep 1
+    done
+    [ -n "$target_offer" ] \
+        || fail "update-target: the brain never reported the pinned pair the source served (last read: $(tail -1 <<<"$target_read"))"
+    grep -qE '"state":"(available|current)"' <<<"$target_read" \
+        || fail "update-target: the read names the target but not a usable state: $(tail -1 <<<"$target_read")"
+    grep -q '"window_from":"answer"' <<<"$target_read" \
+        || fail "update-target: the read does not say the window came from the answer: $(tail -1 <<<"$target_read")"
+    echo "cloud-assertions: update-target — READ OK (the brain reports the pinned pair the in-guest source served)"
 
     applied=""
     for _i in $(seq 1 420); do
