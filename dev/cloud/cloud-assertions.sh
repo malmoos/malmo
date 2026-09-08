@@ -1197,6 +1197,13 @@ EOF
     # 6a. THE REFUSAL. The answer names TAGS. A box that pulled them would be
     #     trusting a movable label, so it must refuse and stay exactly where it is.
     brain_id_before_target="$(docker inspect -f '{{.Id}}' malmo-brain 2>/dev/null || true)"
+    # The baseline for the os#447 check below. Read a host-backed endpoint while
+    # host-agent is still the process the brain has always talked to, so the
+    # "after" read has something to be compared against — without this, a box
+    # that never served this endpoint at all would pass by failing twice.
+    target_before="$(status_of "$(full_get /api/v1/system/update-target "$apex" "$session_cookie" 2>/dev/null || true)")"
+    grep -q ' 200' <<<"$target_before" \
+        || fail "update-target: the brain did not serve a host-backed endpoint BEFORE the host-agent restart (status='$target_before')"
     systemctl restart host-agent.service || fail "update-target: could not restart host-agent"
     sleep 30
     # The channel, before the behaviour: host-agent must have taken this URL out of
@@ -1217,15 +1224,33 @@ EOF
         || fail "update-target: the box acted on an UNPINNED answer — the brain container was replaced"
     echo "cloud-assertions: update-target — REFUSAL OK (a tagged answer was refused, box unchanged)"
 
-    # The brain-side read of this refusal is NOT asserted here, and that is a
-    # finding rather than a gap: restarting host-agent above leaves the brain
-    # unable to reach it at all until the brain container is recreated
-    # (os#447 - RuntimeDirectory=malmo makes systemd recreate /run/malmo, and
-    # the brain's bind mount still points at the deleted inode). Every
-    # host-backed brain call answers 502 in this window, so a read asserted
-    # here would be asserting os#447, not this endpoint. The refusal itself is
-    # proven by the journal line above; the read is asserted after the apply
-    # below, where the brain has been recreated and can reach host-agent.
+    # 6a-bis. THE SOCKET SURVIVES A PLAIN RESTART (os#447). host-agent was
+    #     restarted above. Before the fix, systemd deleted /run/malmo when the
+    #     unit stopped and made a fresh inode on start, while the brain's bind
+    #     mount still pointed at the deleted one — so the brain saw an empty
+    #     directory, never saw the new agent.sock, and every host-backed call
+    #     answered 502. Nothing closed that window: the brain runs
+    #     restart=unless-stopped and host-agent does not touch a running brain,
+    #     so the box stayed unable to log ANYONE in until a reboot. The unit now
+    #     carries RuntimeDirectoryPreserve=yes, which keeps the inode.
+    #
+    #     Two halves, and the second is what makes this an assertion rather than
+    #     a coincidence: the endpoint answers 200 again, AND it is the same
+    #     brain container. A recreate also produces a 200 — that is precisely
+    #     how the box "recovers" today — so without the id check this would pass
+    #     on the broken build. (6a asserts the same id for the refusal; repeated
+    #     here so this check does not depend on that one staying put.)
+    target_after=""
+    for _i in $(seq 1 60); do
+        target_after="$(status_of "$(full_get /api/v1/system/update-target "$apex" "$session_cookie" 2>/dev/null || true)")"
+        grep -q ' 200' <<<"$target_after" && break
+        sleep 1
+    done
+    grep -q ' 200' <<<"$target_after" \
+        || fail "update-target: the brain cannot reach host-agent after a plain host-agent restart (status='$target_after') — os#447 regression. /run/malmo inode now: $(stat -c %i /run/malmo 2>&1); RuntimeDirectoryPreserve=$(systemctl show host-agent.service -p RuntimeDirectoryPreserve --value 2>&1); brain mounts: $(docker inspect -f '{{range .Mounts}}{{.Source}} {{end}}' malmo-brain 2>&1)"
+    [ "$(docker inspect -f '{{.Id}}' malmo-brain 2>/dev/null || true)" = "$brain_id_before_target" ] \
+        || fail "update-target: the brain container was replaced across the host-agent restart, so the 200 above says nothing about os#447"
+    echo "cloud-assertions: update-target — SOCKET SURVIVES OK (a plain host-agent restart left the SAME brain container able to reach it)"
 
     # 6b. THE APPLY. A pinned gen-3 pair, published and dropped locally like the
     #     ones above, so the loop's apply is a real registry pull.
@@ -1282,9 +1307,10 @@ EOF
 
     # 6c. THE READ (os#443). Everything above is journal lines and container
     #     state. The dashboard reads neither, so the same facts have to come
-    #     back through the brain. Asserted here, after the apply, because the
-    #     apply recreated the brain container - which is what lets it reach the
-    #     restarted host-agent at all (os#447).
+    #     back through the brain. Asserted after the apply so the read covers the
+    #     pair the box actually moved to. (It no longer has to be here: os#447 is
+    #     fixed, and 6a-bis asserts the brain reaches host-agent across a plain
+    #     restart, with no recreate to lean on.)
     #
     #     The claim is end-to-end: the pair the in-guest control plane served is
     #     the pair the brain names. The box is on that pair now, so the state is
