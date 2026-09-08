@@ -35,6 +35,10 @@ const routes: RouteRecordRaw[] = [
       { path: "activity", name: "settings-activity", component: () => import("@/views/settings/ActivitySection.vue") },
       { path: "users", name: "settings-users", component: () => import("@/views/settings/UsersSection.vue") },
       { path: "mail", name: "settings-mail", component: () => import("@/views/settings/OutgoingEmailSection.vue") },
+      // Adding an account is two steps, and each is its own URL so the browser
+      // Back button walks form → picker → list.
+      { path: "mail/add", name: "settings-mail-add", component: () => import("@/views/settings/OutgoingEmailAddSection.vue") },
+      { path: "mail/add/:preset", name: "settings-mail-new", component: () => import("@/views/settings/OutgoingEmailAddSection.vue") },
       { path: "about", name: "settings-about", component: () => import("@/views/settings/AboutSection.vue") },
     ],
   },

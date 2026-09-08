@@ -69,6 +69,10 @@ type harness struct {
 	// this dir *after* construction and the live server picks them up — no need
 	// to swap the catalog on the already-listening server.
 	catalogDir string
+	// stateDir is the lifecycle Manager's state root, so a test can write an
+	// instance's persisted manifest at <stateDir>/instances/<id>/manifest.yml —
+	// the copy the brain reads for an app that is already installed (#434).
+	stateDir string
 }
 
 // srvServer exposes the underlying *Server for tests that exercise handler
@@ -188,7 +192,8 @@ func newHarness(t *testing.T, opts ...func(*Server)) *harness {
 	// the install-plan fixtures declare no images, so the nil docker is never
 	// reached. host (*hostclient.Client) satisfies HostDriver, including the new
 	// SystemStatus the footprint reads.
-	life := lifecycle.NewManager(st, cat, host, nil, nil, bus, t.TempDir())
+	stateDir := t.TempDir()
+	life := lifecycle.NewManager(st, cat, host, nil, nil, bus, stateDir)
 	srv := NewServer(st, cat, life, bus, authMgr, host, audit.New(st), nil, live, nil)
 	for _, opt := range opts {
 		opt(srv)
@@ -197,7 +202,7 @@ func newHarness(t *testing.T, opts ...func(*Server)) *harness {
 	t.Cleanup(ts.Close)
 
 	jar, _ := newJar()
-	return &harness{srv: ts, jar: jar, t: t, pwds: pwds, pmu: &pmu, st: st, deleteCalls: &deleteCalls, tzCalls: &tzCalls, apiSrv: srv, catalogDir: catDir}
+	return &harness{srv: ts, jar: jar, t: t, pwds: pwds, pmu: &pmu, st: st, deleteCalls: &deleteCalls, tzCalls: &tzCalls, apiSrv: srv, catalogDir: catDir, stateDir: stateDir}
 }
 
 func (h *harness) do(method, path string, body any) *http.Response {

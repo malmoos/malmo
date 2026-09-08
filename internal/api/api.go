@@ -235,8 +235,8 @@ func (s *Server) register(api huma.API) {
 	// same-origin, box-identity-gated endpoints instead of pulling the whole
 	// catalog and filtering client-side. They mirror the control plane's public
 	// /catalog/{home,category,search} (cloud specs/CATALOG.md # Serve) but are served
-	// from the box's own synced snapshot, so browse still works offline (step 3's
-	// last-good cache). "home" and "search" are literal path segments; "category"
+	// from the box's own synced snapshot, so browse needs no round trip to the
+	// control plane. "home" and "search" are literal path segments; "category"
 	// takes ?name= rather than a /category/{cat} path so it does not collide with the
 	// /catalog/{id}/install-plan route under net/http's mux precedence.
 	huma.Register(api, huma.Operation{
@@ -554,7 +554,14 @@ func (s *Server) listApps(ctx context.Context, _ *struct{}) (*struct {
 		if e, err := s.catalog.Entry(i.ManifestID); err == nil {
 			ce = &e
 		}
-		out.Body.Apps = append(out.Body.Apps, s.toDTO(i, names[i.OwnerUserID], ce))
+		dto := s.toDTO(i, names[i.OwnerUserID], ce)
+		// The tile badge is exposure + public paths together, the same pair the
+		// detail page's access label is built from — a list DTO carrying only the
+		// exposure would draw a fully closed app that is in fact partly open.
+		// Costs one manifest read per app; best-effort, so a missing copy just
+		// leaves the field empty.
+		s.withPublicPaths(&dto)
+		out.Body.Apps = append(out.Body.Apps, dto)
 	}
 	return out, nil
 }
@@ -591,9 +598,12 @@ func (s *Server) getApp(ctx context.Context, in *struct {
 	dto := s.toDTO(i, owner.Username, catEntry)
 	s.withPublicPaths(&dto)
 	// Mail enrichment for the rebind picker. The manifest comes from the
-	// catalog, so a withdrawn app simply hides the picker (the binding itself
-	// keeps working — lifecycle reads the instance dir's own manifest copy).
-	if man, _, err := s.catalog.Load(i.ManifestID); err == nil && man.Mail != nil {
+	// INSTANCE's own copy, the one the installer persisted (#434): the app is
+	// already installed, so asking the catalog service would put a routine page
+	// load behind the network and hide the picker for an app the store no longer
+	// publishes. An unreadable copy leaves the picker hidden rather than failing
+	// the request.
+	if man, err := s.life.InstanceManifest(i.ID); err == nil && man.Mail != nil {
 		dto.MailSupported = true
 		if mp, err := s.store.GetInstanceMailProvider(i.ID); err == nil {
 			dto.MailProviderID = mp.ID
@@ -655,7 +665,11 @@ func (s *Server) installApp(ctx context.Context, in *struct {
 	// Load the manifest to validate the folder elections authoritatively (the
 	// install-plan endpoint is advisory). A validation failure is an
 	// elevation-class mutation rejection, so it audits success=false.
-	man, _, err := s.catalog.Load(manifestID)
+	// ONE load for the whole install. The elections below are validated against
+	// this exact manifest, and this exact pair is handed to the job that runs the
+	// transaction — the job must never re-fetch, or it could install a payload
+	// nothing validated (lifecycle.CatalogApp).
+	app, err := s.life.LoadCatalogApp(ctx, manifestID)
 	if errors.Is(err, catalog.ErrNotFound) {
 		return nil, huma.Error404NotFound("no such catalog app")
 	}
@@ -663,6 +677,7 @@ func (s *Server) installApp(ctx context.Context, in *struct {
 		slog.Error("install: catalog entry failed to load", "manifest_id", manifestID, "err", err)
 		return nil, huma.Error500InternalServerError("catalog entry is malformed")
 	}
+	man := app.Manifest
 	// An unlisted app (`listed: false`) is pulled from the store: not installable.
 	// Treat it as absent — same 404 as a missing manifest — so a stale store link
 	// or direct API call can't install a deliberately-withdrawn app.
@@ -707,7 +722,7 @@ func (s *Server) installApp(ctx context.Context, in *struct {
 	}
 	jobCtx := ctx // capture for audit inside the job goroutine
 	job := s.jobs.run("app-install", func(job *Job) (map[string]any, error) {
-		inst, err := s.life.Install(context.Background(), manifestID, owner, scope, mounts, mailProviderID, config, job.setStep)
+		inst, err := s.life.Install(context.Background(), app, owner, scope, mounts, mailProviderID, config, job.setStep)
 		target := audit.Target{Kind: "app"}
 		// confirm records a deliberate override of the duplicate-install warning,
 		// so the Activity view can see "installed a second copy on purpose".

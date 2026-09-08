@@ -10,6 +10,11 @@ import (
 	"github.com/malmoos/malmo/internal/profile"
 )
 
+// buildProfile is the environment profile this binary was built for. It is a
+// build-time fact, not a source-time one, so the disabled path can still report
+// it after updateTargetSource has refused to produce a source at all.
+const buildProfile = string(profile.Hosted)
+
 // updateTargetSource is the **hosted** half of the update-target seam: the box
 // reads its target from the cloud over its existing outbound path (UPDATES.md
 // # 8.1 — the box asks, nothing connects in), and applies it without a prompt
@@ -37,15 +42,18 @@ import (
 // The release-manifest poller is unused here and is always nil on this build:
 // a hosted box has one opinion about its target, and a signed public broadcast
 // would be a second.
-func updateTargetSource(*relmanifest.Poller) (src updatetarget.Source, autoApply bool, name string, err error) {
+func updateTargetSource(*relmanifest.Poller) (targetSource, error) {
 	target, from, boxID, err := updateTarget()
 	if err != nil {
-		return nil, false, "", err
+		return targetSource{}, err
 	}
 	shown := target
 	if shown == "" {
 		shown = updatetarget.DefaultURL
 	}
+	// Redacted: an operator-set URL may carry credentials, and this line is the
+	// one place the whole URL is written out.
+	shown = updatetarget.RedactURL(shown)
 	if from == fromDefault {
 		slog.Info("update target resolved", "url", shown, "from", from, "box_id", boxID)
 	} else {
@@ -54,5 +62,10 @@ func updateTargetSource(*relmanifest.Poller) (src updatetarget.Source, autoApply
 		// it has to be visible without knowing to go looking for it.
 		slog.Warn("this box is not following the fleet update target", "url", shown, "from", from, "box_id", boxID)
 	}
-	return updatetarget.HTTPSource{URL: target, BoxID: boxID}, true, string(profile.Hosted), nil
+	return targetSource{
+		Source:    updatetarget.HTTPSource{URL: target, BoxID: boxID},
+		AutoApply: true,
+		Profile:   buildProfile,
+		From:      from,
+	}, nil
 }

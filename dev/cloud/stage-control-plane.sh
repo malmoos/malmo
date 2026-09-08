@@ -133,7 +133,9 @@ EOF
     # regardless of filename (build-host network only; the VM never pulls).
     local caddy_acmedns_image="malmo-caddy-acmedns:dev"
     echo "building hosted Caddy with the caddy-dns/acmedns module (xcaddy)..."
-    docker build -t "$caddy_acmedns_image" "${REPO_ROOT}/dev/control-plane/caddy-acmedns/"
+    # Through make, not `docker build`: the target feeds the Dockerfile its two
+    # digest-pinned base images from dev/control-plane/images.lock (#432).
+    make -C "$REPO_ROOT" caddy-acmedns-image CADDY_ACMEDNS_IMAGE="$caddy_acmedns_image"
     docker save "$caddy_acmedns_image" -o "$WIRING/var/lib/malmo/control-plane-images/caddy.tar"
     cp "${REPO_ROOT}/dev/test-qemu/load-control-plane-images.sh" "$WIRING/usr/lib/malmo/"
     chmod 0755 "$WIRING/usr/lib/malmo/load-control-plane-images.sh"
@@ -145,11 +147,12 @@ EOF
     cp "${REPO_ROOT}/dev/control-plane/caddy.json"   "$WIRING/var/lib/malmo/control-plane/"
 
     # No catalog is baked into the image (cloud #62). The brain syncs the store from
-    # the control plane's public-read catalog API (GET /catalog/sync, MALMO_CATALOG_URL
-    # default the apex) and caches it last-good under /var/lib/malmo/catalog-cache. A
-    # box that has never reached the control plane shows an empty store (the documented,
-    # accepted behavior — installing an app needs internet regardless). This lane
-    # installs no app, so an empty store is fine here.
+    # the control plane's public-read catalog API (GET /catalog, MALMO_CATALOG_URL
+    # default the apex) and holds it in memory; only proxied icons and screenshots are
+    # cached, under /var/lib/malmo/catalog-cache. A box that cannot reach the control
+    # plane shows an empty store (the documented, accepted behavior — installing an app
+    # needs internet regardless). This lane installs no app, so an empty store is fine
+    # here.
 
     # First-boot provisioning-seed materializer + its oneshot (C3a cloud-lane, #220).
     # Lands the delivered seed at /var/lib/malmo/seed.json before host-agent launches

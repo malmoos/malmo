@@ -10,6 +10,20 @@ services:
     command: ["caddy", "run", "--config", "/etc/caddy/caddy.json"]
     volumes:
       - ./caddy.json:/etc/caddy/caddy.json:ro
+    # Match the production sandbox (dev/control-plane/compose.yml # caddy, #431)
+    # so the inner loop runs Caddy the way a box does. Nothing here needs to
+    # survive a recreate — dev Caddy is plain-HTTP .local and issues no
+    # certificate — so /data can be a tmpfs rather than the named volume prod uses.
+    read_only: true
+    tmpfs:
+      - /data
+      - /config
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - "no-new-privileges:true"
     ports:
       - "80:80"      # app routes on the LAN-facing port so <slug>.local resolves portless (matches prod + Avahi)
       - "2019:2019"  # admin API the brain drives

@@ -103,6 +103,38 @@ GET /v1/system/resources
 
 **Live system-resources sample (`GET /v1/system/resources`).** Pattern A; the host source for the all-users live-resources view (`LOCAL_ANALYTICS.md` # Real-time system resources). Returns the **raw cumulative counters** from `/proc/stat`, `/proc/meminfo`, `/proc/loadavg`, `/proc/net/dev`, `/proc/diskstats` plus a monotonic `ts_ns`. host-agent is stateless — it reads on request and computes no rates; the brain polls once per second *while a UI is watching*, diffs successive samples (rate denominator = `ts_ns` delta), and fans the derived rates out over its own SSE channel. host-agent applies the interface/device allowlist — physical LAN NICs + mesh, excluding `lo`/`docker0`/`veth*`/`br-*`, whole-disk devices only — so the brain never sees container-bridge noise. Distinct from `GET /v1/health/system`, which is a coarse 60s health poll, not a 1 Hz live feed.
 
+**Update-target read (`GET /v1/system/update-target`, as built #443).** Pattern A, and a **read** — the trigger stays `POST /v1/jobs/system-update`. It answers one question the box asks itself every 15 minutes and used to answer only in the journal (`UPDATES.md` # 8.4): what am I running, what could I be running, and why is the difference not closed yet. Without it the appliance prompt `UPDATES.md` # 3 promises has nothing to read.
+
+```
+GET /v1/system/update-target
+→ 200 OK
+  { "state": "available",
+    "running": { "brain": "ghcr.io/malmoos/brain@sha256:…", "ui": "ghcr.io/malmoos/ui@sha256:…" },
+    "target":  { "version": "v0.8.0", "brain_image": "…@sha256:…", "ui_image": "…@sha256:…",
+                 "published_at": "2026-09-01T10:00:00Z" },
+    "checked_at": "2026-09-07T02:45:00Z",
+    "from": "seed", "window": "03:00-04:00", "window_from": "answer",
+    "auto_apply": true, "profile": "hosted" }
+```
+
+`state` is the whole answer in one word, and the seven values stay apart on purpose:
+
+- **`current`** — the target is what the box already runs. The healthy answer.
+- **`available`** — a different control plane is on offer. Hosted applies it in the window on its own; appliance waits for an admin (# 8.2).
+- **`none`** — the source is up and has nothing to offer. Normal, not a failure: most boxes are here.
+- **`unreachable`** — the check could not be completed (the source could not be read, or the box could not read its own running pair). The box keeps running what it runs.
+- **`refused`** — the source answered and the box rejected the answer: a tag, an unexpected repository, half an answer. Nothing was pulled. A source stuck on a bad answer is a fleet problem; a source that is down is not, so these two never collapse into one.
+- **`disabled`** — this box has no update loop at all, because its configured target is unusable and host-agent refused it rather than falling back (`UPDATES.md` # 8.4). The only state here that needs a human, and the reason it is not folded into `unknown`.
+- **`unknown`** — nothing measured yet: the loop has not finished its first tick, or no reporter is wired (the fake binary's default). Never "you are up to date".
+
+Three things about the payload:
+
+- **`running` is read when the request arrives**, from the box's own declaration (`images.json` for the brain, the staged `compose.yml` for the UI). It is not carried from the last tick, because a tick that ended early never read it and host-agent outlives an update.
+- **`from` and `window_from` are two different settings** whose values only look alike. `from` is where the box's update-target URL came from (`seed`, `env`, `default`) and is absent on an appliance, which has no such URL. `window_from` is where the update window came from (`answer`, `env`, `default`). A window can come from the source's answer; a URL never can. The URL itself is deliberately not on the wire — `from` carries the fact worth showing, and a hand-edited URL is the one place a credential could turn up in a payload the dashboard renders.
+- **`detail`** (omitted above) is the underlying error text for `unreachable`, `refused` and `disabled`. It is a diagnostic, not UI copy: the dashboard writes its sentence from `state`.
+
+**200 always**, like `/v1/health/system`. Every way this can go wrong is a state in the payload, so an HTTP error would tell the brain "ask again later" about facts that are not going to change on their own. The brain re-serves it at `GET /api/v1/system/update-target`, admin-only.
+
 **Health findings report (`GET /v1/health/system`).** The brain can't read host hardware directly (it's containerized behind the socket-proxy), so all *physical* health detection — SMART, `statfs`, mount flags, `systemctl is-active`, memory pressure, the pending-reboot flag (`/var/run/reboot-required`) — is host-agent's job. host-agent samples on its own cadence and the brain polls this one report on the 60s heartbeat, reconciling findings into typed health issues (`HEALTH.md` # Detector catalog, locus B). It returns findings across domains (storage, drives, services, resources, time, system) in one payload — **not** a proliferation of per-domain endpoints — so the brain's `ApplyFindings(category, …)` reconcile can clear-absent / raise-present per category atomically. This supersedes the slice-1 single-purpose storage report (`/run/malmo/health/storage.json` boot reporter stays; the polled endpoint generalizes). See `DECISIONS.md` 2026-05-29.
 
 ```
@@ -185,6 +217,17 @@ GET /v1/system/gpu
 - `render_gid` — the GID of the host `render` group, which owns the `/dev/dri/renderD*` nodes. The brain `group_add`s it onto the main service so a `cap_drop: [ALL]` container (which lacks `CAP_DAC_OVERRIDE`) can still open the render node. Only meaningful when `present`.
 
 The real host-agent detects the GPU by scanning `/dev/dri/renderD*` and reading each node's PCI vendor (`/sys/class/drm/renderD*/device/vendor`; `0x8086` → `intel`), and resolves the render GID via `os/user.LookupGroup("render")` — the same way `/v1/identity/well-known` resolves `malmo-shared`. The `render` group and the udev rules binding the DRI nodes to it are provisioned by the box build's media stack, not by host-agent (the OS-image half is tracked separately — see issue #125). The fake host-agent returns a synthetic Intel iGPU (`present: true, vendor: "intel"`, a fixed dev `render_gid`) so the override path is exercisable under `make dev`, with a toggle to report `present: false` so the capacity-refusal path is testable without real hardware. This is the brain's only GPU host query — vendor→runtime selection is entirely the brain's job; the manifest stays vendor-agnostic `gpu: true` (`APP_MANIFEST.md` # E).
+
+**System time zone (`POST /v1/system/set-timezone`).** The only write in the "misc host state" group. It is the host op behind the first-run wizard's time-zone step (`FIRST_RUN.md`) and behind Settings → System → Time (`SETTINGS.md`). Pattern A, no response body:
+
+```
+POST /v1/system/set-timezone   { "zone": "Europe/Stockholm" }
+  → 200 OK
+```
+
+- `zone` is an IANA tz database name, like `"Europe/Stockholm"` or `"UTC"`. **The brain checks it before calling.** host-agent does not check it.
+- The real host-agent runs `timedatectl set-timezone <zone>`. That is what re-points `/etc/localtime` (`TIME.md` # System TZ). Both build profiles have it, so a hosted box sets its time zone the same way an appliance does.
+- Clock **sync** is a different thing, and it is not a write. The `clock-not-synced` detector reads `chronyc tracking` and reports it through `GET /v1/health/system` (# Health). Nothing in this protocol sets the time.
 
 **Network endpoints (NetworkManager-backed).** host-agent exposes Pattern A routes that wrap NetworkManager's DBus surface:
 

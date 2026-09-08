@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -20,6 +22,21 @@ func (h *harness) seedInstance(id, manifestID, slug, ownerID, scope string) {
 		OwnerUserID: ownerID, Scope: scope, CreatedAt: time.Now(),
 	}); err != nil {
 		h.t.Fatalf("seed instance %q: %v", id, err)
+	}
+}
+
+// seedInstanceManifest writes an instance's persisted manifest copy, the one the
+// installer writes next to the installation (lifecycle writeInstanceDir). Every
+// brain path that needs an INSTALLED app's manifest reads this file rather than
+// the catalog (#434), so a test that exercises one has to stage it.
+func (h *harness) seedInstanceManifest(id, manifestYML string) {
+	h.t.Helper()
+	dir := filepath.Join(h.stateDir, "instances", id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		h.t.Fatalf("mkdir instance dir %q: %v", id, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yml"), []byte(manifestYML), 0o644); err != nil {
+		h.t.Fatalf("write instance manifest %q: %v", id, err)
 	}
 }
 

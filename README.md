@@ -56,7 +56,7 @@ What runs today (mostly in the native inner loop, see [Quickstart](#quickstart-l
 - **Real host-agent (`host-agent-real`).** PAM verify, user create / delete / role / password, real `/proc` sampling, disk and RAM reporting, journal streaming, per-LAN-interface Avahi discovery, and first-boot brain launch (Docker socket proxy + brain container). LUKS/TPM enrollment and the boot-chain units exist and are exercised in the QEMU test lane.
 - **Hosted cloud profile (coming online).** A slim, build-tagged cloud `host-agent`; a lean `mkosi` cloud image with self-bootstrapping first boot; real Let's Encrypt wildcard certs over ACME DNS-01 for `*.<box-id>.malmo.network` (the `auth.malmo.network` acme-dns face is live); an app-container egress block for the cloud metadata endpoint; and a portal-to-box SSO handshake so the owner reaches the box through their existing `malmo.network` login. The image builds, boots, and provisions on a real cloud provider; a CI lane plus a cloud QEMU lane drive the seed → first-run → served-dashboard arc, with full end-to-end acceptance still being hardened.
 
-What is **not** built yet (so this isn't read as a finished-product claim): the appliance storage subsystem (`/srv/malmo`, mergerfs, the LUKS-unlock-at-boot flow), the production install ISO and the update streams, WiFi/NetworkManager configuration in the agent, and the signed remote app-store fetch. The authoritative as-built map is [`docs/architecture.md`](docs/architecture.md) (# What is not built yet); per-change history is in [`docs/progress/`](docs/progress/).
+What is **not** built yet, so nobody reads this as a finished product: the appliance storage subsystem (`/srv/malmo`, mergerfs, and the LUKS unlock at boot beyond the QEMU lane), the production install medium, stream A of updates (the apt and `unattended-upgrades` half), and WiFi/NetworkManager setup in the agent. Stream B is the box updating its own brain and UI. On `hosted` that is built and proven on a booted box. On `appliance` the box can read a signed release manifest, but there is no signing key and no release host yet, so it does nothing on purpose. The authoritative as-built map is [`docs/architecture.md`](docs/architecture.md) (# What is not built yet); per-change history is in [`docs/progress/`](docs/progress/).
 
 ## Architecture
 
@@ -78,11 +78,12 @@ browser → web-ui → brain → docker compose (Docker daemon)
 
 | Path | What lives here |
 |---|---|
-| `cmd/` | Go entrypoints: `brain`, `host-agent` (fake), `host-agent-real`, plus small tools (`malmo`, `malmo-storage-verify`, `openapi-gen`) |
-| `internal/` | brain packages: `api`, `lifecycle`, `store`, `catalog`, `manifest`, `admission`, `caddy`, `hostclient`, `protocol`, `auth`, `audit`, `events`, `profile`, `assertion`, plus host-integration and health packages |
+| `cmd/` | Go entrypoints: `brain`, `host-agent` (fake), `host-agent-real`, plus small tools (`malmo`, `malmo-storage-verify`, `malmo-network-verify`, `openapi-gen`) |
+| `internal/` | brain packages: `api`, `lifecycle`, `store`, `catalog`, `manifest`, `admission`, `caddy`, `hostclient`, `protocol`, `auth`, `audit`, `events`, `profile`, `assertion`, `version`, the health/observability set (`health`, `notify`, `applog`, `systemlive`, `storageverify`), and `internal/hostagent/…` for the host side |
+| `api/` | the generated OpenAPI document (`make openapi`); `make check` fails if it is stale |
 | `web-ui/` | Vue 3 + Vite dashboard |
-| `catalog/` | hand-written sample app manifests (`manifest.yml` + `compose.yml`) |
-| `dev/` | local dev orchestration (Caddy container, config, test lanes) |
+| `dist/` | systemd units and drop-ins shipped onto a real box |
+| `dev/` | local dev orchestration (Caddy container, config, image trees, test lanes) |
 | `docs/` | all documentation (specs, progress, architecture, dev guides) |
 | `Makefile` | dev workflow, run `make help` |
 
@@ -97,7 +98,7 @@ make dev          # the whole inner-loop stack in one terminal:
                   # Caddy (container) + fake host-agent + brain + Vite
 ```
 
-Then open <http://localhost:5173> and install **Whoami** from the catalog. `make dev` also publishes each app's `<slug>.local` name over real Avahi, so installed apps are reachable by their portless `.local` URL from this box and other LAN devices (Android browsers don't resolve `.local`). Ctrl-C stops everything.
+Then open <http://localhost:5173> and install **Whoami** from the catalog. (The catalog is not in this repo — the brain syncs it from the control plane at run time. To work against a specific store app instead, use `make dev-app APP=<id>` with a `malmoos/store` checkout.) `make dev` also publishes each app's `<slug>.local` name over real Avahi, so installed apps are reachable by their portless `.local` URL from this box and other LAN devices (Android browsers don't resolve `.local`). Ctrl-C stops everything.
 
 Prefer separate terminals? Run the pieces individually:
 

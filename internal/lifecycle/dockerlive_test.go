@@ -89,7 +89,7 @@ services:
 			"alpine", "rm", "-rf", "/s/services").Run()
 	})
 
-	inst, err := m.Install(ctx, "liveapp",
+	inst, err := m.Install(ctx, mustLoadApp(t, m, "liveapp"),
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
@@ -190,7 +190,7 @@ services:
 			"alpine", "rm", "-rf", "/s/services").Run()
 	})
 
-	inst, err := m.Install(ctx, "livepg18",
+	inst, err := m.Install(ctx, mustLoadApp(t, m, "livepg18"),
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
@@ -315,7 +315,7 @@ services:
 			"alpine", "rm", "-rf", "/s/services").Run()
 	})
 
-	inst, err := m.Install(ctx, "livemysql",
+	inst, err := m.Install(ctx, mustLoadApp(t, m, "livemysql"),
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
@@ -410,7 +410,7 @@ services:
 			"alpine", "rm", "-rf", "/s/services").Run()
 	})
 
-	inst, err := m.Install(ctx, "livecache",
+	inst, err := m.Install(ctx, mustLoadApp(t, m, "livecache"),
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
@@ -547,7 +547,7 @@ services:
 `
 	writeLiveCatalogApp(t, catDir, "liveuser", compose, man)
 
-	inst, err := m.Install(ctx, "liveuser",
+	inst, err := m.Install(ctx, mustLoadApp(t, m, "liveuser"),
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
@@ -725,7 +725,7 @@ permissions:
 `
 	writeLiveCatalogApp(t, catDir, "kan", compose, man)
 
-	inst, err := m.Install(ctx, "kan",
+	inst, err := m.Install(ctx, mustLoadApp(t, m, "kan"),
 		Owner{UserID: "u_admin", Username: "admin"}, store.ScopeHousehold, nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("install kan: %v", err)

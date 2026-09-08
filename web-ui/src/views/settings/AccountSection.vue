@@ -10,6 +10,7 @@
 // this component unmounts, so we only ever reset submitting on the error path.
 import { ref } from "vue";
 import { api, type ApiError } from "@/api";
+import Button from "@/components/ui/Button.vue";
 import { changeMyPassword, useAuth } from "@/auth";
 
 const { currentUser } = useAuth();
@@ -49,13 +50,9 @@ function cancelPwChange() {
           <div class="text-sm font-medium">{{ currentUser?.username }}</div>
           <div class="text-xs capitalize text-muted-foreground">{{ currentUser?.role }}</div>
         </div>
-        <button
-          v-if="!showPwForm"
-          class="shrink-0 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
-          @click="showPwForm = true"
-        >
+        <Button v-if="!showPwForm" variant="secondary" size="sm" @click="showPwForm = true">
           Change password
-        </button>
+        </Button>
       </div>
       <form v-if="showPwForm" class="space-y-3 border-t border-border pt-3" @submit.prevent="submitPasswordChange">
         <label class="block space-y-1">
@@ -80,20 +77,10 @@ function cancelPwChange() {
         </label>
         <p v-if="pwError" class="text-xs text-destructive">{{ pwError }}</p>
         <div class="flex justify-end gap-2">
-          <button
-            type="button"
-            class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
-            @click="cancelPwChange"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            :disabled="pwSubmitting || !currentPw || !newPw"
-            class="rounded-lg border border-border bg-accent px-3 py-1.5 text-sm text-accent-foreground hover:opacity-90 disabled:opacity-50"
-          >
+          <Button type="button" variant="ghost" size="sm" @click="cancelPwChange">Cancel</Button>
+          <Button type="submit" size="sm" :disabled="pwSubmitting || !currentPw || !newPw">
             {{ pwSubmitting ? "Changing…" : "Change password" }}
-          </button>
+          </Button>
         </div>
       </form>
     </div>

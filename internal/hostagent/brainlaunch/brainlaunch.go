@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/malmoos/malmo/internal/protocol"
 )
@@ -61,6 +62,14 @@ type Docker interface {
 	// success (idempotent). host-agent seeds the shared ingress network the
 	// proxy, brain, Caddy and UI all attach to.
 	NetworkCreate(ctx context.Context, name string) error
+	// ContainerSandboxed reports whether an existing container already runs
+	// with the capability sandbox proxyRunSpec asks for. A container's
+	// capabilities are fixed at create time, so this is the only way to tell a
+	// proxy created before the sandbox landed from one created after (#431).
+	ContainerSandboxed(ctx context.Context, name string) (bool, error)
+	// Remove force-removes a container by name, treating "no such container"
+	// as success.
+	Remove(ctx context.Context, name string) error
 }
 
 // RunSpec is one `docker run -d` invocation — a container host-agent launches.
@@ -72,6 +81,12 @@ type RunSpec struct {
 	Aliases []string // extra network aliases (beyond the container name)
 	Mounts  []Mount  // bind mounts
 	Env     []EnvVar
+	// CapDrop lists Linux capabilities to drop, in `docker run` spelling
+	// ("ALL"), and SecurityOpt is passed through as --security-opt. Empty means
+	// "leave Docker's default", which is what the brain still runs with — see
+	// proxyRunSpec for the sandbox the proxy gets and why the brain has none.
+	CapDrop     []string
+	SecurityOpt []string
 }
 
 // Mount is a host→container bind mount.
@@ -134,16 +149,22 @@ type Config struct {
 	// ACME — so the var is only emitted when set.
 	CaddyImage string
 	// CatalogURL is the control-plane catalog origin the brain syncs the Door-1
-	// catalog from (GET /catalog/sync), passed as MALMO_CATALOG_URL. Empty leaves
+	// catalog from (GET /catalog), passed as MALMO_CATALOG_URL. Empty leaves
 	// the brain on its own default (the public control plane). The air-gapped test
-	// lane points it at an inert address and relies on the pre-seeded last-good
-	// cache (CatalogCacheDir).
+	// lane points it at an inert address and seeds the store from a staged
+	// snapshot file instead (CatalogFile).
 	CatalogURL string
-	// CatalogCacheDir is where the brain writes/reads the last-good catalog
-	// snapshot + proxied assets, passed as MALMO_CATALOG_CACHE_DIR. It must live
-	// under DataDir (the default does) so it rides the brain's DataDir bind mount
-	// and survives a restart. Empty leaves the brain on its own default.
+	// CatalogCacheDir is where the brain caches proxied catalog icons and
+	// screenshots, passed as MALMO_CATALOG_CACHE_DIR. It must live under DataDir
+	// (the default does) so it rides the brain's DataDir bind mount. The catalog
+	// snapshot itself is never written there — a box holds it in memory only
+	// (APP_STORE.md # Failure modes). Empty leaves the brain on its own default.
 	CatalogCacheDir string
+	// CatalogFile is a staged snapshot the brain reads once at startup, passed as
+	// MALMO_CATALOG_FILE. It exists for the air-gapped test lanes, which have no
+	// control plane to sync from; the brain reads it and never writes it. Empty on
+	// a real box, which gets its catalog from CatalogURL and nowhere else.
+	CatalogFile string
 	// OfflineInstall sets MALMO_OFFLINE_INSTALL on the brain — trust the
 	// catalog-promised digest of a locally-loaded image when its pull fails
 	// (APP_LIFECYCLE.md # image digest pinning). Set on a baked, registry-less
@@ -225,10 +246,25 @@ const dockerSockPath = "/var/run/docker.sock"
 
 // proxyAllowlist is the docker-socket-proxy env allowlist — the endpoint
 // families the brain needs to manage app + control-plane containers, kept in
-// sync with dev/control-plane/compose.yml. EXEC and host-bind mounts stay denied
-// (the proxy defaults them off); managed-DB provisioning runs the engine's
-// client in a one-shot `docker run` container (CONTAINERS/POST), not `docker
-// exec`, so it needs no EXEC (DECISIONS.md 2026-06-15 — re-architected off exec).
+// sync with dev/control-plane/compose.yml. Every family here is load-bearing:
+// dropping any of them breaks a real brain path, so the list is already as
+// narrow as it can be (measured, #430).
+//
+// The flags gate by URL prefix and method only. tecnativa/docker-socket-proxy
+// never reads request bodies, so it CANNOT filter what an allowed request asks
+// for: a permitted POST /containers/create with Privileged:true and
+// Binds:["/:/host"] passes straight through and, once started, is host root.
+// So granting CONTAINERS+POST is a container escape for anyone who can reach
+// :2375 — confirmed on a real box (#430). The only control on that is network
+// reachability: nothing but the brain may reach the proxy. That is not yet true
+// (the proxy shares malmo-ingress with app main_service containers); #187 is the
+// fix that takes apps off that network. See CONTROL_PLANE.md # Locked: Docker
+// socket exposure and THREAT_MODEL.md B2.
+//
+// EXEC, by contrast, IS denied — it is a URL family this allowlist omits, not a
+// body field. That is why managed-DB provisioning runs the engine's client in a
+// one-shot `docker run` container (CONTAINERS/POST), not `docker exec`
+// (DECISIONS.md 2026-06-15 — re-architected off exec).
 func proxyAllowlist() []EnvVar {
 	return []EnvVar{
 		{Key: "POST", Value: "1"},
@@ -272,8 +308,44 @@ func EnsureTransport(ctx context.Context, d Docker, cfg Config) error {
 		return fmt.Errorf("check proxy container %q: %w", cfg.ProxyContainerName, err)
 	}
 	if exists {
-		slog.Info("proxy container already present; leaving it to Docker",
+		// A container's capability set is fixed when it is created, so a proxy
+		// that predates #431 keeps Docker's full default set for as long as it
+		// lives — a restart does not re-apply the flags, and nothing else
+		// recreates this container. Left alone, the hardening would reach new
+		// boxes only. Recreate it once, here, before the brain is launched
+		// (Launch runs after EnsureTransport), and it converges on the next
+		// host-agent start. An already-running brain loses its Docker transport
+		// for the moment the container is gone; its Docker calls are per-request
+		// HTTP, so an in-flight one fails and the next succeeds.
+		sandboxed, err := d.ContainerSandboxed(ctx, cfg.ProxyContainerName)
+		if err != nil {
+			// Not fatal: a hardening check must not be the thing that stops a
+			// box booting. Keep the container we have and say why.
+			slog.Warn("could not read the proxy container's sandbox; leaving it as it is",
+				"container", cfg.ProxyContainerName, "err", err)
+			return nil
+		}
+		if sandboxed {
+			slog.Info("proxy container already present; leaving it to Docker",
+				"container", cfg.ProxyContainerName)
+			return nil
+		}
+		slog.Info("proxy container predates the container sandbox; recreating it",
 			"container", cfg.ProxyContainerName)
+		if err := d.Remove(ctx, cfg.ProxyContainerName); err != nil {
+			return fmt.Errorf("remove unsandboxed proxy container %q: %w", cfg.ProxyContainerName, err)
+		}
+		// From here the box has NO Docker transport until the run below
+		// succeeds, and nothing retries it before the next host-agent start —
+		// so a daemon that is briefly busy would cost the box its transport for
+		// the rest of the boot. There is nothing to fall back to (the old
+		// container is gone), so try more than once.
+		if err := runProxyWithRetry(ctx, d, cfg); err != nil {
+			return fmt.Errorf("relaunch proxy container %q after removing the unsandboxed one (the box has no Docker transport until host-agent starts again): %w",
+				cfg.ProxyContainerName, err)
+		}
+		slog.Info("socket-proxy recreated with the container sandbox",
+			"container", cfg.ProxyContainerName, "image", cfg.ProxyImage)
 		return nil
 	}
 	if err := d.Run(ctx, proxyRunSpec(cfg)); err != nil {
@@ -284,17 +356,61 @@ func EnsureTransport(ctx context.Context, d Docker, cfg Config) error {
 	return nil
 }
 
+// proxyRunRetries / proxyRunRetryDelay bound the retry the recreate path uses.
+// A var, not a const, so a test can drop the wait to zero.
+var (
+	proxyRunRetries    = 3
+	proxyRunRetryDelay = 2 * time.Second
+)
+
+// runProxyWithRetry runs the hardened proxy, retrying a bounded number of times.
+// Only the recreate path uses it: there the old container is already removed, so
+// giving up on the first error leaves the box with no path to Docker. A first
+// launch has no such asymmetry — nothing was taken away — and keeps its single
+// attempt.
+func runProxyWithRetry(ctx context.Context, d Docker, cfg Config) error {
+	var err error
+	for attempt := 1; attempt <= proxyRunRetries; attempt++ {
+		if err = d.Run(ctx, proxyRunSpec(cfg)); err == nil {
+			return nil
+		}
+		slog.Warn("relaunching the socket-proxy failed",
+			"container", cfg.ProxyContainerName, "attempt", attempt, "err", err)
+		if attempt == proxyRunRetries {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(proxyRunRetryDelay):
+		}
+	}
+	return err
+}
+
 // proxyRunSpec assembles the docker-socket-proxy `docker run`. The raw socket is
 // mounted read-only; the brain reaches the proxy by the docker-proxy alias.
+//
+// It runs under the same sandbox every app container gets — all capabilities
+// dropped, no-new-privileges (APP_ISOLATION.md # Capabilities & privilege, #431).
+// This is the container holding the raw Docker socket, so it is the one where a
+// bug is worth the most. haproxy needs no capability here: it binds :2375, above
+// the privileged range, so not even CAP_NET_BIND_SERVICE. A read-only root is
+// deliberately NOT set — the image's entrypoint writes its generated config to
+// /tmp and haproxy writes /run and /var/lib/haproxy, so read_only would mean
+// three tmpfs mounts pinned to another project's internal paths
+// (CONTROL_PLANE.md # Locked: control-plane container hardening).
 func proxyRunSpec(cfg Config) RunSpec {
 	return RunSpec{
-		Name:    cfg.ProxyContainerName,
-		Image:   cfg.ProxyImage,
-		Restart: "unless-stopped",
-		Network: cfg.Network,
-		Aliases: []string{proxyDialAlias},
-		Mounts:  []Mount{{Source: dockerSockPath, Target: dockerSockPath, ReadOnly: true}},
-		Env:     proxyAllowlist(),
+		Name:        cfg.ProxyContainerName,
+		Image:       cfg.ProxyImage,
+		Restart:     "unless-stopped",
+		Network:     cfg.Network,
+		Aliases:     []string{proxyDialAlias},
+		Mounts:      []Mount{{Source: dockerSockPath, Target: dockerSockPath, ReadOnly: true}},
+		Env:         proxyAllowlist(),
+		CapDrop:     []string{"ALL"},
+		SecurityOpt: []string{"no-new-privileges:true"},
 	}
 }
 
@@ -314,9 +430,17 @@ func RunSpecFor(cfg Config) RunSpec { return runSpec(cfg) }
 // runs with restart=unless-stopped so Docker supervises it after launch. It is
 // deliberately not given the Docker socket — the brain reaches Docker only
 // through the host-agent-seeded socket-proxy at tcp://docker-proxy:2375
-// (CONTROL_PLANE.md # Docker socket exposure). It joins the ingress network so
+// (CONTROL_PLANE.md # Locked: control-plane container hardening). It joins the ingress network so
 // it can reach the proxy + Caddy admin by name, and carries the env that points
 // it at the proxy, Caddy, and the staged control-plane compose.
+//
+// Unlike the proxy, the brain gets no capability sandbox (#431). It chowns app
+// data directories to the uid it elects for an app (lifecycle, APP_ISOLATION.md
+// # Runtime identity & data ownership), so CAP_CHOWN is load-bearing and
+// `cap_drop: ALL` would break an install. Hardening it means naming the
+// capabilities it does need and proving that set on a booted box, which is its
+// own change — CONTROL_PLANE.md # Locked: control-plane container hardening
+// and THREAT_MODEL.md B2 record the residual.
 func runSpec(cfg Config) RunSpec {
 	sockDir := filepath.Dir(cfg.SocketPath)
 	mounts := []Mount{
@@ -341,15 +465,19 @@ func runSpec(cfg Config) RunSpec {
 		{Key: "MALMO_CONTROL_PLANE_DIR", Value: cfg.ControlPlaneDir},
 		{Key: "MALMO_DASHBOARD_UI_UPSTREAM", Value: cfg.UIUpstream},
 	}
-	// Control-plane catalog origin + last-good cache dir (the cache is under
-	// DataDir, already mounted — see Config.CatalogCacheDir). Each is emitted only
-	// when set so an unset value leaves the brain on its own default rather than
-	// pointing it at an empty "".
+	// Control-plane catalog origin + asset cache dir (the cache is under DataDir,
+	// already mounted — see Config.CatalogCacheDir), plus the staged snapshot file
+	// the air-gapped lanes seed from. Each is emitted only when set so an unset
+	// value leaves the brain on its own default rather than pointing it at an
+	// empty "".
 	if cfg.CatalogURL != "" {
 		env = append(env, EnvVar{Key: "MALMO_CATALOG_URL", Value: cfg.CatalogURL})
 	}
 	if cfg.CatalogCacheDir != "" {
 		env = append(env, EnvVar{Key: "MALMO_CATALOG_CACHE_DIR", Value: cfg.CatalogCacheDir})
+	}
+	if cfg.CatalogFile != "" {
+		env = append(env, EnvVar{Key: "MALMO_CATALOG_FILE", Value: cfg.CatalogFile})
 	}
 	// The hosted Caddy image (caddy-dns/acmedns build). Emit only when set so an
 	// unset CaddyImage leaves the control-plane compose on its stock-caddy default

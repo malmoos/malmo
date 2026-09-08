@@ -25,23 +25,24 @@ const { currentUser } = useAuth();
 type NavItem = { to: string; label: string; icon: LucideIcon; adminOnly?: boolean };
 type NavGroup = { label: string; items: NavItem[] };
 
-// Group and item order is the menu order: your own account first, then
-// System — Installed apps stays first within System, with the admin-only
-// items folded in after it rather than split into their own group.
+// Group and item order is the menu order. "You" holds what the signed-in user
+// owns: their account, then the apps they have installed. "System" holds the
+// box-wide items, with Notifications sitting just above Activity — both are
+// "what happened on this box", so they read as a pair.
 const groups: NavGroup[] = [
   {
     label: "You",
     items: [
       { to: "/settings/account", label: "Account", icon: User },
-      { to: "/settings/notifications", label: "Notifications", icon: Bell },
+      { to: "/settings/apps", label: "Installed apps", icon: LayoutGrid },
     ],
   },
   {
     label: "System",
     items: [
-      { to: "/settings/apps", label: "Installed apps", icon: LayoutGrid },
       { to: "/settings/users", label: "Users", icon: Users, adminOnly: true },
       { to: "/settings/mail", label: "Outgoing email", icon: Mail, adminOnly: true },
+      { to: "/settings/notifications", label: "Notifications", icon: Bell },
       { to: "/settings/activity", label: "Activity", icon: ScrollText },
       { to: "/settings/about", label: "About", icon: Info },
     ],

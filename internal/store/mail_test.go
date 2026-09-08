@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/malmoos/malmo/internal/mailpreset"
 )
 
 func sampleProvider(id, label string) MailProvider {
@@ -11,7 +13,8 @@ func sampleProvider(id, label string) MailProvider {
 		ID: id, Label: label, Host: "smtp.example.com", Port: 587,
 		Username: "malmo@example.com", Password: "hunter2",
 		FromAddress: "malmo@example.com", Encryption: MailEncryptionSTARTTLS,
-		CreatedAt: time.Unix(1_700_000_000, 0),
+		ProviderType: mailpreset.Custom,
+		CreatedAt:    time.Unix(1_700_000_000, 0),
 	}
 }
 
@@ -161,5 +164,59 @@ func TestInstanceMailBinding(t *testing.T) {
 	var n int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM instance_mail_bindings`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("binding must cascade with instance: n=%d err=%v", n, err)
+	}
+}
+
+// A provider registered before presets shipped has no provider_type. The
+// column migrates in with DEFAULT 'custom', and an empty value on a write
+// normalizes to the same thing, so an old row keeps working and opens the
+// advanced (custom) form on edit.
+func TestMailProviderTypeDefaultsToCustom(t *testing.T) {
+	s := open(t)
+
+	// Simulate a pre-migration row: written through the raw SQL an older
+	// brain used, without the provider_type column.
+	if _, err := s.db.Exec(
+		`INSERT INTO mail_providers (id, label, host, port, username, password, from_address, encryption, created_at)
+		 VALUES (?,?,?,?,?,?,?,?,?)`,
+		"mp_old", "Old", "smtp.example.com", 587, "u", "p", "u@example.com", MailEncryptionSTARTTLS,
+		time.Unix(1_700_000_000, 0).Unix()); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+	got, err := s.GetMailProvider("mp_old")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.ProviderType != mailpreset.Custom {
+		t.Fatalf("legacy row provider_type = %q, want custom", got.ProviderType)
+	}
+
+	// An empty ProviderType on a write normalizes rather than persisting "".
+	p := sampleProvider("mp_blank", "Blank")
+	p.ProviderType = ""
+	if err := s.CreateMailProvider(p); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if got, _ := s.GetMailProvider("mp_blank"); got.ProviderType != mailpreset.Custom {
+		t.Fatalf("blank provider_type = %q, want custom", got.ProviderType)
+	}
+}
+
+func TestMailProviderTypeRejectsUnknown(t *testing.T) {
+	s := open(t)
+	p := sampleProvider("mp_bad", "Bad")
+	p.ProviderType = "not-a-provider"
+	if err := s.CreateMailProvider(p); err == nil {
+		t.Fatal("create accepted an unknown provider_type")
+	}
+
+	good := sampleProvider("mp_good", "Good")
+	good.ProviderType = "ses"
+	if err := s.CreateMailProvider(good); err != nil {
+		t.Fatalf("create with a known preset: %v", err)
+	}
+	good.ProviderType = "not-a-provider"
+	if err := s.UpdateMailProvider(good); err == nil {
+		t.Fatal("update accepted an unknown provider_type")
 	}
 }

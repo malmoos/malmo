@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -279,4 +280,37 @@ func TestUpdateWindow(t *testing.T) {
 			t.Fatalf("got (%v, %q), want (%v, %q)", w, from, updatetarget.DefaultWindow, fromDefault)
 		}
 	})
+}
+
+// A seeded update-target URL that will not parse becomes the `detail` of the
+// disabled state on GET /v1/system/update-target (#443). The parser's own error
+// carries the raw URL — password, query and all — so this is the one message on
+// that path that has to be checked, not assumed.
+func TestCheckTargetURL_RefusalCarriesNoSecret(t *testing.T) {
+	// Malformed (a control character), with a secret in each hiding place.
+	err := checkTargetURL("http://user:pw-secret@malmo.example\x7f/target?token=query-secret")
+	if err == nil {
+		t.Fatal("a URL with a control character was accepted")
+	}
+	for _, leak := range []string{"pw-secret", "query-secret"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Errorf("the refusal leaks %q: %q", leak, err)
+		}
+	}
+	if !strings.Contains(err.Error(), "seed update_target_url") {
+		t.Errorf("the refusal = %q, want it to still name the setting at fault", err)
+	}
+}
+
+// The two well-formed refusals name the offending value, redacted.
+func TestCheckTargetURL_WrongSchemeCarriesNoSecret(t *testing.T) {
+	err := checkTargetURL("ftp://user:pw-secret@malmo.example/target?token=query-secret")
+	if err == nil {
+		t.Fatal("an ftp URL was accepted")
+	}
+	for _, leak := range []string{"pw-secret", "query-secret"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Errorf("the refusal leaks %q: %q", leak, err)
+		}
+	}
 }

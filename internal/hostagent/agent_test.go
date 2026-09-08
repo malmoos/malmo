@@ -684,6 +684,48 @@ func TestSystemGPU_DelegatesToReporter(t *testing.T) {
 	}
 }
 
+// --- update-target read (#443) ---
+
+// With no reporter wired the endpoint says "not measured", never "you are up to
+// date". A 501 or an error would be worse: the brain would have nothing to show
+// and no state to show it in.
+func TestSystemUpdateTarget_NoReporter(t *testing.T) {
+	_, mux := newTestAgent(&stubVerifier{})
+	w := get(t, mux, "/v1/system/update-target")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	if got := decodeBody[protocol.UpdateTarget](t, w); got.State != protocol.UpdateTargetUnknown {
+		t.Errorf("state = %q, want %q", got.State, protocol.UpdateTargetUnknown)
+	}
+}
+
+func TestSystemUpdateTarget_DelegatesToReporter(t *testing.T) {
+	a, mux := newTestAgent(&stubVerifier{})
+	fake := NewFakeUpdateTargetReporter(protocol.UpdateTarget{
+		State:   protocol.UpdateTargetAvailable,
+		Running: protocol.ControlPlanePair{Brain: "ghcr.io/malmoos/brain@sha256:aa", UI: "ghcr.io/malmoos/ui@sha256:bb"},
+		Target:  &protocol.ControlPlaneOffer{Version: "v0.8.0", BrainImage: "ghcr.io/malmoos/brain@sha256:cc", UIImage: "ghcr.io/malmoos/ui@sha256:dd"},
+	})
+	a.UpdateTarget = fake
+
+	got := decodeBody[protocol.UpdateTarget](t, get(t, mux, "/v1/system/update-target"))
+	if got.State != protocol.UpdateTargetAvailable {
+		t.Fatalf("state = %q, want %q", got.State, protocol.UpdateTargetAvailable)
+	}
+	if got.Target == nil || got.Target.Version != "v0.8.0" {
+		t.Errorf("target = %+v, want the offered v0.8.0", got.Target)
+	}
+
+	// The states the dashboard has to render are all reachable through the same
+	// read, including the one that needs a human.
+	fake.Set(protocol.UpdateTarget{State: protocol.UpdateTargetDisabled, Detail: "seed update_target_url has no host"})
+	got = decodeBody[protocol.UpdateTarget](t, get(t, mux, "/v1/system/update-target"))
+	if got.State != protocol.UpdateTargetDisabled || got.Detail == "" {
+		t.Errorf("got %+v, want the disabled state with a reason", got)
+	}
+}
+
 // --- system-resources sampler seam ---
 
 type stubSampler struct {

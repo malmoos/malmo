@@ -127,7 +127,7 @@ Caddy on a busy household box can emit thousands of access-log entries per hour,
 
 ### Where
 
-A single table `audit_events` in the existing `brain.db`. No new database file, no new connection pool.
+A single table `audit_events` in the brain's existing database (`state/malmo.db`). No new database file, no new connection pool.
 
 ### Schema sketch
 
@@ -156,6 +156,9 @@ The following `action` strings are the pinned v1 set. Defined as exported consts
 | Action | When |
 |--------|------|
 | `setup.complete` | First admin bootstrapped via `/v1/setup`. |
+| `setup.failure` | A `/v1/setup` call that got past input validation and then failed: the hosted 403 (`/setup` is disabled there — `ENVIRONMENT.md` # Owner sign-in & seed ingestion — as built), a store conflict or error on the admin row, a host-agent 502 with rollback, and a failure to issue the session. Validation 422s do **not** audit, and neither does a recovery-code generation error, so this is not a complete record of refused requests. |
+| `sso.success` | Hosted owner signed in through the portal-to-box handshake at `/_malmo/sso`; on the first one it also created the founding admin. |
+| `sso.failure` | A portal assertion was refused — bad signature, expired, replayed, wrong box or issuer, or not the box owner. Mirrors `login.failure`. |
 | `login.success` | Dashboard password login succeeded. |
 | `login.failure` | Dashboard password login failed (bad credentials). |
 | `login.lockout` | Per-username failure counter crossed the 15-minute lock threshold (`AUTH.md` # Rate limiting). Emitted once per lock at the crossing failure; `success=false`. |
@@ -202,7 +205,7 @@ A buggy migration or a future contributor's `DELETE` can't accidentally rewrite 
 
 Brain doesn't see SSH or SMB logins directly — they go through `sshd` / `smbd` → PAM → journald, outside brain's code path. But "did someone unauthorized access my box?" is exactly the question audit log answers, so these events have to land in `audit_events`.
 
-Brain opens a long-lived `journal_follow` against host-agent filtered to `_COMM=sshd OR _COMM=smbd OR _COMM=sudo OR _COMM=su`. host-agent streams matching entries; brain parses them through a small `pamparse` package and writes `audit_events` rows via the same `audit.Record()` path. The journald cursor checkpoints in `brain.db` (`brain_meta.audit_journal_cursor`) so brain restarts resume cleanly.
+Brain opens a long-lived `journal_follow` against host-agent filtered to `_COMM=sshd OR _COMM=smbd OR _COMM=sudo OR _COMM=su`. host-agent streams matching entries; brain parses them through a small `pamparse` package and writes `audit_events` rows via the same `audit.Record()` path. The journald cursor checkpoints in the brain's SQLite (the key-value table is `box_meta`, not a `brain_meta` — `internal/store`) so brain restarts resume cleanly.
 
 Event vocabulary added by this ingestion path:
 

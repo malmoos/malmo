@@ -270,6 +270,31 @@ done
     fail "journalctl CONTAINER_NAME=malmo-brain returned nothing after 60s — container stdout is not reaching journald, so the per-app Logs tab will hang for every app"
 echo "cloud-assertions: container logs readable via journalctl CONTAINER_NAME= (driver=journald)"
 
+# --- 5c. the control-plane containers run the app sandbox (#431). Apps get
+# cap_drop ALL + no-new-privileges from the brain's override, in code; the
+# control plane declares the same posture by hand (compose for caddy + malmo-ui,
+# brainlaunch.proxyRunSpec for the proxy), so this checks what the box actually
+# booted rather than what the file says. Caddy binds :80/:443, so it keeps
+# CAP_NET_BIND_SERVICE and nothing else; the proxy needs no capability at all.
+# The brain is knowingly absent from this list — it needs CAP_CHOWN for app data
+# dirs (CONTROL_PLANE.md # Locked: control-plane container hardening).
+for c in malmo-caddy malmo-ui malmo-docker-proxy; do
+    caps="$(docker inspect "$c" --format '{{json .HostConfig.CapDrop}}' 2>/dev/null || true)"
+    [ "$caps" = '["ALL"]' ] || \
+        fail "$c cap_drop is '${caps:-<nothing>}', want [\"ALL\"] (#431 — the control-plane sandbox is gone)"
+    secopt="$(docker inspect "$c" --format '{{json .HostConfig.SecurityOpt}}' 2>/dev/null || true)"
+    grep -q 'no-new-privileges:true' <<<"$secopt" || \
+        fail "$c security_opt is '${secopt:-<nothing>}', want no-new-privileges:true (#431)"
+done
+for c in malmo-caddy malmo-ui; do
+    ro="$(docker inspect "$c" --format '{{.HostConfig.ReadonlyRootfs}}' 2>/dev/null || true)"
+    [ "$ro" = true ] || fail "$c does not have a read-only root filesystem (#431)"
+    capadd="$(docker inspect "$c" --format '{{json .HostConfig.CapAdd}}' 2>/dev/null || true)"
+    [ "$capadd" = '["NET_BIND_SERVICE"]' ] || [ "$capadd" = '["CAP_NET_BIND_SERVICE"]' ] || \
+        fail "$c cap_add is '${capadd:-<nothing>}', want only NET_BIND_SERVICE (#431)"
+done
+echo "cloud-assertions: control-plane containers sandboxed — cap_drop ALL, no-new-privileges, read-only root on caddy + malmo-ui (#431)"
+
 # --- 6. proxy boundary: the brain reaches Docker only through the socket-proxy,
 # never the raw socket (CONTROL_PLANE.md # Docker socket exposure).
 brain_sock="$(docker inspect malmo-brain --format '{{range .Mounts}}{{println .Source}}{{end}}' 2>/dev/null | grep -c 'docker.sock' || true)"
@@ -569,6 +594,36 @@ seeded)
     wait_brain_log 'caddy: wildcard TLS configured' || \
         fail "brain did not configure wildcard TLS on the seeded boot (#278 — EnsureWildcardTLS not reached/applied)"
     echo "cloud-assertions: wildcard TLS configured (acme-dns DNS-01 issuer + :443 set for *.$box_id.malmo.network)"
+
+    # (c) Caddy's certificate store survives a container recreate (#433). The cert
+    # this box would obtain lands in /data; on the writable layer it dies with the
+    # container and the box has to place a NEW Let's Encrypt order — not a renewal,
+    # so no ARI exemption, and against a "50 new certificates per 7 days" budget
+    # that every hosted box shares because they are all under one registered domain
+    # (malmo.network). This lane is air-gapped, so it cannot watch for the absence
+    # of an issuance; what it CAN prove is the property that absence rests on — the
+    # store is on a named volume with a life of its own, not in the container.
+    mount_name="$(docker inspect malmo-caddy \
+        --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Type}}:{{.Name}}{{end}}{{end}}' 2>/dev/null || true)"
+    [ "$mount_name" = "volume:malmo-caddy-data" ] || \
+        fail "malmo-caddy /data is not the malmo-caddy-data volume: got '${mount_name:-<nothing>}' (#433 — a recreate would drop the wildcard cert)"
+    docker volume inspect malmo-caddy-data >/dev/null 2>&1 || \
+        fail "docker volume malmo-caddy-data does not exist (#433)"
+
+    # The mount is live in both directions, not just declared: a file Caddy writes
+    # under /data is visible to a SEPARATE container mounting the same volume, so it
+    # outlives this container by construction. Reads the image malmo-caddy runs, so
+    # nothing is pulled in the air gap.
+    caddy_img="$(docker inspect malmo-caddy --format '{{.Config.Image}}' 2>/dev/null || true)"
+    [ -n "$caddy_img" ] || fail "could not read the malmo-caddy image ref (#433 probe)"
+    docker exec malmo-caddy sh -c 'echo malmo-433 > /data/.malmo-persist-probe' 2>/dev/null || \
+        fail "could not write a probe into malmo-caddy /data (#433)"
+    probe="$(docker run --rm --entrypoint sh -v malmo-caddy-data:/probe "$caddy_img" \
+        -c 'cat /probe/.malmo-persist-probe' 2>/dev/null || true)"
+    docker exec malmo-caddy rm -f /data/.malmo-persist-probe 2>/dev/null || true
+    [ "$probe" = "malmo-433" ] || \
+        fail "malmo-caddy /data writes do not land in the malmo-caddy-data volume: probe read back '${probe:-<nothing>}' (#433)"
+    echo "cloud-assertions: Caddy cert store on the malmo-caddy-data volume, survives a container recreate (#433)"
     ;;
 frozen:*)
     expect="${MODE#frozen:}"
@@ -1142,6 +1197,13 @@ EOF
     # 6a. THE REFUSAL. The answer names TAGS. A box that pulled them would be
     #     trusting a movable label, so it must refuse and stay exactly where it is.
     brain_id_before_target="$(docker inspect -f '{{.Id}}' malmo-brain 2>/dev/null || true)"
+    # The baseline for the os#447 check below. Read a host-backed endpoint while
+    # host-agent is still the process the brain has always talked to, so the
+    # "after" read has something to be compared against — without this, a box
+    # that never served this endpoint at all would pass by failing twice.
+    target_before="$(status_of "$(full_get /api/v1/system/update-target "$apex" "$session_cookie" 2>/dev/null || true)")"
+    grep -q ' 200' <<<"$target_before" \
+        || fail "update-target: the brain did not serve a host-backed endpoint BEFORE the host-agent restart (status='$target_before')"
     systemctl restart host-agent.service || fail "update-target: could not restart host-agent"
     sleep 30
     # The channel, before the behaviour: host-agent must have taken this URL out of
@@ -1161,6 +1223,34 @@ EOF
     [ "$(docker inspect -f '{{.Id}}' malmo-brain 2>/dev/null || true)" = "$brain_id_before_target" ] \
         || fail "update-target: the box acted on an UNPINNED answer — the brain container was replaced"
     echo "cloud-assertions: update-target — REFUSAL OK (a tagged answer was refused, box unchanged)"
+
+    # 6a-bis. THE SOCKET SURVIVES A PLAIN RESTART (os#447). host-agent was
+    #     restarted above. Before the fix, systemd deleted /run/malmo when the
+    #     unit stopped and made a fresh inode on start, while the brain's bind
+    #     mount still pointed at the deleted one — so the brain saw an empty
+    #     directory, never saw the new agent.sock, and every host-backed call
+    #     answered 502. Nothing closed that window: the brain runs
+    #     restart=unless-stopped and host-agent does not touch a running brain,
+    #     so the box stayed unable to log ANYONE in until a reboot. The unit now
+    #     carries RuntimeDirectoryPreserve=yes, which keeps the inode.
+    #
+    #     Two halves, and the second is what makes this an assertion rather than
+    #     a coincidence: the endpoint answers 200 again, AND it is the same
+    #     brain container. A recreate also produces a 200 — that is precisely
+    #     how the box "recovers" today — so without the id check this would pass
+    #     on the broken build. (6a asserts the same id for the refusal; repeated
+    #     here so this check does not depend on that one staying put.)
+    target_after=""
+    for _i in $(seq 1 60); do
+        target_after="$(status_of "$(full_get /api/v1/system/update-target "$apex" "$session_cookie" 2>/dev/null || true)")"
+        grep -q ' 200' <<<"$target_after" && break
+        sleep 1
+    done
+    grep -q ' 200' <<<"$target_after" \
+        || fail "update-target: the brain cannot reach host-agent after a plain host-agent restart (status='$target_after') — os#447 regression. /run/malmo inode now: $(stat -c %i /run/malmo 2>&1); RuntimeDirectoryPreserve=$(systemctl show host-agent.service -p RuntimeDirectoryPreserve --value 2>&1); brain mounts: $(docker inspect -f '{{range .Mounts}}{{.Source}} {{end}}' malmo-brain 2>&1)"
+    [ "$(docker inspect -f '{{.Id}}' malmo-brain 2>/dev/null || true)" = "$brain_id_before_target" ] \
+        || fail "update-target: the brain container was replaced across the host-agent restart, so the 200 above says nothing about os#447"
+    echo "cloud-assertions: update-target — SOCKET SURVIVES OK (a plain host-agent restart left the SAME brain container able to reach it)"
 
     # 6b. THE APPLY. A pinned gen-3 pair, published and dropped locally like the
     #     ones above, so the loop's apply is a real registry pull.
@@ -1214,6 +1304,41 @@ EOF
     grep -q ' 200' <<<"$me_after" \
         || fail "update-target: after the target-driven update the box does not answer an authenticated /api/v1/me (status='$me_after')"
     echo "cloud-assertions: update-target — APPLY OK (the box read its target, pulled the pinned pair and applied it with no prompt)"
+
+    # 6c. THE READ (os#443). Everything above is journal lines and container
+    #     state. The dashboard reads neither, so the same facts have to come
+    #     back through the brain. Asserted after the apply so the read covers the
+    #     pair the box actually moved to. (It no longer has to be here: os#447 is
+    #     fixed, and 6a-bis asserts the brain reaches host-agent across a plain
+    #     restart, with no recreate to lean on.)
+    #
+    #     The claim is end-to-end: the pair the in-guest control plane served is
+    #     the pair the brain names. The box is on that pair now, so the state is
+    #     `current`; `available` is accepted too, for the tick that has not
+    #     re-read the ledger yet.
+    target_read=""
+    for _i in $(seq 1 120); do
+        target_read="$(full_get /api/v1/system/update-target "$apex" "$session_cookie" 2>/dev/null || true)"
+        grep -qE '"state":"(available|current)"' <<<"$target_read" && break
+        sleep 1
+    done
+    grep -q ' 200' <<<"$(status_of "$target_read")" \
+        || fail "update-target: the brain did not serve /api/v1/system/update-target (status='$(status_of "$target_read")'): $(docker ps --format '{{.Names}} {{.Status}}' 2>&1 | tr '\n' '; ')"
+    grep -qF "$brain_v3" <<<"$target_read" && grep -qF "$ui_v3" <<<"$target_read" \
+        || fail "update-target: the read does not name the pinned pair the source served: $(tail -1 <<<"$target_read")"
+    # The channel, through the read: from=seed is how an operator sees that this
+    # box is not following the fleet without opening the journal (os#407).
+    grep -q '"from":"seed"' <<<"$target_read" \
+        || fail "update-target: the read does not name the seed as the target's source: $(tail -1 <<<"$target_read")"
+    # The window came from the answer, and it is a separate field from the one
+    # above - two settings whose values only look alike (os#443).
+    grep -q '"window_from":"answer"' <<<"$target_read" \
+        || fail "update-target: the read does not say the window came from the answer: $(tail -1 <<<"$target_read")"
+    # A caller with no session must not learn what this box is being moved to.
+    anon_read="$(status_of "$(full_get /api/v1/system/update-target "$apex" "" 2>/dev/null || true)")"
+    grep -qE ' (401|403)' <<<"$anon_read" \
+        || fail "update-target: the read answered an unauthenticated caller (status='$anon_read')"
+    echo "cloud-assertions: update-target — READ OK (the brain reports the pinned pair the in-guest source served, from=seed, window from the answer, admin-only)"
     ;;
 *)
     fail "unknown assert mode '$MODE'"

@@ -106,7 +106,7 @@ Two kinds of app data, two locations:
 | Kind | Lives at | Survives uninstall? | User sees it? |
 |---|---|---|---|
 | **User content** (photo files, music, notes) | `/home/<user>/Photos/`, etc. | Yes, always | Yes, daily |
-| **App state** (indexes, caches, DBs) | `/var/lib/malmo/instances/<id>/data/` | No (or archived on "keep data") | No, ever |
+| **App state** (indexes, caches, DBs) | `/var/lib/malmo/state/instances/<id>/data/` | No (or archived on "keep data") | No, ever |
 
 ### OS drive
 
@@ -151,10 +151,26 @@ Optional but expected. One or more drives, each ext4 + LUKS + TPM-enrolled indep
   Photos/  Music/  Movies/  Documents/
 
 /var/lib/malmo/                  malmo's bookkeeping (brain SQLite, app instances)
-  brain/state.db
-  instances/<id>/                 app working dirs — never user-facing
-  managed-services/
+  state/                          the brain's state dir (MALMO_STATE_DIR)
+    malmo.db                      brain SQLite (+ the -wal / -shm sidecars)
+    instances/<id>/               app working dirs — never user-facing
+    services/<kind>-<version>/    managed-service data (e.g. postgres-18/data)
+  control-plane/                  staged control-plane compose + images.json
+  seed.json                       provisioning seed (hosted only)
 ```
+
+**These are the real paths.** The brain writes everything under one folder. It gets that folder as `MALMO_STATE_DIR`. On a real box it is `/var/lib/malmo/state`. Under `make dev` it is `.dev/state`. host-agent mounts `/var/lib/malmo` into the brain container at the same path, so the host and the brain see the same paths.
+
+**Why the extra `state/` folder.** `/var/lib/malmo/` holds files from two owners. `control-plane/` and `seed.json` belong to host-agent. Everything in `state/` belongs to the brain, and nothing else writes there. So `state/` is the line between them.
+
+Without it we would have to do one of two bad things. Either point `MALMO_STATE_DIR` at `/var/lib/malmo`, which puts host-agent's files inside the brain's folder. Or teach the brain about two folders instead of one.
+
+One folder also keeps other things simple. The brain container needs one mount. And `internal/hostagent/cpupdate` can copy one folder to snapshot the brain before an update (`DECISIONS.md` 2026-08-26).
+
+Two mistakes here fail **silently**. Neither shows an error:
+
+- **Restoring the database.** Put it back at `state/malmo.db`, and bring the `-wal` file too. The brain uses WAL mode. If you copy only the main file, you get a working database that is missing its newest writes.
+- **Measuring an app's disk use.** Read `state/instances/<id>/`, not `instances/<id>/`. The second path does not exist, so `du` returns nothing instead of failing.
 
 The use-case folders (`Photos`, `Music`, `Movies`, `Documents`, `Notes`, `Downloads`) are auto-created at user creation. `~/.config/user-dirs.dirs` is populated so XDG-aware tools resolve them. Users may rename, delete, or add folders — apps resolve canonical paths via XDG so a rename doesn't break them.
 

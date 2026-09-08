@@ -22,6 +22,27 @@ RestartSec=2s
 User=root
 RuntimeDirectory=malmo
 RuntimeDirectoryMode=0755
+# Keep /run/malmo when the unit stops, instead of letting systemd delete and
+# recreate it (os#447). The brain reaches the socket through a bind mount of
+# this *directory* (brainlaunch.runSpec), and Docker resolves a bind mount when
+# the container starts, not on every call. So a fresh directory inode is a
+# directory the running brain can never see: after a plain `systemctl restart
+# host-agent`, the brain looks at the deleted inode, finds no agent.sock, and
+# every host-backed call fails — login included, since the brain holds no
+# password hash (AUTH.md # Identity primitive). Nothing closes that window on
+# its own; the brain runs restart=unless-stopped and host-agent does not touch
+# a running brain (brainlaunch.go). Preserving the directory keeps the inode
+# stable, so the mount stays live across a restart.
+#
+# Nothing leaks by keeping it. /run is a tmpfs, so a reboot clears it anyway —
+# the only thing lost is a cleanup that a reboot performs regardless.
+# host-agent unlinks a stale agent.sock before it binds
+# (cmd/host-agent-real/main.go), so a preserved socket node does not block a
+# restart. It also stops host-agent's own stop from deleting
+# /run/malmo/health/storage.json, which a *different* unit
+# (malmo-storage-verify) writes and the brain reads (BOOT.md # The storage-ready
+# target).
+RuntimeDirectoryPreserve=yes
 # No ImportCredential= for the per-box update settings, on purpose. systemd
 # credentials only reach a box in the QEMU lane, so a shipped ImportCredential=
 # is inert on every real box (ENVIRONMENT.md # Provisioning & first-boot). This

@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/malmoos/malmo/internal/mailpreset"
 )
 
 // Mail provider encryption modes. tls is implicit TLS (smtps, usually port
@@ -32,23 +34,44 @@ type MailProvider struct {
 	Password    string
 	FromAddress string
 	Encryption  string // none | starttls | tls
-	CreatedAt   time.Time
+	// ProviderType names the built-in preset the admin picked, or "custom"
+	// for hand-typed values (internal/mailpreset). It records the choice, not
+	// a guarantee the other fields still match the preset — the advanced form
+	// lets an admin override host, port and encryption.
+	ProviderType string
+	CreatedAt    time.Time
 }
 
 func validMailEncryption(enc string) bool {
 	return enc == MailEncryptionNone || enc == MailEncryptionSTARTTLS || enc == MailEncryptionTLS
 }
 
-// CreateMailProvider inserts a provider. Caller generates the ID. Returns
-// ErrConflict on a duplicate id or label.
-func (s *Store) CreateMailProvider(p MailProvider) error {
+// normalizeMailProvider applies the same defense-in-depth as Create's scope
+// and exposure checks: the ALTER-migration path carries no CHECK on
+// provider_type, so the invariant is enforced here, on both write paths.
+func normalizeMailProvider(p *MailProvider) error {
 	if !validMailEncryption(p.Encryption) {
 		return fmt.Errorf("invalid encryption %q", p.Encryption)
 	}
+	if p.ProviderType == "" {
+		p.ProviderType = mailpreset.Custom
+	}
+	if !mailpreset.Valid(p.ProviderType) {
+		return fmt.Errorf("invalid provider type %q", p.ProviderType)
+	}
+	return nil
+}
+
+// CreateMailProvider inserts a provider. Caller generates the ID. Returns
+// ErrConflict on a duplicate id or label.
+func (s *Store) CreateMailProvider(p MailProvider) error {
+	if err := normalizeMailProvider(&p); err != nil {
+		return err
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO mail_providers (id, label, host, port, username, password, from_address, encryption, created_at)
-		 VALUES (?,?,?,?,?,?,?,?,?)`,
-		p.ID, p.Label, p.Host, p.Port, p.Username, p.Password, p.FromAddress, p.Encryption, p.CreatedAt.Unix())
+		`INSERT INTO mail_providers (id, label, host, port, username, password, from_address, encryption, provider_type, created_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		p.ID, p.Label, p.Host, p.Port, p.Username, p.Password, p.FromAddress, p.Encryption, p.ProviderType, p.CreatedAt.Unix())
 	if err != nil && isUniqueErr(err) {
 		return ErrConflict
 	}
@@ -58,14 +81,14 @@ func (s *Store) CreateMailProvider(p MailProvider) error {
 // GetMailProvider returns one provider by ID, or ErrNotFound.
 func (s *Store) GetMailProvider(id string) (MailProvider, error) {
 	return scanMailProvider(s.db.QueryRow(
-		`SELECT id, label, host, port, username, password, from_address, encryption, created_at
+		`SELECT id, label, host, port, username, password, from_address, encryption, provider_type, created_at
 		 FROM mail_providers WHERE id=?`, id))
 }
 
 // ListMailProviders returns every registered provider, ordered by label.
 func (s *Store) ListMailProviders() ([]MailProvider, error) {
 	rows, err := s.db.Query(
-		`SELECT id, label, host, port, username, password, from_address, encryption, created_at
+		`SELECT id, label, host, port, username, password, from_address, encryption, provider_type, created_at
 		 FROM mail_providers ORDER BY label`)
 	if err != nil {
 		return nil, err
@@ -86,13 +109,13 @@ func (s *Store) ListMailProviders() ([]MailProvider, error) {
 // by p.ID. Returns ErrNotFound when no such provider exists and ErrConflict
 // when the new label collides with another provider's.
 func (s *Store) UpdateMailProvider(p MailProvider) error {
-	if !validMailEncryption(p.Encryption) {
-		return fmt.Errorf("invalid encryption %q", p.Encryption)
+	if err := normalizeMailProvider(&p); err != nil {
+		return err
 	}
 	res, err := s.db.Exec(
-		`UPDATE mail_providers SET label=?, host=?, port=?, username=?, password=?, from_address=?, encryption=?
+		`UPDATE mail_providers SET label=?, host=?, port=?, username=?, password=?, from_address=?, encryption=?, provider_type=?
 		 WHERE id=?`,
-		p.Label, p.Host, p.Port, p.Username, p.Password, p.FromAddress, p.Encryption, p.ID)
+		p.Label, p.Host, p.Port, p.Username, p.Password, p.FromAddress, p.Encryption, p.ProviderType, p.ID)
 	if err != nil {
 		if isUniqueErr(err) {
 			return ErrConflict
@@ -139,7 +162,7 @@ func (s *Store) DeleteInstanceMailBinding(instanceID string) error {
 // ErrNotFound when unbound (writeEnv's signal to inject nothing).
 func (s *Store) GetInstanceMailProvider(instanceID string) (MailProvider, error) {
 	return scanMailProvider(s.db.QueryRow(
-		`SELECT p.id, p.label, p.host, p.port, p.username, p.password, p.from_address, p.encryption, p.created_at
+		`SELECT p.id, p.label, p.host, p.port, p.username, p.password, p.from_address, p.encryption, p.provider_type, p.created_at
 		 FROM instance_mail_bindings b JOIN mail_providers p ON p.id = b.provider_id
 		 WHERE b.instance_id=?`, instanceID))
 }
@@ -147,7 +170,7 @@ func (s *Store) GetInstanceMailProvider(instanceID string) (MailProvider, error)
 func scanMailProvider(row scanner) (MailProvider, error) {
 	var p MailProvider
 	var created int64
-	err := row.Scan(&p.ID, &p.Label, &p.Host, &p.Port, &p.Username, &p.Password, &p.FromAddress, &p.Encryption, &created)
+	err := row.Scan(&p.ID, &p.Label, &p.Host, &p.Port, &p.Username, &p.Password, &p.FromAddress, &p.Encryption, &p.ProviderType, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return MailProvider{}, ErrNotFound
 	}

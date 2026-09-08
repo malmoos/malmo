@@ -117,7 +117,7 @@ The writable layer resets on container *recreation* (image update, uninstall/rei
 
 ### Volumes
 
-App state (indexes, configs, the app's own DB) lives under the instance dir at `/var/lib/malmo/instances/<id>/data/`, via bind mounts only — no Docker named volumes (`APP_LIFECYCLE.md` # on-disk layout per instance). The author writes the bind mount against `${MALMO_DATA_DIR}/foo:/foo` (or the relative `./data/foo:/foo`); the brain injects `MALMO_DATA_DIR`, so authors reference a stable variable rather than a hardcoded host path.
+App state (indexes, configs, the app's own DB) lives under the instance dir at `/var/lib/malmo/state/instances/<id>/data/`, via bind mounts only — no Docker named volumes (`APP_LIFECYCLE.md` # on-disk layout per instance). The author writes the bind mount against `${MALMO_DATA_DIR}/foo:/foo` (or the relative `./data/foo:/foo`); the brain injects `MALMO_DATA_DIR`, so authors reference a stable variable rather than a hardcoded host path.
 
 `/tmp` is a size-capped tmpfs.
 
@@ -320,7 +320,7 @@ Mounted-file secrets (Docker secrets style) deferred — only ~half of images su
 When a per-user app declares `services: [postgres]`, the brain runs a Postgres container **co-located on that (user, app)'s per-app network**. Only that specific instance — Andrei's Photos, not Maria's — can reach it.
 
 - Lifecycle tied to the (user, app) tuple. Uninstall Andrei's Photos → Andrei's Postgres goes away; data backed up first per `SERVICE_PROVISIONING.md`. Maria's Photos is untouched.
-- Postgres data lives under the per-(user, app) instance dir (`/var/lib/malmo/instances/<id>/managed/postgres/...`), owned by the user's UID with restrictive perms. Cross-user filesystem access is blocked the same way every other app-state dir is — POSIX ownership + the brain controlling the bind-mount surface. **Open:** when fscrypt lands for `/home/<user>/`, does it extend to `/var/lib/malmo/instances/` for per-user app state? Tracked in `NEXT.md`.
+- Postgres data lives under the per-(user, app) instance dir (`/var/lib/malmo/state/instances/<id>/managed/postgres/...`), owned by the user's UID with restrictive perms. Cross-user filesystem access is blocked the same way every other app-state dir is — POSIX ownership + the brain controlling the bind-mount surface. **Open:** when fscrypt lands for `/home/<user>/`, does it extend to `/var/lib/malmo/state/instances/` for per-user app state? Tracked in `NEXT.md`.
 - Network-layer isolation: cross-user, cross-app database access is impossible by construction.
 - Cost: in the worst case, N users × M apps requesting Postgres = N×M Postgres instances. Realistic case (1–2 users, one heavy account running most apps) keeps this well within home-server budgets.
 

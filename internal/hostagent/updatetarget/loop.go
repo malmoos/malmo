@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/malmoos/malmo/internal/hostagent/controlplane"
@@ -135,6 +136,12 @@ type Loop struct {
 		version string
 		night   time.Time
 	}
+
+	// snap is what the last tick decided, for a reader outside the loop
+	// (state.go). snapMu guards it: the writer is the tick, the reader is the
+	// host socket's HTTP handler.
+	snapMu sync.Mutex
+	snap   Snapshot
 }
 
 // occurrenceNight is the calendar date (local midnight) of the window
@@ -206,6 +213,19 @@ func (l *Loop) nextDelay() time.Duration {
 // here because this package is where an answer's window is read.
 const fromAnswer = "answer"
 
+// fromDefault is what an unset WindowFrom reports. A loop wired without one
+// (a test, or a caller that never read a setting) is on the built-in window, so
+// that is what the snapshot says rather than an empty string.
+const fromDefault = "default"
+
+// windowFrom is WindowFrom with the built-in default filled in.
+func (l *Loop) windowFrom() string {
+	if l.WindowFrom == "" {
+		return fromDefault
+	}
+	return l.WindowFrom
+}
+
 // windowFor picks the window for this tick.
 //
 // **The answer wins when it carries one.** When to update is per-box policy the
@@ -217,21 +237,21 @@ const fromAnswer = "answer"
 // A window the box cannot read warns and falls back. That is deliberately unlike
 // a bad target, which stops the loop: a wrong hour can only apply an update at
 // the wrong time, while a wrong target sends the box to the wrong version.
-func (l *Loop) windowFor(t Target) Window {
+func (l *Loop) windowFor(t Target) (Window, string) {
 	if strings.TrimSpace(t.Window) == "" {
-		return l.window()
+		return l.window(), l.windowFrom()
 	}
 	w, err := ParseWindow(t.Window)
 	if err != nil {
 		l.sayWindow("bad:"+t.Window, slog.LevelWarn,
 			"update target: the window in the answer is not readable; keeping the configured one",
-			"err", err, "window", l.window().String(), "from", l.WindowFrom)
-		return l.window()
+			"err", err, "window", l.window().String(), "from", l.windowFrom())
+		return l.window(), l.windowFrom()
 	}
 	l.sayWindow("answer:"+w.String(), slog.LevelInfo,
 		"update target: taking the update window from the answer",
 		"window", w.String(), "from", fromAnswer)
-	return w
+	return w, fromAnswer
 }
 
 // sayWindow logs a change in the window, once per change.
@@ -263,6 +283,7 @@ func (l *Loop) Tick(ctx context.Context) {
 		// A source with nothing to offer is not a broken source, and it is
 		// certainly not "there is nothing to run". Distinguishable from the
 		// unreachable case below, which is the point.
+		l.record(OutcomeNone, Target{}, l.window(), l.windowFrom(), nil)
 		l.quiet(slog.LevelInfo, "no-target", "update target: the source has no target; staying on the current version")
 		return
 	case err != nil:
@@ -274,6 +295,7 @@ func (l *Loop) Tick(ctx context.Context) {
 		// dead link, or an appliance whose manifest names versions, would otherwise
 		// write the same warning four times an hour for as long as it runs, and
 		// bury the tick where something actually changed.
+		l.record(OutcomeUnreachable, Target{}, l.window(), l.windowFrom(), err)
 		l.quiet(slog.LevelWarn, "err:"+err.Error(),
 			"update target: could not read the source; staying on the current version", "err", err)
 		return
@@ -288,18 +310,38 @@ func (l *Loop) Tick(ctx context.Context) {
 		// so once, and says so again the moment the answer changes. Error level,
 		// because unlike an unreachable source this is a box being handed
 		// something it must not act on.
+		//
+		// The refused answer is kept in the snapshot. Nothing acts on it — the
+		// version and refs are what an operator needs to see to fix the source.
+		l.record(OutcomeRefused, t, l.window(), l.windowFrom(), err)
 		l.quiet(slog.LevelError, "refused:"+t.Version+":"+t.BrainImage+":"+t.UIImage,
 			"update target: refusing the answer; nothing pulled, box unchanged",
 			"err", err, "brain", t.Version, "image", t.BrainImage)
 		return
 	}
 
+	// The window is resolved here, before the compare, not further down on the
+	// apply path. An answer's window outranks the box's setting the moment the
+	// answer is read (UPDATES.md # 8.4), so a box that is already current still
+	// reports the hour it would update in. The log line is deduped, so resolving
+	// it every tick costs nothing.
+	w, windowFrom := l.windowFor(t)
+
 	brain, ui, err := l.Current.Running()
 	if err != nil {
+		// The box could not read its own declaration, so it cannot tell whether
+		// the answer is a change. The answer itself was fine, so the snapshot
+		// keeps it and reports the read failure alongside.
+		//
+		// One tick writes one snapshot. Recording the good answer here and
+		// overwriting it below would publish an intermediate "all fine" state
+		// that a concurrent reader can catch.
+		l.record(OutcomeUnreachable, t, w, windowFrom, err)
 		l.quiet(slog.LevelWarn, "running-err:"+err.Error(),
 			"update target: cannot read what this box is running", "err", err)
 		return
 	}
+	l.record(OutcomeOK, t, w, windowFrom, nil)
 	if brain == t.BrainImage && ui == t.UIImage {
 		// The overwhelmingly common case. No pull, no work, and one line the
 		// first time it is true.
@@ -317,7 +359,6 @@ func (l *Loop) Tick(ctx context.Context) {
 	}
 
 	now := l.now()
-	w := l.windowFor(t)
 	if !w.Contains(now) {
 		l.quiet(slog.LevelInfo, "holding:"+t.Version, "update target: holding a new version for the update window",
 			"brain", t.Version, "step", "waiting", "zone", now.Location().String())

@@ -17,7 +17,7 @@ import { computed, ref } from "vue";
 import { RouterLink } from "vue-router";
 import { AlertTriangle, EllipsisVertical } from "lucide-vue-next";
 import type { Instance } from "../api";
-import { useAuth } from "../auth";
+import { useAuth, isHosted } from "../auth";
 import AppGlyph from "./AppGlyph.vue";
 import AppMenuDialog from "./AppMenuDialog.vue";
 
@@ -33,6 +33,27 @@ const label = computed(() => (props.instance.scope === "household" ? "Shared" : 
 // personal instance. Drives whether the quick-menu button is shown.
 const canControl = computed(
   () => currentUser.value?.role === "admin" || props.instance.scope === "personal",
+);
+
+// How open the app is, drawn as a globe in the bottom corner of the logo. Three
+// states, because the manifest can keep single paths open on an otherwise closed
+// app (#415):
+//   - "open"    exposure=public — anyone with the link opens the whole app (#306).
+//   - "partial" exposure=restricted, but the manifest declares public paths, so
+//               part of the app answers anonymously. Drawn as a faded globe.
+//   - "closed"  owner-only, no badge — the quiet default needs no mark.
+// Hosted-only: the appliance has no public app subdomains, every app is LAN-only
+// there, and exposure defaults to "public" on that profile, so an ungated badge
+// would mark every tile.
+const access = computed<"open" | "partial" | "closed">(() => {
+  if (!isHosted()) return "closed";
+  if (props.instance.exposure === "public") return "open";
+  return (props.instance.public_paths ?? []).length > 0 ? "partial" : "closed";
+});
+const accessTitle = computed(() =>
+  access.value === "open"
+    ? "Public. Anyone with the link can access this app."
+    : "Partly public. Some app paths are open to the public.",
 );
 
 const brokenIcon = ref(false);
@@ -76,6 +97,21 @@ const menuOpen = ref(false);
         v-if="showAlert"
         class="absolute right-3 top-3 size-4 text-destructive"
       />
+      <span
+        v-if="access !== 'closed'"
+        class="absolute bottom-3 right-3 block size-4 text-muted-foreground"
+        :class="access === 'partial' ? 'opacity-30' : ''"
+        :title="accessTitle"
+      >
+        <!-- The globe is drawn as a mask filled with currentColor, not as a plain
+             <img>: the source PNG is black line art, which would vanish on a dark
+             tile. One drawing serves both states. "Partly public" is the same
+             globe at 30% opacity, so a partly open app reads as a fainter version
+             of an open one rather than as a second symbol to learn.
+             Decorative here: the state is named in the sr-only text below. -->
+        <span class="globe-mask block size-full bg-current" />
+        <span class="sr-only">{{ access === "open" ? "Public" : "Partly public" }}</span>
+      </span>
       <img
         v-if="instance.icon_url && !brokenIcon"
         :src="instance.icon_url"
@@ -130,3 +166,21 @@ const menuOpen = ref(false);
     <AppMenuDialog v-if="menuOpen" :instance="instance" @close="menuOpen = false" />
   </div>
 </template>
+
+<style scoped>
+/* The globe badge. The PNG is black line art on transparency, so it is used as a
+   MASK filled with currentColor rather than drawn as an image — that way it takes
+   the tile's text color and stays visible in both themes. Vite resolves the
+   relative url() at build time and hashes the asset. */
+.globe-mask {
+  -webkit-mask-image: url("../assets/globe.png");
+  mask-image: url("../assets/globe.png");
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
+</style>

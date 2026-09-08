@@ -23,7 +23,7 @@ Within each root the user browses freely. **The use-case folders are not hardcod
 
 **Out of scope, by construction:**
 
-- **App state** (`/var/lib/malmo/instances/<id>/`, managed-service data). This is malmo's bookkeeping, "never user-facing" (`STORAGE.md`). The file manager is for user *content*, not the plumbing apps write underneath it.
+- **App state** (`/var/lib/malmo/state/instances/<id>/`, managed-service data). This is malmo's bookkeeping, "never user-facing" (`STORAGE.md`). The file manager is for user *content*, not the plumbing apps write underneath it.
 - **Other users' homes.** See # Authorization.
 - **The rest of the host filesystem** (`/etc`, `/var`, another `/home/<other>`). The two roots are the entire navigable surface. This is a UX boundary; the security boundary is the UID drop in # Execution.
 - **`~/Shared`** as a *separate* entry. `/home/<user>/Shared` is a symlink to `/srv/malmo/shared/` (`STORAGE.md`); the file manager presents the shared tree once, as the **Shared** root, and does not also descend into it through the symlink (avoids a confusing double-listing).

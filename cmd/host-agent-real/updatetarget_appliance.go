@@ -8,6 +8,10 @@ import (
 	"github.com/malmoos/malmo/internal/profile"
 )
 
+// buildProfile is the environment profile this binary was built for. See the
+// hosted half for why it is separate from the source.
+const buildProfile = string(profile.Appliance)
+
 // updateTargetSource is the **appliance** half of the update-target seam: the
 // target comes from the signed release manifest this box already polls
 // (RELEASE_MANIFEST.md), read straight off that poller.
@@ -23,6 +27,12 @@ import (
 // The error is always nil here: the appliance source is the poller this box
 // already runs, so there is no per-box configuration to get wrong. It exists so
 // the hosted half can refuse an unusable seeded update target.
-func updateTargetSource(p *relmanifest.Poller) (src updatetarget.Source, autoApply bool, name string, err error) {
-	return updatetarget.ManifestSource{Poller: p}, false, string(profile.Appliance), nil
+//
+// From is left empty: an appliance has no update-target URL to have a source
+// for. Its target comes from the signed manifest this box already polls.
+func updateTargetSource(p *relmanifest.Poller) (targetSource, error) {
+	return targetSource{
+		Source:  updatetarget.ManifestSource{Poller: p},
+		Profile: buildProfile,
+	}, nil
 }

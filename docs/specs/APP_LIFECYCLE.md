@@ -30,7 +30,7 @@ The Docker HTTP API (via the socket proxy) is used directly only for things the 
 ## Locked: on-disk layout per instance
 
 ```
-/var/lib/malmo/instances/<instance-id>/
+/var/lib/malmo/state/instances/<instance-id>/
 ├── manifest.yml              # author's, verbatim
 ├── compose.yml               # author's, verbatim
 ├── compose.override.yml      # malmo-generated, regenerated on update

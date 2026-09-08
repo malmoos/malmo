@@ -228,6 +228,13 @@ func (s *Store) migrate() error {
 			password     TEXT    NOT NULL,
 			from_address TEXT    NOT NULL,
 			encryption   TEXT    NOT NULL CHECK (encryption IN ('none','starttls','tls')),
+			-- provider_type: which built-in preset the admin picked, or
+			-- 'custom' for hand-typed values (internal/mailpreset). No CHECK:
+			-- a CHECK cannot ride the ALTER migration path, so it would apply
+			-- only to fresh DBs — validated in Go instead, like scope and
+			-- exposure. Rows that predate presets migrate to 'custom', which
+			-- is right: they were typed by hand.
+			provider_type TEXT   NOT NULL DEFAULT 'custom',
 			created_at   INTEGER NOT NULL
 		);
 		-- instance_mail_bindings: which provider a mail-capable app sends
@@ -389,6 +396,7 @@ func (s *Store) migrate() error {
 		{"instances", "service_gid", "ALTER TABLE instances ADD COLUMN service_gid INTEGER NOT NULL DEFAULT 0"},
 		{"instances", "pending_recreate", "ALTER TABLE instances ADD COLUMN pending_recreate INTEGER NOT NULL DEFAULT 0"},
 		{"instances", "exposure", "ALTER TABLE instances ADD COLUMN exposure TEXT NOT NULL DEFAULT 'public'"},
+		{"mail_providers", "provider_type", "ALTER TABLE mail_providers ADD COLUMN provider_type TEXT NOT NULL DEFAULT 'custom'"},
 	} {
 		has, hErr := s.hasColumn(col.table, col.name)
 		if hErr != nil {

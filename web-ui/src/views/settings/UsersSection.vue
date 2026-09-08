@@ -15,6 +15,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/vue-query";
 import { api, ApiError, type User } from "@/api";
 import { withElevation } from "@/elevate";
 import { useAuth } from "@/auth";
+import Button from "@/components/ui/Button.vue";
 
 const router = useRouter();
 const qc = useQueryClient();
@@ -163,13 +164,13 @@ const doResetPassword = useMutation({
             <option value="member">Member</option>
             <option value="admin">Admin</option>
           </select>
-          <button
-            class="rounded-lg border border-border px-4 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+          <Button
+            size="sm"
             :disabled="create.isPending.value || !newUsername.trim() || !newPassword"
             @click="create.mutate()"
           >
             Add
-          </button>
+          </Button>
         </div>
         <p v-if="createError" class="text-xs text-destructive">{{ createError }}</p>
       </div>
@@ -202,20 +203,23 @@ const doResetPassword = useMutation({
               <option value="admin">Admin</option>
             </select>
             <!-- Reset password toggle -->
-            <button
-              class="rounded-lg border border-border px-3 py-1 text-sm hover:bg-muted"
+            <Button
+              variant="secondary"
+              size="sm"
               @click="resetFor = resetFor === u.id ? null : u.id; resetPasswordValue = ''"
             >
               Reset password
-            </button>
+            </Button>
             <!-- Delete -->
-            <button
-              class="rounded-lg border border-border px-3 py-1 text-sm text-destructive hover:bg-muted disabled:opacity-50"
+            <Button
+              variant="ghost"
+              size="sm"
+              class="text-destructive hover:bg-destructive/10"
               :disabled="deleteUser.isPending.value"
               @click="confirmDeleteFor = confirmDeleteFor === u.id ? null : u.id"
             >
               Delete
-            </button>
+            </Button>
           </div>
 
           <!-- Delete confirmation (irreversible — confirm before mutating) -->
@@ -224,19 +228,16 @@ const doResetPassword = useMutation({
             class="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2"
           >
             <span class="text-sm">Delete <strong>{{ u.username }}</strong>? This can't be undone.</span>
-            <button
-              class="rounded-lg border border-destructive px-3 py-1 text-sm text-destructive hover:bg-destructive/10 disabled:opacity-50"
+            <Button
+              variant="secondary"
+              size="sm"
+              class="border-destructive text-destructive hover:bg-destructive/10"
               :disabled="deleteUser.isPending.value"
               @click="deleteUser.mutate(u.id)"
             >
               Delete
-            </button>
-            <button
-              class="rounded-lg border border-border px-3 py-1 text-sm hover:bg-muted"
-              @click="confirmDeleteFor = null"
-            >
-              Cancel
-            </button>
+            </Button>
+            <Button variant="ghost" size="sm" @click="confirmDeleteFor = null">Cancel</Button>
           </div>
 
           <!-- Inline reset-password form (expands on toggle) -->
@@ -249,19 +250,14 @@ const doResetPassword = useMutation({
               autocomplete="new-password"
               @keydown.enter="!doResetPassword.isPending.value && resetPasswordValue && doResetPassword.mutate({ id: u.id, password: resetPasswordValue })"
             />
-            <button
-              class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+            <Button
+              size="sm"
               :disabled="doResetPassword.isPending.value || !resetPasswordValue"
               @click="doResetPassword.mutate({ id: u.id, password: resetPasswordValue })"
             >
               Save
-            </button>
-            <button
-              class="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
-              @click="resetFor = null; resetPasswordValue = ''"
-            >
-              Cancel
-            </button>
+            </Button>
+            <Button variant="ghost" size="sm" @click="resetFor = null; resetPasswordValue = ''">Cancel</Button>
           </div>
 
           <!-- Per-row guard / error message -->

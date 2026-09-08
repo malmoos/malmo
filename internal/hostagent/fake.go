@@ -375,3 +375,35 @@ func (f *FakeLogSource) Follow(ctx context.Context, container string) (<-chan pr
 	}()
 	return ch, nil
 }
+
+// FakeUpdateTargetReporter implements UpdateTargetReporter with a settable
+// report. The fake binary wires one that reports "nothing to offer", which is
+// the honest answer for a dev box: there is no control plane behind the inner
+// loop to update to.
+//
+// Set is what makes the other states reachable in dev. A stub that always
+// claimed an available target would lie in every session; a stub stuck on
+// "none" would leave the dashboard prompt with nothing to be built against.
+// MALMO_FAKE_UPDATE_TARGET picks the state at startup (cmd/host-agent).
+type FakeUpdateTargetReporter struct {
+	mu     sync.Mutex
+	report protocol.UpdateTarget
+}
+
+// NewFakeUpdateTargetReporter returns a reporter serving the given report.
+func NewFakeUpdateTargetReporter(r protocol.UpdateTarget) *FakeUpdateTargetReporter {
+	return &FakeUpdateTargetReporter{report: r}
+}
+
+// Set replaces the report.
+func (f *FakeUpdateTargetReporter) Set(r protocol.UpdateTarget) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.report = r
+}
+
+func (f *FakeUpdateTargetReporter) Read() protocol.UpdateTarget {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.report
+}

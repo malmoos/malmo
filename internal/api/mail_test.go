@@ -10,6 +10,9 @@ package api
 
 import (
 	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -20,6 +23,8 @@ import (
 	"testing"
 
 	"github.com/malmoos/malmo/internal/audit"
+	"github.com/malmoos/malmo/internal/mailpreset"
+	"github.com/malmoos/malmo/internal/profile"
 	"github.com/malmoos/malmo/internal/store"
 )
 
@@ -297,7 +302,7 @@ func TestListMailProviderOptionsMemberVisible(t *testing.T) {
 	}
 	raw, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	// id + label only: no host, no credential.
+	// id, label and provider type only: no host, no credential.
 	if strings.Contains(string(raw), "smtp.example.com") || strings.Contains(string(raw), "s3cret-pass") {
 		t.Fatalf("options response leaks provider details: %s", raw)
 	}
@@ -544,9 +549,12 @@ func TestSetAppMailBindingMemberOwnPersonal(t *testing.T) {
 // fails later inside RebindMail.
 func TestSetAppMailBindingNonMailApp422(t *testing.T) {
 	h := newHarness(t)
-	writeManifestFixture(t, h.catalogDir, "whoami", minimalManifestYML)
 	h.setupAdmin("alice", "pass1")
 	h.seedInstance("i1", "whoami", "whoami", "u_admin", store.ScopeHousehold)
+	// The check reads the INSTANCE's persisted manifest, not the catalog (#434),
+	// and the catalog is left empty here to prove it: an app already installed
+	// must not need the catalog service to answer this.
+	h.seedInstanceManifest("i1", minimalManifestYML)
 
 	resp := h.do("PUT", "/api/v1/apps/i1/mail-binding", map[string]string{"provider_id": "mp_x"})
 	resp.Body.Close()
@@ -637,5 +645,270 @@ func TestInstallPlanCarriesMailProviders(t *testing.T) {
 	plan = decodeJSON[InstallPlanDTO](t, resp)
 	if plan.Mail != nil {
 		t.Errorf("non-mail app install plan carries mail block: %+v", plan.Mail)
+	}
+}
+
+// --- provider presets ------------------------------------------------------
+
+func TestListMailPresetsAdminOnly(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+
+	got := decodeJSON[struct {
+		Presets []MailPresetDTO `json:"presets"`
+	}](t, h.do("GET", "/api/v1/mail-presets", nil))
+	if len(got.Presets) == 0 {
+		t.Fatal("no presets served")
+	}
+	var hasCustom bool
+	for _, p := range got.Presets {
+		if p.ID == mailpreset.Custom {
+			hasCustom = true
+		}
+	}
+	if !hasCustom {
+		t.Error("custom missing from the preset list")
+	}
+
+	// A member cannot register a provider, so a member cannot read the presets.
+	h.addMember("u_bob", "bob", "bobpass")
+	h.loginAs("bob", "bobpass")
+	resp := h.do("GET", "/api/v1/mail-presets", nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("member GET /mail-presets = %d; want 403", resp.StatusCode)
+	}
+}
+
+func TestCreateMailProviderPersistsProviderType(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
+
+	b := providerBody("ses account")
+	b["provider_type"] = "ses"
+	p := decodeJSON[MailProviderDTO](t, h.do("POST", "/api/v1/mail-providers", b))
+	if p.ProviderType != "ses" || p.ProviderLabel != "Amazon SES" {
+		t.Fatalf("provider_type round trip = %+v", p)
+	}
+	stored, err := h.st.GetMailProvider(p.ID)
+	if err != nil {
+		t.Fatalf("get stored: %v", err)
+	}
+	if stored.ProviderType != "ses" {
+		t.Fatalf("stored provider_type = %q; want ses", stored.ProviderType)
+	}
+	// D3: the server stores what the client sent. It does not re-derive the
+	// host from the preset, so an advanced override survives.
+	if stored.Host != "smtp.example.com" {
+		t.Fatalf("stored host = %q; the server re-derived it from the preset", stored.Host)
+	}
+}
+
+func TestCreateMailProviderDefaultsProviderTypeToCustom(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
+
+	// An older client sends no provider_type at all.
+	p := h.createProvider("hand typed")
+	if p.ProviderType != mailpreset.Custom {
+		t.Fatalf("provider_type = %q; want custom", p.ProviderType)
+	}
+}
+
+func TestMailProviderUnknownTypeIs422(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+	h.elevate("pass1")
+
+	b := providerBody("bogus")
+	b["provider_type"] = "not-a-provider"
+	resp := h.do("POST", "/api/v1/mail-providers", b)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("unknown provider_type on create = %d; want 422", resp.StatusCode)
+	}
+
+	p := h.createProvider("real")
+	up := providerBody("real")
+	up["provider_type"] = "not-a-provider"
+	resp = h.do("PUT", "/api/v1/mail-providers/"+p.ID, up)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("unknown provider_type on update = %d; want 422", resp.StatusCode)
+	}
+}
+
+// A hosted box cannot reach 465, so the bare connection timeout an admin used
+// to see is replaced by an error that names the port. The appliance reaches
+// 465 fine and must keep the plain error.
+func TestBlockedPortHint(t *testing.T) {
+	tls465 := store.MailProvider{Port: 465}
+	starttls587 := store.MailProvider{Port: 587}
+	connectErr := &dialError{fmt.Errorf("dial tcp 1.2.3.4:465: i/o timeout")}
+	authErr := fmt.Errorf("auth: 535 bad credentials")
+
+	if got := blockedPortHint(profile.Hosted, tls465, connectErr); got == "" {
+		t.Error("hosted connect failure on 465 got no hint")
+	} else if !strings.Contains(got, "587") {
+		t.Errorf("hint does not name the working port: %q", got)
+	}
+	if got := blockedPortHint(profile.Appliance, tls465, connectErr); got != "" {
+		t.Errorf("appliance got a hint it should not: %q", got)
+	}
+	if got := blockedPortHint(profile.Hosted, starttls587, connectErr); got != "" {
+		t.Errorf("port 587 got a blocked-port hint: %q", got)
+	}
+	// The port was reachable — auth failed. Naming the port would mislead.
+	if got := blockedPortHint(profile.Hosted, tls465, authErr); got != "" {
+		t.Errorf("auth failure got a blocked-port hint: %q", got)
+	}
+}
+
+// The hint keys off a typed error, so this asserts the live path still produces
+// one: a hand-built error in the test above would keep passing even if
+// sendTestMail stopped reporting dial failures as dialError, and the hint would
+// silently stop firing for the hosted admin it exists for.
+func TestSendTestMailReportsDialFailuresAsDialError(t *testing.T) {
+	// A port that was just listening and is now closed: connect refuses fast.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	host, portStr, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portStr)
+
+	p := store.MailProvider{
+		Host: host, Port: port, FromAddress: "box@example.com",
+		Encryption: store.MailEncryptionNone,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), testMailTimeout)
+	defer cancel()
+	err = sendTestMail(ctx, p, "admin@example.com")
+	if err == nil {
+		t.Fatal("send to a closed port succeeded")
+	}
+	var de *dialError
+	if !errors.As(err, &de) {
+		t.Fatalf("dial failure = %T (%v); want *dialError, which blockedPortHint keys off", err, err)
+	}
+}
+
+// --- pre-save config check -------------------------------------------------
+
+func TestVerifyMailProviderConfigConnectsWithoutSending(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+	sink := startSMTPSink(t)
+	host, portStr, _ := net.SplitHostPort(sink.addr)
+	port, _ := strconv.Atoi(portStr)
+
+	resp := h.do("POST", "/api/v1/mail-providers/verify", map[string]any{
+		"label": "sink", "host": host, "port": port,
+		"from_address": "malmo@example.com", "encryption": "none",
+	})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("verify = %d; want 204", resp.StatusCode)
+	}
+
+	// The whole point of the check: it proves the connection without mailing
+	// anyone, so the sink must have taken no message.
+	sink.mu.Lock()
+	from, rcpt, data := sink.from, sink.rcpt, sink.data
+	sink.mu.Unlock()
+	if from != "" || rcpt != "" || data != "" {
+		t.Fatalf("verify delivered a message: from=%q rcpt=%q data=%q", from, rcpt, data)
+	}
+
+	// It stores nothing either — a config that checks out is still not an account.
+	list, err := h.st.ListMailProviders()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("verify created %d providers; want 0", len(list))
+	}
+}
+
+func TestVerifyMailProviderConfigUnreachable502(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+	// A port that was just listening and is now closed: connect refuses fast.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	ln.Close()
+	port, _ := strconv.Atoi(portStr)
+
+	resp := h.do("POST", "/api/v1/mail-providers/verify", map[string]any{
+		"label": "dead", "host": host, "port": port,
+		"from_address": "malmo@example.com", "encryption": "none",
+	})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("verify against a closed port = %d; want 502", resp.StatusCode)
+	}
+}
+
+func TestVerifyMailProviderConfigGuards(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+
+	// Same validation as create — a bad body is a 422, not a dial attempt.
+	bad := providerBody("v")
+	bad["from_address"] = "not-an-email"
+	resp := h.do("POST", "/api/v1/mail-providers/verify", bad)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid body = %d; want 422", resp.StatusCode)
+	}
+
+	// Admin-only: a member cannot register a provider, so cannot probe with one.
+	h.addMember("u_bob", "bob", "bobpass")
+	h.loginAs("bob", "bobpass")
+	resp = h.do("POST", "/api/v1/mail-providers/verify", providerBody("v"))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("member verify = %d; want 403", resp.StatusCode)
+	}
+}
+
+// The mail picker on an installed app's detail page is driven by the INSTANCE's
+// own persisted manifest (#434). The catalog is empty here, which is what a box
+// looks like before its first sync, or after the app is unpublished: the picker
+// must still appear, because the binding it edits still works.
+func TestGetAppMailSupportedComesFromTheInstanceManifest(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin("alice", "pass1")
+
+	h.seedInstance("i_mail", "mailer", "mailer", "u_admin", store.ScopeHousehold)
+	h.seedInstanceManifest("i_mail", mailManifestYML)
+	h.seedInstance("i_plain", "whoami", "whoami", "u_admin", store.ScopeHousehold)
+	h.seedInstanceManifest("i_plain", minimalManifestYML)
+
+	for _, tc := range []struct {
+		id   string
+		want bool
+	}{{"i_mail", true}, {"i_plain", false}} {
+		resp := h.do("GET", "/api/v1/apps/"+tc.id, nil)
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			t.Fatalf("GET %s = %d; want 200", tc.id, resp.StatusCode)
+		}
+		var dto InstanceDTO
+		if err := json.NewDecoder(resp.Body).Decode(&dto); err != nil {
+			t.Fatalf("decode %s: %v", tc.id, err)
+		}
+		resp.Body.Close()
+		if dto.MailSupported != tc.want {
+			t.Errorf("%s mail_supported = %v, want %v (read from the persisted manifest, catalog is empty)",
+				tc.id, dto.MailSupported, tc.want)
+		}
 	}
 }

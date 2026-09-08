@@ -21,6 +21,77 @@ Keep entries skimmable. The detailed rationale lives in the affected doc; this f
 
 ---
 
+## 2026-09-04 — Catalog: browse and install are two fetches, and the index digest is gone (#434)
+
+**Previously:** the box pulled one bulk snapshot, `GET /catalog/sync`, that carried every published app's verbatim `manifest.yml`, `compose.yml` and resolved images map, whether or not the box would ever install them. The snapshot was stamped with `index_sha256`, a SHA-256 over the app index that the box **recomputed** by re-marshalling what it had parsed, and refused the whole snapshot on a mismatch. Environment visibility was filtered on the box (`visibleIn`).
+
+**Now:** two seams. `GET /catalog?env=<environment>` returns browse data only — display records, the landing page, the category vocabulary, and an opaque `version` token served as the `ETag`. An app's install payload is fetched per app, at install time, from `GET /catalog/apps/{id}/manifest` and `/compose` (`application/yaml`, verbatim), by following the `manifest_url` / `compose_url` the record carries. Every published URL is opaque: the box follows it, never assembles it. The digest is **removed** — `version` is a change token the box stores and echoes and never recomputes — and unknown keys are dropped the way `encoding/json` drops them everywhere else. The schema-version refusal stays. Environment filtering moved to the control plane. An app's manifest and compose are **persisted next to the installation**, and every brain path that needs an installed app's manifest reads that copy.
+
+**Why:**
+- **The bulk snapshot was mostly waste.** On a 43-app catalog it was 614KB, of which **77% was install payloads** for apps the box would never install; the browse data the store actually renders was 106KB. Every box paid the full 614KB on first sync and on every catalog change.
+- **The digest was doing cache work while wearing an integrity label.** Recomputing it meant the box had to re-marshal to byte-identical JSON, which made field order load-bearing and made **any** new published field a flag day: the digest stopped matching, `verify()` refused the snapshot, and the box showed an empty store. Measured, not theoretical — `external_costs` did exactly this. It closed no threat TLS (origin) and HTTP framing (truncation) do not already close, so it is removed rather than reworked.
+- **Routine box operation must not depend on the catalog service.** `Load` was never install-only: the app detail page, the mail picker and the install plan all called it. Turning it into a live fetch would have put a page load behind the network. Writing the manifest and compose next to the installation fixes that and a pre-existing bug with it — an installed app's manifest used to disappear the moment the app was unpublished.
+
+**Trade accepted:** with filtering server-side, an installed app that leaves the box's surface (or the catalog) is no longer in the browse response, so `Entry(id)` cannot resolve its card. The install is unaffected — the manifest lives next to it — but the card loses its catalog-supplied icon and falls back to the instance row's own name. Persisting the display record too was the alternative; it buys an icon and costs a second copy to keep fresh.
+
+**Affected docs:** `docs/specs/APP_STORE.md` (banners, Failure modes, What we run, Landing page, Category labels, What the box models, Locked decisions); `docs/architecture.md` (catalog package row + app-store bullet). Progress: `catalog-split-browse-and-install.md`.
+
+---
+
+## 2026-08-27 — Outgoing-mail provider presets: hardcoded in the brain, and the picked provider is persisted
+
+**Previously:** Adding an email account meant typing seven fields the admin had to look up in their provider's docs. The brain knew nothing about who the provider was — only a host, a port and a credential.
+
+**Now:** The brain ships a table of built-in presets (`internal/mailpreset`), serves it at `GET /api/v1/mail-presets`, and stores which one the admin picked as `mail_providers.provider_type`.
+
+**D1 — presets are hardcoded in the brain, not catalog-served.** The catalog is an app-distribution channel; these constants change roughly never, and the credential broker's per-provider logic (`NEXT.md` # On-box credential broker) has to be Go anyway. Putting them in the catalog would add a fetch, a schema and a failure mode to data that ships fine in the binary.
+
+**D2 — `provider_type` is persisted, not discarded after create.** It re-renders the right edit form and labels the row, but the real reason is the broker: without it, every provider registered before the broker ships is an untyped row someone has to classify by pattern-matching hostnames.
+
+**D3 — the server stores what the client sends and does not re-derive host, port or encryption from the preset.** Re-deriving would silently undo the Advanced override, which exists so a non-standard endpoint is never trapped. The consequence, accepted on purpose: `provider_type` records what the admin picked, not a guarantee that the other fields still match the preset.
+
+**D4 — no change to `MALMO_MAIL_*` injection.** `mailEnvLines` in `internal/lifecycle/mail.go` is untouched. That function is the seam the broker replaces later, and keeping it out of this change is what makes the two features independent.
+
+**Also:** the region mechanism deviates from the issue's `{region}` host template. Each region option names the host it resolves to instead, because Mailgun's EU host is `smtp.eu.mailgun.org` — a prefix, not a region code — so one substitution rule cannot serve both providers.
+
+**Affected docs:** `SERVICE_PROVISIONING.md` # BYO outgoing mail, `SETTINGS.md`, `NEXT.md` # On-box credential broker.
+
+---
+
+## 2026-08-26 — The brain's state lives under `state/`, and the specs follow the code
+
+**Previously:** `STORAGE.md` # mount layout put the brain's database at `/var/lib/malmo/brain/state.db`. It put app instances at `/var/lib/malmo/instances/<id>/`, and managed-service data under `/var/lib/malmo/managed-services/`. `THREAT_MODEL.md`, `USERS_AND_GROUPS.md` and `LOCAL_ANALYTICS.md` copied those paths. `LOCAL_ANALYTICS.md` had a third version of its own, `/var/lib/malmo-state/brain.db`. `TELEMETRY.md` and `BOOT.md` wrote into a `/var/lib/malmo-state/` root.
+
+**Now:** the paths in the code stand, and the docs move to match them. The brain writes everything under one folder: `/var/lib/malmo/state/malmo.db` with its `-wal` and `-shm` files, `state/instances/<id>/`, and `state/services/<kind>-<version>/`. There is no `managed-services/` folder and no `/var/lib/malmo-state/` root. Neither was ever created. **No code change and no migration.**
+
+**Why:** `/var/lib/malmo/` holds files from two owners. `control-plane/` and `seed.json` are host-agent's. Everything under `state/` is the brain's. So `state/` is the line between them.
+
+Drop that folder and we have to do one of two bad things. Either point `MALMO_STATE_DIR` at `/var/lib/malmo`, which puts host-agent's files inside the brain's folder. Or teach the brain about two roots.
+
+One folder also keeps the rest cheap. The dev loop is just `.dev/state/`. The brain container takes one mount. And `internal/hostagent/cpupdate` copies one folder to snapshot the brain around an update.
+
+The flat spelling in the specs reads a little better. That is the only point on the other side, and it is not worth a migration on boxes that already run. The specs were the stale side, so the docs follow the code (`CLAUDE.md` # Documentation discipline).
+
+One cost was not cosmetic. `USERS_AND_GROUPS.md` gives a recovery step for a corrupt database, and it named a path the brain never reads. Anyone following it would restore nothing and see no error. That step now names the right path, and says to bring the `-wal` file too. The brain uses WAL mode, so restoring the main file alone gives a working database that is missing its newest writes.
+
+**Affected docs:** `STORAGE.md` (# mount layout, rewritten to the real tree plus the two silent failures), `THREAT_MODEL.md` (asset table), `USERS_AND_GROUPS.md` (recovery step, plus WAL), `LOCAL_ANALYTICS.md`, `TELEMETRY.md`, `BOOT.md` (note: the first-run marker is `box_meta.first_run_complete`, not a `.bootstrapped` file), `APP_LIFECYCLE.md`, `APP_MANIFEST.md`, `APP_ISOLATION.md`, `FILES.md`, `UPDATES.md`, `NEXT.md`, `CLAUDE.md`. Older entries in this log keep the paths they were written with.
+
+## 2026-08-17 — The box keeps no catalog on disk; only icons and screenshots are cached, for 24 hours
+
+**Previously:** the box was a thin client **with a last-good on-disk cache** (`DECISIONS.md` 2026-07-02). It wrote every verified snapshot to `/var/lib/malmo/catalog-cache/catalog.json` and read it back at boot, so a box that had synced once browsed its last-good catalog forever, online or not. Proxied icons and screenshots were cached next to it with no expiry at all.
+
+**Now:** the brain holds the snapshot **in memory only**. Nothing writes it to disk, nothing reads it back at boot. A box that cannot reach the catalog endpoint shows an **empty store** until a sync lands. Icons and screenshots are still proxied and cached on disk, now with a **24-hour expiry**; an expired asset whose refetch fails is served stale rather than broken. The dev and test lanes that used to pre-seed the cache file now pass a snapshot explicitly as `MALMO_CATALOG_FILE` — an input the brain reads once and never writes.
+
+**Why:**
+- **Browsing offline was never installing offline.** The 2026-07-02 entry already said it: "installing an app needs internet to pull images regardless." So the cache bought a catalog you could read but not act on. That is a thin slice of value for a permanent copy of the catalog on every box.
+- **A pinned copy goes wrong in a way an empty store does not.** The catalog is a separate distribution with its own release cadence. A box holding an old snapshot can offer a version of a manifest the store no longer publishes, and install it. Empty is a state the user can understand and the box recovers from on the next sync; silently stale is neither.
+- **It makes the failure visible.** A box that rejects a snapshot on a digest mismatch used to freeze on its cache and keep looking healthy (`APP_STORE.md` # What the box models). With no cache, a restart shows an empty store — worse cosmetics, better signal.
+- **Assets are a different question, so they got a different answer.** Icons are page furniture for a snapshot the box already holds, and re-fetching them per request would be wasteful. But their filenames are stable per app (`icon.png`), so an unexpiring cache meant the first icon a box ever fetched was the icon it served forever, and republished artwork never reached the fleet. A day is short enough that a fixed icon lands on its own and long enough that browsing is not a stream of refetches. A per-asset digest on the wire would be better and is a two-repo change; the TTL is the cheap correct-enough form.
+
+**Affected docs:** `docs/specs/APP_STORE.md` (superseded banner, Failure modes, What the box models, Landing page, Locked decisions); `docs/specs/NEXT.md` (publish-mechanism language); `docs/architecture.md` (catalog package row + app-store note); `CLAUDE.md` + `docs/dev/contributing.md` (where catalog artifacts live, synthetic fixtures); `docs/dev/running-locally.md` (env-var list); `docs/dev/authoring-apps-with-an-agent.md`. Progress: `catalog-no-box-side-copy.md`.
+
+---
+
 ## 2026-08-11 — Hosted updates are cloud-decided per box and pushed, not manifest-driven and prompted
 
 **Previously:** `UPDATES.md` and `RELEASE_MANIFEST.md` described one update model for every box: a signed static `stable.json` on a CDN, polled hourly, verified with minisign, surfacing an "Update available" prompt that an admin clicks. That model was written before the `hosted` profile existed and was silently assumed to cover it.
@@ -196,6 +267,18 @@ The deeper point: verifying a promise *after* pulling a tag was never the trust 
 - Self-hosting is a hard requirement of the offline-LAN deployment model, not a preference. Licensing allows it: this copies only palette *values* and font *choices* (config, not Oatmeal component source), inside the Tailwind Plus End-Product allowance; Inter and Instrument Serif are both SIL OFL 1.1.
 
 **Affected docs:** `WEB_UI.md` # Styling, `docs/progress/oatmeal-theme.md`, `docs/dev/web-ui.md`.
+
+---
+
+## 2026-06-28 — Hosted first admin comes from the portal sign-in handshake; the admin-bootstrap secret is gone (#275)
+
+**Previously:** the two entries below (2026-06-20 and 2026-06-26) locked a one-time **admin-bootstrap secret** as the hosted gate: the seed carried `admin_bootstrap_secret`, the brain stored its SHA-256 hash, `POST /setup` took the secret in a `bootstrap_secret` body field and constant-time-compared it, and the operator got the plaintext out-of-band from the cloud console (later prefilled into `/setup` from a link fragment).
+
+**Now:** none of that exists in the code. The seed carries `assertion_verification_key` — the portal's Ed25519 **public** key — and the hosted owner signs in through the **portal-to-box SSO handshake**: the portal mints a short-lived signed ownership assertion, the box verifies it against the seeded key at `GET /_malmo/sso`, and the **first** valid assertion auto-creates the founding PAM admin. `POST /setup` is **disabled on hosted** (403, audited), and there is no hosted setup or login page at all — an unauthenticated visitor is bounced to the portal.
+
+**Why:** the owner already has a `malmo.network` account, so making them copy a second one-time secret into a box form was a step that bought no trust the portal session did not already carry. A signed assertion also removes the shared secret from the seed, the brain's SQLite and the operator's clipboard, and it is what the cloud half was built to send. The flip shipped with the code in #275 (`docs/progress/portal-box-sso.md`), but `ENVIRONMENT.md` and `FIRST_RUN.md` were never updated, so both pages went on describing a login path that could not happen — the same drift as #404 → #407 (#412).
+
+**Affected docs:** `ENVIRONMENT.md` (# Provisioning & first-boot; "Admin bootstrap — as built" renamed to "Owner sign-in & seed ingestion — as built" and rewritten), `FIRST_RUN.md` (# Step 2 hosted note), `NEXT.md` (section cross-reference), `docs/dev/hosted-boot-proof.md` (seed field list). The two entries below stay as written — they record what we believed then. Progress: `docs/progress/portal-box-sso.md`, `docs/progress/hosted-seed-doc-drift.md`.
 
 ---
 
