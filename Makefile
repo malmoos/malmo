@@ -135,7 +135,19 @@ VET_TAGS := dockerlive usermgrtest avahitest nmtest pamtest
 # list of top-level directories would not.
 GOPKGS = $(shell git ls-files '*.go' | xargs -n1 dirname | sort -u | sed 's|^|./|')
 
-vet:
+# An empty GOPKGS would make `go test` fall back to testing the CURRENT
+# directory and exit 0 — a gate that passes having covered nothing. That is the
+# #375 failure exactly (a guard pointed at a path it never matched, green
+# forever), so it fails loudly instead. It can only happen outside a git
+# checkout, e.g. an unpacked tarball.
+require-gopkgs:
+	@if [ -z "$(GOPKGS)" ]; then \
+	  echo "GOPKGS is empty — no tracked .go files found."; \
+	  echo "This target derives its package list from git; run it inside a git checkout."; \
+	  exit 1; \
+	fi
+
+vet: require-gopkgs
 	$(GO) vet $(GOPKGS)
 	@for tag in $(VET_TAGS); do 	  echo "$(GO) vet -tags $$tag <tracked packages>"; 	  $(GO) vet -tags $$tag $(GOPKGS) || exit 1; 	done
 
@@ -237,11 +249,11 @@ caddy-acmedns-image:
 # GOTESTFLAGS passes extra flags through to `go test` — CI sets it to -v so
 # skipped tests are visible (a skip prints nothing without it, so a test that
 # never runs reads exactly like one that passed). See .github/workflows/ci-go.yml.
-test:
+test: require-gopkgs
 	$(GO) test $(GOTESTFLAGS) $(GOPKGS)
 
 # Skip the pamverifier package (no libpam0g-dev required).
-test-nopam:
+test-nopam: require-gopkgs
 	$(GO) test $(GOTESTFLAGS) $$($(GO) list $(GOPKGS) | grep -v pamverifier)
 
 # Integration tests for the Avahi DBus publisher. Requires avahi-daemon
