@@ -121,9 +121,23 @@ fmt-check:
 # actually RUNNING them still needs the real system each tag names (TESTING.md).
 VET_TAGS := dockerlive usermgrtest avahitest nmtest pamtest
 
+# The packages the gate covers: every directory holding a TRACKED .go file.
+#
+# Not `./...`, which walks the working tree and therefore also walks whatever a
+# local build left behind. `dev/cloud/mkosi.tools/` is the real case — it is
+# gitignored, it holds vendored third-party sample code, and `go vet ./...`
+# reports that code and fails. CI never sees it (it is not in the repo), so the
+# local gate went red for something CI is structurally incapable of catching,
+# which is the fastest way to teach people to ignore a gate.
+#
+# `git ls-files` is the same idiom `fmt-check` already uses for exactly this
+# reason. It also keeps covering any package added later, which a hardcoded
+# list of top-level directories would not.
+GOPKGS = $(shell git ls-files '*.go' | xargs -n1 dirname | sort -u | sed 's|^|./|')
+
 vet:
-	$(GO) vet ./...
-	@for tag in $(VET_TAGS); do 	  echo "$(GO) vet -tags $$tag ./..."; 	  $(GO) vet -tags $$tag ./... || exit 1; 	done
+	$(GO) vet $(GOPKGS)
+	@for tag in $(VET_TAGS); do 	  echo "$(GO) vet -tags $$tag <tracked packages>"; 	  $(GO) vet -tags $$tag $(GOPKGS) || exit 1; 	done
 
 # `build` stays host-agent (fake) + brain, unchanged from before this slice.
 # host-agent-real is deliberately NOT folded in: it's Linux + CGO +
@@ -224,11 +238,11 @@ caddy-acmedns-image:
 # skipped tests are visible (a skip prints nothing without it, so a test that
 # never runs reads exactly like one that passed). See .github/workflows/ci-go.yml.
 test:
-	$(GO) test $(GOTESTFLAGS) ./...
+	$(GO) test $(GOTESTFLAGS) $(GOPKGS)
 
 # Skip the pamverifier package (no libpam0g-dev required).
 test-nopam:
-	$(GO) test $(GOTESTFLAGS) $$($(GO) list ./... | grep -v pamverifier)
+	$(GO) test $(GOTESTFLAGS) $$($(GO) list $(GOPKGS) | grep -v pamverifier)
 
 # Integration tests for the Avahi DBus publisher. Requires avahi-daemon
 # running on the host. No sudo needed (default DBus policy allows it).
