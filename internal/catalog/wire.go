@@ -40,7 +40,7 @@ import (
 // tracks the cloud's catalog.SchemaVersion; a snapshot stamped with anything else
 // is refused at verify (a format the box can't project), the same staleness guard
 // the cloud designed the version stamp for.
-const wireSchemaVersion = 1
+const wireSchemaVersion = 2
 
 // catalogFile is the browse payload served by GET /catalog?env=<environment>:
 // the app records this box's surface may show, the curated landing page, and the
