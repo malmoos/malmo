@@ -159,6 +159,7 @@ The **box-side enforcement is now built too (#306)**: a per-instance exposure st
 
 - **SSH: off in v1.** The appliance enables sshd-but-allows-no-account and scopes it to RFC1918 + mesh via nftables (`BUILD.md` # SSH, `AUTH.md`). In hosted v1 there is no LAN to scope to and no mesh, so SSH is **off**. Operator/console rescue is a hosting concern, not a user-facing feature. (Re-opening user SSH is a candidate for the later mesh pass.)
 - **No Samba/SMB.** Cross-device file sharing over SMB assumes a LAN with first-class native clients (`STORAGE.md` # Cross-device access). Over the public internet it is a non-starter and is **not shipped**. File access is the **in-dashboard file manager** (`FILES.md`), with a WebDAV-over-HTTPS path as a possible later addition.
+- **No public login picker.** The appliance login screen lists every account on the box, which is fine behind a LAN (`AUTH.md` # Login screen UX). On hosted the dashboard is a public host, so the endpoint behind that list — `GET /api/v1/auth/users` — returns **404**. A hosted box never shows the screen anyway: an unauthenticated visitor is redirected to the portal and comes back through the SSO handshake, so the route had no caller and only a reader.
 - **Identity stays PAM-sourced.** Even though no SSH or SMB surface consumes it in v1, PAM remains the source of truth for accounts and passwords (the decision in # Two layers). This keeps Layer 1 — including the auth model and the migration bundle — identical to the appliance.
 
 ## Boot (hosted)

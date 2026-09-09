@@ -108,6 +108,8 @@ The login page lists every account on the box — first name + colored letter gl
 
 **Tradeoff:** anyone who reaches the dashboard URL sees the user list. Acceptable in the household trust model — the security boundary is "you're authenticated to malmo," not "you don't know who lives here." Tinkerers who want stricter posture can flip a Settings toggle to switch to a blank username + password form.
 
+**Appliance only.** That tradeoff assumes the reader is already on the LAN or the mesh, which is what the appliance's network posture guarantees. A hosted box has no such perimeter — it answers on the public internet at `<box-id>.malmo.network` (`ENVIRONMENT.md` # Networking & discovery) — so the same list is a tenant roster any scanner can read, and the box-id labels needed to find it are already public in certificate transparency logs. On hosted the picker's source, `GET /api/v1/auth/users`, returns **404**, the same way `/setup` is disabled there. Nothing is lost: a hosted box never renders this screen. An unauthenticated visitor is redirected to the portal and bootstraps through the portal-to-box SSO handshake (`ENVIRONMENT.md` # Access & files, box side in `internal/api/sso.go`), so the dashboard never asks for the list. The refusal is 404 rather than 403 because the route does not exist on that profile, mirroring how the SSO landing hides itself on the appliance.
+
 ## Rate limiting
 
 - **Per-username:** exponential backoff after failed attempts. 3 fails → 1s; 5 → 10s; 10 → 60s; 20 → account temporarily locked for 15 minutes.

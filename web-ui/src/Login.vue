@@ -1,7 +1,11 @@
 <script setup lang="ts">
 // Login screen — AUTH.md # Login screen UX: user-list style (macOS / Plex / Synology
-// pattern). Users are fetched from GET /auth/users (public). Click a name →
-// password field appears → submit. No username text field.
+// pattern). Users are fetched from GET /auth/users. Click a name → password field
+// appears → submit. No username text field.
+//
+// Appliance-only in practice: on hosted, App.vue bounces an unauthenticated
+// visitor to the portal, so this screen never renders and /auth/users answers 404
+// there.
 import { ref } from "vue";
 import { RouterLink } from "vue-router";
 import { useQuery } from "@tanstack/vue-query";
@@ -12,7 +16,8 @@ import Heading from "@/components/ui/Heading.vue";
 
 interface PickerUser { id: string; username: string; }
 
-// Public endpoint: lists users for the login picker (no session required).
+// Public endpoint on the appliance: lists users for the login picker (no session
+// required). 404 on hosted, where this screen is never reached.
 const users = useQuery({
   queryKey: ["auth-users"],
   queryFn: () => api.get<{ users: PickerUser[] }>("/auth/users"),

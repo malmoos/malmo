@@ -3620,7 +3620,7 @@
             "description": "Error"
           }
         },
-        "summary": "List users for the login picker (public)"
+        "summary": "List users for the login picker (public; appliance only)"
       }
     },
     "/api/v1/catalog": {

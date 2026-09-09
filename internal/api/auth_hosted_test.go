@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bytes"
+	"io"
 	"testing"
 
 	"github.com/malmoos/malmo/internal/audit"
@@ -75,5 +77,24 @@ func TestApplianceSetup_OpenAndOmitsBoxID(t *testing.T) {
 	}](t, resp)
 	if body.User.BoxID != "" {
 		t.Errorf("appliance surfaced box_id = %q; want empty", body.User.BoxID)
+	}
+}
+
+// On hosted, GET /api/v1/auth/users is refused (404). The route feeds the login
+// picker, which never renders on a hosted box (the dashboard bounces an
+// unauthenticated visitor to the portal), so the only thing it could serve there
+// is a public tenant roster on an internet-facing host.
+func TestHostedAuthUsers_NotFound(t *testing.T) {
+	h := hostedHarness(t)
+	h.addMember("u_bob", "bob", "bobpass")
+
+	resp := h.do("GET", "/api/v1/auth/users", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Fatalf("hosted auth/users = %d; want 404", resp.StatusCode)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	if bytes.Contains(raw, []byte("bob")) {
+		t.Fatalf("hosted auth/users leaked a username: %s", raw)
 	}
 }
