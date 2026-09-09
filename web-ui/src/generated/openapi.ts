@@ -269,7 +269,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List users for the login picker (public) */
+        /** List users for the login picker (public; appliance only) */
         get: operations["auth-users"];
         put?: never;
         post?: never;

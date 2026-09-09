@@ -165,7 +165,7 @@ func (s *Server) registerAuth(api huma.API) {
 
 	huma.Register(api, huma.Operation{
 		OperationID: "auth-users", Method: "GET", Path: "/api/v1/auth/users",
-		Summary: "List users for the login picker (public)",
+		Summary: "List users for the login picker (public; appliance only)",
 	}, s.authUsers)
 }
 
@@ -207,19 +207,35 @@ func (s *Server) authState(ctx context.Context, _ *struct{}) (*struct {
 	return out, nil
 }
 
-// authUsers returns the minimal user list for the login picker. Public — anyone
-// who can reach the dashboard URL can see who lives on the box, which is
-// acceptable in the household trust model (AUTH.md # Login screen UX).
+// loginPickerUser is the one shape the picker exposes: no role, no email, no
+// hash. Widening it widens what an unauthenticated caller learns.
 type loginPickerUser struct {
 	ID       string `json:"id"`
 	Username string `json:"username"`
 }
 
+// authUsers returns the minimal user list for the login picker. Public on the
+// appliance — anyone who can reach the dashboard URL is already on the LAN or
+// the mesh, so seeing who lives on the box is acceptable in the household trust
+// model (AUTH.md # Login screen UX).
+//
+// Hosted is the opposite case and is refused. A hosted box answers on the
+// public internet at "<box-id>.malmo.network" (ENVIRONMENT.md
+// # Networking & discovery), so the same payload is a tenant roster any scanner
+// can read — and the box-id labels it enumerates are already discoverable from
+// certificate transparency. Nothing on hosted needs it: an unauthenticated
+// visitor is bounced to the portal and bootstraps through the SSO handshake
+// (sso.go), so the login picker never renders there and the dashboard never
+// calls this route. The refusal is 404, not 403, matching how ssoLanding hides
+// itself on the appliance — the route simply does not exist on this profile.
 func (s *Server) authUsers(ctx context.Context, _ *struct{}) (*struct {
 	Body struct {
 		Users []loginPickerUser `json:"users"`
 	}
 }, error) {
+	if s.profile == profile.Hosted {
+		return nil, huma.Error404NotFound("not found")
+	}
 	users, err := s.store.ListUsers()
 	if err != nil {
 		return nil, huma.Error500InternalServerError("store read failed", err)
