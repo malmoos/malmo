@@ -229,6 +229,26 @@ POST /v1/system/set-timezone   { "zone": "Europe/Stockholm" }
 - The real host-agent runs `timedatectl set-timezone <zone>`. That is what re-points `/etc/localtime` (`TIME.md` # System TZ). Both build profiles have it, so a hosted box sets its time zone the same way an appliance does.
 - Clock **sync** is a different thing, and it is not a write. The `clock-not-synced` detector reads `chronyc tracking` and reports it through `GET /v1/health/system` (# Health). Nothing in this protocol sets the time.
 
+**SSH access (`POST /v1/ssh/set-access`, `GET /v1/ssh/state`).** The host ops behind Settings → My account → Device access (`AUTH.md` # Device access). Pattern A.
+
+```
+POST /v1/ssh/set-access  { "user": "alex", "enabled": true,
+                           "authorized_keys": ["ssh-ed25519 AAAA... alex@laptop"],
+                           "require_password": false }
+  → 200 OK
+
+GET  /v1/ssh/state
+  → 200 OK { "daemon_running": true,
+             "users": [ { "username": "alex", "key_count": 1, "require_password": false } ] }
+```
+
+- **The write carries one account's full desired state, not a delta.** `authorized_keys` replaces that account's file; an empty list with `enabled: false` is how an account is removed. Full-state means a retry after a partial failure converges instead of compounding, which matters because the brain commits first and calls host second.
+- **host-agent renders the whole drop-in, never line-edits it.** `sshd_config.d/malmo-allowed.conf` is regenerated from the enabled set on every call: a global `AllowUsers`, then one `Match User` block per account carrying that account's `AuthenticationMethods`. It validates with `sshd -t` before reloading, so a bad render cannot take the daemon down.
+- **`require_password` adds a factor, it never substitutes for one.** True renders both methods for that account, so sshd demands both. Which method is mandatory is the **brain's** decision and depends on the profile — a key on hosted, the password on the appliance — and the brain refuses a hosted enable with no key before it ever calls here. host-agent does not know the profile and does not second-guess the brain, the same division as `set-timezone`, where the brain validates the zone.
+- **The daemon follows the enabled set.** host-agent starts sshd when the call leaves at least one account enabled and stops it when none is left, so :22 is closed on a box nobody uses SSH on (`BUILD.md` # SSH). On hosted this is the only control over that port.
+- **`GET /v1/ssh/state` is the reconcile read**, reported alongside the rest of actual state on the 60-second heartbeat. Drift here is asymmetric like everything else (# B): the brain re-applies when it made the last change and surfaces when something else did, so an admin who hand-edited the drop-in over SSH is not fought.
+- The fake host-agent keeps the same state in memory and reports a plausible `daemon_running`, so the whole flow is exercisable under `make dev`.
+
 **Network endpoints (NetworkManager-backed).** host-agent exposes Pattern A routes that wrap NetworkManager's DBus surface:
 
 ```
