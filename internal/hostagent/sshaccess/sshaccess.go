@@ -22,11 +22,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/malmoos/malmo/internal/protocol"
 )
@@ -51,10 +50,15 @@ type Manager struct {
 	// Present so the tests can drive the render and lifecycle logic without a
 	// real sshd or systemd; nothing else swaps it.
 	Runner func(name string, args ...string) ([]byte, error)
-	// Lookup resolves an account to its home directory and ids. Empty →
-	// user.Lookup. Swapped only by the tests, which have no malmo accounts on the
-	// machine running them.
-	Lookup func(username string) (*user.User, error)
+	// KeysDir holds the root-owned per-account key files. Empty → ManagedKeysDir.
+	KeysDir string
+
+	// mu serialises SetAccess. Every call is a read-modify-write of one drop-in
+	// that holds the whole enabled set, so two concurrent calls could each render
+	// from the same starting point and the second would drop the first's account —
+	// silently revoking someone's access, or stopping sshd while a user still has
+	// it on. The brain fans out per user, so concurrent calls are expected.
+	mu sync.Mutex
 }
 
 func (m *Manager) dropInPath() string {
@@ -89,6 +93,9 @@ type account struct {
 
 // SetAccess applies one account's full desired state.
 func (m *Manager) SetAccess(req protocol.SetSSHAccessRequest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if req.User == "" {
 		return fmt.Errorf("sshaccess: user is required")
 	}
@@ -148,73 +155,133 @@ func (m *Manager) State() (protocol.SSHState, error) {
 	}, nil
 }
 
-// writeKeys writes (or removes) an account's authorized_keys. The file and its
-// ~/.ssh directory are owned by the account and mode 0600/0700, because sshd
-// refuses to read a key file that is group- or world-writable, and because the
-// user must be able to manage it from their own shell.
+// ManagedKeysDir holds one root-owned file per enabled account. malmo's keys
+// live here and **never** in the user's home directory.
+//
+// This is the whole answer to a class of attack. host-agent runs as root, and
+// `~/.ssh` is a path the account controls: it can be replaced with a symlink
+// between any check and any use. Writing there as root means a `chown` that can
+// be redirected onto `/etc`, and a read-modify-write that can be redirected into
+// disclosing a root-only file to the user. Owning our own directory removes the
+// user from the path entirely — there is nothing to race.
+//
+// The per-account Match block points sshd at this file *and* at the user's own
+// `~/.ssh/authorized_keys`, so keys a user added from their own shell keep
+// working and malmo never has to parse, preserve or delete them. sshd reads a
+// path outside the home as root and requires it to be root-owned and not
+// group- or world-writable, which is what the 0755/0644 modes below are for.
+const ManagedKeysDir = "/etc/ssh/malmo-authorized-keys"
+
+func (m *Manager) managedKeysDir() string {
+	if m.KeysDir != "" {
+		return m.KeysDir
+	}
+	return ManagedKeysDir
+}
+
+// managedKeysPath is the account's key file. The username is validated rather
+// than escaped because it comes from the brain, which took it from a Linux
+// account: anything with a separator in it is a bug or an attack, and joining it
+// blindly would let it climb out of the directory.
+func (m *Manager) managedKeysPath(username string) (string, error) {
+	if username == "" || username == "." || username == ".." ||
+		strings.ContainsAny(username, `/\`+"\x00") {
+		return "", fmt.Errorf("sshaccess: refusing unsafe username %q", username)
+	}
+	return filepath.Join(m.managedKeysDir(), username), nil
+}
+
+// writeKeys writes the account's malmo-managed keys, or removes the file when
+// the account is disabled or has none. Every path here is root-owned, so nothing
+// the account can change is followed or trusted.
 func (m *Manager) writeKeys(username string, keys []string, enabled bool) error {
-	lookup := m.Lookup
-	if lookup == nil {
-		lookup = user.Lookup
-	}
-	u, err := lookup(username)
+	path, err := m.managedKeysPath(username)
 	if err != nil {
-		return fmt.Errorf("sshaccess: lookup %q: %w", username, err)
-	}
-	uid, err := strconv.Atoi(u.Uid)
-	if err != nil {
-		return fmt.Errorf("sshaccess: uid %q: %w", u.Uid, err)
-	}
-	gid, err := strconv.Atoi(u.Gid)
-	if err != nil {
-		return fmt.Errorf("sshaccess: gid %q: %w", u.Gid, err)
+		return err
 	}
 
-	sshDir := filepath.Join(u.HomeDir, ".ssh")
-	keyFile := filepath.Join(sshDir, "authorized_keys")
-
-	// Disabling removes the keys rather than leaving them behind: the account is
-	// off, and a stale key file is a credential nobody is tracking.
 	if !enabled || len(keys) == 0 {
-		if err := os.Remove(keyFile); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("sshaccess: remove %s: %w", keyFile, err)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("sshaccess: remove %s: %w", path, err)
 		}
 		return nil
 	}
 
-	if err := os.MkdirAll(sshDir, 0o700); err != nil {
-		return fmt.Errorf("sshaccess: mkdir %s: %w", sshDir, err)
+	if err := os.MkdirAll(m.managedKeysDir(), 0o755); err != nil {
+		return fmt.Errorf("sshaccess: mkdir %s: %w", m.managedKeysDir(), err)
 	}
-	if err := os.Chown(sshDir, uid, gid); err != nil {
-		return fmt.Errorf("sshaccess: chown %s: %w", sshDir, err)
-	}
-	if err := os.Chmod(sshDir, 0o700); err != nil {
-		return fmt.Errorf("sshaccess: chmod %s: %w", sshDir, err)
-	}
-
 	body := strings.Join(keys, "\n") + "\n"
-	if err := writeFileAtomic(keyFile, []byte(body), 0o600, uid, gid); err != nil {
-		return fmt.Errorf("sshaccess: write %s: %w", keyFile, err)
+	if err := writeFileAtomic(path, []byte(body), 0o644, -1, -1); err != nil {
+		return fmt.Errorf("sshaccess: write %s: %w", path, err)
 	}
 	return nil
 }
 
-// writeDropIn renders the config for the whole enabled set and refuses to
-// install it unless `sshd -t` accepts it. The candidate is written next to the
-// real path (same directory, so the rename is atomic and on the same
-// filesystem), tested, then moved into place.
+// writeDropIn renders the config for the whole enabled set and installs it only
+// if sshd accepts it.
+//
+// Two validations, because they catch different things and only one of them can
+// happen before the file is live:
+//
+//  1. `sshd -t -f <candidate>` reads the candidate on its own, so a syntax error
+//     in what we rendered is caught while nothing is installed.
+//  2. Plain `sshd -t` reads the real config, which is the only way to see our
+//     fragment in combination with the box's own sshd_config. That one can only
+//     run once the file is in place, so a failure there restores the previous
+//     content before returning.
+//
+// The restore is the part that matters. Leaving a fragment sshd rejects would
+// mean the next start or reload fails, which locks out every account that was
+// working a moment ago — the exact outcome validating before the reload exists
+// to prevent.
 func (m *Manager) writeDropIn(accounts []account) error {
 	path := m.dropInPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("sshaccess: mkdir %s: %w", filepath.Dir(path), err)
 	}
-	if err := writeFileAtomic(path, []byte(render(accounts)), 0o644, -1, -1); err != nil {
-		return fmt.Errorf("sshaccess: write %s: %w", path, err)
+
+	// Previous content, kept so a rejected combined config can be undone. A
+	// missing file is recorded as "did not exist", which restores by removing.
+	previous, prevErr := os.ReadFile(path)
+	hadPrevious := prevErr == nil
+	if prevErr != nil && !os.IsNotExist(prevErr) {
+		return fmt.Errorf("sshaccess: read %s: %w", path, prevErr)
 	}
+
+	candidate := path + ".new"
+	if err := writeFileAtomic(candidate, []byte(render(accounts, m.managedKeysDir())), 0o644, -1, -1); err != nil {
+		return fmt.Errorf("sshaccess: write %s: %w", candidate, err)
+	}
+	if out, err := m.run("sshd", "-t", "-f", candidate); err != nil {
+		_ = os.Remove(candidate)
+		return fmt.Errorf("sshaccess: sshd rejected the rendered config: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	if err := os.Rename(candidate, path); err != nil {
+		_ = os.Remove(candidate)
+		return fmt.Errorf("sshaccess: install %s: %w", path, err)
+	}
+
 	if out, err := m.run("sshd", "-t"); err != nil {
-		return fmt.Errorf("sshaccess: sshd -t rejected the rendered config: %w: %s", err, strings.TrimSpace(string(out)))
+		if rbErr := restore(path, previous, hadPrevious); rbErr != nil {
+			// Both the change and the undo failed. Say so plainly: the box now
+			// holds a fragment sshd rejects, and a human has to look.
+			return fmt.Errorf("sshaccess: sshd rejected the combined config and %s could not be restored: %w (restore: %v)",
+				path, err, rbErr)
+		}
+		return fmt.Errorf("sshaccess: sshd rejected the combined config: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// restore puts the drop-in back the way it was before a failed write.
+func restore(path string, previous []byte, hadPrevious bool) error {
+	if !hadPrevious {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return writeFileAtomic(path, previous, 0o644, -1, -1)
 }
 
 // applyDaemon brings sshd to the state the enabled set implies. With no enabled

@@ -2,10 +2,9 @@ package sshaccess
 
 import (
 	"os"
-	"os/user"
 	"path/filepath"
-	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/malmoos/malmo/internal/protocol"
@@ -14,25 +13,22 @@ import (
 // newManager builds a Manager pointed at a temp drop-in, with sshd and systemctl
 // faked. Every command is recorded so the daemon-lifecycle assertions can read
 // what would have run.
-func newManager(t *testing.T, home string) (*Manager, *[]string) {
+// testKey is a real ed25519 public key, so anything that parses it agrees with
+// what a box would see.
+const testKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIfJnhGAA/rWbxmvMGuZvXV6in+czTK5F8Ie7QGTKOT+ alex@laptop"
+
+func newManager(t *testing.T, keysDir string) (*Manager, *[]string) {
 	t.Helper()
 	var ran []string
 	m := &Manager{
 		DropInPath: filepath.Join(t.TempDir(), "sshd_config.d", "malmo-allowed.conf"),
+		KeysDir:    keysDir,
 		Runner: func(name string, args ...string) ([]byte, error) {
 			ran = append(ran, name+" "+strings.Join(args, " "))
 			if name == "systemctl" && len(args) > 0 && args[0] == "is-active" {
 				return []byte("active\n"), nil
 			}
 			return nil, nil
-		},
-		Lookup: func(username string) (*user.User, error) {
-			return &user.User{
-				Uid:      strconv.Itoa(os.Getuid()),
-				Gid:      strconv.Itoa(os.Getgid()),
-				Username: username,
-				HomeDir:  filepath.Join(home, username),
-			}, nil
 		},
 	}
 	return m, &ran
@@ -85,7 +81,7 @@ func TestMethodsAreRequiredNotAlternatives(t *testing.T) {
 // means "every account" to sshd, which is the opposite of what an empty set
 // means, so a hand-started sshd would admit the whole machine.
 func TestRenderEmptySetDeniesEveryone(t *testing.T) {
-	out := render(nil)
+	out := render(nil, "/etc/ssh/malmo-authorized-keys")
 	if !strings.Contains(out, "DenyUsers *") {
 		t.Fatalf("empty set did not deny everyone:\n%s", out)
 	}
@@ -98,7 +94,7 @@ func TestRenderEmptySetDeniesEveryone(t *testing.T) {
 // everything after a Match line to that block, so a global written afterwards
 // would silently become the last account's policy.
 func TestRenderGlobalsPrecedeMatchBlocks(t *testing.T) {
-	out := render([]account{{Username: "alex", KeyCount: 1}})
+	out := render([]account{{Username: "alex", KeyCount: 1}}, "/etc/ssh/malmo-authorized-keys")
 	firstMatch := strings.Index(out, "Match User ")
 	if firstMatch < 0 {
 		t.Fatalf("no Match block rendered:\n%s", out)
@@ -177,9 +173,7 @@ func TestBadRenderIsRefusedBeforeReload(t *testing.T) {
 			}
 			return nil, nil
 		},
-		Lookup: func(username string) (*user.User, error) {
-			return &user.User{Uid: strconv.Itoa(os.Getuid()), Gid: strconv.Itoa(os.Getgid()), HomeDir: t.TempDir()}, nil
-		},
+		KeysDir: t.TempDir(),
 	}
 	err := m.SetAccess(protocol.SetSSHAccessRequest{
 		User: "alex", Enabled: true, AuthorizedKeys: []string{"ssh-ed25519 AAAAKEY alex@laptop"},
@@ -202,7 +196,7 @@ func TestStateIsReadBackFromTheRenderedFile(t *testing.T) {
 		AuthorizedKeys: []string{"ssh-ed25519 AAAAKEY alex@laptop", "ssh-ed25519 AAAAKEY2 alex@desktop"},
 	})
 
-	fresh := &Manager{DropInPath: m.DropInPath, Runner: m.Runner, Lookup: m.Lookup}
+	fresh := &Manager{DropInPath: m.DropInPath, KeysDir: m.KeysDir, Runner: m.Runner}
 	st, err := fresh.State()
 	if err != nil {
 		t.Fatalf("State: %v", err)
@@ -240,30 +234,97 @@ func TestUnmanagedConfigIsRefused(t *testing.T) {
 	}
 }
 
-// Disabling an account removes its keys. A stale authorized_keys on a disabled
-// account is a credential nobody is tracking.
-func TestDisablingRemovesTheKeys(t *testing.T) {
-	home := t.TempDir()
-	m, _ := newManager(t, home)
-	keyFile := filepath.Join(home, "alex", ".ssh", "authorized_keys")
+// malmo's keys live in a root-owned file, never in the account's home. The home
+// directory is a path the account controls and can replace with a symlink between
+// any check and any use, so writing there as root is a privilege-escalation path
+// rather than a hardening problem. Owning the file removes the user from it.
+func TestKeysAreWrittenOutsideTheUsersHome(t *testing.T) {
+	keysDir := t.TempDir()
+	m, _ := newManager(t, keysDir)
 
 	mustSet(t, m, protocol.SetSSHAccessRequest{
-		User: "alex", Enabled: true, AuthorizedKeys: []string{"ssh-ed25519 AAAAKEY alex@laptop"},
+		User: "alex", Enabled: true, AuthorizedKeys: []string{testKey},
+	})
+	assertContains(t, filepath.Join(keysDir, "alex"), testKey)
+
+	// And sshd is pointed at both that file and the user's own, so keys they added
+	// from their shell keep working without malmo ever touching that file.
+	conf := readDropInFile(t, m)
+	if !strings.Contains(conf, "AuthorizedKeysFile "+filepath.Join(keysDir, "alex")+" .ssh/authorized_keys") {
+		t.Fatalf("drop-in does not point sshd at both key files:\n%s", conf)
+	}
+}
+
+// A username that could climb out of the managed directory is refused rather
+// than joined blindly.
+func TestUnsafeUsernameIsRefused(t *testing.T) {
+	m, _ := newManager(t, t.TempDir())
+	for _, name := range []string{"../root", "a/b", ".", ".."} {
+		err := m.SetAccess(protocol.SetSSHAccessRequest{
+			User: name, Enabled: true, AuthorizedKeys: []string{testKey},
+		})
+		if err == nil {
+			t.Fatalf("SetAccess accepted username %q", name)
+		}
+	}
+}
+
+// Disabling an account removes its key file. A stale key on a disabled account
+// is a credential nobody is tracking.
+func TestDisablingRemovesTheKeyFile(t *testing.T) {
+	keysDir := t.TempDir()
+	m, _ := newManager(t, keysDir)
+	keyFile := filepath.Join(keysDir, "alex")
+
+	mustSet(t, m, protocol.SetSSHAccessRequest{
+		User: "alex", Enabled: true, AuthorizedKeys: []string{testKey},
 	})
 	if _, err := os.Stat(keyFile); err != nil {
 		t.Fatalf("keys not written: %v", err)
 	}
-	info, err := os.Stat(filepath.Dir(keyFile))
-	if err != nil {
-		t.Fatalf("stat .ssh: %v", err)
-	}
-	if info.Mode().Perm() != 0o700 {
-		t.Fatalf(".ssh mode = %o; want 700 (sshd refuses a group-writable key path)", info.Mode().Perm())
-	}
-
 	mustSet(t, m, protocol.SetSSHAccessRequest{User: "alex", Enabled: false})
 	if _, err := os.Stat(keyFile); !os.IsNotExist(err) {
-		t.Fatalf("keys survived a disable: %v", err)
+		t.Fatalf("key file survived a disable: %v", err)
+	}
+}
+
+// Two accounts enabled at once must both survive. Every call re-renders one
+// drop-in that holds the whole enabled set, so an unsynchronised read-modify-write
+// would silently drop whichever account lost the race.
+func TestConcurrentEnablesDoNotLoseAnAccount(t *testing.T) {
+	m, _ := newManager(t, t.TempDir())
+
+	var wg sync.WaitGroup
+	for _, name := range []string{"alex", "bo", "cy", "di"} {
+		wg.Add(1)
+		go func(u string) {
+			defer wg.Done()
+			if err := m.SetAccess(protocol.SetSSHAccessRequest{
+				User: u, Enabled: true, AuthorizedKeys: []string{testKey},
+			}); err != nil {
+				t.Errorf("SetAccess(%s): %v", u, err)
+			}
+		}(name)
+	}
+	wg.Wait()
+
+	st, err := m.State()
+	if err != nil {
+		t.Fatalf("State: %v", err)
+	}
+	if len(st.Users) != 4 {
+		t.Fatalf("enabled accounts = %d; want 4 — a concurrent write dropped one", len(st.Users))
+	}
+}
+
+func assertContains(t *testing.T, path, want string) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if !strings.Contains(string(b), want) {
+		t.Fatalf("%s does not contain %q:\n%s", path, want, b)
 	}
 }
 

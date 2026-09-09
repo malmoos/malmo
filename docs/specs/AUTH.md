@@ -247,7 +247,7 @@ The optional factor is a **second lock, never a second door**. Choosing it rende
 2. Confirm dashboard password (re-auth gate, prevents stolen-session abuse).
 3. Add a public key. Required on hosted, optional on the appliance. The user can **upload a `.pub` file or paste the text**; both reach the same validation. Several keys per account is normal — a laptop and a desktop. A pasted **private** key is refused in plain English and never stored.
 4. Optionally turn on the second factor, described to the user as an extra lock rather than another way in.
-5. Brain calls host-agent → renders the sshd drop-in from the enabled set, writes `~/.ssh/authorized_keys` as the owning user, validates with `sshd -t`, reloads, and starts or stops the daemon as the enabled set requires. SMB is the `valid users` allowlist plus a Samba reload, unchanged.
+5. Brain calls host-agent → renders the sshd drop-in from the enabled set, writes the account's keys to a **root-owned file outside the user's home** (`/etc/ssh/malmo-authorized-keys/<user>`), validates with `sshd -t`, reloads, and starts or stops the daemon as the enabled set requires. The per-account `Match` block points sshd at that file **and** at the user's own `~/.ssh/authorized_keys`, so keys a user added from their shell keep working and malmo never touches that file. Keeping malmo's keys out of the home directory is a security requirement, not tidiness: host-agent runs as root and `~/.ssh` is a path the account controls, so writing there as root can be redirected by a symlink the user swaps in. SMB is the `valid users` allowlist plus a Samba reload, unchanged.
 
 **Why one password instead of two:**
 

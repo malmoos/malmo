@@ -207,6 +207,8 @@ func (s *Server) addMySSHKey(ctx context.Context, in *struct {
 		return nil, huma.Error500InternalServerError("read ssh keys failed", err)
 	}
 	if len(existing) >= maxSSHKeysPerUser {
+		// Also a guard rejection rather than a malformed request, so it audits.
+		s.auditor.Record(ctx, audit.ActionSSHKeyAdd, tgt, nil, false)
 		return nil, huma.Error422UnprocessableEntity(
 			fmt.Sprintf("you can have at most %d SSH keys; remove one first", maxSSHKeysPerUser))
 	}
@@ -278,12 +280,19 @@ func (s *Server) deleteMySSHKey(ctx context.Context, in *struct {
 	// user asked to remove a key, not to lose their access, and they may be about
 	// to add a replacement.
 	if access.Enabled && s.keyRequired() && len(keys) == 1 && keys[0].ID == in.ID {
+		// A guard rejection, the same shape as the last-admin guard, so it audits
+		// (CLAUDE.md # Elevation-class mutations). Not a plain validation 422.
+		s.auditor.Record(ctx, audit.ActionSSHKeyDelete, tgt, nil, false)
 		return nil, huma.Error422UnprocessableEntity(
 			"this is your only SSH key; add another one or turn SSH off before removing it")
 	}
 
 	if err := s.store.DeleteSSHKey(id.User.ID, in.ID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
+			// Audited: an attempt to revoke a key that is not there is still an
+			// attempted elevation-class mutation, and it is what probing another
+			// account's key ids would look like from the Activity view.
+			s.auditor.Record(ctx, audit.ActionSSHKeyDelete, tgt, nil, false)
 			return nil, huma.Error404NotFound("key not found")
 		}
 		s.auditor.Record(ctx, audit.ActionSSHKeyDelete, tgt, nil, false)

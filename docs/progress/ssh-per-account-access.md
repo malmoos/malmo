@@ -34,6 +34,20 @@ The enabled set is recovered by **reading the rendered file back**; host-agent k
 
 Adding a key to a **disabled** account does not call the host. There is nothing for sshd to admit, and writing an `authorized_keys` for an account that is off would leave a credential live ahead of the switch.
 
+## What the two reviews changed
+
+Three real defects, all in this slice's own new code. Recorded because the shape of each is worth knowing, not to pad the entry.
+
+**A root privilege-escalation path (Greptile).** The first version wrote each account's keys into `~/.ssh/authorized_keys` as root, exactly as `AUTH.md` described. But `~/.ssh` is a path the account controls, and it can be replaced with a symlink between any check and any use. The `chown` could be redirected onto `/etc`, and the read-modify-write could be redirected into copying a root-only file somewhere the user reads it. Hardening the checks would only have narrowed the race.
+
+The fix removes the user from the path. malmo's keys now live in a **root-owned file outside the home**, `/etc/ssh/malmo-authorized-keys/<user>`, and each account's `Match` block names that file **and** the user's own `.ssh/authorized_keys`. Nothing malmo writes is on a path the account can change, keys a user added from their own shell keep working, and malmo never has to parse, preserve or delete that file. `AUTH.md` and `BRAIN_HOST_PROTOCOL.md` are updated: this is a deliberate divergence from the spec's original wording, with the reason recorded.
+
+**A rejected config was left installed (agent review).** `writeDropIn` claimed to test a candidate and then move it into place, and actually wrote straight to the live path and validated afterwards. So a render sshd rejects stayed on disk, and the next start or reload would fail — the lockout the ordering exists to prevent. The test passed because it only asserted the daemon was not touched. There are now two validations: the candidate is tested on its own before installing, and the combined config is tested after, with the previous file restored if that fails.
+
+**Concurrent writes could drop an account (Greptile).** Every call re-renders one drop-in holding the whole enabled set, and the manager had no lock, so two calls could each render from the same starting point and the second would silently revoke the first's account, or stop sshd while someone still had it on. The brain fans out per user, so this was reachable. `Manager` now serialises `SetAccess`, covered by a test that enables four accounts concurrently and runs under `-race`.
+
+Also from the agent review: the elevation-class delete now audits its 404 and its last-key guard rejection. The guard is the same shape as the last-admin guard `CLAUDE.md` names, so it audits rather than passing as a plain validation failure.
+
 ## How it maps to the specs
 
 Realizes `AUTH.md` # Device access for SSH, and reverses the hosted half of `ENVIRONMENT.md` # Access & files under a `DECISIONS.md` entry rather than by drift. Follows the established host seams: consumer-side interface in `internal/hostagent` with the concrete provider in its own package, brain commits first with rollback on host failure, elevation-class writes auditing both outcomes, and a `Match`-per-account config the brain owns and the reconciler can compare.
@@ -49,6 +63,8 @@ The division of labour with host-agent matches `set-timezone`: the brain validat
 - **The appliance nftables drop-in does not exist either.** `BUILD.md` specifies it and no build file writes it, which predates this change and is unchanged by it.
 - **`sshd -t` validates the whole config, not the drop-in alone.** On a host whose main `sshd_config` is already broken, every write here fails. That is the safe direction, but the error the user sees will name our call rather than the real cause.
 - **Key comments are kept and only stripped of newlines.** A comment is attacker-influenced text that lands in a root-owned file. Newlines are the part that could add a second key line; the rest is preserved because users identify keys by it.
+- **The brain does not serialise its own concurrent pushes.** host-agent is now safe against concurrent calls, but two overlapping requests from one user can still reach it in either order, and the store has no revision to reject a stale one. Low risk for a self-service panel one person drives; it would need a revision column to close properly.
+- **A failed revocation is not retried.** Removing a key commits in the brain and then pushes; if the push fails the key stays live on the host until something re-pushes, and nothing does today because no reconcile loop consumes `GET /v1/ssh/state`. The failure is logged and audited, so it is visible, but visibility is not recovery. This is the sharpest reason the reconcile follow-up matters.
 - **PAM builds need `CGO_CFLAGS=-D_GNU_SOURCE` on this machine.** Pre-existing and unrelated to this change; `make check` fails at `vet` without it here.
 
 ## What's next

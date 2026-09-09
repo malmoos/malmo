@@ -76,7 +76,7 @@ Why daemon-follows-the-enabled-set instead of daemon-on-with-an-empty-allowlist:
 - **The toggle is no less simple.** The user still flips one switch in Settings; the brain calls host-agent, which renders the config and starts or stops the unit. A `systemctl` call is no more visible to the user than a config edit was.
 - `PermitRootLogin no`. `PasswordAuthentication yes` globally, because it is a prerequisite for the password half of any account's `AuthenticationMethods` — **it does not mean a password alone gets in.** Per-account method policy is a `Match User` block, so an account whose mandatory factor is the key is `publickey`, and one that added the optional second lock is `publickey,password`.
 
-The drop-in at `sshd_config.d/malmo-allowed.conf` is **rendered whole from the enabled set**, never line-edited: a global `AllowUsers` plus one `Match User` block per enabled account. host-agent validates it with `sshd -t` before reloading, so a bad render never takes the daemon down.
+The drop-in at `sshd_config.d/malmo-allowed.conf` is **rendered whole from the enabled set**, never line-edited: a global `AllowUsers` plus one `Match User` block per enabled account. Each block names an `AuthorizedKeysFile` pair — malmo's root-owned `/etc/ssh/malmo-authorized-keys/<user>` first, the user's own `.ssh/authorized_keys` second (`AUTH.md` # Device access explains why malmo's keys stay out of the home directory). host-agent validates the candidate on its own **before** installing it and the combined config **after**, restoring the previous file if the combined check fails, so a render sshd rejects never survives to break the next start.
 
 **Network scope: LAN + mesh only, structurally.** An nftables rule on :22 default-denies and allows only:
 

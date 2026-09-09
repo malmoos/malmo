@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,7 +31,7 @@ const keyCountPrefix = "#   malmo-keys: "
 // nothing: an account whose Match block says "publickey" cannot get in with a
 // password no matter what the global says, and an account with no Match block
 // cannot get in at all because it is not in AllowUsers.
-func render(accounts []account) string {
+func render(accounts []account, keysDir string) string {
 	sorted := make([]account, len(accounts))
 	copy(sorted, accounts)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Username < sorted[j].Username })
@@ -67,6 +68,10 @@ func render(accounts []account) string {
 		b.WriteString(keyCountPrefix + a.Username + " " + strconv.Itoa(a.KeyCount) + "\n")
 		b.WriteString("Match User " + a.Username + "\n")
 		b.WriteString("    AuthenticationMethods " + methods(a) + "\n")
+		// Two paths, in this order. The first is malmo's root-owned file, which the
+		// account cannot write. The second is the user's own, so keys they added
+		// from their shell keep working and malmo never touches that file.
+		b.WriteString("    AuthorizedKeysFile " + filepath.Join(keysDir, a.Username) + " .ssh/authorized_keys\n")
 	}
 	return b.String()
 }

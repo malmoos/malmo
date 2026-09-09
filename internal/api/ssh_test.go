@@ -314,3 +314,57 @@ func assertAudited(t *testing.T, h *harness, action string, success bool) {
 	}
 	t.Fatalf("no %s audit event with success=%v", action, success)
 }
+
+// A failed elevation-class delete leaves a trace, including one against an id
+// that is not there — which is what probing another account's key ids would look
+// like from the Activity view.
+func TestFailedKeyDeleteIsAudited(t *testing.T) {
+	h := hostedSSHHarness(t)
+
+	resp := h.do("DELETE", "/api/v1/me/ssh/keys/nope", nil)
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Fatalf("delete unknown key = %d; want 404", resp.StatusCode)
+	}
+	assertAudited(t, h, audit.ActionSSHKeyDelete, false)
+}
+
+// The last-key guard is a guard rejection in the CLAUDE.md sense, the same shape
+// as the last-admin guard, so it audits rather than passing silently as a plain
+// validation failure.
+func TestLastKeyGuardIsAudited(t *testing.T) {
+	h := hostedSSHHarness(t)
+	body := h.addKey(t, testKeyA)
+	if resp := h.do("PUT", "/api/v1/me/ssh", map[string]any{"enabled": true}); resp.StatusCode != 200 {
+		t.Fatalf("enable = %d", resp.StatusCode)
+	}
+
+	resp := h.do("DELETE", "/api/v1/me/ssh/keys/"+body.Keys[0].ID, nil)
+	resp.Body.Close()
+	if resp.StatusCode != 422 {
+		t.Fatalf("removing the only key = %d; want 422", resp.StatusCode)
+	}
+	assertAudited(t, h, audit.ActionSSHKeyDelete, false)
+}
+
+// A second key makes the first removable, which is the escape hatch the guard
+// leaves open.
+func TestSecondKeyMakesTheFirstRemovable(t *testing.T) {
+	h := hostedSSHHarness(t)
+	first := h.addKey(t, testKeyA)
+	h.addKey(t, testKeyB)
+	if resp := h.do("PUT", "/api/v1/me/ssh", map[string]any{"enabled": true}); resp.StatusCode != 200 {
+		t.Fatalf("enable = %d", resp.StatusCode)
+	}
+
+	resp := h.do("DELETE", "/api/v1/me/ssh/keys/"+first.Keys[0].ID, nil)
+	resp.Body.Close()
+	if resp.StatusCode != 204 {
+		t.Fatalf("delete with a spare key = %d; want 204", resp.StatusCode)
+	}
+	calls := h.sshCallsSnapshot()
+	last := calls[len(calls)-1]
+	if len(last.AuthorizedKeys) != 1 {
+		t.Fatalf("host got %d keys after the revoke; want 1", len(last.AuthorizedKeys))
+	}
+}
