@@ -670,6 +670,19 @@ assert_ssh_posture() {
             || fail "IPv6 LAN range $range is not allowed to reach :22, so every IPv6 client hits the drop: $rules"
     done
 
+    # Containers are excluded, and the ORDER is what makes that true: Docker's
+    # bridges are numbered inside 172.16.0.0/12, so a drop placed after the
+    # RFC1918 accept would never be reached and a compromised app container would
+    # sit in front of the box's own sshd.
+    for iface in docker0 'br-*'; do
+        grep -qF "iifname \"$iface\"" <<<"$rules" \
+            || fail "container interface $iface is not excluded from the :22 allow, so an app container can reach sshd: $rules"
+    done
+    docker_line="$(grep -n 'iifname "docker0"' <<<"$rules" | head -1 | cut -d: -f1)"
+    lan_line="$(grep -n '172\.16\.0\.0/12' <<<"$rules" | head -1 | cut -d: -f1)"
+    [ -n "$docker_line" ] && [ -n "$lan_line" ] && [ "$docker_line" -lt "$lan_line" ] \
+        || fail "the container drop does not come before the RFC1918 accept, so it is dead code (docker=$docker_line lan=$lan_line): $rules"
+
     # The harness's own drop-in still sorts first, so root login survives every
     # rebuild. This is the check that catches someone renaming it back.
     [ -f /etc/ssh/sshd_config.d/00-medium-test.conf ] \
