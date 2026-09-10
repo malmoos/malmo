@@ -171,7 +171,7 @@ jobs:
     # mkosi-sandbox EPERM (#189), so the fix has to be proven here, not on a
     # floating ubuntu-latest.
     runs-on: ubuntu-24.04
-    # Two mkosi builds (production image + QEMU test image), the QEMU boots (five
+    # Two mkosi builds (production image + QEMU test image), the QEMU boots (six
     # on a push/dispatch, just `update` on a PR — see MALMO_CLOUD_BOOTS below), and
     # the compress-and-attach publish run ~10 min in practice; the 120 cap is a
     # generous ceiling so a one-off slow runner is never killed mid-build.
@@ -306,7 +306,7 @@ jobs:
       #    brain that rejects the live seed fails here -> nothing is published. The
       #    test image reuses the control-plane bundle built in step 1, so it
       #    exercises the same brain that ships.
-      # Scope to unseeded + seeded + bios + access — four boots, each guarding a
+      # Scope to unseeded + seeded + bios + access + update + ssh — each guarding a
       # regression that must never reach publish:
       #   - unseeded + seeded: the regression this gate was built for — the built
       #     image's brain accepting the current seed schema.
@@ -331,6 +331,13 @@ jobs:
       #     replace the brain, cannot put the box back when the new brain does not
       #     serve, or acts on an unpinned target, must never be published.
       #
+      #   - ssh (#467): the ONLY proof that :22 is closed on a box nobody uses SSH on.
+      #     On hosted the daemon's run state is the whole of the port control — no
+      #     malmo firewall, and the provider attaches none — so an image that boots
+      #     with sshd running has no control over the port at all, and one that
+      #     cannot stop it again can never close it. It also proves the mandatory
+      #     factor on a real sshd: a key gets in, a password alone does not.
+      #
       # The frozen-identity boot stays out: it is orthogonal (it checks a re-delivered
       # seed is ignored on a later boot) and has shown a flaky false "re-ingested"
       # verdict whose root cause is still open, so it is left to the full local run
@@ -338,7 +345,7 @@ jobs:
       #
       # ON A PULL REQUEST the list narrows to `update` alone (#389). That boot is
       # standalone — its own fresh overlay and its own box-id — so it needs none
-      # of the others, and the four it drops each guard a publish-time regression
+      # of the others, and the ones it drops each guard a publish-time regression
       # that a PR cannot ship. One boot keeps the PR cost close to the build cost
       # (the build dominates), while still failing a PR that breaks the updater.
       # A PR that wants the whole list can still get it: `gh workflow run
@@ -349,9 +356,9 @@ jobs:
       # under `sudo -E`, and sudo's secure_path resets PATH, so `go` on the runner's
       # PATH is invisible to the script; pass it explicitly (run-cloud-tests.sh
       # honours ${GO:-}, and -E preserves it).
-      - name: Boot test (${{ github.event_name == 'pull_request' && 'control-plane update only' || 'seed schema + BIOS/UEFI + access modes + control-plane update' }})
+      - name: Boot test (${{ github.event_name == 'pull_request' && 'control-plane update only' || 'seed schema + BIOS/UEFI + access modes + control-plane update + SSH' }})
         env:
-          MALMO_CLOUD_BOOTS: ${{ github.event_name == 'pull_request' && 'update' || 'unseeded seeded bios access update' }}
+          MALMO_CLOUD_BOOTS: ${{ github.event_name == 'pull_request' && 'update' || 'unseeded seeded bios access update ssh' }}
           GO: ${{ steps.go.outputs.go-bin }}
         run: make test-cloud-qemu
 

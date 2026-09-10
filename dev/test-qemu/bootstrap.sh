@@ -21,7 +21,7 @@ TEST_DIR="${REPO_ROOT}/dev/test-qemu"
 WORK="${REPO_ROOT}/.dev/qemu"
 EXTRA="${TEST_DIR}/mkosi.extra"
 CANARY="${WORK}/.malmo-medium-ready"
-CANARY_VERSION="v29"  # bump when mkosi.conf changes require a clean rebuild
+CANARY_VERSION="v30"  # bump when mkosi.conf changes require a clean rebuild
 PASSPHRASE_FILE="${TEST_DIR}/mkosi.passphrase"  # LUKS recovery key (slice 0023); gitignored
 IMAGE_OUT="${WORK}/malmo-medium.raw"
 SSH_KEY="${WORK}/ssh-key"
@@ -343,8 +343,29 @@ cp "${TEST_DIR}/malmo-tpm-enroll.service" "$EXTRA/etc/systemd/system/"
 cp "${TEST_DIR}/first-boot-tpm-enroll.sh" "$EXTRA/usr/lib/malmo/first-boot-tpm-enroll.sh"
 chmod 0755 "$EXTRA/usr/lib/malmo/first-boot-tpm-enroll.sh"
 
-# sshd: allow root key-login, no passwords (test image only).
-cat >"$EXTRA/etc/ssh/sshd_config.d/medium-test.conf" <<'EOF'
+# The appliance's own static config (#467): the SSH LAN/mesh scoping rule, its
+# loader unit, and the sshd hardening drop-in. Checked in under appliance/ at
+# their in-image paths and copied in whole — see appliance/README.md for why they
+# are not in this script. On a real box the malmo .deb ships them; the medium lane
+# is the only thing that builds an appliance image today.
+cp -a "${TEST_DIR}/appliance/etc/." "$EXTRA/etc/"
+
+# sshd: allow root key-login, no passwords (TEST IMAGE ONLY).
+#
+# Named to sort FIRST in sshd_config.d/. sshd takes the first value it obtains for
+# a keyword and reads the drop-ins in filename order, so malmo-hardening.conf's
+# `PermitRootLogin no` would otherwise win and shut the harness out of its own
+# image — every in-VM assertion here runs over this root connection.
+#
+# The appliance lane deliberately does NOT exercise the per-account SSH toggle.
+# Enabling an account makes host-agent render an AllowUsers naming that account and
+# no other; AllowUsers is not additive across drop-in files, so root would stop
+# being considered and the harness would cut its own connection mid-run. Turning
+# the last account back off would stop sshd outright and do the same. The daemon
+# lifecycle and the account toggle are proved in the cloud lane instead, which
+# reaches its box over the serial console and has no connection to lose
+# (dev/cloud/cloud-assertions.sh, the `ssh` boot).
+cat >"$EXTRA/etc/ssh/sshd_config.d/00-medium-test.conf" <<'EOF'
 PermitRootLogin prohibit-password
 PasswordAuthentication no
 PubkeyAuthentication yes

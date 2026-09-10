@@ -107,11 +107,22 @@ func (s *Store) ListSSHKeys(userID string) ([]SSHKey, error) {
 // A key the account already holds returns ErrDuplicateSSHKey, enforced by the
 // UNIQUE (user_id, fingerprint) index rather than a read-then-write, so two
 // concurrent adds cannot both win.
+//
+// A zero AddedAt means "now", which is what adding a key is. A caller that
+// supplies one is RE-inserting a key that already existed — the rollback paths
+// that put a key back after a failed host push — and it keeps its original
+// timestamp. Stamping those with `now` would silently reorder the user's key
+// list, since ListSSHKeys orders by added_at, so a failed operation would leave a
+// visible change behind after reporting that nothing happened.
 func (s *Store) AddSSHKey(k SSHKey) error {
+	added := k.AddedAt
+	if added.IsZero() {
+		added = time.Now()
+	}
 	_, err := s.db.Exec(
 		`INSERT INTO ssh_keys (id, user_id, label, public_key, fingerprint, added_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		k.ID, k.UserID, k.Label, k.PublicKey, k.Fingerprint, time.Now().Unix())
+		k.ID, k.UserID, k.Label, k.PublicKey, k.Fingerprint, added.Unix())
 	if err != nil && isUniqueErr(err) {
 		return ErrDuplicateSSHKey
 	}

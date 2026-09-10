@@ -433,6 +433,7 @@ Loose ends. Each is parked until it bites or a higher-tier topic pulls it in.
 - Container vulnerability scanning at catalog publish (Trivy/Grype in CI on every PR). `APP_STORE.md`.
 
 **Networking & cloud**
+- **SSH scoping on a dual-stack LAN.** `BUILD.md` # SSH scopes `:22` by source range, and the ranges it names are RFC1918. IPv6 has no RFC1918. As built (#467) the rule allows link-local `fe80::/10` and unique-local `fc00::/7` and drops everything else, which is the honest translation — those two cannot be routed in from outside — but it does not cover the common home network whose LAN peers carry only ISP-delegated **global** addresses. Those are reachable from the public internet, so allowing them would undo the property the rule exists for: a scan from outside sees a closed port. Link-local always exists on a LAN interface, so the path is not shut today; what needs deciding is whether "the LAN" gets a better v6 definition (the box's own delegated prefix, learned at runtime? interface-scoped accepts after all?) or whether v6 SSH stays link-local-and-ULA-only and the mesh is the answer for everything else. `BUILD.md` # SSH, `DISCOVERY.md` (mDNS hands clients AAAA records, which is how a client ends up on v6 in the first place).
 - `box-id` allocation scheme — word-pair vs. random hex + check digit. `MALMO_NETWORK.md`.
 - DNS provider for the apex — Cloudflare free tier vs. self-hosted PowerDNS. `MALMO_NETWORK.md`.
 - ACME DNS-01 plugin path — Caddy generic vs. malmo-specific plugin. `MALMO_NETWORK.md`.

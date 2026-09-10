@@ -78,6 +78,14 @@ chmod 0600 /root/.ssh/authorized_keys 2>/dev/null || true
 ln -sf /lib/systemd/system/ssh.service \
     /etc/systemd/system/multi-user.target.wants/ssh.service
 
+# SSH LAN/mesh scoping (#467; BUILD.md # SSH). The rule + its loader unit are
+# staged from appliance/ by bootstrap.sh; enable the unit here with the same
+# manual .wants idiom as everything else (no `systemctl enable` in the chroot).
+# It is a standing policy: loaded every boot regardless of whether any account has
+# SSH on, so there is no window where :22 is reachable from off the LAN.
+ln -sf /etc/systemd/system/malmo-ssh-firewall.service \
+    /etc/systemd/system/multi-user.target.wants/malmo-ssh-firewall.service
+
 # Disable services we don't want eating boot time / pulling in deps.
 systemctl --root=/ disable systemd-networkd-wait-online.service \
     >/dev/null 2>&1 || true
@@ -101,6 +109,7 @@ systemctl --root=/ mask systemd-firstboot.service >/dev/null 2>&1 || true
 mkdir -p /usr/lib/systemd/system-preset
 cat > /usr/lib/systemd/system-preset/99-malmo-medium-test.preset <<'EOF'
 enable ssh.service
+enable malmo-ssh-firewall.service
 enable NetworkManager.service
 enable avahi-daemon.service
 enable docker.service

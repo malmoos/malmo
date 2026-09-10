@@ -16,9 +16,12 @@
 #     never blocks boot.
 #
 # Deliberately NOT here (hosted cuts, ENVIRONMENT.md # How the profile is realized):
-# sshd (off in hosted v1), NetworkManager, Avahi, the LUKS/TPM enrollment of the
-# medium lane. The serial-driven boot self-check is test-lane-only — it is enabled
-# by dev/cloud/test/mkosi.postinst.chroot, not here.
+# NetworkManager, Avahi, the LUKS/TPM enrollment of the medium lane. sshd used to
+# be on that list; #467 moved it — the daemon ships, but it is left STOPPED here
+# rather than enabled (see the ssh.service block below).
+#
+# The serial-driven boot self-check is test-lane-only — it is enabled by
+# dev/cloud/test/mkosi.postinst.chroot, not here.
 set -euo pipefail
 
 # Enable a unit by dropping its multi-user.target.wants symlink (no systemctl in
@@ -100,6 +103,48 @@ enable_unit /etc/systemd/system/malmo-load-images.service malmo-load-images.serv
 # delivered seed at /var/lib/malmo/seed.json before host-agent launches the brain;
 # no-ops on an un-seeded boot.
 enable_unit /etc/systemd/system/malmo-seed.service malmo-seed.service
+
+# sshd installed, NOT started at boot (#467; BUILD.md # SSH). Debian's
+# openssh-server postinst enables ssh.service, which would leave every hosted box
+# answering on :22 for its whole life. On this profile that is the entire port
+# control: there is no malmo firewall and the provider attaches none, so a running
+# daemon IS an open port (ENVIRONMENT.md # Access & files). The brain starts the
+# unit through host-agent when the first account turns SSH on and stops it when the
+# last one turns it off, so a box nobody uses SSH on presents no port at all.
+#
+# Remove the postinst's multi-user.target.wants link and add a preset saying the
+# same thing, so a `systemctl preset-all` on first boot does not re-enable it.
+# ssh.socket is left alone: Debian trixie does not enable it on install (only
+# ssh.service gets a link), so the service unit is the whole of the port control.
+rm -f /etc/systemd/system/multi-user.target.wants/ssh.service
+systemctl --root=/ disable ssh.service >/dev/null 2>&1 || true
+
+# Delete the host keys Debian's postinst generated at BUILD time. Baked keys mean
+# every box provisioned from this image shares them, so anyone with the published
+# image could impersonate any hosted box to its owner's ssh client. Same reasoning
+# as the empty /etc/machine-id below: per-box identity is generated on the box.
+#
+# Debian's sshd-keygen.service cannot regenerate them here — it is
+# ConditionFirstBoot=yes and only pulled in by ssh.service, and on this profile
+# sshd usually first starts long after the first boot, when that condition is
+# false. malmo-sshd-keygen.service is the same job without the condition, pulled
+# in at BOOT rather than with the daemon: host-agent runs `sshd -t` to validate the
+# rendered config before it ever starts the unit, and that exits "no hostkeys
+# available" when there are none, so keys arriving with the daemon arrive too late
+# for the first enable to succeed. Keys on disk open nothing; the port is still the
+# daemon's run state.
+rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub
+enable_unit /etc/systemd/system/malmo-sshd-keygen.service malmo-sshd-keygen.service
+mkdir -p /etc/systemd/system/ssh.service.wants
+ln -sf /etc/systemd/system/malmo-sshd-keygen.service \
+    /etc/systemd/system/ssh.service.wants/malmo-sshd-keygen.service
+mkdir -p /usr/lib/systemd/system-preset
+cat > /usr/lib/systemd/system-preset/99-malmo-ssh.preset <<'EOF'
+# malmo owns sshd's run state (BUILD.md # SSH). Installed, off until an account
+# opts in; host-agent starts and stops the unit.
+disable ssh.service
+disable ssh.socket
+EOF
 
 # Block app-container egress to the cloud metadata endpoint (169.254.169.254) so an
 # untrusted app container cannot read the first-boot seed secrets via the classic
