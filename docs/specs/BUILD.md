@@ -82,7 +82,7 @@ The drop-in at `sshd_config.d/malmo-allowed.conf` is **rendered whole from the e
 
 **Network scope: LAN + mesh only, structurally.** An nftables rule on :22 default-denies and allows only:
 
-- RFC1918 source ranges: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` (the LAN).
+- RFC1918 source ranges: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` (the LAN), and their IPv6 counterparts `fe80::/10` (link-local) and `fc00::/7` (unique-local). Both families have to be spelled out: in an `inet` table an `ip saddr` match compiles to an nfproto==IPv4 test before the address compare, so an IPv4-only rule silently drops every IPv6 client — and a LAN client resolving the box over mDNS commonly gets an AAAA record. A globally-routable IPv6 address is **not** allowed even from the same LAN, because it is reachable from the public internet, which is the thing this rule exists to close. The dual-stack LAN whose peers only carry GUAs is an open item (`NEXT.md` # SSH scoping on a dual-stack LAN); link-local always exists on a LAN interface, so the path stays open meanwhile.
 - The mesh interface (`tailscale0` / `headscale0`) when present — devices the user has paired via `MALMO_NETWORK.md`.
 
 SSH from the public internet is **structurally blocked**, not relying on per-account opt-in alone. A port scan from outside sees a closed port, not a refused-auth banner. The path to "SSH to my box from outside" is "pair the device on the mesh" — same trust model the user already learns for the dashboard. Interface-agnostic by design (nftables on source IP, not `ListenAddress` on a NIC name), so changing NICs / adding Wi-Fi doesn't break it.

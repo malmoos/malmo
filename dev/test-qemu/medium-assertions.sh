@@ -659,6 +659,17 @@ assert_ssh_posture() {
             || fail "private range $range is not allowed to reach :22: $rules"
     done
 
+    # Both families, and this is the easy one to lose. In an inet table an
+    # `ip saddr` match compiles to an nfproto==IPv4 test first, so it can never
+    # match an IPv6 packet — drop the v6 accepts and every IPv6 connection falls
+    # into the final drop instead. A LAN client resolving the box over mDNS
+    # commonly gets an AAAA record, so that would hang `ssh malmo.local` while the
+    # rule still read as if it allowed the LAN.
+    for range in fe80::/10 fc00::/7; do
+        grep -qF "$range" <<<"$rules" \
+            || fail "IPv6 LAN range $range is not allowed to reach :22, so every IPv6 client hits the drop: $rules"
+    done
+
     # The harness's own drop-in still sorts first, so root login survives every
     # rebuild. This is the check that catches someone renaming it back.
     [ -f /etc/ssh/sshd_config.d/00-medium-test.conf ] \
