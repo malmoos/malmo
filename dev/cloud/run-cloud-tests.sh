@@ -40,6 +40,11 @@
 #                       failed-update-then-revert (#382), and the target-driven path:
 #                       host-agent reads an update-target source and applies it with
 #                       no prompt, refusing an unpinned answer (#401)
+#   ssh                 own overlay + box-id, same test-portal key → the per-account
+#                       SSH opt-in against a REAL sshd (#467): :22 closed at boot,
+#                       the port opening and closing with the toggle, a real login a
+#                       key passes and a password alone does not, and a deleted
+#                       account leaving no key behind
 #
 # The positive SSO path (a valid portal assertion → owner auto-create → box session →
 # first-run wizard) needs the portal's private signing key, so it is the joint cloud
@@ -78,6 +83,10 @@ BOX_ID_ACCESS=owl-harbor
 # one scenario that replaces the box's control-plane images, so it must never run
 # over an overlay another boot depends on.
 BOX_ID_UPDATE=pine-otter
+# The ssh boot (#467) provisions its OWN box on a fresh overlay too: it creates and
+# deletes accounts and rewrites the box's sshd config, so it must never run over an
+# overlay another boot depends on.
+BOX_ID_SSH=heron-birch
 
 # Which boots to run, space-separated (unseeded seeded frozen bios access).
 # Default: all.
@@ -100,6 +109,11 @@ BOX_ID_UPDATE=pine-otter
 #     is ALSO in the publish gate: the gate it proves is on by default for every
 #     hosted app (DECISIONS.md 2026-07-08), and this is its only real-Caddy net, so a
 #     box that leaks its forward-auth cookie to an app upstream must fail publish.
+#   - `ssh` (#467) proves the SSH daemon lifecycle and the per-account opt-in on a
+#     real sshd. It is in the gate too: on hosted the daemon's run state is the ONLY
+#     control over :22, so an image that boots with sshd running, or that cannot
+#     close the port again, must not publish. It creates and deletes accounts and
+#     rewrites the box's sshd config, so it takes its own overlay.
 #   - `update` (#382, #401) proves the control-plane updater against a real Docker
 #     daemon, a real registry inside the guest, a real brain restart, a real revert,
 #     and the update-target loop that drives all of it on a hosted box. It
@@ -107,7 +121,7 @@ BOX_ID_UPDATE=pine-otter
 #     convenience — sharing one would leave every later boot on images this scenario
 #     built.
 # All three are in the gate — see ci-cloud-image.yml.
-BOOTS="${MALMO_CLOUD_BOOTS:-unseeded seeded frozen bios access update}"
+BOOTS="${MALMO_CLOUD_BOOTS:-unseeded seeded frozen bios access update ssh}"
 should_run() { case " $BOOTS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 # QEMU writes serial logs as root (this script runs under sudo). Resolve the
@@ -516,6 +530,53 @@ if should_run update; then
         exit 1
     fi
     echo "boot update OK — control-plane update applied and a failed update reverted, both for real (box_id=${BOX_ID_UPDATE})"
+fi
+
+# --- 10. ssh boot: the per-account SSH opt-in against a real sshd (#467). Its OWN
+# fresh overlay + box-id, seeded with a TEST-PORTAL key like the access and update
+# boots — every SSH write is elevation-class, so the box needs a real owner session
+# before it can be asked to turn SSH on. Everything else happens inside the guest:
+# cloud-assertions.sh makes a keypair with ssh-keygen and connects the box to
+# itself, so nothing crosses the air gap.
+#
+# This is the only place the daemon lifecycle is observable. #464 built the whole
+# path down to the rendered sshd config, but a rendered string cannot tell you that
+# :22 opened, that a real sshd took the key and refused the password, or that the
+# port closed again — and on hosted that port is controlled by nothing else.
+if should_run ssh; then
+    [ -n "$GO" ] && [ -x "$GO" ] || {
+        echo "ssh boot needs go to mint the owner assertion; none found (\$GO='${GO:-}')" >&2
+        exit 1
+    }
+    mapfile -t ssh_mint < <(mint_owner_assertion "$BOX_ID_SSH") || true
+    SSH_KEY_B64="${ssh_mint[0]:-}"
+    SSH_TOKEN="${ssh_mint[1]:-}"
+    [ -n "$SSH_KEY_B64" ] && [ -n "$SSH_TOKEN" ] || {
+        echo "ssh boot: failed to mint the owner assertion (go run ./dev/cloud/mkassertion)" >&2
+        exit 1
+    }
+
+    # Same explicit-globals reasoning as the access and update boots: OVERLAY and
+    # FIRMWARE are run_boot's globals and the boots above leave them pointing
+    # elsewhere.
+    SSH_OVERLAY="${RUN_DIR}/overlay-ssh.qcow2"
+    qemu-img create -f qcow2 -b "$QCOW2" -F qcow2 "$SSH_OVERLAY" >/dev/null
+    OVERLAY="$SSH_OVERLAY"
+    FIRMWARE=uefi
+
+    # Wider than the default for the same reason as the access boot: on top of the
+    # shared prechecks this one drives SSO, an elevation, a key add, three sshd
+    # reloads, three real ssh connections and a user create + delete. Each waits on
+    # a systemctl round-trip through host-agent, and under CI's TCG-only QEMU those
+    # add up well past the 480s default.
+    VERDICT_TIMEOUT=900
+    if ! run_boot "ssh" "ssh" \
+        -smbios "type=11,value=$(seed_cred_keyed "$BOX_ID_SSH" "$SSH_KEY_B64")" \
+        -smbios "type=11,value=io.systemd.credential.binary:malmo.sso_token=$(printf '%s' "$SSH_TOKEN" | base64 -w0)"; then
+        echo "cloud ssh proof: ${VERDICT}" >&2
+        exit 1
+    fi
+    echo "boot ssh OK — :22 closed at boot, opened by the toggle and closed again; key accepted, password alone refused (box_id=${BOX_ID_SSH})"
 fi
 
 echo "cloud end-to-end: PASS (boots: ${BOOTS})"
