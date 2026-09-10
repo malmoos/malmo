@@ -1155,9 +1155,16 @@ ssh)
     grep -qE ' (200|201)' <<<"$(status_of "$gaddk")" \
         || fail "ssh: '$GONE_USER' could not add a key: status='$(status_of "$gaddk")'"
     elevate "$apex" "$gone_cookie" "$GONE_PW" || fail "ssh: re-elevate as '$GONE_USER' before turning SSH on failed"
+    # This enable is also the re-enable regression test. SSH was turned off in step
+    # 8, which stops the unit — and Debian's ssh.service declares
+    # RuntimeDirectory=sshd, so systemd deletes /run/sshd on that stop. sshd will
+    # not read a config without it, and host-agent runs `sshd -t` before starting
+    # anything, so without the RuntimeDirectoryPreserve drop-in no account can ever
+    # turn SSH back on until the box reboots. Only the SECOND enable of a boot
+    # catches it.
     gon="$(full_send PUT /api/v1/me/ssh "$apex" "$gone_cookie" '{"enabled":true}' 2>/dev/null)"
     grep -q ' 200' <<<"$(status_of "$gon")" \
-        || fail "ssh: '$GONE_USER' could not turn SSH on: status='$(status_of "$gon")'"
+        || fail "ssh: '$GONE_USER' could not turn SSH on AFTER a previous account turned it off: status='$(status_of "$gon")' — if host-agent logged 'Missing privilege separation directory', the ssh.service RuntimeDirectoryPreserve drop-in is missing and SSH is one-shot per boot"
     wait_port22 open || fail "ssh: :22 never re-opened for '$GONE_USER'"
     grep -qE "^AllowUsers .*\b${GONE_USER}\b" "$DROPIN" \
         || fail "ssh: drop-in does not name '$GONE_USER' after they turned SSH on: $(cat "$DROPIN")"
