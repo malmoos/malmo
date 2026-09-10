@@ -619,6 +619,54 @@ esac
 
 echo "control-plane M1c: /setup created the admin, verify-password authenticated it against /etc/shadow"
 
+# --- SSH posture on the appliance (#467; BUILD.md # SSH) ------------------
+# The two files the appliance must ship, and the rule actually being loaded.
+# Both halves matter separately: a file that lands but is never loaded scopes
+# nothing, and a rule loaded from something not checked in is not a shipped
+# posture.
+#
+# What this does NOT do is flip the per-account toggle. Enabling an account makes
+# host-agent render an AllowUsers naming that account and no other, and disabling
+# the last one stops sshd — either would cut this very connection, which is how
+# every assertion in this file reaches the box. The daemon lifecycle and the
+# toggle are proved in the cloud lane, over a serial console with nothing to lose
+# (dev/cloud/cloud-assertions.sh, the `ssh` boot).
+assert_ssh_posture() {
+    [ -f /etc/ssh/sshd_config.d/malmo-hardening.conf ] \
+        || fail "sshd hardening drop-in missing from the image (/etc/ssh/sshd_config.d/malmo-hardening.conf)"
+    grep -qE '^PermitRootLogin +no$' /etc/ssh/sshd_config.d/malmo-hardening.conf \
+        || fail "hardening drop-in does not set PermitRootLogin no"
+    grep -qE '^PasswordAuthentication +yes$' /etc/ssh/sshd_config.d/malmo-hardening.conf \
+        || fail "hardening drop-in does not set PasswordAuthentication yes (the prerequisite for the password half of AuthenticationMethods)"
+
+    [ -f /etc/nftables.d/malmo-ssh.conf ] \
+        || fail "SSH firewall rule missing from the image (/etc/nftables.d/malmo-ssh.conf)"
+
+    # The loader ran and the rule is live in the kernel, not just on disk.
+    systemctl is-active --quiet malmo-ssh-firewall.service \
+        || fail "malmo-ssh-firewall.service is not active: $(systemctl status malmo-ssh-firewall.service --no-pager 2>&1 | tail -10)"
+    rules="$(nft list table inet malmo_ssh 2>&1)" \
+        || fail "nftables table inet malmo_ssh not loaded: $rules"
+
+    # Default-deny plus the three private ranges. Assert the drop and each allow
+    # separately — a rule set that dropped everything would pass a "drop exists"
+    # check while locking the whole LAN out, and one that allowed everything
+    # would pass an "allow exists" check while scoping nothing.
+    grep -qE 'tcp dport 22 .*drop' <<<"$rules" \
+        || fail "no default drop on :22 in the malmo_ssh table: $rules"
+    for range in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+        grep -qF "$range" <<<"$rules" \
+            || fail "private range $range is not allowed to reach :22: $rules"
+    done
+
+    # The harness's own drop-in still sorts first, so root login survives every
+    # rebuild. This is the check that catches someone renaming it back.
+    [ -f /etc/ssh/sshd_config.d/00-medium-test.conf ] \
+        || fail "harness sshd drop-in is not named to sort before malmo-*.conf; root login would be shut off by the hardening drop-in"
+    echo "appliance SSH posture: hardening drop-in + LAN-scoped :22 rule shipped and loaded"
+}
+assert_ssh_posture
+
 case "$PHASE" in
     first-boot)
         # The run-once enrollment unit (malmo-tpm-enroll.service) is
