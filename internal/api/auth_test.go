@@ -169,8 +169,16 @@ func newHarness(t *testing.T, opts ...func(*Server)) *harness {
 		var req protocol.DeleteUserRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		pmu.Lock()
-		delete(pwds, req.User)
 		deleteCalls = append(deleteCalls, req.User)
+		pmu.Unlock()
+		// Same sentinel idiom as sshFailUser: this one account's delete fails on
+		// the host, so the brain's rollback path is reachable over the wire.
+		if req.User == deleteFailUser {
+			http.Error(w, `{"code":"boom","message":"userdel failed"}`, 500)
+			return
+		}
+		pmu.Lock()
+		delete(pwds, req.User)
 		pmu.Unlock()
 		_ = json.NewEncoder(w).Encode(struct{}{})
 	})

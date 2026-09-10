@@ -306,6 +306,31 @@ func (s *Server) deleteUser(ctx context.Context, in *struct {
 		s.auditor.Record(ctx, audit.ActionUserDelete, tgt, meta, false)
 		return nil, huma.Error500InternalServerError("read ssh access failed", err)
 	}
+	// Read before the delete cascades them away: they are what puts the account's
+	// SSH back if a later step fails. Nothing else can reconstruct them — the host
+	// holds only the rendered set, and after the revoke below not even that.
+	sshKeys, err := s.store.ListSSHKeys(targetID)
+	if err != nil {
+		s.auditor.Record(ctx, audit.ActionUserDelete, tgt, meta, false)
+		return nil, huma.Error500InternalServerError("read ssh keys failed", err)
+	}
+
+	// This is the one place the brain-commits-first rule cannot hold: the revoke
+	// has to read state the delete is about to cascade away, so the host is
+	// changed first. That makes every later failure path owe a compensating
+	// re-push — without one, a delete that fails after this point leaves the
+	// account enabled in the brain and revoked on the host, with nothing to
+	// notice or repair the difference (CLAUDE.md # Brain commits first).
+	restoreSSH := func() {
+		if !access.Enabled {
+			return
+		}
+		if err := s.applySSH(ctx, target.Username, access.Enabled, access.RequirePassword, sshKeys); err != nil {
+			slog.Error("ssh revoke rollback failed; the account is enabled in the brain but revoked on the host",
+				"user_id", targetID, "username", target.Username, "service", "ssh", "err", err)
+		}
+	}
+
 	if access.Enabled {
 		if err := s.applySSH(ctx, target.Username, false, false, nil); err != nil {
 			s.auditor.Record(ctx, audit.ActionUserDelete, tgt, meta, false)
@@ -317,12 +342,30 @@ func (s *Server) deleteUser(ctx context.Context, in *struct {
 	// the row so the two sides stay aligned. Cascaded sessions don't come back —
 	// the user has to log in again, which is acceptable for a rare error path.
 	if err := s.store.DeleteUser(targetID); err != nil {
+		restoreSSH()
 		s.auditor.Record(ctx, audit.ActionUserDelete, tgt, meta, false)
 		return nil, huma.Error500InternalServerError("delete user failed", err)
 	}
 	if err := s.host.DeleteUser(ctx, target.Username); err != nil {
 		if rbErr := s.store.CreateUser(target); rbErr != nil {
 			slog.Error("rollback delete user failed", "user_id", targetID, "err", rbErr)
+		} else {
+			// The user row is back, so put their SSH back with it. The cascade took
+			// the ssh_access and ssh_keys rows, so these are re-inserted from what
+			// was read above; restoring the row alone would hand the user back an
+			// account whose keys had silently been destroyed by a delete that
+			// reported failure.
+			if rbErr := s.store.SetSSHAccess(targetID, access.Enabled, access.RequirePassword); rbErr != nil {
+				slog.Error("rollback ssh access failed", "user_id", targetID,
+					"username", target.Username, "service", "ssh", "err", rbErr)
+			}
+			for _, k := range sshKeys {
+				if rbErr := s.store.AddSSHKey(k); rbErr != nil {
+					slog.Error("rollback ssh key failed", "user_id", targetID,
+						"username", target.Username, "service", "ssh", "err", rbErr)
+				}
+			}
+			restoreSSH()
 		}
 		s.auditor.Record(ctx, audit.ActionUserDelete, tgt, meta, false)
 		return nil, huma.Error502BadGateway("host-agent delete-user failed", err)

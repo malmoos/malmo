@@ -503,3 +503,96 @@ func TestDeletingADisabledUserStillHoldsTheSSHLock(t *testing.T) {
 		t.Fatal("delete never finished after the lock was released")
 	}
 }
+
+// deleteFailUser makes the harness's /v1/auth/delete-user mock answer 500, so the
+// brain's delete rollback is reachable.
+const deleteFailUser = "delfail"
+
+// Deleting a user revokes their SSH on the host BEFORE the brain row goes, because
+// the revoke reads state the delete is about to cascade away. That inverts the
+// usual brain-commits-first order, so every later failure owes a compensating
+// re-push. Without one, a delete that fails after the revoke leaves the account
+// enabled in the brain and revoked on the host, and nothing re-reads the host to
+// notice: the user silently loses SSH while the dashboard still shows it on.
+func TestFailedDeleteRestoresTheAccountsSSH(t *testing.T) {
+	h := hostedSSHHarness(t)
+	h.addMember("u_bob", deleteFailUser, "pw-bob")
+
+	// Bob has SSH on with one key. Written straight to the store: /me/ssh is
+	// self-service and this test is about the admin's delete, not Bob's session.
+	if err := h.st.SetSSHAccess("u_bob", true, true); err != nil {
+		t.Fatalf("seed ssh access: %v", err)
+	}
+	added := time.Now().Add(-72 * time.Hour).Truncate(time.Second)
+	if err := h.st.AddSSHKey(store.SSHKey{
+		ID: "k_bob", UserID: "u_bob", Label: "laptop",
+		PublicKey: testKeyA, Fingerprint: "SHA256:bob", AddedAt: added,
+	}); err != nil {
+		t.Fatalf("seed ssh key: %v", err)
+	}
+
+	resp := h.do("DELETE", "/api/v1/users/u_bob", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != 502 {
+		t.Fatalf("delete with a failing host = %d; want 502", resp.StatusCode)
+	}
+
+	// The user row came back, as it did before this fix.
+	if _, err := h.st.GetUser("u_bob"); err != nil {
+		t.Fatalf("user row not restored after a failed delete: %v", err)
+	}
+
+	// And so did their SSH. The cascade took both rows with the user, so a restore
+	// that put back only the user would hand Bob an account whose keys had been
+	// destroyed by an operation that reported failure.
+	access, err := h.st.SSHAccessFor("u_bob")
+	if err != nil {
+		t.Fatalf("read ssh access: %v", err)
+	}
+	if !access.Enabled || !access.RequirePassword {
+		t.Fatalf("ssh access not restored: %+v", access)
+	}
+	keys, err := h.st.ListSSHKeys("u_bob")
+	if err != nil {
+		t.Fatalf("list ssh keys: %v", err)
+	}
+	if len(keys) != 1 || keys[0].ID != "k_bob" {
+		t.Fatalf("ssh keys not restored: %+v", keys)
+	}
+	// The original timestamp, not the restore's. ListSSHKeys orders by added_at, so
+	// re-stamping would silently reorder the user's key list after a failure that
+	// said nothing happened.
+	if !keys[0].AddedAt.Equal(added.UTC()) {
+		t.Fatalf("restored key was re-stamped: added_at = %v, want %v", keys[0].AddedAt, added.UTC())
+	}
+
+	// The host was put back too: revoked on the way down, re-pushed on the way out.
+	calls := h.sshCallsSnapshot()
+	if len(calls) < 2 {
+		t.Fatalf("expected a revoke and a compensating re-push; got %+v", calls)
+	}
+	last := calls[len(calls)-1]
+	if last.User != deleteFailUser || !last.Enabled || !last.RequirePassword {
+		t.Fatalf("host was not re-pushed the account's previous state: %+v", last)
+	}
+	if len(last.AuthorizedKeys) != 1 {
+		t.Fatalf("re-push carried %d keys, want 1: %+v", len(last.AuthorizedKeys), last)
+	}
+}
+
+// A delete that never touched SSH must not push anything to the host on its
+// failure path either — a disabled account has nothing to restore, and a box with
+// no sshd installed would fail the call.
+func TestFailedDeleteOfAnAccountWithoutSSHPushesNothing(t *testing.T) {
+	h := hostedSSHHarness(t)
+	h.addMember("u_bob", deleteFailUser, "pw-bob")
+
+	resp := h.do("DELETE", "/api/v1/users/u_bob", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != 502 {
+		t.Fatalf("delete with a failing host = %d; want 502", resp.StatusCode)
+	}
+	if calls := h.sshCallsSnapshot(); len(calls) != 0 {
+		t.Fatalf("a delete of an SSH-less account reached the ssh seam: %+v", calls)
+	}
+}

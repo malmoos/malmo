@@ -336,3 +336,68 @@ func containsCmd(ran []string, prefix string) bool {
 	}
 	return false
 }
+
+// A rejected render must leave the key file exactly as it was, not only the
+// drop-in. The keys are written first on purpose — an account must never be named
+// in a config a moment before the key that authenticates it exists — which means
+// the key file is already committed when the config step runs. Without the undo,
+// a failed validation leaves the two disagreeing.
+//
+// The first-ever enable is the case that matters most: nothing is rendered, so a
+// key file left behind belongs to an account the config does not name at all.
+func TestRejectedRenderLeavesNoKeyFileBehind(t *testing.T) {
+	keys := t.TempDir()
+	m := &Manager{
+		DropInPath: filepath.Join(t.TempDir(), "malmo-allowed.conf"),
+		KeysDir:    keys,
+		Runner: func(name string, args ...string) ([]byte, error) {
+			if name == "sshd" {
+				return []byte("bad configuration option"), os.ErrInvalid
+			}
+			return nil, nil
+		},
+	}
+	if err := m.SetAccess(protocol.SetSSHAccessRequest{
+		User: "alex", Enabled: true, AuthorizedKeys: []string{testKey},
+	}); err == nil {
+		t.Fatal("SetAccess accepted a config sshd -t rejected")
+	}
+	if _, err := os.Stat(filepath.Join(keys, "alex")); !os.IsNotExist(err) {
+		t.Fatalf("key file survived a rejected render: stat err = %v", err)
+	}
+}
+
+// The same undo, for an account that already had keys: a rejected render must not
+// leave the new set live under the old config. Here the account is enabled and
+// working, and a second call that sshd refuses tries to replace its keys.
+func TestRejectedRenderRestoresThePreviousKeys(t *testing.T) {
+	keys := t.TempDir()
+	m, _ := newManager(t, keys)
+	mustSet(t, m, protocol.SetSSHAccessRequest{
+		User: "alex", Enabled: true, AuthorizedKeys: []string{testKey},
+	})
+
+	const replacement = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB alex@desktop"
+	m.Runner = func(name string, args ...string) ([]byte, error) {
+		if name == "sshd" {
+			return []byte("bad configuration option"), os.ErrInvalid
+		}
+		return nil, nil
+	}
+	if err := m.SetAccess(protocol.SetSSHAccessRequest{
+		User: "alex", Enabled: true, AuthorizedKeys: []string{replacement},
+	}); err == nil {
+		t.Fatal("SetAccess accepted a config sshd -t rejected")
+	}
+
+	got, err := os.ReadFile(filepath.Join(keys, "alex"))
+	if err != nil {
+		t.Fatalf("key file missing after a rejected render: %v", err)
+	}
+	if strings.Contains(string(got), "alex@desktop") {
+		t.Fatalf("the rejected render's keys are live on the host: %q", got)
+	}
+	if !strings.Contains(string(got), "alex@laptop") {
+		t.Fatalf("the previous keys were not restored: %q", got)
+	}
+}

@@ -105,6 +105,17 @@ func (m *Manager) SetAccess(req protocol.SetSSHAccessRequest) error {
 		return err
 	}
 
+	// The key file is written first so an account never becomes reachable a moment
+	// before the key that authenticates it exists. That ordering also means the key
+	// file is already committed if the config step then fails, so capture enough to
+	// put it back: writeDropIn restores the drop-in on a rejected render, and
+	// without this the two would disagree — a key file for an account the config no
+	// longer names, or an enabled account whose keys were just replaced by the set
+	// from a render that never took effect.
+	restoreKeys, err := m.snapshotKeys(req.User)
+	if err != nil {
+		return err
+	}
 	if err := m.writeKeys(req.User, req.AuthorizedKeys, req.Enabled); err != nil {
 		return err
 	}
@@ -125,9 +136,33 @@ func (m *Manager) SetAccess(req protocol.SetSSHAccessRequest) error {
 	sort.Slice(next, func(i, j int) bool { return next[i].Username < next[j].Username })
 
 	if err := m.writeDropIn(next); err != nil {
+		if rErr := restoreKeys(); rErr != nil {
+			// Both the change and the undo failed. Say so plainly, the same way
+			// writeDropIn does: the host now holds a key file that does not match
+			// its config, and a human has to look.
+			return fmt.Errorf("%w (and the key file for %q could not be restored: %v)", err, req.User, rErr)
+		}
 		return err
 	}
 	return m.applyDaemon(len(next) > 0)
+}
+
+// snapshotKeys reads the account's current key file and returns a function that
+// puts it back. A missing file is recorded as "did not exist", which restores by
+// removing — the same shape as the drop-in's own restore, and the case that
+// matters most: a first-ever enable whose render is rejected must not leave a key
+// file behind for an account the config does not name.
+func (m *Manager) snapshotKeys(username string) (func() error, error) {
+	path, err := m.managedKeysPath(username)
+	if err != nil {
+		return nil, err
+	}
+	previous, readErr := os.ReadFile(path)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return nil, fmt.Errorf("sshaccess: read %s: %w", path, readErr)
+	}
+	had := readErr == nil
+	return func() error { return restore(path, previous, had) }, nil
 }
 
 // State reports what the host actually has: the daemon's run state from systemd,
