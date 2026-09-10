@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -50,6 +51,17 @@ type Server struct {
 	streams  *streamCap
 	limiter  *rateLimiter
 	jobs     *Jobs
+
+	// sshWrites serialises the Device access writes (ssh.go). Each one is a
+	// read-modify-write that ends in a full-state push to host-agent, so two
+	// overlapping requests can commit to SQLite in one order and reach the host
+	// in the other, leaving sshd admitting an account the brain thinks is off.
+	// One lock for all accounts, not one per account: these writes are rare and
+	// a user-facing panel action, so the contention does not matter and a map of
+	// per-user locks would be state to grow and never free. Deleting a user takes
+	// it too (users.go), because that delete revokes the account's SSH and must
+	// not interleave with the account turning SSH back on.
+	sshWrites sync.Mutex
 
 	// Environment profile and hosted-only provisioning identity, set once at
 	// startup via SetEnvironment (ENVIRONMENT.md # Provisioning). On appliance
@@ -196,6 +208,7 @@ func (s *Server) registerAll(api huma.API) {
 	s.registerAuth(api)
 	s.registerUsers(api)
 	s.registerMeRoutes(api)
+	s.registerSSHRoutes(api)
 	s.registerHealth(api)
 	s.registerNotifications(api)
 	s.registerMail(api)
