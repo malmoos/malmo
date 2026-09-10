@@ -129,6 +129,13 @@ func (s *Server) setMySSH(ctx context.Context, in *struct {
 		return nil, err
 	}
 
+	// Everything below reads the account's state, decides, writes it, then pushes
+	// the whole set to the host. Held across the host call on purpose: without it
+	// two overlapping writes can commit in one order and land on the host in the
+	// other (api.go # sshWrites).
+	s.sshWrites.Lock()
+	defer s.sshWrites.Unlock()
+
 	keys, err := s.store.ListSSHKeys(id.User.ID)
 	if err != nil {
 		s.auditor.Record(ctx, audit.ActionSSHAccessSet, tgt, meta, false)
@@ -201,6 +208,11 @@ func (s *Server) addMySSHKey(ctx context.Context, in *struct {
 		return nil, err
 	}
 
+	// See setMySSH: the count check, the insert and the host push are one
+	// sequence and must not interleave with another SSH write (api.go # sshWrites).
+	s.sshWrites.Lock()
+	defer s.sshWrites.Unlock()
+
 	existing, err := s.store.ListSSHKeys(id.User.ID)
 	if err != nil {
 		s.auditor.Record(ctx, audit.ActionSSHKeyAdd, tgt, nil, false)
@@ -264,6 +276,11 @@ func (s *Server) deleteMySSHKey(ctx context.Context, in *struct {
 		return nil, err
 	}
 
+	// See setMySSH: the last-key guard, the delete and the host push are one
+	// sequence and must not interleave with another SSH write (api.go # sshWrites).
+	s.sshWrites.Lock()
+	defer s.sshWrites.Unlock()
+
 	access, err := s.store.SSHAccessFor(id.User.ID)
 	if err != nil {
 		s.auditor.Record(ctx, audit.ActionSSHKeyDelete, tgt, nil, false)
@@ -287,6 +304,17 @@ func (s *Server) deleteMySSHKey(ctx context.Context, in *struct {
 			"this is your only SSH key; add another one or turn SSH off before removing it")
 	}
 
+	// Kept so the row can be restored if the host push fails. Nothing re-reads the
+	// host today, so a delete the host never saw has to leave both sides agreeing
+	// or it stays wrong forever.
+	var removed store.SSHKey
+	for _, k := range keys {
+		if k.ID == in.ID {
+			removed = k
+			break
+		}
+	}
+
 	if err := s.store.DeleteSSHKey(id.User.ID, in.ID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			// Audited: an attempt to revoke a key that is not there is still an
@@ -299,11 +327,19 @@ func (s *Server) deleteMySSHKey(ctx context.Context, in *struct {
 		return nil, huma.Error500InternalServerError("delete ssh key failed", err)
 	}
 	if err := s.syncSSHIfEnabled(ctx, id.User.ID, id.User.Username); err != nil {
-		// The row is already gone and the key is one the user asked to revoke, so
-		// this does not roll back: leaving a revoked key live on the host is the
-		// worse of the two failures. The reconciler re-pushes the set on its next
-		// pass, and the audit record says the attempt failed.
-		slog.Error("ssh key removed in brain but host push failed", "user_id", id.User.ID,
+		// Roll the row back, the same as the other two writes. The key is still live
+		// on the host either way — the push is what failed — so dropping the row
+		// would only hide it: the brain would show the key gone, a retry would 404,
+		// and nothing re-reads the host to notice. Restoring it keeps the two sides
+		// agreeing and leaves the user a delete they can repeat once the host is
+		// back. The 502 and the audit record both say it did not happen.
+		if removed.ID != "" {
+			if rbErr := s.store.AddSSHKey(removed); rbErr != nil {
+				slog.Error("ssh key rollback failed", "user_id", id.User.ID,
+					"username", id.User.Username, "service", "ssh", "err", rbErr)
+			}
+		}
+		slog.Error("ssh key delete host push failed", "user_id", id.User.ID,
 			"username", id.User.Username, "service", "ssh", "err", err)
 		s.auditor.Record(ctx, audit.ActionSSHKeyDelete, tgt, nil, false)
 		return nil, huma.Error502BadGateway("host-agent ssh set-access failed", err)

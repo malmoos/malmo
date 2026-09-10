@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -50,6 +51,15 @@ type Server struct {
 	streams  *streamCap
 	limiter  *rateLimiter
 	jobs     *Jobs
+
+	// sshWrites serialises the Device access writes (ssh.go). Each one is a
+	// read-modify-write that ends in a full-state push to host-agent, so two
+	// overlapping requests can commit to SQLite in one order and reach the host
+	// in the other, leaving sshd admitting an account the brain thinks is off.
+	// One lock for all accounts, not one per account: these writes are rare and
+	// a user-facing panel action, so the contention does not matter and a map of
+	// per-user locks would be state to grow and never free.
+	sshWrites sync.Mutex
 
 	// Environment profile and hosted-only provisioning identity, set once at
 	// startup via SetEnvironment (ENVIRONMENT.md # Provisioning). On appliance

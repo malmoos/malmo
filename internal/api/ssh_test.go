@@ -253,6 +253,101 @@ func TestHostFailureRollsBackTheAccessRow(t *testing.T) {
 	assertAudited(t, h, audit.ActionSSHAccessSet, false)
 }
 
+// Deleting a user revokes their SSH on the host first. The brain's rows cascade
+// away, but sshd's AllowUsers and the account's key file do not — a later user
+// with the same name would inherit a deleted account's key.
+func TestDeletingAUserRevokesTheirSSH(t *testing.T) {
+	h := newHarness(t)
+	seedAdminSession(t, h)
+	if err := h.st.CreateUser(store.User{ID: "u_bob", Username: "bob", Role: store.RoleMember}); err != nil {
+		t.Fatalf("create member: %v", err)
+	}
+	if err := h.st.SetSSHAccess("u_bob", true, false); err != nil {
+		t.Fatalf("seed access: %v", err)
+	}
+	if err := h.st.AddSSHKey(store.SSHKey{
+		ID: "k_bob", UserID: "u_bob", PublicKey: testKeyA, Fingerprint: "fp_bob",
+	}); err != nil {
+		t.Fatalf("seed key: %v", err)
+	}
+
+	resp := h.do("DELETE", "/api/v1/users/u_bob", nil)
+	resp.Body.Close()
+	if resp.StatusCode != 204 {
+		t.Fatalf("delete user = %d; want 204", resp.StatusCode)
+	}
+
+	var revoked bool
+	for _, c := range h.sshCallsSnapshot() {
+		if c.User == "bob" && !c.Enabled && len(c.AuthorizedKeys) == 0 {
+			revoked = true
+		}
+	}
+	if !revoked {
+		t.Fatalf("no ssh revoke reached the host: %+v", h.sshCallsSnapshot())
+	}
+}
+
+// An account that never had SSH on is not pushed at all. Nothing was sent to the
+// host for it, and calling here would fail on a box with no sshd installed.
+func TestDeletingAUserWithoutSSHDoesNotCallTheHost(t *testing.T) {
+	h := newHarness(t)
+	seedAdminSession(t, h)
+	if err := h.st.CreateUser(store.User{ID: "u_cid", Username: "cid", Role: store.RoleMember}); err != nil {
+		t.Fatalf("create member: %v", err)
+	}
+
+	resp := h.do("DELETE", "/api/v1/users/u_cid", nil)
+	resp.Body.Close()
+	if resp.StatusCode != 204 {
+		t.Fatalf("delete user = %d; want 204", resp.StatusCode)
+	}
+	if calls := h.sshCallsSnapshot(); len(calls) != 0 {
+		t.Fatalf("host was called for an account with no SSH: %+v", calls)
+	}
+}
+
+// A delete the host never applied is put back. The key is still live on the host
+// whichever way this goes, so dropping the row would only hide it: the panel
+// would show the key gone, a retry would 404, and nothing re-reads the host.
+func TestHostFailureRestoresTheDeletedKey(t *testing.T) {
+	h := newHarness(t)
+	if err := h.st.CreateUser(store.User{ID: "u_fail", Username: sshFailUser, Role: store.RoleAdmin}); err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+	h.seedPassword(sshFailUser, "pass1")
+	h.loginAs(sshFailUser, "pass1")
+	h.elevate("pass1")
+
+	// Seeded straight into the store: every route that would set this up goes
+	// through the same host mock, which answers 500 for this account.
+	if err := h.st.SetSSHAccess("u_fail", true, false); err != nil {
+		t.Fatalf("seed access: %v", err)
+	}
+	for _, k := range []store.SSHKey{
+		{ID: "k_a", UserID: "u_fail", PublicKey: testKeyA, Fingerprint: "fp_a"},
+		{ID: "k_b", UserID: "u_fail", PublicKey: testKeyB, Fingerprint: "fp_b"},
+	} {
+		if err := h.st.AddSSHKey(k); err != nil {
+			t.Fatalf("seed key: %v", err)
+		}
+	}
+
+	resp := h.do("DELETE", "/api/v1/me/ssh/keys/k_a", nil)
+	resp.Body.Close()
+	if resp.StatusCode != 502 {
+		t.Fatalf("host failure = %d; want 502", resp.StatusCode)
+	}
+	keys, err := h.st.ListSSHKeys("u_fail")
+	if err != nil {
+		t.Fatalf("list keys: %v", err)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("keys after the failed delete = %d; want 2 (%+v)", len(keys), keys)
+	}
+	assertAudited(t, h, audit.ActionSSHKeyDelete, false)
+}
+
 // Every write here is elevation-class, and a rejection audits so the Activity
 // view can answer "did someone try to open a shell into this box?".
 func TestSSHWritesRequireElevation(t *testing.T) {
