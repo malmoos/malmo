@@ -1054,13 +1054,25 @@ ssh)
     # server's list of methods that may continue, and with AuthenticationMethods
     # publickey that list is `publickey` — sshd saying, on the wire, that no password
     # is accepted here. The connection must also actually fail.
+    # Normalise line endings before matching. The methods list is read out of ssh's
+    # -v output, and matching it is where this assertion has actually gone wrong
+    # before: an anchored pattern failed against a line that printed identically.
+    # Match on what the line says, not on where it ends.
     pw_out="$(ssh $SSH_OPTS -v -o PubkeyAuthentication=no -o PreferredAuthentications=password \
-        "${owner}@127.0.0.1" 'echo MALMO_SSH_PW' 2>&1)"
+        "${owner}@127.0.0.1" 'echo MALMO_SSH_PW' 2>&1 | tr -d '\r')"
     grep -q MALMO_SSH_PW <<<"$pw_out" \
         && fail "ssh: PASSWORD-ONLY LOGIN SUCCEEDED — the key is supposed to be the mandatory factor on hosted: $pw_out"
-    grep -qE 'Authentications that can continue: *publickey$' <<<"$pw_out" \
-        || fail "ssh: sshd did not advertise publickey as the only method that can continue: $(grep -i 'can continue' <<<"$pw_out" | tail -3)"
-    echo "cloud-assertions: password-only login refused — sshd offers publickey and nothing else"
+    pw_methods="$(grep -i 'Authentications that can continue' <<<"$pw_out" | tail -1)"
+    [ -n "$pw_methods" ] \
+        || fail "ssh: sshd never sent a methods list on the password-only attempt; cannot tell what it would accept: $pw_out"
+    # The property, stated directly: password is not among the ways in. Asserting
+    # the absence is what "a password alone does not get in" means — a list that
+    # merely contains publickey would still be satisfied by publickey,password.
+    grep -qi 'password' <<<"$pw_methods" \
+        && fail "ssh: PASSWORD IS AN ACCEPTED METHOD — sshd offers '$pw_methods'; on hosted the key is the mandatory factor, not one of two doors"
+    grep -qi 'publickey' <<<"$pw_methods" \
+        || fail "ssh: sshd does not offer publickey either: '$pw_methods'"
+    echo "cloud-assertions: password-only login refused — sshd offers '${pw_methods#*continue: }' and nothing else"
 
     # --- 6. the optional second factor makes the key alone insufficient.
     # The optional factor is a second lock, never a second door: AuthenticationMethods
@@ -1078,11 +1090,17 @@ ssh)
     # mean the key alone was enough. Poll the other way round: give the reload a
     # moment, but require every attempt in the window to fail.
     sleep 3
-    keyonly="$(ssh $SSH_OPTS -v -i "$KEYFILE" "${owner}@127.0.0.1" 'echo MALMO_SSH_KEYONLY' 2>&1)"
+    keyonly="$(ssh $SSH_OPTS -v -i "$KEYFILE" "${owner}@127.0.0.1" 'echo MALMO_SSH_KEYONLY' 2>&1 | tr -d '\r')"
     grep -q MALMO_SSH_KEYONLY <<<"$keyonly" \
         && fail "ssh: THE KEY ALONE STILL GETS IN with the second factor on — publickey,password is not being enforced: $keyonly"
-    grep -qE 'Authentications that can continue: *password$' <<<"$keyonly" \
-        || fail "ssh: sshd did not ask for a password after accepting the key: $(grep -i 'can continue' <<<"$keyonly" | tail -3)"
+    # Partial success is the AND, in sshd's own words: the key was accepted and was
+    # not enough. Stronger than reading the methods list, because it says the key
+    # got through and the connection still did not.
+    grep -qi 'partial success' <<<"$keyonly" \
+        || fail "ssh: sshd did not report partial success, so the key was not even accepted: $(grep -iE 'can continue|denied' <<<"$keyonly" | tail -3)"
+    key_methods="$(grep -i 'Authentications that can continue' <<<"$keyonly" | tail -1)"
+    grep -qi 'password' <<<"$key_methods" \
+        || fail "ssh: sshd did not demand a password after accepting the key: '$key_methods'"
     echo "cloud-assertions: second factor enforced — the key is accepted, then a password is still demanded"
 
     # --- 7. removing the only key while SSH is on is refused.
