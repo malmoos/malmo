@@ -289,19 +289,24 @@ func (s *Server) deleteUser(ctx context.Context, in *struct {
 	// would then hand them a deleted account's key. Only accounts that were
 	// actually enabled are pushed — a disabled one was never sent to the host, and
 	// calling here on every delete would fail on a box with no sshd installed.
+	//
+	// The lock is taken before the read and held until the account is gone, on
+	// every delete and not only on the enabled ones. The user's own session stays
+	// valid until DeleteUser cascades it, so a request that is already elevated
+	// could otherwise turn SSH on right after a disabled account reads as disabled.
+	// The cascade would then drop the brain's rows while the host kept the key
+	// file, which is the re-grant this revoke exists to prevent. A write that was
+	// waiting on the lock finds the user row gone and fails its foreign key before
+	// it can reach the host.
+	s.sshWrites.Lock()
+	defer s.sshWrites.Unlock()
+
 	access, err := s.store.SSHAccessFor(targetID)
 	if err != nil {
 		s.auditor.Record(ctx, audit.ActionUserDelete, tgt, meta, false)
 		return nil, huma.Error500InternalServerError("read ssh access failed", err)
 	}
-	// Held until the account is gone, not just across the revoke. The user's own
-	// session is still valid until DeleteUser cascades it, so a request that is
-	// already elevated could take this lock in between and turn SSH back on. The
-	// cascade would then drop the brain's rows while the host kept the key file,
-	// which is the re-grant this revoke exists to prevent.
 	if access.Enabled {
-		s.sshWrites.Lock()
-		defer s.sshWrites.Unlock()
 		if err := s.applySSH(ctx, target.Username, false, false, nil); err != nil {
 			s.auditor.Record(ctx, audit.ActionUserDelete, tgt, meta, false)
 			return nil, huma.Error502BadGateway("host-agent ssh set-access failed", err)

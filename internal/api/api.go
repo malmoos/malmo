@@ -58,7 +58,9 @@ type Server struct {
 	// in the other, leaving sshd admitting an account the brain thinks is off.
 	// One lock for all accounts, not one per account: these writes are rare and
 	// a user-facing panel action, so the contention does not matter and a map of
-	// per-user locks would be state to grow and never free.
+	// per-user locks would be state to grow and never free. Deleting a user takes
+	// it too (users.go), because that delete revokes the account's SSH and must
+	// not interleave with the account turning SSH back on.
 	sshWrites sync.Mutex
 
 	// Environment profile and hosted-only provisioning identity, set once at

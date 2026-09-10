@@ -3,6 +3,7 @@ package api
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -461,5 +462,44 @@ func TestSecondKeyMakesTheFirstRemovable(t *testing.T) {
 	last := calls[len(calls)-1]
 	if len(last.AuthorizedKeys) != 1 {
 		t.Fatalf("host got %d keys after the revoke; want 1", len(last.AuthorizedKeys))
+	}
+}
+
+// A user with SSH off is still deleted under the SSH lock. Without it, the
+// account could turn SSH on between the "is it enabled?" read and the delete:
+// the cascade would drop the brain's rows while sshd kept the account and its
+// key file, which is exactly the leftover the revoke exists to prevent.
+func TestDeletingADisabledUserStillHoldsTheSSHLock(t *testing.T) {
+	h := newHarness(t)
+	seedAdminSession(t, h)
+	if err := h.st.CreateUser(store.User{ID: "u_dan", Username: "dan", Role: store.RoleMember}); err != nil {
+		t.Fatalf("create member: %v", err)
+	}
+
+	// Stand in for an SSH write that is already in flight.
+	h.apiSrv.sshWrites.Lock()
+
+	done := make(chan int, 1)
+	go func() {
+		resp := h.do("DELETE", "/api/v1/users/u_dan", nil)
+		resp.Body.Close()
+		done <- resp.StatusCode
+	}()
+
+	select {
+	case code := <-done:
+		h.apiSrv.sshWrites.Unlock()
+		t.Fatalf("delete finished (%d) while an SSH write held the lock", code)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	h.apiSrv.sshWrites.Unlock()
+	select {
+	case code := <-done:
+		if code != 204 {
+			t.Fatalf("delete user = %d; want 204", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("delete never finished after the lock was released")
 	}
 }
