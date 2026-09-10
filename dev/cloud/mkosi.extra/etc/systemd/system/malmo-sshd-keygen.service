@@ -16,9 +16,19 @@
 #    boot and may be months later — by then the condition is false, the unit is
 #    skipped, and sshd exits with "no hostkeys available".
 #
-# So: same job, no first-boot condition. Pulled in by ssh.service, so it runs on
-# whichever boot the account toggle first starts the daemon, and never otherwise.
-# `ssh-keygen -A` only creates the keys that are missing, so later starts are
+# So: same job, no first-boot condition, and pulled in by multi-user.target rather
+# than only by ssh.service. The target is load-bearing and was learned the hard
+# way (#467's first boot-proof run): host-agent validates the rendered config with
+# `sshd -t` BEFORE it starts the unit, and `sshd -t` exits "no hostkeys available"
+# when there are none — so keys that arrive with the daemon arrive too late, and
+# the very first enable could never succeed. Generating them at boot costs a few
+# milliseconds on a box that never turns SSH on, and opens nothing: a key on disk
+# is not a listening port.
+#
+# ssh.service is kept in WantedBy as well, so a box whose /etc/ssh was emptied
+# after boot still gets keys before the daemon starts.
+#
+# `ssh-keygen -A` only creates the keys that are missing, so later boots are
 # no-ops and an existing box's keys are never rotated underneath it.
 [Unit]
 Description=malmo — generate sshd host keys if they are missing
@@ -32,4 +42,4 @@ RemainAfterExit=yes
 ExecStart=/usr/bin/ssh-keygen -A
 
 [Install]
-WantedBy=ssh.service
+WantedBy=multi-user.target ssh.service

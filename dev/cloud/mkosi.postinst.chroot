@@ -127,11 +127,14 @@ systemctl --root=/ disable ssh.service >/dev/null 2>&1 || true
 # Debian's sshd-keygen.service cannot regenerate them here — it is
 # ConditionFirstBoot=yes and only pulled in by ssh.service, and on this profile
 # sshd usually first starts long after the first boot, when that condition is
-# false. malmo-sshd-keygen.service is the same job without the condition; it is
-# WantedBy=ssh.service, so it runs on whichever boot the toggle first starts the
-# daemon. Without it a box that turns SSH on weeks later gets "no hostkeys
-# available" and sshd never comes up.
+# false. malmo-sshd-keygen.service is the same job without the condition, pulled
+# in at BOOT rather than with the daemon: host-agent runs `sshd -t` to validate the
+# rendered config before it ever starts the unit, and that exits "no hostkeys
+# available" when there are none, so keys arriving with the daemon arrive too late
+# for the first enable to succeed. Keys on disk open nothing; the port is still the
+# daemon's run state.
 rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub
+enable_unit /etc/systemd/system/malmo-sshd-keygen.service malmo-sshd-keygen.service
 mkdir -p /etc/systemd/system/ssh.service.wants
 ln -sf /etc/systemd/system/malmo-sshd-keygen.service \
     /etc/systemd/system/ssh.service.wants/malmo-sshd-keygen.service
