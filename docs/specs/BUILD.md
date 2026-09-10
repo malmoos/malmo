@@ -366,7 +366,7 @@ GitHub Actions or self-hosted CI — TBD, not architecturally interesting at thi
 - **`malmo-ui` ships as a second OCI image** (`caddy:alpine` + baked UI bundle), from our own registry, also bundled in the ISO. Launched by the brain, not host-agent (`CONTROL_PLANE.md`).
 - **Every third-party build input is pinned in one checked-in file** (`dev/control-plane/images.lock`, #432): upstream images by digest, base images by digest, the hosted Caddy's plugin by module version. Same reasoning as app images: a tag is not a lookup key. See # 5c for how to bump one.
 - **Same root filesystem serves both the live (installer) environment and the installed system.**
-- **SSH daemon enabled at boot; no account can authenticate until per-user opt-in** (`AUTH.md` # SSH access). Root login disabled.
+- **SSH daemon installed but not enabled at boot; it follows the per-account opt-in** (# SSH, `AUTH.md` # Device access). Root login disabled.
 - **Channels: stable only in v1, no beta, no nightly.** Beta is additive when triggered (see `RELEASE_MANIFEST.md`).
 - **Versioning: one repo SemVer for the whole monorepo, the image inherits it.** `VERSION` at the repo root is the source of truth; every build additionally stamps the git commit as a separate field. No independent per-component counters, no CalVer for the image (DECISIONS.md 2026-07-16, flipping both prior positions).
 
