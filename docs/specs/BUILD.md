@@ -67,7 +67,7 @@ Minimum to be a malmo box:
 
 ### SSH
 
-`openssh-server` is **installed but not enabled at boot** — sshd does not run and :22 is closed on a fresh box. It is started when the first account enables SSH from Settings and stopped when the last one disables it, so a box nobody uses SSH on presents no port at all (`AUTH.md` # Device access; `DECISIONS.md` 2026-09-09).
+`openssh-server` is **installed but not enabled at boot** — sshd does not run and :22 is closed on a fresh box. This describes the appliance image today; the hosted image does not carry the package yet and `dev/cloud/expected-packages.txt` still forbids it, tracked in #467. It is started when the first account enables SSH from Settings and stopped when the last one disables it, so a box nobody uses SSH on presents no port at all (`AUTH.md` # Device access; `DECISIONS.md` 2026-09-09).
 
 Why daemon-follows-the-enabled-set instead of daemon-on-with-an-empty-allowlist:
 
@@ -366,7 +366,7 @@ GitHub Actions or self-hosted CI — TBD, not architecturally interesting at thi
 - **`malmo-ui` ships as a second OCI image** (`caddy:alpine` + baked UI bundle), from our own registry, also bundled in the ISO. Launched by the brain, not host-agent (`CONTROL_PLANE.md`).
 - **Every third-party build input is pinned in one checked-in file** (`dev/control-plane/images.lock`, #432): upstream images by digest, base images by digest, the hosted Caddy's plugin by module version. Same reasoning as app images: a tag is not a lookup key. See # 5c for how to bump one.
 - **Same root filesystem serves both the live (installer) environment and the installed system.**
-- **SSH daemon installed but not enabled at boot; it follows the per-account opt-in** (# SSH, `AUTH.md` # Device access). Root login disabled.
+- **SSH daemon installed but not enabled at boot; it follows the per-account opt-in** (# SSH, `AUTH.md` # Device access). Root login disabled. Appliance image only so far — hosted packaging is #467.
 - **Channels: stable only in v1, no beta, no nightly.** Beta is additive when triggered (see `RELEASE_MANIFEST.md`).
 - **Versioning: one repo SemVer for the whole monorepo, the image inherits it.** `VERSION` at the repo root is the source of truth; every build additionally stamps the git commit as a separate field. No independent per-component counters, no CalVer for the image (DECISIONS.md 2026-07-16, flipping both prior positions).
 

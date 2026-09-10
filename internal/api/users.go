@@ -294,11 +294,15 @@ func (s *Server) deleteUser(ctx context.Context, in *struct {
 		s.auditor.Record(ctx, audit.ActionUserDelete, tgt, meta, false)
 		return nil, huma.Error500InternalServerError("read ssh access failed", err)
 	}
+	// Held until the account is gone, not just across the revoke. The user's own
+	// session is still valid until DeleteUser cascades it, so a request that is
+	// already elevated could take this lock in between and turn SSH back on. The
+	// cascade would then drop the brain's rows while the host kept the key file,
+	// which is the re-grant this revoke exists to prevent.
 	if access.Enabled {
 		s.sshWrites.Lock()
-		err := s.applySSH(ctx, target.Username, false, false, nil)
-		s.sshWrites.Unlock()
-		if err != nil {
+		defer s.sshWrites.Unlock()
+		if err := s.applySSH(ctx, target.Username, false, false, nil); err != nil {
 			s.auditor.Record(ctx, audit.ActionUserDelete, tgt, meta, false)
 			return nil, huma.Error502BadGateway("host-agent ssh set-access failed", err)
 		}
