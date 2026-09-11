@@ -639,3 +639,57 @@ func TestDaemonIsNotReloadedWhenTheKeysCannotBeRestored(t *testing.T) {
 			"which would make the rejected key live; ran after the failure = %v", ran[mark:])
 	}
 }
+
+// Stopping is never gated on a restore, because stopping reads nothing.
+//
+// This is the case that matters most on hosted, where the daemon's run state is
+// the only control over :22. A first enable that fails after the unit has
+// started must still bring it down, even if a file could not be put back — the
+// alternative is an open port for a call that failed and whose previous state
+// had nobody enabled at all.
+func TestFailedFirstEnableStillStopsTheDaemon(t *testing.T) {
+	keys := t.TempDir()
+	m, _ := newManager(t, keys)
+
+	var ran []string
+	m.Runner = func(name string, args ...string) ([]byte, error) {
+		ran = append(ran, name+" "+strings.Join(args, " "))
+		if name == "systemctl" && len(args) > 0 && args[0] == "enable" {
+			// Make the key restore fail, without touching the drop-in. Its
+			// restore is a remove, and a remove only fails on a directory that
+			// is not empty, so put one there.
+			path := filepath.Join(keys, "alex")
+			if err := os.Remove(path); err != nil {
+				t.Fatalf("inject: %v", err)
+			}
+			if err := os.Mkdir(path, 0o755); err != nil {
+				t.Fatalf("inject: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(path, "blocker"), []byte("x"), 0o644); err != nil {
+				t.Fatalf("inject: %v", err)
+			}
+			return []byte("Failed to start ssh.service"), os.ErrInvalid
+		}
+		return nil, nil
+	}
+
+	err := m.SetAccess(protocol.SetSSHAccessRequest{
+		User: "alex", Enabled: true, AuthorizedKeys: []string{testKey},
+	})
+	if err == nil {
+		t.Fatal("SetAccess reported success though the daemon never started")
+	}
+	if !strings.Contains(err.Error(), "restore the key file") {
+		t.Fatalf("the key restore was expected to fail, so this test proved nothing: %v", err)
+	}
+
+	var stopped bool
+	for _, c := range ran {
+		if strings.HasPrefix(c, "systemctl disable") {
+			stopped = true
+		}
+	}
+	if !stopped {
+		t.Errorf("the daemon was left running after a failed first enable, so :22 stays open; ran = %v", ran)
+	}
+}
