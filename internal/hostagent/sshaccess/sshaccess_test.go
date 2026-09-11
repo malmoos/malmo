@@ -529,3 +529,59 @@ func TestFailedUndoIsReported(t *testing.T) {
 		t.Errorf("error does not say the host was left inconsistent: %v", err)
 	}
 }
+
+// The undo's two file restores are independent, so one failing must not skip
+// the other — and the daemon must not be reconciled against a drop-in that
+// could not be put back.
+//
+// The failure is injected through the runner: the systemctl call that fails
+// also removes the drop-in's directory, so the restore that follows has nowhere
+// to write. That is contrived, but it is the only way to reach a half-failed
+// undo from a unit test, and the branch it covers is the one that decides
+// whether a failed change goes live.
+func TestUndoRestoresTheKeysEvenWhenTheDropInCannotBeRestored(t *testing.T) {
+	keys := t.TempDir()
+	m, _ := newManager(t, keys)
+
+	// An account already enabled, so the drop-in exists and its restore is a
+	// write rather than a remove. A remove would succeed against a missing
+	// directory and the failure could not be injected at all.
+	mustSet(t, m, protocol.SetSSHAccessRequest{
+		User: "alex", Enabled: true, AuthorizedKeys: []string{testKey},
+	})
+
+	var ran []string
+	m.Runner = func(name string, args ...string) ([]byte, error) {
+		ran = append(ran, name+" "+strings.Join(args, " "))
+		if name == "systemctl" && len(args) > 0 && args[0] == "enable" {
+			if err := os.RemoveAll(filepath.Dir(m.dropInPath())); err != nil {
+				t.Fatalf("inject: %v", err)
+			}
+			return []byte("Failed to start ssh.service"), os.ErrInvalid
+		}
+		return nil, nil
+	}
+
+	err := m.SetAccess(protocol.SetSSHAccessRequest{
+		User: "bob", Enabled: true, AuthorizedKeys: []string{testKey},
+	})
+	if err == nil {
+		t.Fatal("SetAccess reported success though the daemon never started")
+	}
+	if !strings.Contains(err.Error(), "restore the drop-in") {
+		t.Errorf("error does not name the failed drop-in restore: %v", err)
+	}
+
+	// The key restore is a separate path and had to be attempted anyway.
+	if _, statErr := os.Stat(filepath.Join(keys, "bob")); !os.IsNotExist(statErr) {
+		t.Errorf("bob's key file was left behind because the drop-in restore failed first: %v", statErr)
+	}
+
+	// And the daemon was left alone, because the config on disk is still this
+	// call's render. Reconciling against it would put the failed change live.
+	for _, c := range ran {
+		if strings.HasPrefix(c, "systemctl disable") || strings.HasPrefix(c, "systemctl reload") {
+			t.Errorf("the daemon was reconciled against a drop-in that could not be restored; ran = %v", ran)
+		}
+	}
+}

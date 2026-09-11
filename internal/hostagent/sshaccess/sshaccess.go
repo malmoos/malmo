@@ -19,6 +19,7 @@
 package sshaccess
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -116,20 +117,25 @@ func (m *Manager) SetAccess(req protocol.SetSSHAccessRequest) error {
 	if err != nil {
 		return err
 	}
-	if err := m.writeKeys(req.User, req.AuthorizedKeys, req.Enabled); err != nil {
+	// The drop-in is snapshotted for a different failure: writeDropIn already
+	// undoes a render the combined `sshd -t` rejects, but it cannot undo a daemon
+	// call that fails *after* the render is installed, because by then both files
+	// are committed and SetAccess is on its way out with an error. The brain
+	// reads that error as a host failure and rolls back only its own row, so
+	// without this the two sides disagree about who has a shell — and the drop-in
+	// is what readDropIn trusts on the next call, so a stale entry merges back in
+	// rather than being overwritten.
+	//
+	// Taken here, before the first write rather than between the two, so that a
+	// snapshot that fails costs nothing. Reading it after writeKeys would leave
+	// the new key file live with no restore to undo it, which on a key
+	// replacement silently changes who can authenticate.
+	restoreDropIn, err := m.snapshotDropIn()
+	if err != nil {
 		return err
 	}
 
-	// The drop-in gets the same treatment, one step later and for a different
-	// failure. writeDropIn already undoes a render the combined `sshd -t`
-	// rejects; what it cannot undo is a daemon call that fails *after* the render
-	// is installed, because by then both files are committed and SetAccess is on
-	// its way out with an error. The brain reads that error as a host failure and
-	// rolls back only its own row, so without this the two sides disagree about
-	// who has a shell — and the drop-in is what readDropIn trusts on the next
-	// call, so a stale entry merges back in rather than being overwritten.
-	restoreDropIn, err := m.snapshotDropIn()
-	if err != nil {
+	if err := m.writeKeys(req.User, req.AuthorizedKeys, req.Enabled); err != nil {
 		return err
 	}
 
@@ -181,16 +187,31 @@ func (m *Manager) SetAccess(req protocol.SetSSHAccessRequest) error {
 // run on a path where a systemctl call has just failed: it either succeeds or
 // it is reported.
 func (m *Manager) undo(restoreDropIn, restoreKeys func() error, wasRunning bool) error {
-	if err := restoreDropIn(); err != nil {
-		return fmt.Errorf("restore the drop-in: %w", err)
+	// The two files are separate paths and neither restore depends on the other,
+	// so both are attempted and the errors are collected. Returning at the first
+	// one would leave the other's write live for no reason, which makes an
+	// already-bad state worse than it needs to be.
+	dropInErr := restoreDropIn()
+	keysErr := restoreKeys()
+
+	var errs []error
+	if dropInErr != nil {
+		errs = append(errs, fmt.Errorf("restore the drop-in: %w", dropInErr))
 	}
-	if err := restoreKeys(); err != nil {
-		return fmt.Errorf("restore the key file: %w", err)
+	if keysErr != nil {
+		errs = append(errs, fmt.Errorf("restore the key file: %w", keysErr))
 	}
-	if err := m.applyDaemon(wasRunning); err != nil {
-		return fmt.Errorf("reconcile the daemon: %w", err)
+
+	// The daemon is reconciled only when the config it would read is the one we
+	// meant to go back to. If the drop-in could not be restored, the file on disk
+	// is still this call's render, and starting or reloading against it would put
+	// the failed change into effect — the opposite of an undo.
+	if dropInErr == nil {
+		if err := m.applyDaemon(wasRunning); err != nil {
+			errs = append(errs, fmt.Errorf("reconcile the daemon: %w", err))
+		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // snapshotDropIn reads the rendered drop-in and returns a function that puts it

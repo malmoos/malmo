@@ -24,15 +24,19 @@ Two outcomes, both now covered by tests:
 ## What was tested
 
 - Four tests in `internal/hostagent/sshaccess/sshaccess_test.go`, all using a faked runner where `sshd` validates and `systemctl` fails — the real shape of this failure, where the render is good so both writes commit and only the last step refuses.
-- A failed first enable leaves no key file and no drop-in. A failed disable keeps both. The undo reconciles the daemon rather than only the files, shown with a runner that fails the enable alone so the undo's own `systemctl disable` can be observed. A failed undo is reported in the error text.
+- A failed first enable leaves no key file and no drop-in. A failed disable keeps both. A drop-in restore that itself fails still gets the key file restored, and leaves the daemon alone. The undo reconciles the daemon rather than only the files, shown with a runner that fails the enable alone so the undo's own `systemctl disable` can be observed. A failed undo is reported in the error text.
 - The first two were run against the unfixed code and fail there, the disable case showing `DenyUsers *` where the account should still be.
 - `make check` green.
+
+**Two things the review of this change corrected.** The drop-in snapshot was first taken between the key write and the render; it is now taken before either write, so a snapshot that fails costs nothing — reading it after `writeKeys` would have left a new key file live with no restore to undo it, which on a key replacement silently changes who can authenticate. And `undo` returned at the first restore error, though the two files are separate paths: it now attempts both and joins the errors, and reconciles the daemon **only if the drop-in actually went back**, since reloading against a drop-in that could not be restored would put the failed change into effect rather than undo it.
 
 ## Known gaps & deviations
 
 - **Nothing here ran against real systemd.** The runner is faked, so this proves the ordering and the undo, not that `systemctl reload ssh` behaves as assumed on a box. The `ssh` cloud boot from [ssh-in-the-images.md](ssh-in-the-images.md) exercises the success path on a real daemon; no lane fails a systemd call on purpose.
 - **The undo is best-effort by construction.** If the reconcile fails the host is left inconsistent and the only remedy is the error message. A reconcile loop reading `GET /v1/ssh/state` would repair it, and still does not exist — the gap [ssh-per-account-access.md](ssh-per-account-access.md) named and this does not close.
 - **A crash, rather than an error, still drifts.** If host-agent dies between the render and the daemon call, nothing runs the undo. Converging from `GET /v1/ssh/state` is the only real answer to that, and it is the same missing loop.
+- **The snapshot reordering is not covered by a test, and cannot be at this layer.** Reaching it needs `readDropIn` to succeed while `snapshotDropIn` fails on the same path a moment later — a race or a transient I/O error. `readDropIn` runs first and fails on anything unreadable, so any test that forces the failure stops there and would pass without the reorder too. The change is kept because it is strictly better and free, not because it is proved.
+- The half-failed undo *is* covered, by injecting the failure through the runner: the systemctl call that fails also removes the drop-in's directory. Contrived, and the only way to reach that branch from a unit test.
 - The brain is untouched. Its rollback was already correct; what was missing was the host keeping its end.
 
 ## What's next
