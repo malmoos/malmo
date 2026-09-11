@@ -12,7 +12,17 @@
 # file; only a genuine change to the dependency graph does, and that change must
 # be reviewed. ENVIRONMENT.md # How the profile is realized governs what the lean
 # image carries; the appliance cuts (network-manager, avahi, samba, mergerfs,
-# cryptsetup, tpm2-tools, openssh-server) must never appear below.
+# cryptsetup, tpm2-tools) must never appear below.
+#
+# openssh-server IS in the set (#467), and used to be named above as a package that
+# must never appear. That sentence was written when a hosted box had no SSH at all;
+# DECISIONS.md 2026-09-09 reverses it. Hosted SSH is a per-account opt-in with a
+# public key as the mandatory factor, so the daemon ships — installed and stopped,
+# started only while an account has SSH on (BUILD.md # SSH). It brings
+# openssh-client, openssh-sftp-server, adduser, ucf, sensible-utils, runit-helper,
+# procps + libproc2-0, libncursesw6, libfido2-1 + libcbor0.10, libwrap0,
+# libwtmpdb0, libtext-charwidth-perl and libtext-wrapi18n-perl with it; all are
+# listed below so the exact-match guard still holds.
 #
 # nftables is in the set because docker-ce hard-Depends it (#241) — its proper
 # fix/decision is tracked there; until then it is part of the lean set, not a
@@ -37,6 +47,7 @@
 # "UNEXPECTED" names / drop the reported "MISSING" names below.
 #
 # --- package set (filled from the first green CI build) ---
+adduser
 base-files
 base-passwd
 bash
@@ -93,6 +104,7 @@ libcap2
 libcap2-bin
 libcap-ng0
 libc-bin
+libcbor0.10
 libcom-err2
 libcrypt1
 libdb5.3t64
@@ -105,6 +117,7 @@ libefivar1t64
 libelf1t64
 libexpat1
 libfdisk1
+libfido2-1
 libfreetype6
 libfuse3-4
 libgcc-s1
@@ -125,6 +138,7 @@ libmd0
 libmnl0
 libmount1
 libmpfr6
+libncursesw6
 libnetfilter-conntrack3
 libnfnetlink0
 libnftables1
@@ -135,6 +149,7 @@ libpam-modules-bin
 libpam-runtime
 libpcre2-8-0
 libpng16-16t64
+libproc2-0
 libreadline8t64
 libseccomp2
 libselinux1
@@ -147,11 +162,15 @@ libsqlite3-0
 libssl3t64
 libsystemd0
 libsystemd-shared
+libtext-charwidth-perl
+libtext-wrapi18n-perl
 libtinfo6
 libtirpc3t64
 libtirpc-common
 libudev1
 libuuid1
+libwrap0
+libwtmpdb0
 libxtables12
 libzstd1
 linux-base
@@ -164,12 +183,18 @@ ncurses-base
 ncurses-bin
 netbase
 nftables
+openssh-client
+openssh-server
+openssh-sftp-server
 openssl
 openssl-provider-legacy
 passwd
 perl-base
+procps
 readline-common
+runit-helper
 sed
+sensible-utils
 sudo
 systemd
 systemd-boot
@@ -180,6 +205,7 @@ systemd-sysv
 sysvinit-utils
 tar
 tzdata
+ucf
 udev
 util-linux
 zlib1g

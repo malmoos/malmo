@@ -38,12 +38,37 @@ export function isHosted() {
   return profile.value === "hosted";
 }
 
+// isBoxOwner reports whether the signed-in account is the hosted box's owner —
+// the account the portal handshake created. Only that account has no box
+// password, so it is the only one whose confirm step is a portal round-trip
+// (issue #469). Always false on an appliance, where the brain omits the field.
+export function isBoxOwner() {
+  return currentUser.value?.owner === true;
+}
+
+// portalOpenBoxURL is the portal route that mints a fresh ownership assertion for
+// the signed-in account's own box and redirects the browser to the box's SSO
+// landing. It takes an optional `return` param: a relative path on the box to
+// land on instead of the dashboard root. Shared contract with the control plane —
+// the box side is internal/api/sso.go, the portal side is the private cloud repo.
+const portalOpenBoxURL = `${portalURL}/api/boxes/current/open`;
+
 // redirectToPortal sends the browser to the malmo.network portal, which mints a
 // fresh SSO assertion and lands the owner back on the box dashboard. Used as the
 // hosted stand-in for the login screen. replace() so the unauthenticated box URL
 // doesn't linger in history.
 export function redirectToPortal() {
   window.location.replace(portalURL);
+}
+
+// redirectToPortalConfirm is the hosted confirm step (issue #469). A hosted owner
+// has no box password to re-type, so proving "it's really me" is a portal
+// round-trip: the portal signs a fresh ownership assertion and sends the browser
+// back to the box, which elevates the session it mints. returnPath is where on the
+// box to land — the page the user was on, carrying the one-time challenge the box
+// minted — and the box refuses anything that is not a relative path of its own.
+export function redirectToPortalConfirm(returnPath: string) {
+  window.location.assign(`${portalOpenBoxURL}?return=${encodeURIComponent(returnPath)}`);
 }
 
 export async function bootstrap() {

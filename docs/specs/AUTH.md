@@ -108,6 +108,8 @@ The login page lists every account on the box — first name + colored letter gl
 
 **Tradeoff:** anyone who reaches the dashboard URL sees the user list. Acceptable in the household trust model — the security boundary is "you're authenticated to malmo," not "you don't know who lives here." Tinkerers who want stricter posture can flip a Settings toggle to switch to a blank username + password form.
 
+**Appliance only.** That tradeoff assumes the reader is already on the LAN or the mesh, which is what the appliance's network posture guarantees. A hosted box has no such perimeter — it answers on the public internet at `<box-id>.malmo.network` (`ENVIRONMENT.md` # Networking & discovery) — so the same list is a tenant roster any scanner can read, and the box-id labels needed to find it are already public in certificate transparency logs. On hosted the picker's source, `GET /api/v1/auth/users`, returns **404**, the same way `/setup` is disabled there. Nothing is lost: a hosted box never renders this screen. An unauthenticated visitor is redirected to the portal and bootstraps through the portal-to-box SSO handshake (`ENVIRONMENT.md` # Access & files, box side in `internal/api/sso.go`), so the dashboard never asks for the list. The refusal is 404 rather than 403 because the route does not exist on that profile, mirroring how the SSO landing hides itself on the appliance.
+
 ## Rate limiting
 
 - **Per-username:** exponential backoff after failed attempts. 3 fails → 1s; 5 → 10s; 10 → 60s; 20 → account temporarily locked for 15 minutes.
@@ -146,6 +148,14 @@ App instances are **owner-scoped** (`DASHBOARD.md` # the apps model): an admin e
 Routes are grouped by role at the router level (e.g., `/api/admin/*` requires admin; `/api/me/*` requires any authenticated user). Hard to introduce a bypass by missing a check on one handler.
 
 **On top of the role check, destructive Settings operations re-prompt for the password** with a 5-minute elevation window per session (sudo-in-UI pattern). Full mechanics in `USERS_AND_GROUPS.md` # Elevation in the UI.
+
+**On a hosted box the owner confirms through the portal, not with a password** (issue #469, as built). The portal signs the owner in and the box gives their PAM account a random password that is generated and thrown away (`ENVIRONMENT.md` # Owner sign-in & seed ingestion), so there is no password for them to re-type and every elevation-class action was unreachable. Their confirm step is a second portal round-trip instead: the dashboard mints a one-time challenge (`POST /api/v1/auth/elevate/challenge`, hosted-only), sends the browser to the portal's open-box route with the current page as the return path and the challenge inside it, and the portal comes back to the box's SSO landing with a fresh ownership assertion. The landing verifies the assertion, spends the challenge, and marks the session elevated for the same five minutes a password confirm buys. Three rules make that safe, and each is enforced box-side:
+
+- **No challenge, no elevation.** A plain sign-in landing elevates nothing. The portal's open-box route is a GET with a `SameSite=Lax` cookie, so a cross-site page can drive that navigation; without this rule it could silently arm a privileged window on the victim's own box. The challenge is the part such a page cannot supply, and the reason is worth stating precisely, because the obvious version of it is wrong. **The protection is that a cross-origin page cannot read the reply, not that it cannot send the request.** `POST /api/v1/auth/elevate/challenge` takes no body and requires no JSON content type, so it is a *simple* request in CORS terms: a same-site app page can send it with the owner's cookie and the brain will mint a challenge. What the page never gets is the response. The brain serves no CORS headers at all (`internal/api` # Handler), so the browser refuses to hand the body back, and a challenge nobody can read is inert — it is single-use, bound to its user, and expires in five minutes unspent. This matters most on hosted, where apps are `<slug>.<box-id>.malmo.network` and the dashboard is `<box-id>.malmo.network`. `malmo.network` is not on the Public Suffix List (`ENVIRONMENT.md` # Certs, where the same fact sets the Let's Encrypt budget), so those hosts are **same-site** and `SameSite=Lax` does not stop a fetch between them. A reflected `Origin` with `Access-Control-Allow-Credentials` would hand the app the challenge value and with it the owner's elevation, which is exactly the boundary this rule exists to hold. Issue #475 fixed a layer that did reflect one.
+- **The challenge is single-use and short-lived**, bound to the user it was minted for, and spent before the session is elevated. A replayed return URL signs the owner in and opens nothing.
+- **The return path must be a relative path on this box.** The landing hands out a live session, so an open redirect there would hand it to someone else's page. Anything with a scheme, a host, a backslash, or a leading `//` is refused and the owner lands on the box's front page.
+
+Elevation lives on the box session only. The Domain-scoped forward-auth cookie (`ENVIRONMENT.md` # Public-by-default) proves a live session to app subdomains and carries no elevation of its own. The appliance is untouched: the password prompt stays the only confirm step there, and a box user the hosted owner creates does have a password, so they keep the prompt too.
 
 **Enrollment-class operations bypass the elevation window.** Add-drive and eject-drive (`STORAGE.md` # Adding a data drive, # Ejecting a data drive) require a fresh password prompt every time, regardless of recent elevation. These operations extend the box's LUKS keyslot set or remove a physically-attached drive; they're rare, deliberate, and not safely batched. The 5-minute window covers user-management batch work, not enrollment.
 
@@ -218,24 +228,36 @@ The LUKS recovery passphrase (shown at install, see `STORAGE.md`) recovers **dis
 
 ## Device access (SSH + SMB)
 
-**One password for everything.** Dashboard, SSH, and SMB all authenticate against the same Linux account password — the one the user set at account creation, stored in PAM (`/etc/shadow`). Setting up SSH or mounting an SMB share uses the password the user already knows.
+**One password for everything.** Dashboard, SSH, and SMB all authenticate against the same Linux account password — the one the user set at account creation, stored in PAM (`/etc/shadow`). Setting up SSH or mounting an SMB share uses the password the user already knows. **On hosted, SSH is the exception**: the password is not enough there on its own, and a public key is required — see the profile table below.
 
 **What's per-protocol is the *access*, not the *credential*.** The password is set when the account is created; what changes when the user opts in is which services accept that password for that account.
 
-**Default posture: services on, accounts off.** sshd and Samba are enabled at boot, but no Linux account can log in to either until explicitly allowed:
+**The mandatory factor is set by the profile.** SSH is the one place the one-password rule does not travel, and `DECISIONS.md` 2026-09-09 records why: that rule was a decision about a LAN, and hosted has none.
 
-- `sshd_config.d/malmo-allowed.conf` carries an `AllowUsers` allowlist. Empty at install — sshd rejects every account by default.
+| Profile | Mandatory | Optional second factor | Refused |
+|---|---|---|---|
+| Appliance | The malmo password | A public key | — |
+| Hosted | A public key | The malmo password | Enabling with no key |
+
+The optional factor is a **second lock, never a second door**. Choosing it renders `AuthenticationMethods publickey,password` for that account, so sshd demands both and neither alone authenticates. Offering the other factor as an *alternative* would set the account's security by its weaker branch, which on hosted would discard the whole point of requiring a key.
+
+**Both rows are enforced in the brain, not in host-agent and not in the UI.** host-agent renders what it is told and deliberately does not know the profile, so it cannot be the place that decides which factor is mandatory. The brain refuses a hosted enable that has no key, and resolves the appliance's password to required no matter what the caller sent — so adding a key on the appliance adds a lock rather than swapping one out. Issue #477 fixed the appliance half, which the table described and nothing enforced.
+
+**Losing a key is not a lockout.** The dashboard is reached through the portal on hosted and through the login screen on the appliance, never through SSH. A user who loses their key signs in as usual and pastes a new one. That is what makes the strict hosted posture affordable for a non-technical owner.
+
+**Default posture: nothing is listening.** Samba is enabled at boot with an empty `valid users`. **sshd is not running at all** until an account opts in:
+
+- `sshd_config.d/malmo-allowed.conf` is rendered from the enabled set — a global `AllowUsers` plus one `Match User` block per account carrying that account's `AuthenticationMethods`. Empty at install.
+- sshd is **started when the first account enables SSH and stopped when the last one disables it**, so a box nobody uses SSH on has no open port rather than an open port that refuses (`BUILD.md` # SSH, and `DECISIONS.md` 2026-09-09 for why this replaces daemon-on-but-no-account).
 - `smb.conf` carries a `valid users` directive per share. Empty at install — Samba rejects every account.
-
-The password exists in PAM and is valid; the services just don't accept any user yet.
 
 **Flow (per protocol):**
 
-1. Settings → My account → Device access → toggle "Enable SSH" or "Enable file shares (SMB)."
+1. Settings → SSH → toggle "Allow SSH to my account." (The screen carries SSH alone until SMB has an API; `SETTINGS.md` # panel inventory has the naming.) SMB gets "Enable file shares (SMB)" on the same screen when it ships.
 2. Confirm dashboard password (re-auth gate, prevents stolen-session abuse).
-3. Optional: paste an SSH public key (preferred for SSH; SMB doesn't use keys).
-4. Brain calls host-agent → adds the user to the relevant allowlist (`sshd AllowUsers` and/or Samba `valid users`) → reloads the service. Optionally writes `~/.ssh/authorized_keys`.
-5. User can now connect using their existing malmo password.
+3. Add a public key. Required on hosted, optional on the appliance. The user can **upload a `.pub` file or paste the text**; both reach the same validation. Several keys per account is normal — a laptop and a desktop. A pasted **private** key is refused in plain English and never stored.
+4. Optionally turn on the second factor, described to the user as an extra lock rather than another way in.
+5. Brain calls host-agent → renders the sshd drop-in from the enabled set, writes the account's keys to a **root-owned file outside the user's home** (`/etc/ssh/malmo-authorized-keys/<user>`), validates with `sshd -t`, reloads, and starts or stops the daemon as the enabled set requires. The per-account `Match` block points sshd at that file **and** at the user's own `~/.ssh/authorized_keys`, so keys a user added from their shell keep working and malmo never touches that file. Keeping malmo's keys out of the home directory is a security requirement, not tidiness: host-agent runs as root and `~/.ssh` is a path the account controls, so writing there as root can be redirected by a symlink the user swaps in. SMB is the `valid users` allowlist plus a Samba reload, unchanged.
 
 **Why one password instead of two:**
 
@@ -245,7 +267,9 @@ The password exists in PAM and is valid; the services just don't accept any user
 
 **Samba password backend:** Samba historically wants its own password DB (`tdbsam`), which doesn't share storage with `/etc/shadow`. We use Samba's PAM passdb backend (`passdb backend = tdbsam` with `unix password sync = yes` + `pam password change = yes`) so a password change via `passwd` automatically updates Samba. host-agent does the change atomically (`passwd` + Samba sync as one operation) so drift doesn't occur in practice.
 
-**Network scope:** SSH on :22 and SMB on :445 are firewalled to RFC1918 + the mesh interface — see `BUILD.md` # SSH. Both are structurally blocked from the public internet; both work from a paired mesh device. Pair the device to access the box remotely.
+**Network scope (appliance):** SSH on :22 and SMB on :445 are firewalled to RFC1918 + the mesh interface — see `BUILD.md` # SSH. Both are structurally blocked from the public internet; both work from a paired mesh device. Pair the device to access the box remotely. That scoping is what lets the appliance keep the password as its mandatory factor.
+
+**Network scope (hosted):** there is no LAN and no mesh, so there is nothing to scope to, and no SMB at all (`ENVIRONMENT.md` # Access & files). The box is its own perimeter — it runs no malmo firewall and its provider attaches none — so the only control over :22 is whether sshd is running, which is exactly why the daemon follows the enabled set. Reachability is therefore binary and the credential has to carry the weight, which is the key requirement.
 
 ## Brain ↔ host-agent in the auth path
 
@@ -278,7 +302,8 @@ The brain's session middleware reaches host-agent for *credential verification* 
 - **Login UX: user-list style** with first name + letter glyph. Settings toggle to switch to a blank-form login for privacy-conscious users.
 - **Roles enforced server-side in the brain.** UI hiding is defense in depth.
 - **Tier-2 admin surface lives in the dashboard at `/settings/<service>/*`.** Same origin, same session, no forward-auth.
-- **SSH and SMB are off-by-account-by-default.** Services run; per-user allowlists are empty until the user opts in via Settings.
+- **SSH and SMB are off-by-account-by-default.** Per-user allowlists are empty until the user opts in via Settings. Samba runs from boot; **sshd does not** — it follows the enabled set, so :22 is closed on a box where nobody uses SSH.
+- **The mandatory SSH factor is the profile's.** A public key on hosted, the malmo password on the appliance. The other factor is available as a required *second* method (`AuthenticationMethods publickey,password`), never as an alternative. Hosted refuses to enable an account that has no key. See `DECISIONS.md` 2026-09-09.
 - **Admin recovery code: opt-in toggle, default on.** Shown once, hashed (stored in brain SQLite), single-use, no physical-access reset path. Validating the code triggers a password change through host-agent → PAM.
 - **No SSO into Tier-3 apps.** Locked already in `SPEC.md`; reiterated here.
 - **Cross-origin re-auth on toggle flip is accepted.** No session handoff in v1.

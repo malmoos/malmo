@@ -27,6 +27,12 @@
 #                      identity frozen), and the brain does NOT re-ingest the seed
 #     access           a valid owner assertion → session → per-app forward-auth
 #                      access modes end-to-end through real Caddy (#308)
+#     ssh              the per-account SSH opt-in against a REAL sshd (#467): :22
+#                      closed at boot, a key-less enable refused, the port opening
+#                      with the toggle, a real login that a key passes and a
+#                      password alone does not, the optional second factor making
+#                      the key alone insufficient, the port closing again, and a
+#                      deleted account leaving no name and no key file behind
 #     update           a real control-plane update and a real failed-update-then-
 #                      revert, pulled by digest from a registry inside the guest
 #                      (#382), then the same update again driven by an update-target
@@ -39,10 +45,10 @@
 # to the persisted overlay before the harness boots the next scenario.
 #
 # -u + pipefail but NOT -e: every check is `... || fail`. The unseeded/seeded/frozen
-# scenarios only read or probe. The access and update scenarios do change the box —
-# each on its own throwaway overlay — because the thing under test is a mutation:
-# an owner session plus an app install (access), and the box's own control-plane
-# images (update).
+# scenarios only read or probe. The access, ssh and update scenarios do change the
+# box — each on its own throwaway overlay — because the thing under test is a
+# mutation: an owner session plus an app install (access), accounts and the sshd
+# config (ssh), and the box's own control-plane images (update).
 set -uo pipefail
 
 SENTINEL=/dev/console
@@ -462,6 +468,7 @@ seeded)   DASH_HOST="$(json_str "$SEED" box_id).malmo.network" ;;
 frozen:*) DASH_HOST="${MODE#frozen:}.malmo.network" ;;
 access)   DASH_HOST="$(json_str "$SEED" box_id).malmo.network" ;;
 update)   DASH_HOST="$(json_str "$SEED" box_id).malmo.network" ;;
+ssh)      DASH_HOST="$(json_str "$SEED" box_id).malmo.network" ;;
 esac
 echo "cloud-assertions: probing control plane at Host=$DASH_HOST (mode=$MODE)"
 
@@ -878,7 +885,377 @@ access)
         || fail "access: public app upstream did not receive its own cookie (probe=leakcheck) — the strip is removing more than malmo_forward_auth: $(grep -i '^Cookie:' <<<"$pl_resp" | tr -d '\r')"
     echo "cloud-assertions: public app also strips only malmo_forward_auth (no forward-auth cookie leaks to a public upstream, app's own cookie intact)"
 
+    # 5. THE HOSTED CONFIRM STEP (os#469). Destructive admin writes sit behind a
+    #    re-auth gate, and until now a hosted owner could not pass it: the portal
+    #    signs them in and the box gives their PAM account a random password nobody
+    #    has seen, so every elevation-class action was unreachable on a hosted box.
+    #    The fix makes a second portal round-trip the proof. This drives it with a
+    #    REAL assertion (the harness's second token) against the REAL handshake, and
+    #    ends in a real elevation-class write — the only proof that matters.
+    sso_token2="$(tr -d '\r\n' < "${CREDENTIALS_DIRECTORY:-/nonexistent}/malmo.sso_token2" 2>/dev/null || true)"
+    [ -n "$sso_token2" ] || fail "access: malmo.sso_token2 credential missing (harness did not mint/deliver the second owner assertion)"
+
+    new_user_body='{"username":"tester","password":"malmo-cloud-lane-tester-pw"}'
+
+    # 5a. The plain owner session is admin but NOT elevated, so the write is refused.
+    #     This is the state a hosted box could never leave before #469.
+    cu_status="$(status_of "$(full_send POST /api/v1/users "$apex" "$session_cookie" "$new_user_body" 2>/dev/null)")"
+    grep -q ' 403' <<<"$cu_status" \
+        || fail "access: create-user on a signed-in-but-unconfirmed owner session answered '$cu_status'; wanted 403 (the re-auth gate)"
+
+    # 5b. The dashboard mints a one-time confirm challenge. It is what a cross-site
+    #     page cannot supply: minting it takes an authenticated POST to the box's own
+    #     API, so a drive-by navigation to the portal's open-box route cannot arm the
+    #     window on the victim's box.
+    ch_resp="$(full_send POST /api/v1/auth/elevate/challenge "$apex" "$session_cookie" '{}' 2>/dev/null)"
+    grep -q ' 200' <<<"$(status_of "$ch_resp")" \
+        || fail "access: mint confirm challenge answered '$(status_of "$ch_resp")'; wanted 200"
+    challenge="$(json_str_of "$ch_resp" challenge)"
+    [ -n "$challenge" ] || fail "access: confirm challenge response carried no challenge: $(tail -1 <<<"$ch_resp")"
+
+    # 5c. The portal round-trip: a fresh assertion plus the return path the dashboard
+    #     asked for, URL-encoded exactly as the portal forwards it. The box must land
+    #     the owner back on the page they came from, with the spent challenge stripped
+    #     out of the URL.
+    cf_resp="$(full_get "/_malmo/sso?token=${sso_token2}&return=%2Fsettings%2Fusers%3Fconfirm%3D${challenge}" "$apex" 2>/dev/null || true)"
+    grep -q ' 303' <<<"$(status_of "$cf_resp")" \
+        || fail "access: confirm landing answered '$(status_of "$cf_resp")'; wanted 303"
+    cf_loc="$(grep -i '^Location:' <<<"$cf_resp" | head -1 | tr -d '\r' | awk '{print $2}')"
+    [ "$cf_loc" = "/settings/users" ] \
+        || fail "access: confirm landing sent the owner to '$cf_loc'; wanted /settings/users with the confirm stripped"
+    confirm_cookie="$(cookie_val "$cf_resp" malmo_session)"
+    [ -n "$confirm_cookie" ] || fail "access: confirm landing minted no session cookie"
+
+    # 5d. The same write now passes, and it really reached the host: the Linux
+    #     account exists. A 200 alone would only prove the brain let it through.
+    cu2_status="$(status_of "$(full_send POST /api/v1/users "$apex" "$confirm_cookie" "$new_user_body" 2>/dev/null)")"
+    grep -q ' 200' <<<"$cu2_status" \
+        || fail "access: create-user after the portal confirm answered '$cu2_status'; wanted 200 — the hosted owner still cannot pass the re-auth gate"
+    id tester >/dev/null 2>&1 \
+        || fail "access: create-user returned 200 but no PAM account 'tester' exists; the elevation-class write never reached the host"
+    echo "cloud-assertions: hosted confirm step opened the elevation window through a real portal round-trip (create-user 403 before, 200 after, PAM account created)"
+
+    # 5e. A return path naming another host must never be honoured: the landing hands
+    #     out a live session, so an open redirect here would hand it to somebody
+    #     else's page. The owner still signs in and still lands on their own front
+    #     page. Driven with the third assertion — every token is single-use, and a
+    #     rejected token would 401 before the redirect is ever built, which would
+    #     prove nothing about the return path. The other refused shapes are covered
+    #     per-shape by the brain's unit tests (internal/api # TestReturnTarget).
+    sso_token3="$(tr -d '\r\n' < "${CREDENTIALS_DIRECTORY:-/nonexistent}/malmo.sso_token3" 2>/dev/null || true)"
+    [ -n "$sso_token3" ] || fail "access: malmo.sso_token3 credential missing (harness did not mint/deliver the third owner assertion)"
+    or_resp="$(full_get "/_malmo/sso?token=${sso_token3}&return=%2F%2Fevil.example%2Fsteal" "$apex" 2>/dev/null || true)"
+    grep -q ' 303' <<<"$(status_of "$or_resp")" \
+        || fail "access: landing with an off-box return answered '$(status_of "$or_resp")'; wanted 303 (sign-in still works)"
+    or_loc="$(grep -i '^Location:' <<<"$or_resp" | head -1 | tr -d '\r' | awk '{print $2}')"
+    [ "$or_loc" = "/" ] \
+        || fail "access: OPEN REDIRECT — an off-box return path became Location '$or_loc'; wanted the box's own front page"
+    [ -n "$(cookie_val "$or_resp" malmo_session)" ] \
+        || fail "access: the off-box-return landing minted no session; sign-in must still succeed"
+    echo "cloud-assertions: an off-box return path is refused and the owner lands on the box's own front page"
+
     echo "cloud-assertions: hosted per-app access modes verified end-to-end (restricted gate + owner proxy-through, public reachability, per-cookie strip in both modes)"
+    ;;
+ssh)
+    # SSH end-to-end on a booted hosted box (#467). #464 built the whole path from
+    # the brain's API down to the rendered sshd config, but every proof of it stopped
+    # at a rendered string: no test had ever watched :22 open, watched a real sshd
+    # accept a key and refuse a password, or watched the port close again. That is
+    # what this scenario is for, and it is the acceptance condition #463 left unmet.
+    #
+    # Everything happens inside the guest. The box makes its own keypair with
+    # ssh-keygen and connects to itself, so the air gap costs nothing. The owner
+    # session comes from the same signed test-portal credential the access boot uses.
+    [ -f "$SEED" ] || fail "ssh mode but $SEED absent (seed materializer did not run?)"
+    box_id="$(json_str "$SEED" box_id)"
+    [ -n "$box_id" ] || fail "ssh mode: could not read box_id from $SEED"
+    apex="${box_id}.malmo.network"
+
+    DROPIN=/etc/ssh/sshd_config.d/malmo-allowed.conf
+    KEYSDIR=/etc/ssh/malmo-authorized-keys
+
+    # A TCP connect to :22, as the answer to "is the port open". /dev/tcp fails on a
+    # closed port, which is exactly the signal — no ss/netstat parsing.
+    port22_open() { (exec 3<>/dev/tcp/127.0.0.1/22) 2>/dev/null; }
+    unit_active() { [ "$(systemctl is-active ssh.service 2>/dev/null)" = active ]; }
+    # The daemon's run state and the port change a beat after the API returns (the
+    # brain calls host-agent, which runs systemctl), so poll rather than sample.
+    wait_port22() { # want=open|closed
+        local want="$1" _i
+        for _i in $(seq 1 30); do
+            if [ "$want" = open ]; then port22_open && return 0
+            else port22_open || return 0; fi
+            sleep 1
+        done
+        return 1
+    }
+
+    # --- 1. at boot: nothing listening, nothing enabled.
+    # On hosted the daemon IS the port control — no malmo firewall, and the provider
+    # attaches none — so a box that boots with sshd running has no control over :22
+    # at all. Debian's openssh-server postinst enables ssh.service on install, so
+    # this is a live check on the image's own wiring (dev/cloud/mkosi.postinst.chroot
+    # undoes it), not a restatement of a config file.
+    unit_active && fail "ssh: ssh.service is active at boot — the image enabled sshd; on hosted that leaves :22 open for the life of the box"
+    port22_open && fail "ssh: :22 answers at boot with no account enabled"
+    [ -f "$DROPIN" ] && fail "ssh: $DROPIN exists at boot — nothing should be rendered before an account opts in"
+
+    # Host keys are this box's own, not the image's. Debian's postinst generates
+    # them at IMAGE BUILD time, so every box provisioned from one image would share
+    # them and any holder of the published image could impersonate a box to its
+    # owner's ssh client. The build deletes them and malmo-sshd-keygen.service
+    # makes per-box ones at boot.
+    #
+    # Their presence is not the question — they have to be here, because host-agent
+    # validates the rendered config with `sshd -t` before it ever starts the daemon
+    # and that needs keys. The question is WHEN they were written. A key this box
+    # generated has an mtime at or after this boot; a key baked into the image
+    # carries the build's timestamp, hours or days earlier. The 300s slack absorbs
+    # clock jitter and still separates the two cases by a wide margin.
+    hostkey=/etc/ssh/ssh_host_ed25519_key
+    [ -f "$hostkey" ] \
+        || fail "ssh: no host keys at boot — malmo-sshd-keygen.service did not run, so the first enable will fail 'sshd -t' with 'no hostkeys available'"
+    btime="$(awk '/^btime /{print $2}' /proc/stat)"
+    kmtime="$(stat -c %Y "$hostkey" 2>/dev/null || echo 0)"
+    [ -n "$btime" ] && [ "$kmtime" -ge "$((btime - 300))" ] \
+        || fail "ssh: HOST KEY WAS BAKED INTO THE IMAGE — written $((btime - kmtime))s before this boot, so every box from this image shares it"
+    echo "cloud-assertions: :22 closed and ssh.service inactive at boot, nothing rendered, host keys generated by this box"
+
+    # --- 2. owner session, then elevation.
+    # Every SSH write is elevation-class (it changes who can get a shell on the box),
+    # so the session has to pass the re-auth gate. Elevation re-verifies the account's
+    # password through PAM, and a hosted owner's password is generated by the SSO
+    # auto-create and thrown away — nobody, including this harness, knows it. So set
+    # one here as host root, which is the only side that can. This is harness setup,
+    # not a product path: the box is ours and PAM is the source of truth
+    # (AUTH.md # Identity primitive), so chpasswd is the same write the brain would
+    # make through host-agent. A real hosted owner has no way past this gate at all
+    # today; that is #469, not something this scenario can fix.
+    # The SSO landing runs first: it is what creates the owner's PAM account, so
+    # there is nothing to set a password on before it. Driven ONCE — the jti is
+    # single-use, so a retry replays and 401s.
+    sso_token="$(tr -d '\r\n' < "${CREDENTIALS_DIRECTORY:-/nonexistent}/malmo.sso_token" 2>/dev/null || true)"
+    [ -n "$sso_token" ] || fail "ssh: malmo.sso_token credential missing (harness did not mint/deliver the owner assertion)"
+    sso_resp="$(full_get "/_malmo/sso?token=${sso_token}" "$apex" 2>/dev/null || true)"
+    grep -q ' 303' <<<"$(status_of "$sso_resp")" \
+        || fail "ssh: SSO landing did not 303 to the dashboard: status='$(status_of "$sso_resp")'"
+    owner_cookie="$(cookie_val "$sso_resp" malmo_session)"
+    [ -n "$owner_cookie" ] || fail "ssh: no malmo_session cookie from the SSO landing"
+
+    owner=owner
+    OWNER_PW='malmo-cloud-lane-owner-pw'
+    id "$owner" >/dev/null 2>&1 \
+        || fail "ssh: the SSO landing did not create the PAM account '$owner' (mkassertion's -email local-part)"
+    printf '%s:%s\n' "$owner" "$OWNER_PW" | chpasswd || fail "ssh: could not set a known password for '$owner'"
+
+    # Every SSH write below re-elevates first. The window is five minutes
+    # (USERS_AND_GROUPS.md # Elevation in the UI) and this scenario drives three
+    # sshd reloads, three real ssh connections and a user create + delete, each
+    # waiting on a systemctl round-trip through host-agent — under CI's TCG-only
+    # QEMU that can outlast the window, and an expired one fails as a 403 that says
+    # nothing about SSH. Re-elevating is one PAM verify and removes the flake.
+    elevate() { # HOST COOKIE PASSWORD -> 0 when the session is elevated
+        local r
+        r="$(full_send POST /api/v1/auth/elevate "$1" "$2" "{\"password\":\"$3\"}" 2>/dev/null)"
+        grep -q ' 200' <<<"$(status_of "$r")"
+    }
+    elevate "$apex" "$owner_cookie" "$OWNER_PW" \
+        || fail "ssh: elevate as the owner failed (PAM did not accept the password we just set?)"
+    echo "cloud-assertions: owner session established and elevated"
+
+    # --- 3. turning SSH on with no key is refused.
+    # The key is the MANDATORY factor on hosted (DECISIONS.md 2026-09-09): a
+    # household password on a port the open internet can reach is not a credential,
+    # and sshd knows nothing of the login throttling the brain applies to that same
+    # password. Enforced server-side, not only in the dashboard.
+    elevate "$apex" "$owner_cookie" "$OWNER_PW" || fail "ssh: re-elevate before the key-less enable failed"
+    nokey="$(full_send PUT /api/v1/me/ssh "$apex" "$owner_cookie" '{"enabled":true}' 2>/dev/null)"
+    grep -q ' 422' <<<"$(status_of "$nokey")" \
+        || fail "ssh: enabling SSH with no key was not refused: status='$(status_of "$nokey")' (want 422 — the key is mandatory on hosted)"
+    port22_open && fail "ssh: :22 opened after a refused enable"
+    echo "cloud-assertions: enabling SSH with no key refused (422), :22 still closed"
+
+    # --- 4. add a key, turn SSH on.
+    KEYFILE=/root/.malmo-ssh-lane
+    rm -f "$KEYFILE" "${KEYFILE}.pub"
+    ssh-keygen -t ed25519 -N '' -C 'malmo-cloud-lane' -f "$KEYFILE" >/dev/null 2>&1 \
+        || fail "ssh: ssh-keygen failed (is openssh-client in the image?)"
+    pubkey="$(tr -d '\n' < "${KEYFILE}.pub")"
+    elevate "$apex" "$owner_cookie" "$OWNER_PW" || fail "ssh: re-elevate before adding the key failed"
+    addk="$(full_send POST /api/v1/me/ssh/keys "$apex" "$owner_cookie" \
+        "{\"public_key\":\"${pubkey}\",\"label\":\"cloud lane\"}" 2>/dev/null)"
+    grep -qE ' (200|201)' <<<"$(status_of "$addk")" \
+        || fail "ssh: adding a public key failed: status='$(status_of "$addk")'"
+    key_id="$(json_str_of "$addk" id)"
+    [ -n "$key_id" ] || fail "ssh: could not read the new key's id out of the add response"
+
+    elevate "$apex" "$owner_cookie" "$OWNER_PW" || fail "ssh: re-elevate before turning SSH on failed"
+    on="$(full_send PUT /api/v1/me/ssh "$apex" "$owner_cookie" '{"enabled":true}' 2>/dev/null)"
+    grep -q ' 200' <<<"$(status_of "$on")" \
+        || fail "ssh: turning SSH on with a key failed: status='$(status_of "$on")'"
+    wait_port22 open || fail "ssh: :22 never opened after the account was enabled"
+    unit_active || fail "ssh: ssh.service is not active after the account was enabled"
+    [ -f "$DROPIN" ] || fail "ssh: $DROPIN was not rendered after the account was enabled"
+    grep -qE "^AllowUsers .*\b${owner}\b" "$DROPIN" \
+        || fail "ssh: rendered drop-in does not name '$owner' in AllowUsers: $(cat "$DROPIN")"
+    grep -qE "^Match User ${owner}\$" "$DROPIN" \
+        || fail "ssh: rendered drop-in has no Match block for '$owner': $(cat "$DROPIN")"
+    [ -f "${KEYSDIR}/${owner}" ] || fail "ssh: managed key file ${KEYSDIR}/${owner} was not written"
+    echo "cloud-assertions: SSH on — ssh.service active, :22 listening, drop-in names $owner"
+
+    # --- 5. a real connection: the key gets in, a password alone does not.
+    # This is the step that makes the whole scenario worth booting a VM for. Up to
+    # here everything is a rendered string; from here a real sshd decides.
+    SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes"
+    # Poll: sshd was just started/reloaded and may not have finished binding.
+    conn=""
+    for _i in $(seq 1 30); do
+        conn="$(ssh $SSH_OPTS -i "$KEYFILE" "${owner}@127.0.0.1" 'echo MALMO_SSH_OK' 2>&1)"
+        grep -q MALMO_SSH_OK <<<"$conn" && break
+        sleep 1
+    done
+    grep -q MALMO_SSH_OK <<<"$conn" \
+        || fail "ssh: key-based login as '$owner' failed: $conn"
+    echo "cloud-assertions: real ssh login with the key succeeded, on host keys this box generated itself"
+
+    # Password alone must not be a way in. Ask sshd directly rather than trying to
+    # type a password without a terminal: a client that offers no key gets back the
+    # server's list of methods that may continue, and with AuthenticationMethods
+    # publickey that list is `publickey` — sshd saying, on the wire, that no password
+    # is accepted here. The connection must also actually fail.
+    # Normalise line endings before matching. The methods list is read out of ssh's
+    # -v output, and matching it is where this assertion has actually gone wrong
+    # before: an anchored pattern failed against a line that printed identically.
+    # Match on what the line says, not on where it ends.
+    pw_out="$(ssh $SSH_OPTS -v -o PubkeyAuthentication=no -o PreferredAuthentications=password \
+        "${owner}@127.0.0.1" 'echo MALMO_SSH_PW' 2>&1 | tr -d '\r')"
+    grep -q MALMO_SSH_PW <<<"$pw_out" \
+        && fail "ssh: PASSWORD-ONLY LOGIN SUCCEEDED — the key is supposed to be the mandatory factor on hosted: $pw_out"
+    pw_methods="$(grep -i 'Authentications that can continue' <<<"$pw_out" | tail -1)"
+    [ -n "$pw_methods" ] \
+        || fail "ssh: sshd never sent a methods list on the password-only attempt; cannot tell what it would accept: $pw_out"
+    # The property, stated directly: password is not among the ways in. Asserting
+    # the absence is what "a password alone does not get in" means — a list that
+    # merely contains publickey would still be satisfied by publickey,password.
+    grep -qi 'password' <<<"$pw_methods" \
+        && fail "ssh: PASSWORD IS AN ACCEPTED METHOD — sshd offers '$pw_methods'; on hosted the key is the mandatory factor, not one of two doors"
+    grep -qi 'publickey' <<<"$pw_methods" \
+        || fail "ssh: sshd does not offer publickey either: '$pw_methods'"
+    echo "cloud-assertions: password-only login refused — sshd offers '${pw_methods#*continue: }' and nothing else"
+
+    # --- 6. the optional second factor makes the key alone insufficient.
+    # The optional factor is a second lock, never a second door: AuthenticationMethods
+    # becomes publickey,password, so sshd demands BOTH and neither alone gets in
+    # (AUTH.md # Device access). The proof is the same key that just worked no longer
+    # working, and sshd asking for a password after accepting it.
+    elevate "$apex" "$owner_cookie" "$OWNER_PW" || fail "ssh: re-elevate before the second-factor toggle failed"
+    both="$(full_send PUT /api/v1/me/ssh "$apex" "$owner_cookie" '{"enabled":true,"require_password":true}' 2>/dev/null)"
+    grep -q ' 200' <<<"$(status_of "$both")" \
+        || fail "ssh: turning on the optional second factor failed: status='$(status_of "$both")'"
+    grep -qE '^ *AuthenticationMethods +publickey,password$' "$DROPIN" \
+        || fail "ssh: drop-in does not require publickey,password after the second factor was turned on: $(cat "$DROPIN")"
+
+    # BatchMode means the client can never supply a password, so a success here would
+    # mean the key alone was enough. Poll the other way round: give the reload a
+    # moment, but require every attempt in the window to fail.
+    sleep 3
+    keyonly="$(ssh $SSH_OPTS -v -i "$KEYFILE" "${owner}@127.0.0.1" 'echo MALMO_SSH_KEYONLY' 2>&1 | tr -d '\r')"
+    grep -q MALMO_SSH_KEYONLY <<<"$keyonly" \
+        && fail "ssh: THE KEY ALONE STILL GETS IN with the second factor on — publickey,password is not being enforced: $keyonly"
+    # Partial success is the AND, in sshd's own words: the key was accepted and was
+    # not enough. Stronger than reading the methods list, because it says the key
+    # got through and the connection still did not.
+    grep -qi 'partial success' <<<"$keyonly" \
+        || fail "ssh: sshd did not report partial success, so the key was not even accepted: $(grep -iE 'can continue|denied' <<<"$keyonly" | tail -3)"
+    key_methods="$(grep -i 'Authentications that can continue' <<<"$keyonly" | tail -1)"
+    grep -qi 'password' <<<"$key_methods" \
+        || fail "ssh: sshd did not demand a password after accepting the key: '$key_methods'"
+    echo "cloud-assertions: second factor enforced — the key is accepted, then a password is still demanded"
+
+    # --- 7. removing the only key while SSH is on is refused.
+    # The user asked to remove a key, not to lose their access, and they may be about
+    # to add a replacement — so this refuses rather than silently turning SSH off.
+    elevate "$apex" "$owner_cookie" "$OWNER_PW" || fail "ssh: re-elevate before the key delete failed"
+    delk="$(full_send DELETE "/api/v1/me/ssh/keys/${key_id}" "$apex" "$owner_cookie" '{}' 2>/dev/null)"
+    grep -q ' 422' <<<"$(status_of "$delk")" \
+        || fail "ssh: removing the only key while SSH is on was not refused: status='$(status_of "$delk")' (want 422)"
+    [ -f "${KEYSDIR}/${owner}" ] || fail "ssh: the managed key file disappeared on a refused delete"
+    echo "cloud-assertions: removing the only key while SSH is on refused (422)"
+
+    # --- 8. turn SSH off: the port closes and the key file goes.
+    elevate "$apex" "$owner_cookie" "$OWNER_PW" || fail "ssh: re-elevate before turning SSH off failed"
+    off="$(full_send PUT /api/v1/me/ssh "$apex" "$owner_cookie" '{"enabled":false}' 2>/dev/null)"
+    grep -q ' 200' <<<"$(status_of "$off")" \
+        || fail "ssh: turning SSH off failed: status='$(status_of "$off")'"
+    wait_port22 closed || fail "ssh: :22 STILL ANSWERS after the last account turned SSH off — on hosted the daemon is the only port control"
+    unit_active && fail "ssh: ssh.service is still active after the last account turned SSH off"
+    [ -f "${KEYSDIR}/${owner}" ] \
+        && fail "ssh: the managed key file ${KEYSDIR}/${owner} survived the account being turned off"
+    echo "cloud-assertions: SSH off — ssh.service stopped, :22 closed, managed key file removed"
+
+    # --- 9. deleting a user who had SSH on takes their access with them.
+    # This cleanup landed in #464 and nothing outside a booted box can check it: a
+    # name left in AllowUsers or a key file left in ${KEYSDIR} is a credential for an
+    # account that no longer exists. Needs a second account, because the owner cannot
+    # delete itself.
+    GONE_USER=sshgone
+    GONE_PW='malmo-cloud-lane-gone-pw'
+    elevate "$apex" "$owner_cookie" "$OWNER_PW" || fail "ssh: re-elevate before creating the second account failed"
+    mk="$(full_send POST /api/v1/users "$apex" "$owner_cookie" \
+        "{\"username\":\"${GONE_USER}\",\"password\":\"${GONE_PW}\",\"role\":\"member\"}" 2>/dev/null)"
+    grep -qE ' (200|201)' <<<"$(status_of "$mk")" \
+        || fail "ssh: could not create the second account: status='$(status_of "$mk")'"
+    gone_id="$(json_str_of "$mk" id)"
+    [ -n "$gone_id" ] || fail "ssh: could not read the new user's id out of the create response"
+
+    # That account turns its own SSH on — /me/ssh is self-service, so it needs its own
+    # session and its own elevation.
+    glogin="$(full_send POST /api/v1/login "$apex" 'probe=login' \
+        "{\"username\":\"${GONE_USER}\",\"password\":\"${GONE_PW}\"}" 2>/dev/null)"
+    grep -q ' 200' <<<"$(status_of "$glogin")" \
+        || fail "ssh: '$GONE_USER' could not log in: status='$(status_of "$glogin")'"
+    gone_cookie="$(cookie_val "$glogin" malmo_session)"
+    [ -n "$gone_cookie" ] || fail "ssh: no session cookie for '$GONE_USER'"
+    elevate "$apex" "$gone_cookie" "$GONE_PW" || fail "ssh: '$GONE_USER' could not elevate"
+
+    elevate "$apex" "$gone_cookie" "$GONE_PW" || fail "ssh: re-elevate as '$GONE_USER' before adding a key failed"
+    gaddk="$(full_send POST /api/v1/me/ssh/keys "$apex" "$gone_cookie" \
+        "{\"public_key\":\"${pubkey}\",\"label\":\"cloud lane\"}" 2>/dev/null)"
+    grep -qE ' (200|201)' <<<"$(status_of "$gaddk")" \
+        || fail "ssh: '$GONE_USER' could not add a key: status='$(status_of "$gaddk")'"
+    elevate "$apex" "$gone_cookie" "$GONE_PW" || fail "ssh: re-elevate as '$GONE_USER' before turning SSH on failed"
+    # This enable is also the re-enable regression test. SSH was turned off in step
+    # 8, which stops the unit — and Debian's ssh.service declares
+    # RuntimeDirectory=sshd, so systemd deletes /run/sshd on that stop. sshd will
+    # not read a config without it, and host-agent runs `sshd -t` before starting
+    # anything, so without the RuntimeDirectoryPreserve drop-in no account can ever
+    # turn SSH back on until the box reboots. Only the SECOND enable of a boot
+    # catches it.
+    gon="$(full_send PUT /api/v1/me/ssh "$apex" "$gone_cookie" '{"enabled":true}' 2>/dev/null)"
+    grep -q ' 200' <<<"$(status_of "$gon")" \
+        || fail "ssh: '$GONE_USER' could not turn SSH on AFTER a previous account turned it off: status='$(status_of "$gon")' — if host-agent logged 'Missing privilege separation directory', the ssh.service RuntimeDirectoryPreserve drop-in is missing and SSH is one-shot per boot"
+    wait_port22 open || fail "ssh: :22 never re-opened for '$GONE_USER'"
+    grep -qE "^AllowUsers .*\b${GONE_USER}\b" "$DROPIN" \
+        || fail "ssh: drop-in does not name '$GONE_USER' after they turned SSH on: $(cat "$DROPIN")"
+    [ -f "${KEYSDIR}/${GONE_USER}" ] || fail "ssh: no managed key file for '$GONE_USER'"
+
+    elevate "$apex" "$owner_cookie" "$OWNER_PW" || fail "ssh: re-elevate before deleting the second account failed"
+    rmu="$(full_send DELETE "/api/v1/users/${gone_id}" "$apex" "$owner_cookie" '{}' 2>/dev/null)"
+    grep -qE ' (204|200)' <<<"$(status_of "$rmu")" \
+        || fail "ssh: deleting '$GONE_USER' failed: status='$(status_of "$rmu")'"
+    id "$GONE_USER" >/dev/null 2>&1 \
+        && fail "ssh: the Linux account '$GONE_USER' still exists after the user was deleted"
+    [ -f "${KEYSDIR}/${GONE_USER}" ] \
+        && fail "ssh: KEY LEFT BEHIND — ${KEYSDIR}/${GONE_USER} outlived the deleted account; it authenticates a name that could be re-created"
+    if [ -f "$DROPIN" ]; then
+        grep -qw "$GONE_USER" "$DROPIN" \
+            && fail "ssh: the deleted account '$GONE_USER' is still named in $DROPIN: $(cat "$DROPIN")"
+    fi
+    wait_port22 closed \
+        || fail "ssh: :22 still answers after the last enabled account was deleted"
+    echo "cloud-assertions: deleting an account with SSH on removed its name, its key file, and closed :22"
+
+    echo "cloud-assertions: hosted SSH verified end-to-end (port opens and closes with the toggle, key required, second factor enforced, deleted account leaves nothing behind)"
     ;;
 update)
     # Control-plane update proof (#382): a REAL update and a REAL failed-update-

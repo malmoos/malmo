@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -50,6 +51,17 @@ type Server struct {
 	streams  *streamCap
 	limiter  *rateLimiter
 	jobs     *Jobs
+
+	// sshWrites serialises the Device access writes (ssh.go). Each one is a
+	// read-modify-write that ends in a full-state push to host-agent, so two
+	// overlapping requests can commit to SQLite in one order and reach the host
+	// in the other, leaving sshd admitting an account the brain thinks is off.
+	// One lock for all accounts, not one per account: these writes are rare and
+	// a user-facing panel action, so the contention does not matter and a map of
+	// per-user locks would be state to grow and never free. Deleting a user takes
+	// it too (users.go), because that delete revokes the account's SSH and must
+	// not interleave with the account turning SSH back on.
+	sshWrites sync.Mutex
 
 	// Environment profile and hosted-only provisioning identity, set once at
 	// startup via SetEnvironment (ENVIRONMENT.md # Provisioning). On appliance
@@ -137,10 +149,25 @@ const (
 )
 
 // Handler builds the mux: huma-registered REST routes + the raw SSE endpoint.
-// The chain is CORS → auth → rate-limit → mux. CORS handles OPTIONS preflight
-// (no auth needed); auth gates everything else except the small public
-// allowlist; the limiter then throttles per resolved session (or per IP on the
-// allowlist) before the mux dispatches (BRAIN_UI_PROTOCOL.md # Rate limiting).
+// The chain is auth → rate-limit → mux. Auth gates everything except the small
+// public allowlist; the limiter then throttles per resolved session (or per IP
+// on the allowlist) before the mux dispatches (BRAIN_UI_PROTOCOL.md # Rate
+// limiting).
+//
+// There is no CORS layer, and that is load-bearing rather than an omission.
+// Nothing reaches this API cross-origin: the dashboard fetches relative paths
+// (`/api/v1/...`, web-ui/src/api.ts), Caddy serves the UI and the brain on one
+// host in production, and the Vite dev server proxies `/api` to the brain so
+// the browser sees one origin there too (web-ui/vite.config.ts). So answering
+// a preflight buys no caller anything, and answering one with a reflected
+// Origin plus Access-Control-Allow-Credentials would cost a great deal: on
+// hosted, apps are `<slug>.<box-id>.malmo.network` and the dashboard is
+// `<box-id>.malmo.network`, which are same-site under a registrable domain
+// that is not on the Public Suffix List (ENVIRONMENT.md # Public DNS). The
+// owner's SameSite=Lax session cookie therefore rides a fetch from any app to
+// the dashboard API, and a reflected header would let the app read the reply.
+// AUTH.md # Re-authentication and confirm.go both rest on the opposite: that
+// a cross-origin page cannot make an authenticated JSON POST here.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	api := humago.New(mux, huma.DefaultConfig(openAPITitle, openAPIVersion))
@@ -181,7 +208,7 @@ func (s *Server) Handler() http.Handler {
 	// forward_auth sends.
 	mux.HandleFunc(forwardAuthVerifyPath, s.forwardAuthVerify)
 
-	return withCORS(s.authMiddleware(s.rateLimit(mux)))
+	return s.authMiddleware(s.rateLimit(mux))
 }
 
 // registerAll registers every huma (OpenAPI-described) route on api. It is the
@@ -196,6 +223,7 @@ func (s *Server) registerAll(api huma.API) {
 	s.registerAuth(api)
 	s.registerUsers(api)
 	s.registerMeRoutes(api)
+	s.registerSSHRoutes(api)
 	s.registerHealth(api)
 	s.registerNotifications(api)
 	s.registerMail(api)
@@ -1121,23 +1149,4 @@ func (s *Server) systemLive(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
-}
-
-// withCORS lets the Vite dev server (different origin) call the brain during
-// development. Tightened to same-origin behind Caddy in production.
-func withCORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-		if origin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-		}
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }

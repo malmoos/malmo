@@ -11,7 +11,7 @@
 // portal-signed assertion exactly as it would in production (internal/assertion.Verify,
 // internal/api/sso.go # ssoLanding), mirroring the real portal-to-box trust model.
 //
-// It prints TWO lines to stdout, nothing else (diagnostics go to stderr):
+// It prints two lines to stdout by default, nothing else (diagnostics go to stderr):
 //
 //	<line 1>  the Ed25519 PUBLIC key, standard-base64 — the value the harness puts in
 //	          the seed's "assertion_verification_key" (the same encoding the lane's
@@ -19,6 +19,12 @@
 //	<line 2>  the signed assertion token — base64url(claims) "." base64url(ed25519-sig),
 //	          the shape internal/assertion expects — delivered to the VM over SMBIOS and
 //	          replayed as GET /_malmo/sso?token=<token>
+//
+// With -tokens N it prints N token lines after the key instead of one, each with its
+// own jti. A scenario needs more than one because the box spends a jti on first use:
+// the access boot signs the owner in with the first, drives the hosted confirm step
+// (os#469) with the second, and probes the return path's open-redirect guard with the
+// third — three real portal round-trips.
 //
 // The claims are minted to satisfy every box-side policy check in ssoLanding: iss ==
 // profile.NetworkApex, box == the box-id, and non-empty sub/email/jti. Exp is set far
@@ -43,14 +49,18 @@ import (
 
 func main() {
 	var (
-		box   = flag.String("box", "", "box-id the assertion authorizes (must equal the box's provisioned id)")
-		sub   = flag.String("sub", "portal-owner", "owner portal account id (claims.sub)")
-		email = flag.String("email", "owner@example.com", "owner email; the box derives the PAM username from it")
-		ttl   = flag.Duration("ttl", 2*time.Hour, "assertion lifetime; must outlast a slow air-gapped boot")
+		box    = flag.String("box", "", "box-id the assertion authorizes (must equal the box's provisioned id)")
+		sub    = flag.String("sub", "portal-owner", "owner portal account id (claims.sub)")
+		email  = flag.String("email", "owner@example.com", "owner email; the box derives the PAM username from it")
+		ttl    = flag.Duration("ttl", 2*time.Hour, "assertion lifetime; must outlast a slow air-gapped boot")
+		tokens = flag.Int("tokens", 1, "how many independent assertions to mint (each with its own jti)")
 	)
 	flag.Parse()
 	if *box == "" {
 		fatal("mkassertion: -box is required")
+	}
+	if *tokens < 1 {
+		fatal("mkassertion: -tokens must be at least 1")
 	}
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -58,33 +68,34 @@ func main() {
 		fatal("generate key: %v", err)
 	}
 
-	jti := make([]byte, 16)
-	if _, err := rand.Read(jti); err != nil {
-		fatal("generate jti: %v", err)
-	}
-
-	now := time.Now()
-	claims := assertion.Claims{
-		Iss:   profile.NetworkApex,
-		Sub:   *sub,
-		Email: *email,
-		Box:   *box,
-		Iat:   now.Unix(),
-		Exp:   now.Add(*ttl).Unix(),
-		JTI:   hex.EncodeToString(jti),
-	}
-
-	token, err := mint(priv, claims)
-	if err != nil {
-		fatal("mint token: %v", err)
-	}
-
 	// Line 1: the public key the seed carries. Standard base64 matches the lane's
 	// existing random-key seeds (dev/cloud/run-cloud-tests.sh # seed_cred), which the
 	// brain already decodes at ingestion.
 	fmt.Println(base64.StdEncoding.EncodeToString(pub))
-	// Line 2: the signed token.
-	fmt.Println(token)
+
+	// Then one line per requested token. Each carries its own jti: the box records a
+	// spent jti and refuses the second use, so two steps of one scenario cannot share a token.
+	now := time.Now()
+	for i := 0; i < *tokens; i++ {
+		jti := make([]byte, 16)
+		if _, err := rand.Read(jti); err != nil {
+			fatal("generate jti: %v", err)
+		}
+		claims := assertion.Claims{
+			Iss:   profile.NetworkApex,
+			Sub:   *sub,
+			Email: *email,
+			Box:   *box,
+			Iat:   now.Unix(),
+			Exp:   now.Add(*ttl).Unix(),
+			JTI:   hex.EncodeToString(jti),
+		}
+		token, err := mint(priv, claims)
+		if err != nil {
+			fatal("mint token: %v", err)
+		}
+		fmt.Println(token)
+	}
 }
 
 // mint builds the box's assertion wire form: base64url(claims-json) "." base64url(sig),
