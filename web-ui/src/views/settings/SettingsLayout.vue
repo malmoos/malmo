@@ -26,15 +26,15 @@ type NavItem = { to: string; label: string; icon: LucideIcon; adminOnly?: boolea
 type NavGroup = { label: string; items: NavItem[] };
 
 // Group and item order is the menu order. "You" holds what the signed-in user
-// owns: their account, their own SSH access, then the apps they have installed. "System" holds the
-// box-wide items, with Notifications sitting just above Activity — both are
-// "what happened on this box", so they read as a pair.
+// owns: their account, then the apps they have installed. "System" holds the
+// box-wide items. SSH sits between Notifications and Activity: it is per-account
+// like Notifications, and both of those read as settings you carry, while
+// Activity is the record of what happened on this box.
 const groups: NavGroup[] = [
   {
     label: "You",
     items: [
       { to: "/settings/account", label: "Account", icon: User },
-      { to: "/settings/ssh", label: "SSH", icon: Terminal },
       { to: "/settings/apps", label: "Installed apps", icon: LayoutGrid },
     ],
   },
@@ -44,6 +44,7 @@ const groups: NavGroup[] = [
       { to: "/settings/users", label: "Users", icon: Users, adminOnly: true },
       { to: "/settings/mail", label: "Outgoing email", icon: Mail, adminOnly: true },
       { to: "/settings/notifications", label: "Notifications", icon: Bell },
+      { to: "/settings/ssh", label: "SSH", icon: Terminal },
       { to: "/settings/activity", label: "Activity", icon: ScrollText },
       { to: "/settings/about", label: "About", icon: Info },
     ],
