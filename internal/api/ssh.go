@@ -94,6 +94,30 @@ func (s *Server) keyRequired() bool {
 	return s.profile == profile.Hosted
 }
 
+// effectiveRequirePassword resolves what the account asked for against what the
+// profile makes mandatory. On the appliance the malmo password is the mandatory
+// factor and the key is the optional second lock, so the answer is always true
+// no matter what the caller sent; on hosted the key is mandatory and the
+// password is the account's own choice (AUTH.md # Device access, the profile
+// table).
+//
+// It is applied once, at the only entry point a caller-supplied value comes in
+// through. Every other push (reapplySSH, the deleteUser restore, the rollbacks)
+// reads the stored row, so normalising before the write makes all of them right
+// and stops the row describing a posture sshd is not running.
+//
+// The brain is the right place for this and host-agent is not: host-agent does
+// not know the environment profile and must not second-guess which factor is
+// mandatory. Given a key and false, its renderer correctly writes
+// "AuthenticationMethods publickey" — the bug was the brain handing it a false
+// the appliance is not allowed to ask for.
+func (s *Server) effectiveRequirePassword(asked bool) bool {
+	if !s.keyRequired() {
+		return true
+	}
+	return asked
+}
+
 func (s *Server) getMySSH(ctx context.Context, _ *struct{}) (*struct {
 	Body SSHAccessDTO
 }, error) {
@@ -111,7 +135,11 @@ func (s *Server) getMySSH(ctx context.Context, _ *struct{}) (*struct {
 func (s *Server) setMySSH(ctx context.Context, in *struct {
 	Body struct {
 		Enabled bool `json:"enabled"`
-		// Optional: an account that does not want the second lock simply omits it.
+		// Optional, and only meaningful on hosted: it asks for the malmo password
+		// as a second required method alongside the key. On the appliance the
+		// password is the mandatory factor already, so omitting this changes
+		// nothing and the server resolves it to true either way
+		// (effectiveRequirePassword).
 		RequirePassword bool `json:"require_password,omitempty" required:"false"`
 	}
 }) (*struct {
@@ -122,7 +150,12 @@ func (s *Server) setMySSH(ctx context.Context, in *struct {
 		return nil, huma.Error401Unauthorized("unauthenticated")
 	}
 	tgt := audit.Target{Kind: "user", ID: id.User.ID}
-	meta := map[string]any{"enabled": in.Body.Enabled, "require_password": in.Body.RequirePassword}
+
+	// The effective value, not the asked-for one, so the Activity record says what
+	// the box actually did. On the appliance those differ whenever the caller
+	// omits require_password.
+	requirePassword := s.effectiveRequirePassword(in.Body.RequirePassword)
+	meta := map[string]any{"enabled": in.Body.Enabled, "require_password": requirePassword}
 
 	if err := requireElevated(ctx); err != nil {
 		s.auditor.Record(ctx, audit.ActionSSHAccessSet, tgt, meta, false)
@@ -160,11 +193,11 @@ func (s *Server) setMySSH(ctx context.Context, in *struct {
 		s.auditor.Record(ctx, audit.ActionSSHAccessSet, tgt, meta, false)
 		return nil, huma.Error500InternalServerError("read ssh access failed", err)
 	}
-	if err := s.store.SetSSHAccess(id.User.ID, in.Body.Enabled, in.Body.RequirePassword); err != nil {
+	if err := s.store.SetSSHAccess(id.User.ID, in.Body.Enabled, requirePassword); err != nil {
 		s.auditor.Record(ctx, audit.ActionSSHAccessSet, tgt, meta, false)
 		return nil, huma.Error500InternalServerError("save ssh access failed", err)
 	}
-	if err := s.applySSH(ctx, id.User.Username, in.Body.Enabled, in.Body.RequirePassword, keys); err != nil {
+	if err := s.applySSH(ctx, id.User.Username, in.Body.Enabled, requirePassword, keys); err != nil {
 		if rbErr := s.store.SetSSHAccess(id.User.ID, prev.Enabled, prev.RequirePassword); rbErr != nil {
 			slog.Error("ssh access rollback failed", "user_id", id.User.ID,
 				"username", id.User.Username, "service", "ssh", "err", rbErr)

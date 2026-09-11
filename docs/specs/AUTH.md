@@ -241,6 +241,8 @@ The LUKS recovery passphrase (shown at install, see `STORAGE.md`) recovers **dis
 
 The optional factor is a **second lock, never a second door**. Choosing it renders `AuthenticationMethods publickey,password` for that account, so sshd demands both and neither alone authenticates. Offering the other factor as an *alternative* would set the account's security by its weaker branch, which on hosted would discard the whole point of requiring a key.
 
+**Both rows are enforced in the brain, not in host-agent and not in the UI.** host-agent renders what it is told and deliberately does not know the profile, so it cannot be the place that decides which factor is mandatory. The brain refuses a hosted enable that has no key, and resolves the appliance's password to required no matter what the caller sent — so adding a key on the appliance adds a lock rather than swapping one out. Issue #477 fixed the appliance half, which the table described and nothing enforced.
+
 **Losing a key is not a lockout.** The dashboard is reached through the portal on hosted and through the login screen on the appliance, never through SSH. A user who loses their key signs in as usual and pastes a new one. That is what makes the strict hosted posture affordable for a non-technical owner.
 
 **Default posture: nothing is listening.** Samba is enabled at boot with an empty `valid users`. **sshd is not running at all** until an account opts in:
