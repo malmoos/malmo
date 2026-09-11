@@ -596,3 +596,106 @@ func TestFailedDeleteOfAnAccountWithoutSSHPushesNothing(t *testing.T) {
 		t.Fatalf("a delete of an SSH-less account reached the ssh seam: %+v", calls)
 	}
 }
+
+// The appliance's mandatory factor is the malmo password, with the key as the
+// optional second lock (AUTH.md # Device access, the profile table). Adding a
+// key must not quietly replace the password with it.
+//
+// The brain is what has to hold this. host-agent's renderer, given a key and
+// require_password false, correctly writes "AuthenticationMethods publickey" —
+// it does not know the profile and must not guess which factor is mandatory —
+// so the only place the appliance row can be enforced is here, before the push.
+func TestApplianceKeepsThePasswordWhenAKeyIsAdded(t *testing.T) {
+	// Both request shapes, because they are not the same request even though
+	// they decode to the same boolean today. Omitting the field is what a panel
+	// actually sends — it is `omitempty` — and keeping that case separate means a
+	// later presence-sensitive decoder cannot break the default path unnoticed.
+	//
+	// A harness each, not one shared: the host-call slice accumulates, and a
+	// shared one would let a shape that stops calling the host altogether pass on
+	// the other shape's leftover call.
+	for name, body := range map[string]map[string]any{
+		"field omitted":    {"enabled": true},
+		"field sent false": {"enabled": true, "require_password": false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assertApplianceKeepsThePassword(t, body)
+		})
+	}
+}
+
+func assertApplianceKeepsThePassword(t *testing.T, body map[string]any) {
+	t.Helper()
+	h := applianceSSHHarness(t)
+	h.addKey(t, testKeyA)
+	before := len(h.sshCallsSnapshot())
+
+	resp := h.do("PUT", "/api/v1/me/ssh", body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("enable = %d", resp.StatusCode)
+	}
+	defer resp.Body.Close()
+
+	calls := h.sshCallsSnapshot()
+	if len(calls) != before+1 {
+		t.Fatalf("this request made %d host calls, want exactly 1 — an assertion on a "+
+			"leftover call would pass without testing this request", len(calls)-before)
+	}
+	last := calls[len(calls)-1]
+	if !last.RequirePassword {
+		t.Errorf("host got require_password=false; the appliance would render "+
+			"AuthenticationMethods publickey and drop the mandatory factor (call = %+v)", last)
+	}
+	if len(last.AuthorizedKeys) != 1 {
+		t.Errorf("host got %d keys, want 1", len(last.AuthorizedKeys))
+	}
+
+	// The stored row has to agree, or GET /me/ssh reports a posture sshd is not
+	// running and every later re-push sends the wrong thing.
+	got := decodeJSON[SSHAccessDTO](t, resp)
+	if !got.RequirePassword {
+		t.Errorf("DTO require_password = false, want true — the panel would show a lock the box does not have")
+	}
+}
+
+// Hosted is untouched: there the key is mandatory and the password is the
+// account's own choice, so a false stays false and the account authenticates
+// with the key alone.
+func TestHostedKeepsTheAccountsPasswordChoice(t *testing.T) {
+	h := hostedSSHHarness(t)
+	h.addKey(t, testKeyA)
+
+	resp := h.do("PUT", "/api/v1/me/ssh", map[string]any{"enabled": true, "require_password": false})
+	if resp.StatusCode != 200 {
+		t.Fatalf("enable = %d", resp.StatusCode)
+	}
+	defer resp.Body.Close()
+
+	calls := h.sshCallsSnapshot()
+	last := calls[len(calls)-1]
+	if last.RequirePassword {
+		t.Errorf("host got require_password=true on hosted; the account asked for key-only (call = %+v)", last)
+	}
+	if got := decodeJSON[SSHAccessDTO](t, resp).RequirePassword; got {
+		t.Errorf("DTO require_password = true, want false")
+	}
+}
+
+// An appliance account with no key is password-only, and that is already the
+// mandatory factor, so the resolved value is true there too. Worth pinning
+// because it is the state every appliance account starts in.
+func TestApplianceWithoutAKeyStillRequiresThePassword(t *testing.T) {
+	h := applianceSSHHarness(t)
+
+	resp := h.do("PUT", "/api/v1/me/ssh", map[string]any{"enabled": true})
+	if resp.StatusCode != 200 {
+		t.Fatalf("enable = %d", resp.StatusCode)
+	}
+	defer resp.Body.Close()
+
+	calls := h.sshCallsSnapshot()
+	last := calls[len(calls)-1]
+	if !last.RequirePassword || len(last.AuthorizedKeys) != 0 {
+		t.Errorf("host call = %+v; want require_password with no keys", last)
+	}
+}

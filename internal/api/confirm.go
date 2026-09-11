@@ -37,10 +37,14 @@ import (
 // the victim's browser. While the route only signed the owner in, that was
 // harmless. Once the same round-trip also opens a privileged window, a cross-site
 // page could arm it silently. The challenge is the thing such a page cannot
-// supply: it is minted by an authenticated POST to the box's own API, which a
-// cross-origin page cannot make (the JSON content type forces a preflight the
-// brain does not answer). A landing that carries no valid challenge signs the
-// owner in exactly as before and grants no elevation.
+// supply -- and the reason is that it cannot READ the mint, not that it cannot
+// send it. This handler takes no body and requires no JSON content type, so the
+// POST is a simple request in CORS terms: a same-site app page can send it with
+// the owner's cookie and a challenge will be minted. What that page never gets
+// is the response, because the brain serves no CORS headers at all (api.go #
+// Handler), and a challenge nobody can read is inert -- single-use, bound to its
+// user, and expiring unspent. A landing that carries no valid challenge signs
+// the owner in exactly as before and grants no elevation.
 
 // elevationChallengeTTL bounds a confirm challenge. It has to outlast the portal
 // round-trip — which may include a portal login — but nothing more, so it is
