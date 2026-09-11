@@ -19,6 +19,8 @@ Closes #475. Found by the Greptile review on the v0.12.0 release PR (#474), agai
 
 The brain answered it. The hosted confirm step's whole cross-site argument rested on a preflight being refused by a layer that was in fact returning 204.
 
+**Both of those sentences were also wrong about the mechanism, which the review of this change caught.** `elevateChallenge` takes no body and requires no JSON content type, so the POST is a *simple* request: a same-site app page can send it with the owner's cookie and a challenge is minted either way. The protection was never that the request cannot be sent — it is that the reply cannot be read. A challenge nobody reads is inert, being single-use, bound to its user and short-lived. `AUTH.md` and the `confirm.go` comment now say that instead, so the boundary is defended by the fact that actually holds it.
+
 **Removed rather than narrowed to an allowlist.** Nothing calls this API cross-origin in any lane. `web-ui/src/api.ts` fetches relative paths (`/api/v1${path}`); in production Caddy serves the dashboard and the brain on one host; in dev `web-ui/vite.config.ts` proxies `/api` to the brain with `changeOrigin`, so the browser only ever sees `localhost:5173`. The middleware's own comment said it existed for the Vite dev server, and the proxy had already made that untrue. An allowlist would have kept a knob that is only ever set wrong, to serve a caller that does not exist.
 
 The `Handler` comment now carries the reasoning, so the absence reads as a decision rather than an oversight, and `AUTH.md` states it as a guarantee the brain keeps with the reason named.

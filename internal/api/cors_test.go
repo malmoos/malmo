@@ -56,10 +56,15 @@ func TestNoCORSHeadersOnAPIResponse(t *testing.T) {
 	}
 }
 
-// The preflight is refused, which is the half that actually stops the attack.
-// A JSON POST is not a simple request, so the browser asks first; an answer of
-// 204 with a reflected Origin is what would let the app mint an elevation
-// confirm challenge with the owner's cookie (confirm.go # elevateChallenge).
+// The preflight is refused too.
+//
+// Note what this does and does not cover. Minting a challenge is a POST with no
+// body and no required content type, so it is a *simple* request that no
+// browser preflights -- a same-site app page can send it, and the test above is
+// what keeps the app from reading the answer. The preflight matters for the
+// requests that do trigger one: every JSON PUT and PATCH on this API, the SSH
+// and mail writes included. Answering those 204 with a reflected Origin is what
+// would let an app drive them with the owner's cookie.
 func TestPreflightIsNotAnswered(t *testing.T) {
 	h := newHarness(t)
 
