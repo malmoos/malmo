@@ -272,6 +272,35 @@ func TestElevateChallenge_ApplianceReturns404(t *testing.T) {
 	}
 }
 
+// Only the owner can mint. Nobody else can redeem a challenge — the landing
+// refuses one belonging to another user — so for them the route does not exist.
+func TestElevateChallenge_NonOwnerReturns404(t *testing.T) {
+	h, priv := ssoHarness(t)
+	h.signIn(mint(t, priv, ownerClaims()))
+	h.addMember("u_member", "bob", "hunter2hunter2")
+	h.loginAs("bob", "hunter2hunter2")
+
+	resp := h.do("POST", "/api/v1/auth/elevate/challenge", struct{}{})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("non-owner challenge = %d; want 404", resp.StatusCode)
+	}
+}
+
+// A hosted box with no owner recorded yet mints nothing: fail closed rather than
+// hand out a challenge no landing could be trusted to match.
+func TestElevateChallenge_NoOwnerRecordedReturns404(t *testing.T) {
+	h, _ := ssoHarness(t)
+	h.addMember("u_member", "bob", "hunter2hunter2")
+	h.loginAs("bob", "hunter2hunter2")
+
+	resp := h.do("POST", "/api/v1/auth/elevate/challenge", struct{}{})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("challenge on an ownerless box = %d; want 404", resp.StatusCode)
+	}
+}
+
 // No session, no challenge — the route sits behind the normal auth middleware.
 func TestElevateChallenge_RequiresSession(t *testing.T) {
 	h, _ := ssoHarness(t)

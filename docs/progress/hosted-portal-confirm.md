@@ -32,6 +32,8 @@ The issue asked four, and asked for the reasoning whether or not the answer was 
 - **Does the forward-auth cookie inherit anything? No.** Elevation is a column on the session row, read only by `Validate` on the dashboard path. `ValidateForwardAuth` resolves the same session for app subdomains, but nothing on that path consults elevation — the verify endpoint answers allow/deny for one app request and forwards an identity header. No elevation-gated route is reachable with the Domain-scoped cookie: the API middleware reads only the host-only session cookie.
 - **Replay — the single-use check happens first.** The assertion's own `jti` is spent before the owner is even resolved, so a replayed token never reaches this code. The challenge is spent (row deleted) before `Elevate` is called, so a replayed return URL finds nothing and opens no window. Both replays are audited as `auth.elevate.failure`.
 
+**Minting is owner-only** (from Greptile's review). Any signed-in hosted account could originally mint a challenge, which bought them nothing — the landing refuses a challenge belonging to another user — but it left a write path open to an account that can never use it. The mint now 404s for anyone but the recorded owner, and for a box with no owner recorded, matching how the route already hides itself on the appliance.
+
 One more that the issue did not ask and the code had to answer: a challenge is bound to the user it was minted for, and a challenge minted for another account does not elevate this one. Not reachable in v1 (hosted is owner-only for the handshake), but the check is one comparison and the alternative is a latent bug in the first multi-user hosted box.
 
 ## Verification of the issue's claims

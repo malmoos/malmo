@@ -63,6 +63,14 @@ const maxReturnPathLen = 512
 // prompt and this route does not exist, mirroring how ssoLanding and authUsers
 // hide themselves on the other profile.
 //
+// Owner-only on top of that, and 404 for the same reason: the owner is the only
+// account the portal round-trip can return as (the handshake is owner-only, v1),
+// so for anyone else the route may as well not exist. A challenge they minted
+// could never be redeemed anyway — the landing refuses one belonging to another
+// user — so this closes a write path rather than a privilege gap. It fails
+// closed: a box with no owner recorded, or an owner lookup that errors, mints
+// nothing.
+//
 // It is a pure mint with no privilege of its own — holding a challenge elevates
 // nothing until a verified portal assertion redeems it — so it does not audit.
 // The elevation it may later buy is audited at the landing.
@@ -78,6 +86,18 @@ func (s *Server) elevateChallenge(ctx context.Context, _ *struct{}) (*struct {
 	id, ok := auth.FromContext(ctx)
 	if !ok {
 		return nil, huma.Error401Unauthorized("unauthenticated")
+	}
+	ownerID, err := s.store.GetBoxMeta(store.BoxMetaOwnerUserID)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			slog.Error("confirm: owner lookup failed", "err", err)
+			return nil, huma.Error500InternalServerError("store read failed", err)
+		}
+		slog.Warn("confirm: challenge requested on a box with no recorded owner", "user_id", id.User.ID)
+		return nil, huma.Error404NotFound("not found")
+	}
+	if id.User.ID != ownerID {
+		return nil, huma.Error404NotFound("not found")
 	}
 
 	challenge, err := newChallengeID()
