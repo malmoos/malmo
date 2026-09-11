@@ -253,7 +253,7 @@ The optional factor is a **second lock, never a second door**. Choosing it rende
 
 **Flow (per protocol):**
 
-1. Settings → My account → Device access → toggle "Enable SSH" or "Enable file shares (SMB)."
+1. Settings → SSH → toggle "Allow SSH to my account." (The screen carries SSH alone until SMB has an API; `SETTINGS.md` # panel inventory has the naming.) SMB gets "Enable file shares (SMB)" on the same screen when it ships.
 2. Confirm dashboard password (re-auth gate, prevents stolen-session abuse).
 3. Add a public key. Required on hosted, optional on the appliance. The user can **upload a `.pub` file or paste the text**; both reach the same validation. Several keys per account is normal — a laptop and a desktop. A pasted **private** key is refused in plain English and never stored.
 4. Optionally turn on the second factor, described to the user as an extra lock rather than another way in.
