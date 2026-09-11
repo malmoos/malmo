@@ -245,6 +245,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/elevate/challenge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mint a one-time confirm challenge for the portal re-auth round-trip (hosted only) */
+        post: operations["elevate-challenge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/state": {
         parameters: {
             query?: never;
@@ -1183,6 +1200,17 @@ export interface components {
             /** Format: int64 */
             total_bytes: number;
         };
+        "Elevate-challengeResponse": {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/Elevate-challengeResponse.json
+             */
+            readonly $schema?: string;
+            challenge: string;
+            /** Format: int64 */
+            expires_at: number;
+        };
         ElevateRequest: {
             /**
              * Format: uri
@@ -1981,6 +2009,7 @@ export interface components {
             /** Format: int64 */
             created_at: number;
             id: string;
+            owner?: boolean;
             role: string;
             single_user_mode?: boolean;
             username: string;
@@ -2531,6 +2560,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ElevateResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "elevate-challenge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Elevate-challengeResponse"];
                 };
             };
             /** @description Error */

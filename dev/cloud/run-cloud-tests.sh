@@ -33,7 +33,9 @@
 #                       + systemd-boot UEFI) boots where a UEFI-only one hung (#277)
 #   access              own overlay + box-id, seeded with a TEST-PORTAL key the harness
 #                       holds → a real owner session, then the per-app forward-auth
-#                       access modes end-to-end through real Caddy (#308)
+#                       access modes end-to-end through real Caddy (#308), and the
+#                       hosted confirm step (#469): a real elevation-class write that
+#                       is refused before the portal round-trip and passes after it
 #   update              own overlay + box-id, same test-portal key → a real control-
 #                       plane update (pull by digest from a registry inside the guest,
 #                       brain recreates itself, both files declared), a real
@@ -104,8 +106,9 @@ BOX_ID_SSH=heron-birch
 #   - `bios` (#277) re-boots the image under legacy BIOS (SeaBIOS) instead of UEFI,
 #     so providers that only do legacy BIOS are covered; no ordering dependency, and
 #     the publish gate includes it directly.
-#   - `access` (#308) proves the per-app forward-auth access modes end-to-end
-#     (restricted gate, owner proxy-through, public, whole-Cookie-header strip). It
+#   - `access` (#308, #469) proves the per-app forward-auth access modes end-to-end
+#     (restricted gate, owner proxy-through, public, whole-Cookie-header strip) and
+#     the hosted confirm step that opens the re-auth window without a password. It
 #     is ALSO in the publish gate: the gate it proves is on by default for every
 #     hosted app (DECISIONS.md 2026-07-08), and this is its only real-Caddy net, so a
 #     box that leaks its forward-auth cookie to an app upstream must fail publish.
@@ -250,18 +253,22 @@ if [ -z "$GO" ] && [ -n "$CALLER" ]; then
     done
 fi
 
-# Mint the access boot's test-portal keypair + a valid owner assertion. Prints two
-# lines — the seed public key, then the signed token (dev/cloud/mkassertion). Runs as
-# the invoking caller under sudo so it uses their warm Go build cache (root's is cold
-# and offline-hostile); the private key stays on the host — only the public key (into
-# the seed) and the signed token (into the VM) cross into the box, exactly as a real
-# portal would hand them over.
-mint_owner_assertion() { # box_id -> "<pubkey_b64>\n<token>"
+# Mint the access boot's test-portal keypair + one or more valid owner assertions.
+# Prints the seed public key, then one signed token per requested assertion
+# (dev/cloud/mkassertion). Runs as the invoking caller under sudo so it uses their
+# warm Go build cache (root's is cold and offline-hostile); the private key stays on
+# the host — only the public key (into the seed) and the signed tokens (into the VM)
+# cross into the box, exactly as a real portal would hand them over.
+#
+# A scenario that needs two tokens needs two mints: the box spends a jti on first
+# use, so one token cannot serve both a sign-in and a later portal round-trip. The
+# access boot asks for two — the second drives the hosted confirm step (os#469).
+mint_owner_assertion() { # box_id [count] -> "<pubkey_b64>\n<token>[\n<token>...]"
     if [ -n "$CALLER" ]; then
         sudo -u "$CALLER" env "HOME=$(getent passwd "$CALLER" | cut -d: -f6)" \
-            "$GO" -C "$REPO_ROOT" run ./dev/cloud/mkassertion -box "$1"
+            "$GO" -C "$REPO_ROOT" run ./dev/cloud/mkassertion -box "$1" -tokens "${2:-1}"
     else
-        "$GO" -C "$REPO_ROOT" run ./dev/cloud/mkassertion -box "$1"
+        "$GO" -C "$REPO_ROOT" run ./dev/cloud/mkassertion -box "$1" -tokens "${2:-1}"
     fi
 }
 
@@ -450,11 +457,16 @@ if should_run access; then
         echo "access boot needs go to mint the owner assertion; none found (\$GO='${GO:-}')" >&2
         exit 1
     }
-    mapfile -t access_mint < <(mint_owner_assertion "$BOX_ID_ACCESS") || true
+    # Three tokens, because each is single-use: one signs the owner in, one drives
+    # the hosted confirm round-trip, and one drives the open-redirect probe that the
+    # confirm step's return path opens up (os#469).
+    mapfile -t access_mint < <(mint_owner_assertion "$BOX_ID_ACCESS" 3) || true
     ACCESS_KEY="${access_mint[0]:-}"
     ACCESS_TOKEN="${access_mint[1]:-}"
-    [ -n "$ACCESS_KEY" ] && [ -n "$ACCESS_TOKEN" ] || {
-        echo "access boot: failed to mint the owner assertion (go run ./dev/cloud/mkassertion)" >&2
+    ACCESS_TOKEN2="${access_mint[2]:-}"
+    ACCESS_TOKEN3="${access_mint[3]:-}"
+    [ -n "$ACCESS_KEY" ] && [ -n "$ACCESS_TOKEN" ] && [ -n "$ACCESS_TOKEN2" ] && [ -n "$ACCESS_TOKEN3" ] || {
+        echo "access boot: failed to mint the owner assertions (go run ./dev/cloud/mkassertion)" >&2
         exit 1
     }
 
@@ -473,11 +485,13 @@ if should_run access; then
     VERDICT_TIMEOUT=720
     if ! run_boot "access" "access" \
         -smbios "type=11,value=$(seed_cred_keyed "$BOX_ID_ACCESS" "$ACCESS_KEY")" \
-        -smbios "type=11,value=io.systemd.credential.binary:malmo.sso_token=$(printf '%s' "$ACCESS_TOKEN" | base64 -w0)"; then
+        -smbios "type=11,value=io.systemd.credential.binary:malmo.sso_token=$(printf '%s' "$ACCESS_TOKEN" | base64 -w0)" \
+        -smbios "type=11,value=io.systemd.credential.binary:malmo.sso_token2=$(printf '%s' "$ACCESS_TOKEN2" | base64 -w0)" \
+        -smbios "type=11,value=io.systemd.credential.binary:malmo.sso_token3=$(printf '%s' "$ACCESS_TOKEN3" | base64 -w0)"; then
         echo "cloud gate proof: ${VERDICT}" >&2
         exit 1
     fi
-    echo "boot access OK — per-app forward-auth access modes verified end-to-end (restricted gate + owner proxy-through, public, Cookie strip), box_id=${BOX_ID_ACCESS}"
+    echo "boot access OK — per-app forward-auth access modes verified end-to-end (restricted gate + owner proxy-through, public, Cookie strip) and the hosted confirm step opened the elevation window, box_id=${BOX_ID_ACCESS}"
 fi
 
 # --- 9. update boot: the control-plane updater, for real (#382). Its OWN fresh
