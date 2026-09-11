@@ -606,25 +606,29 @@ func TestFailedDeleteOfAnAccountWithoutSSHPushesNothing(t *testing.T) {
 // it does not know the profile and must not guess which factor is mandatory —
 // so the only place the appliance row can be enforced is here, before the push.
 func TestApplianceKeepsThePasswordWhenAKeyIsAdded(t *testing.T) {
-	h := applianceSSHHarness(t)
-	h.addKey(t, testKeyA)
-
 	// Both request shapes, because they are not the same request even though
 	// they decode to the same boolean today. Omitting the field is what a panel
 	// actually sends — it is `omitempty` — and keeping that case separate means a
 	// later presence-sensitive decoder cannot break the default path unnoticed.
+	//
+	// A harness each, not one shared: the host-call slice accumulates, and a
+	// shared one would let a shape that stops calling the host altogether pass on
+	// the other shape's leftover call.
 	for name, body := range map[string]map[string]any{
 		"field omitted":    {"enabled": true},
 		"field sent false": {"enabled": true, "require_password": false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			assertApplianceKeepsThePassword(t, h, body)
+			assertApplianceKeepsThePassword(t, body)
 		})
 	}
 }
 
-func assertApplianceKeepsThePassword(t *testing.T, h *harness, body map[string]any) {
+func assertApplianceKeepsThePassword(t *testing.T, body map[string]any) {
 	t.Helper()
+	h := applianceSSHHarness(t)
+	h.addKey(t, testKeyA)
+	before := len(h.sshCallsSnapshot())
 
 	resp := h.do("PUT", "/api/v1/me/ssh", body)
 	if resp.StatusCode != 200 {
@@ -633,8 +637,9 @@ func assertApplianceKeepsThePassword(t *testing.T, h *harness, body map[string]a
 	defer resp.Body.Close()
 
 	calls := h.sshCallsSnapshot()
-	if len(calls) == 0 {
-		t.Fatal("no host call")
+	if len(calls) != before+1 {
+		t.Fatalf("this request made %d host calls, want exactly 1 — an assertion on a "+
+			"leftover call would pass without testing this request", len(calls)-before)
 	}
 	last := calls[len(calls)-1]
 	if !last.RequirePassword {

@@ -151,11 +151,16 @@ func (s *Server) setMySSH(ctx context.Context, in *struct {
 	}
 	tgt := audit.Target{Kind: "user", ID: id.User.ID}
 
-	// The effective value, not the asked-for one, so the Activity record says what
-	// the box actually did. On the appliance those differ whenever the caller
-	// omits require_password.
 	requirePassword := s.effectiveRequirePassword(in.Body.RequirePassword)
-	meta := map[string]any{"enabled": in.Body.Enabled, "require_password": requirePassword}
+
+	// The audit meta carries what was *asked for*, because that is what every
+	// record here is about — including the ones written when the request was
+	// refused and nothing was applied. Writing the resolved value on those would
+	// describe a posture the box never took and hide what the caller actually
+	// sent, which is the thing an Activity reader is trying to see. The success
+	// record adds the effective value alongside it, below, where there is a real
+	// applied state to report.
+	meta := map[string]any{"enabled": in.Body.Enabled, "require_password": in.Body.RequirePassword}
 
 	if err := requireElevated(ctx); err != nil {
 		s.auditor.Record(ctx, audit.ActionSSHAccessSet, tgt, meta, false)
@@ -206,6 +211,10 @@ func (s *Server) setMySSH(ctx context.Context, in *struct {
 		return nil, huma.Error502BadGateway("host-agent ssh set-access failed", err)
 	}
 
+	// Only now is there an applied state to name. On the appliance this differs
+	// from what was asked whenever the caller omitted require_password, and the
+	// pair is what makes the record readable: what they wanted, what they got.
+	meta["require_password_applied"] = requirePassword
 	s.auditor.Record(ctx, audit.ActionSSHAccessSet, tgt, meta, true)
 	dto, err := s.sshAccessDTO(id.User.ID)
 	if err != nil {
