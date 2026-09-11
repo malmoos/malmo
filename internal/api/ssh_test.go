@@ -609,10 +609,24 @@ func TestApplianceKeepsThePasswordWhenAKeyIsAdded(t *testing.T) {
 	h := applianceSSHHarness(t)
 	h.addKey(t, testKeyA)
 
-	// The omitted-field case, which is the one a client hits by default: the
-	// field is `omitempty`, so a panel that only sends {"enabled": true} lands
-	// here with false.
-	resp := h.do("PUT", "/api/v1/me/ssh", map[string]any{"enabled": true, "require_password": false})
+	// Both request shapes, because they are not the same request even though
+	// they decode to the same boolean today. Omitting the field is what a panel
+	// actually sends — it is `omitempty` — and keeping that case separate means a
+	// later presence-sensitive decoder cannot break the default path unnoticed.
+	for name, body := range map[string]map[string]any{
+		"field omitted":    {"enabled": true},
+		"field sent false": {"enabled": true, "require_password": false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assertApplianceKeepsThePassword(t, h, body)
+		})
+	}
+}
+
+func assertApplianceKeepsThePassword(t *testing.T, h *harness, body map[string]any) {
+	t.Helper()
+
+	resp := h.do("PUT", "/api/v1/me/ssh", body)
 	if resp.StatusCode != 200 {
 		t.Fatalf("enable = %d", resp.StatusCode)
 	}

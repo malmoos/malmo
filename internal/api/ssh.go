@@ -102,9 +102,9 @@ func (s *Server) keyRequired() bool {
 // table).
 //
 // It is applied once, at the only entry point a caller-supplied value comes in
-// through. Every other push (reapplySSH, the deleteUser restore, the rollbacks)
-// reads the stored row, so normalising before the write makes all of them right
-// and stops the row describing a posture sshd is not running.
+// through. Every other push (syncSSHIfEnabled, the deleteUser restore, the
+// rollbacks) reads the stored row, so normalising before the write makes all of
+// them right and stops the row describing a posture sshd is not running.
 //
 // The brain is the right place for this and host-agent is not: host-agent does
 // not know the environment profile and must not second-guess which factor is

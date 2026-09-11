@@ -16,11 +16,12 @@ The field is `omitempty`, so this is the default path a client takes, not an odd
 
 `setMySSH` now resolves the caller's value against the profile through `effectiveRequirePassword` before anything is written. On the appliance the answer is always true; on hosted the account's choice stands.
 
-**Once, at the single entry point.** `setMySSH` is the only place a caller-supplied `require_password` enters the brain. `reapplySSH`, the `deleteUser` restore and both rollback paths all read the stored row. So normalising before the store write makes every downstream push correct without touching them, and the row stops describing a posture sshd is not running. The audit record uses the effective value too, so Activity says what the box did rather than what was asked.
+**Once, at the single entry point.** `setMySSH` is the only place a caller-supplied `require_password` enters the brain. `syncSSHIfEnabled`, the `deleteUser` restore and both rollback paths all read the stored row. So normalising before the store write makes every downstream push correct without touching them, and the row stops describing a posture sshd is not running. The audit record uses the effective value too, so Activity says what the box did rather than what was asked.
 
 ## What was tested
 
 - Three tests in `internal/api/ssh_test.go`. The appliance sends `require_password: true` to the host and reports it in the DTO after a key is added; the appliance with no key does the same; hosted still honours a `false` and authenticates with the key alone.
+- The appliance case runs both request shapes, the field omitted and the field sent as `false`. They decode to the same boolean today, but omitting it is what a panel actually sends, and keeping the two apart means a later presence-sensitive decoder cannot break the default path unnoticed. Review asked for this.
 - The two appliance tests were run against the unfixed handler and fail there, with the host call showing `RequirePassword:false` next to the key. The hosted test passes either way, which is the point — it is there to prove the fix did not spill across the profile seam.
 - `make check` green.
 
