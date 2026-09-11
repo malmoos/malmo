@@ -885,6 +885,75 @@ access)
         || fail "access: public app upstream did not receive its own cookie (probe=leakcheck) — the strip is removing more than malmo_forward_auth: $(grep -i '^Cookie:' <<<"$pl_resp" | tr -d '\r')"
     echo "cloud-assertions: public app also strips only malmo_forward_auth (no forward-auth cookie leaks to a public upstream, app's own cookie intact)"
 
+    # 5. THE HOSTED CONFIRM STEP (os#469). Destructive admin writes sit behind a
+    #    re-auth gate, and until now a hosted owner could not pass it: the portal
+    #    signs them in and the box gives their PAM account a random password nobody
+    #    has seen, so every elevation-class action was unreachable on a hosted box.
+    #    The fix makes a second portal round-trip the proof. This drives it with a
+    #    REAL assertion (the harness's second token) against the REAL handshake, and
+    #    ends in a real elevation-class write — the only proof that matters.
+    sso_token2="$(tr -d '\r\n' < "${CREDENTIALS_DIRECTORY:-/nonexistent}/malmo.sso_token2" 2>/dev/null || true)"
+    [ -n "$sso_token2" ] || fail "access: malmo.sso_token2 credential missing (harness did not mint/deliver the second owner assertion)"
+
+    new_user_body='{"username":"tester","password":"malmo-cloud-lane-tester-pw"}'
+
+    # 5a. The plain owner session is admin but NOT elevated, so the write is refused.
+    #     This is the state a hosted box could never leave before #469.
+    cu_status="$(status_of "$(full_send POST /api/v1/users "$apex" "$session_cookie" "$new_user_body" 2>/dev/null)")"
+    grep -q ' 403' <<<"$cu_status" \
+        || fail "access: create-user on a signed-in-but-unconfirmed owner session answered '$cu_status'; wanted 403 (the re-auth gate)"
+
+    # 5b. The dashboard mints a one-time confirm challenge. It is what a cross-site
+    #     page cannot supply: minting it takes an authenticated POST to the box's own
+    #     API, so a drive-by navigation to the portal's open-box route cannot arm the
+    #     window on the victim's box.
+    ch_resp="$(full_send POST /api/v1/auth/elevate/challenge "$apex" "$session_cookie" '{}' 2>/dev/null)"
+    grep -q ' 200' <<<"$(status_of "$ch_resp")" \
+        || fail "access: mint confirm challenge answered '$(status_of "$ch_resp")'; wanted 200"
+    challenge="$(json_str_of "$ch_resp" challenge)"
+    [ -n "$challenge" ] || fail "access: confirm challenge response carried no challenge: $(tail -1 <<<"$ch_resp")"
+
+    # 5c. The portal round-trip: a fresh assertion plus the return path the dashboard
+    #     asked for, URL-encoded exactly as the portal forwards it. The box must land
+    #     the owner back on the page they came from, with the spent challenge stripped
+    #     out of the URL.
+    cf_resp="$(full_get "/_malmo/sso?token=${sso_token2}&return=%2Fsettings%2Fusers%3Fconfirm%3D${challenge}" "$apex" 2>/dev/null || true)"
+    grep -q ' 303' <<<"$(status_of "$cf_resp")" \
+        || fail "access: confirm landing answered '$(status_of "$cf_resp")'; wanted 303"
+    cf_loc="$(grep -i '^Location:' <<<"$cf_resp" | head -1 | tr -d '\r' | awk '{print $2}')"
+    [ "$cf_loc" = "/settings/users" ] \
+        || fail "access: confirm landing sent the owner to '$cf_loc'; wanted /settings/users with the confirm stripped"
+    confirm_cookie="$(cookie_val "$cf_resp" malmo_session)"
+    [ -n "$confirm_cookie" ] || fail "access: confirm landing minted no session cookie"
+
+    # 5d. The same write now passes, and it really reached the host: the Linux
+    #     account exists. A 200 alone would only prove the brain let it through.
+    cu2_status="$(status_of "$(full_send POST /api/v1/users "$apex" "$confirm_cookie" "$new_user_body" 2>/dev/null)")"
+    grep -q ' 200' <<<"$cu2_status" \
+        || fail "access: create-user after the portal confirm answered '$cu2_status'; wanted 200 — the hosted owner still cannot pass the re-auth gate"
+    id tester >/dev/null 2>&1 \
+        || fail "access: create-user returned 200 but no PAM account 'tester' exists; the elevation-class write never reached the host"
+    echo "cloud-assertions: hosted confirm step opened the elevation window through a real portal round-trip (create-user 403 before, 200 after, PAM account created)"
+
+    # 5e. A return path naming another host must never be honoured: the landing hands
+    #     out a live session, so an open redirect here would hand it to somebody
+    #     else's page. The owner still signs in and still lands on their own front
+    #     page. Driven with the third assertion — every token is single-use, and a
+    #     rejected token would 401 before the redirect is ever built, which would
+    #     prove nothing about the return path. The other refused shapes are covered
+    #     per-shape by the brain's unit tests (internal/api # TestReturnTarget).
+    sso_token3="$(tr -d '\r\n' < "${CREDENTIALS_DIRECTORY:-/nonexistent}/malmo.sso_token3" 2>/dev/null || true)"
+    [ -n "$sso_token3" ] || fail "access: malmo.sso_token3 credential missing (harness did not mint/deliver the third owner assertion)"
+    or_resp="$(full_get "/_malmo/sso?token=${sso_token3}&return=%2F%2Fevil.example%2Fsteal" "$apex" 2>/dev/null || true)"
+    grep -q ' 303' <<<"$(status_of "$or_resp")" \
+        || fail "access: landing with an off-box return answered '$(status_of "$or_resp")'; wanted 303 (sign-in still works)"
+    or_loc="$(grep -i '^Location:' <<<"$or_resp" | head -1 | tr -d '\r' | awk '{print $2}')"
+    [ "$or_loc" = "/" ] \
+        || fail "access: OPEN REDIRECT — an off-box return path became Location '$or_loc'; wanted the box's own front page"
+    [ -n "$(cookie_val "$or_resp" malmo_session)" ] \
+        || fail "access: the off-box-return landing minted no session; sign-in must still succeed"
+    echo "cloud-assertions: an off-box return path is refused and the owner lands on the box's own front page"
+
     echo "cloud-assertions: hosted per-app access modes verified end-to-end (restricted gate + owner proxy-through, public reachability, per-cookie strip in both modes)"
     ;;
 ssh)

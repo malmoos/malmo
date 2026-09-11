@@ -96,6 +96,13 @@ type UserDTO struct {
 	// Provisioning). Empty (and omitted) on appliance, so appliance responses
 	// are byte-unchanged.
 	BoxID string `json:"box_id,omitempty"`
+	// Owner marks the hosted box's owner — the account the portal handshake
+	// created and signs in (sso.go). The dashboard reads it to pick the confirm
+	// step: the owner has no box password and confirms through the portal, while
+	// a box user the owner created does have one and keeps the password prompt
+	// (issue #469). False (and omitted) on appliance and for every other account,
+	// so appliance responses stay byte-unchanged.
+	Owner bool `json:"owner,omitempty"`
 }
 
 func userDTO(u store.User) UserDTO {
@@ -117,6 +124,15 @@ func (s *Server) fullUserDTO(u store.User) (UserDTO, error) {
 	single := count == 1
 	dto.SingleUserMode = &single
 	dto.BoxID = s.boxID // "" on appliance ⇒ omitted
+	// Owner is a hosted-only concept, so the appliance never reads the row — it
+	// has no owner meta to find and no caller that would use the answer.
+	if s.profile == profile.Hosted {
+		ownerID, err := s.store.GetBoxMeta(store.BoxMetaOwnerUserID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return UserDTO{}, err
+		}
+		dto.Owner = ownerID != "" && ownerID == u.ID
+	}
 	return dto, nil
 }
 
@@ -162,6 +178,11 @@ func (s *Server) registerAuth(api huma.API) {
 		OperationID: "elevate", Method: "POST", Path: "/api/v1/auth/elevate",
 		Summary: "Re-verify password and enter the 5-minute elevation window (auth required)",
 	}, s.elevate)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "elevate-challenge", Method: "POST", Path: "/api/v1/auth/elevate/challenge",
+		Summary: "Mint a one-time confirm challenge for the portal re-auth round-trip (hosted only)",
+	}, s.elevateChallenge)
 
 	huma.Register(api, huma.Operation{
 		OperationID: "auth-users", Method: "GET", Path: "/api/v1/auth/users",
@@ -696,7 +717,11 @@ func (s *Server) listAudit(ctx context.Context, in *struct {
 }
 
 // elevate re-verifies the caller's password and marks the session elevated for
-// ElevationWindow. Body: {password}. Returns {elevated_until: <unix>} on
+// ElevationWindow. This is the appliance path and is unchanged; a hosted owner
+// has no password to re-type and confirms through the portal instead
+// (confirm.go, issue #469). The route stays registered on both profiles: a
+// hosted box user created from the dashboard does have a password.
+// Body: {password}. Returns {elevated_until: <unix>} on
 // success. Audits both success and failure per the elevation-class rule
 // (CLAUDE.md # Go code discipline).
 func (s *Server) elevate(ctx context.Context, in *struct {

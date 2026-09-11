@@ -375,6 +375,20 @@ func (s *Store) migrate() error {
 			jti        TEXT PRIMARY KEY,
 			expires_at INTEGER NOT NULL
 		);
+		-- elevation_challenges: one-time confirm nonces for the hosted
+		-- re-auth path (AUTH.md # Re-authentication for destructive actions).
+		-- A hosted owner has no box password to re-type, so the confirm step is
+		-- a portal round-trip; the dashboard mints a row here first and carries
+		-- its id through the portal, which proves the round-trip was started by
+		-- the box's own dashboard and not by a cross-site page. Single-use (the
+		-- row is deleted when spent) and short-lived; the SSO landing prunes
+		-- past-expiry rows on each write so the table stays tiny. Hosted-only;
+		-- appliance never writes a row.
+		CREATE TABLE IF NOT EXISTS elevation_challenges (
+			id         TEXT PRIMARY KEY,
+			user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			expires_at INTEGER NOT NULL
+		);
 		CREATE TABLE IF NOT EXISTS ssh_access (
 			user_id          TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
 			enabled          INTEGER NOT NULL DEFAULT 0,
@@ -1138,6 +1152,56 @@ func (s *Store) UseAssertionJTI(jti string, expiresAt, now time.Time) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// CreateElevationChallenge records a one-time confirm nonce for userID, to be
+// spent by the SSO landing (UseElevationChallenge). Past-expiry rows are pruned
+// on the way in — now is the caller's clock — so the table stays bounded by the
+// in-flight set without a sweeper.
+func (s *Store) CreateElevationChallenge(id, userID string, expiresAt, now time.Time) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM elevation_challenges WHERE expires_at <= ?`, now.Unix()); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO elevation_challenges (id, user_id, expires_at) VALUES (?,?,?)`,
+		id, userID, expiresAt.Unix()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// UseElevationChallenge spends a confirm nonce and returns the user it was
+// minted for. The row is deleted in the same transaction that reads it, so a
+// replay of the same id finds nothing: ErrNotFound covers unknown, expired, and
+// already-spent alike — the caller must not tell them apart to a client.
+func (s *Store) UseElevationChallenge(id string, now time.Time) (string, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	var userID string
+	err = tx.QueryRow(
+		`SELECT user_id FROM elevation_challenges WHERE id=? AND expires_at > ?`,
+		id, now.Unix()).Scan(&userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("scan elevation_challenges: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM elevation_challenges WHERE id=?`, id); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return userID, nil
 }
 
 // CreateSession persists a freshly issued session. Caller picks the token.

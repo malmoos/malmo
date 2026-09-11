@@ -29,6 +29,12 @@ ImportCredential=malmo.assert
 # unimported credential is simply not present, so this is a no-op for the
 # un-seeded/seeded/frozen scenarios.
 ImportCredential=malmo.sso_token
+# Two MORE independent owner assertions, delivered only by the access boot. The box
+# spends a jti on first use, so the hosted confirm step and its open-redirect probe
+# (os#469) cannot replay the sign-in token — each needs its own. Absent on every
+# other boot, like the first.
+ImportCredential=malmo.sso_token2
+ImportCredential=malmo.sso_token3
 # The script polls the control plane up (docker load + brain bootstrap + compose
 # up race this unit) and can run for minutes; the default 90s start timeout would
 # kill it mid-poll before it writes a verdict. No timeout — the QEMU harness owns

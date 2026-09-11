@@ -142,13 +142,25 @@ func (s *Server) ssoLanding(w http.ResponseWriter, r *http.Request) {
 	idCtx := auth.WithIdentity(ctx, auth.Identity{User: user, Session: sess})
 	s.auditor.Record(idCtx, audit.ActionSSOSuccess, audit.Target{Kind: "user", ID: user.ID}, nil, true)
 
-	// Redirect to the dashboard relatively ("/"), so the browser resolves it
-	// against the URL it arrived on — the same scheme+host that just served this
-	// request. The portal only ever sends the owner here over HTTPS, so an absolute
+	// The optional `return` param says where on this box to land, and may carry a
+	// confirm challenge the dashboard minted before sending the owner to the portal
+	// (confirm.go, issue #469). A landing with a valid challenge is the hosted
+	// re-auth step, so it elevates the session it just minted; a landing without one
+	// is a plain sign-in and elevates nothing. The challenge is spent before the
+	// session is elevated, so a replayed return URL grants no second window — and
+	// the assertion's own jti was already spent above, before any of this.
+	target, challenge := returnTarget(r.URL.Query().Get("return"))
+	if challenge != "" {
+		s.elevateFromConfirm(idCtx, challenge, user, sess)
+	}
+
+	// Redirect relatively, so the browser resolves the target against the URL it
+	// arrived on — the same scheme+host that just served this request. The portal
+	// only ever sends the owner here over HTTPS, so an absolute
 	// "https://<box-id>..." would be equivalent, but a relative target avoids
 	// hardcoding the scheme and can't strand a no-cert box on an HTTPS URL it can't
-	// serve.
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	// serve. returnTarget guarantees the target is a path on this box.
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 // auditSSOFailure records an sso.failure with no actor (the caller is
