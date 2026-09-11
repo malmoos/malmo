@@ -202,11 +202,15 @@ func (m *Manager) undo(restoreDropIn, restoreKeys func() error, wasRunning bool)
 		errs = append(errs, fmt.Errorf("restore the key file: %w", keysErr))
 	}
 
-	// The daemon is reconciled only when the config it would read is the one we
-	// meant to go back to. If the drop-in could not be restored, the file on disk
-	// is still this call's render, and starting or reloading against it would put
-	// the failed change into effect — the opposite of an undo.
-	if dropInErr == nil {
+	// The daemon is reconciled only when **every** file it reads is back the way
+	// it was. Either restore failing is disqualifying, and for the same reason:
+	// what is on disk would then still be this call's, and starting or reloading
+	// against it puts the failed change into effect — the opposite of an undo.
+	// The key file counts as much as the drop-in here, because a restored
+	// drop-in points at the very path whose contents the failed restore left as
+	// the new key set, so a reload would make keys live that this call has
+	// already reported as rejected.
+	if dropInErr == nil && keysErr == nil {
 		if err := m.applyDaemon(wasRunning); err != nil {
 			errs = append(errs, fmt.Errorf("reconcile the daemon: %w", err))
 		}

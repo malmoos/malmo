@@ -585,3 +585,57 @@ func TestUndoRestoresTheKeysEvenWhenTheDropInCannotBeRestored(t *testing.T) {
 		}
 	}
 }
+
+// The mirror of the case above, and the one that actually decides whether
+// rejected keys go live. If the key file restore fails while the drop-in goes
+// back cleanly, the restored config points at a path still holding this call's
+// new keys — so reloading sshd would make keys authenticate that SetAccess has
+// already reported as failed.
+func TestDaemonIsNotReloadedWhenTheKeysCannotBeRestored(t *testing.T) {
+	keys := t.TempDir()
+	m, _ := newManager(t, keys)
+	mustSet(t, m, protocol.SetSSHAccessRequest{
+		User: "alex", Enabled: true, AuthorizedKeys: []string{testKey},
+	})
+
+	const replacement = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHmywREXaNctQmxNs8UMGg8mSDO4MP1SfJnIhUAeEoY9 alex@desktop"
+
+	var ran []string
+	mark := -1
+	m.Runner = func(name string, args ...string) ([]byte, error) {
+		ran = append(ran, name+" "+strings.Join(args, " "))
+		if name == "systemctl" && len(args) > 0 && args[0] == "reload" {
+			// Only the first reload injects, and mark is set once. An undo that
+			// wrongly reconciles reaches this branch a second time, and letting
+			// it move mark would hide exactly what this test is looking for.
+			if mark < 0 {
+				// Take the keys directory away as the daemon call fails, so the
+				// restore that follows cannot write the old key file back while
+				// the drop-in's own restore still succeeds.
+				if err := os.RemoveAll(keys); err != nil {
+					t.Fatalf("inject: %v", err)
+				}
+				mark = len(ran)
+			}
+			return []byte("Failed to reload ssh.service"), os.ErrInvalid
+		}
+		return nil, nil
+	}
+
+	err := m.SetAccess(protocol.SetSSHAccessRequest{
+		User: "alex", Enabled: true, AuthorizedKeys: []string{replacement},
+	})
+	if err == nil {
+		t.Fatal("SetAccess reported success though the reload failed")
+	}
+	if !strings.Contains(err.Error(), "restore the key file") {
+		t.Errorf("error does not name the failed key restore: %v", err)
+	}
+	if mark < 0 {
+		t.Fatal("the reload was never attempted, so this test proved nothing")
+	}
+	if len(ran) != mark {
+		t.Errorf("the daemon was reconciled though the keys could not be restored, "+
+			"which would make the rejected key live; ran after the failure = %v", ran[mark:])
+	}
+}
