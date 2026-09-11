@@ -29,6 +29,7 @@ const routes: RouteRecordRaw[] = [
     children: [
       { path: "", redirect: "/settings/account" },
       { path: "account", name: "settings-account", component: () => import("@/views/settings/AccountSection.vue") },
+      { path: "ssh", name: "settings-ssh", component: () => import("@/views/settings/SshSection.vue") },
       { path: "notifications", name: "settings-notifications", component: () => import("@/views/settings/NotificationsSection.vue") },
       { path: "apps", name: "settings-apps", component: () => import("@/views/settings/InstalledAppsSection.vue") },
       { path: "apps/:id", name: "settings-app", component: () => import("@/views/settings/InstalledAppDetailSection.vue") },

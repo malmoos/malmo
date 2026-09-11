@@ -17,7 +17,7 @@
 // (components/Dock.vue), so this doesn't duplicate that with a second slide-over.
 import { computed } from "vue";
 import { RouterLink, RouterView } from "vue-router";
-import { User, Bell, LayoutGrid, Mail, ScrollText, Users, Info, type LucideIcon } from "lucide-vue-next";
+import { User, Bell, LayoutGrid, Mail, ScrollText, Terminal, Users, Info, type LucideIcon } from "lucide-vue-next";
 import { useAuth } from "@/auth";
 
 const { currentUser } = useAuth();
@@ -26,7 +26,7 @@ type NavItem = { to: string; label: string; icon: LucideIcon; adminOnly?: boolea
 type NavGroup = { label: string; items: NavItem[] };
 
 // Group and item order is the menu order. "You" holds what the signed-in user
-// owns: their account, then the apps they have installed. "System" holds the
+// owns: their account, their own SSH access, then the apps they have installed. "System" holds the
 // box-wide items, with Notifications sitting just above Activity — both are
 // "what happened on this box", so they read as a pair.
 const groups: NavGroup[] = [
@@ -34,6 +34,7 @@ const groups: NavGroup[] = [
     label: "You",
     items: [
       { to: "/settings/account", label: "Account", icon: User },
+      { to: "/settings/ssh", label: "SSH", icon: Terminal },
       { to: "/settings/apps", label: "Installed apps", icon: LayoutGrid },
     ],
   },

@@ -118,6 +118,14 @@ export type SystemVersion = Schemas["SystemVersionDTO"];
 export type DiskSpace = Schemas["DiskSpaceDTO"];
 export type AppSecrets = Schemas["AppSecretsDTO"];
 export type AppSecret = Schemas["AppSecretDTO"];
+// SSHAccess is the whole Settings -> SSH screen state for the signed-in user:
+// the on/off flag, whether the account also demands the malmo password, the
+// account's keys, and key_required — the server's answer to "does this box make
+// a public key the mandatory factor?" (true on hosted, false on the appliance).
+// The screen reads key_required rather than checking the profile itself, so the
+// rule lives only in the brain (AUTH.md # Device access).
+export type SSHAccess = Schemas["SSHAccessDTO"];
+export type SSHKey = Schemas["SSHKeyDTO"];
 
 // Scope is a UI-side literal union, intentionally NOT generated. The brain
 // serves scope (like severity / status / state) as a free string — the huma

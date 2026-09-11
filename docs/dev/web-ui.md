@@ -68,6 +68,7 @@ web-ui/
     │   └── settings/           # Settings left-nav shell + its sections
     │       ├── SettingsLayout.vue        # sidebar + nested-route content pane
     │       ├── AccountSection.vue        # identity + self-service password change
+    │       ├── SshSection.vue            # per-account SSH opt-in + public keys
     │       ├── NotificationsSection.vue  # per-category bell mutes
     │       ├── InstalledAppsSection.vue  # manage/uninstall/logs list
     │       ├── ActivitySection.vue       # audit-log browser (all users)
