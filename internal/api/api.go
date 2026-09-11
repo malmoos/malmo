@@ -149,10 +149,25 @@ const (
 )
 
 // Handler builds the mux: huma-registered REST routes + the raw SSE endpoint.
-// The chain is CORS → auth → rate-limit → mux. CORS handles OPTIONS preflight
-// (no auth needed); auth gates everything else except the small public
-// allowlist; the limiter then throttles per resolved session (or per IP on the
-// allowlist) before the mux dispatches (BRAIN_UI_PROTOCOL.md # Rate limiting).
+// The chain is auth → rate-limit → mux. Auth gates everything except the small
+// public allowlist; the limiter then throttles per resolved session (or per IP
+// on the allowlist) before the mux dispatches (BRAIN_UI_PROTOCOL.md # Rate
+// limiting).
+//
+// There is no CORS layer, and that is load-bearing rather than an omission.
+// Nothing reaches this API cross-origin: the dashboard fetches relative paths
+// (`/api/v1/...`, web-ui/src/api.ts), Caddy serves the UI and the brain on one
+// host in production, and the Vite dev server proxies `/api` to the brain so
+// the browser sees one origin there too (web-ui/vite.config.ts). So answering
+// a preflight buys no caller anything, and answering one with a reflected
+// Origin plus Access-Control-Allow-Credentials would cost a great deal: on
+// hosted, apps are `<slug>.<box-id>.malmo.network` and the dashboard is
+// `<box-id>.malmo.network`, which are same-site under a registrable domain
+// that is not on the Public Suffix List (ENVIRONMENT.md # Public DNS). The
+// owner's SameSite=Lax session cookie therefore rides a fetch from any app to
+// the dashboard API, and a reflected header would let the app read the reply.
+// AUTH.md # Re-authentication and confirm.go both rest on the opposite: that
+// a cross-origin page cannot make an authenticated JSON POST here.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	api := humago.New(mux, huma.DefaultConfig(openAPITitle, openAPIVersion))
@@ -193,7 +208,7 @@ func (s *Server) Handler() http.Handler {
 	// forward_auth sends.
 	mux.HandleFunc(forwardAuthVerifyPath, s.forwardAuthVerify)
 
-	return withCORS(s.authMiddleware(s.rateLimit(mux)))
+	return s.authMiddleware(s.rateLimit(mux))
 }
 
 // registerAll registers every huma (OpenAPI-described) route on api. It is the
@@ -1134,23 +1149,4 @@ func (s *Server) systemLive(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
-}
-
-// withCORS lets the Vite dev server (different origin) call the brain during
-// development. Tightened to same-origin behind Caddy in production.
-func withCORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-		if origin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-		}
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
