@@ -401,3 +401,131 @@ func TestRejectedRenderRestoresThePreviousKeys(t *testing.T) {
 		t.Fatalf("the previous keys were not restored: %q", got)
 	}
 }
+
+// failingSystemctl is a runner where sshd validates fine and every systemctl
+// call fails. That is the shape of a real daemon failure: the render is good,
+// so both file writes commit, and the box only refuses at the last step.
+func failingSystemctl(t *testing.T) (*Manager, string) {
+	t.Helper()
+	keys := t.TempDir()
+	m := &Manager{
+		DropInPath: filepath.Join(t.TempDir(), "sshd_config.d", "malmo-allowed.conf"),
+		KeysDir:    keys,
+		Runner: func(name string, args ...string) ([]byte, error) {
+			if name == "systemctl" {
+				return []byte("Failed to start ssh.service"), os.ErrInvalid
+			}
+			return nil, nil
+		},
+	}
+	return m, keys
+}
+
+// A first-ever enable whose daemon call fails must leave nothing behind.
+//
+// The brain rolls its row back on this error, so an account left in the drop-in
+// with its key on disk is access nobody has a record of. It does not stay
+// dormant either: the next account to enable SSH starts the daemon, and this one
+// comes up with it — granted by a call about a different user.
+func TestFailedDaemonStartLeavesNoAccountBehind(t *testing.T) {
+	m, keys := failingSystemctl(t)
+
+	if err := m.SetAccess(protocol.SetSSHAccessRequest{
+		User: "alex", Enabled: true, AuthorizedKeys: []string{testKey},
+	}); err == nil {
+		t.Fatal("SetAccess reported success though the daemon never started")
+	}
+
+	if _, err := os.Stat(filepath.Join(keys, "alex")); !os.IsNotExist(err) {
+		t.Errorf("key file survived a failed daemon start: stat err = %v", err)
+	}
+	if _, err := os.Stat(m.dropInPath()); !os.IsNotExist(err) {
+		t.Errorf("drop-in survived a failed first enable: stat err = %v", err)
+	}
+}
+
+// A failed disable has to keep the account, because the brain's rollback puts
+// its row back to enabled. Dropping the entry here would leave the dashboard
+// showing access the host is no longer configured for, and the account's key
+// gone with it.
+func TestFailedDaemonStopKeepsThePreviousAccount(t *testing.T) {
+	keys := t.TempDir()
+	m, _ := newManager(t, keys)
+	mustSet(t, m, protocol.SetSSHAccessRequest{
+		User: "alex", Enabled: true, AuthorizedKeys: []string{testKey},
+	})
+
+	m.Runner = func(name string, args ...string) ([]byte, error) {
+		if name == "systemctl" {
+			return []byte("Failed to stop ssh.service"), os.ErrInvalid
+		}
+		return nil, nil
+	}
+	if err := m.SetAccess(protocol.SetSSHAccessRequest{User: "alex", Enabled: false}); err == nil {
+		t.Fatal("SetAccess reported success though the daemon never stopped")
+	}
+
+	got := readDropInFile(t, m)
+	if !strings.Contains(got, "Match User alex") {
+		t.Errorf("the account was dropped though the disable failed; the brain still has it enabled:\n%s", got)
+	}
+	if _, err := os.Stat(filepath.Join(keys, "alex")); err != nil {
+		t.Errorf("key file removed though the disable failed: %v", err)
+	}
+}
+
+// The undo reconciles the daemon, it does not only put the files back. A failed
+// call can still have changed the run state, so leaving sshd running a set that
+// no longer exists on disk would be half an undo.
+func TestUndoReconcilesTheDaemonToThePreviousSet(t *testing.T) {
+	var ran []string
+	keys := t.TempDir()
+	m := &Manager{
+		DropInPath: filepath.Join(t.TempDir(), "sshd_config.d", "malmo-allowed.conf"),
+		KeysDir:    keys,
+		Runner: func(name string, args ...string) ([]byte, error) {
+			ran = append(ran, name+" "+strings.Join(args, " "))
+			// Only the enable fails, so the undo's own systemctl call can run and
+			// be observed. A runner that failed every call could not show this.
+			if name == "systemctl" && len(args) > 0 && args[0] == "enable" {
+				return []byte("Failed to start ssh.service"), os.ErrInvalid
+			}
+			return nil, nil
+		},
+	}
+
+	if err := m.SetAccess(protocol.SetSSHAccessRequest{
+		User: "alex", Enabled: true, AuthorizedKeys: []string{testKey},
+	}); err == nil {
+		t.Fatal("SetAccess reported success though the daemon never started")
+	}
+
+	// The previous enabled set was empty, so the daemon must be brought back down
+	// rather than left in whatever state the failed enable reached.
+	var disabled bool
+	for _, c := range ran {
+		if strings.HasPrefix(c, "systemctl disable") {
+			disabled = true
+		}
+	}
+	if !disabled {
+		t.Errorf("the undo did not reconcile the daemon; ran = %v", ran)
+	}
+}
+
+// When the undo itself fails the error has to say so. The brain will still roll
+// its row back, so this is the one case where the two sides genuinely cannot be
+// reconciled and the message is all a human has to go on.
+func TestFailedUndoIsReported(t *testing.T) {
+	m, _ := failingSystemctl(t)
+
+	err := m.SetAccess(protocol.SetSSHAccessRequest{
+		User: "alex", Enabled: true, AuthorizedKeys: []string{testKey},
+	})
+	if err == nil {
+		t.Fatal("SetAccess reported success though the daemon never started")
+	}
+	if !strings.Contains(err.Error(), "could not be put back") {
+		t.Errorf("error does not say the host was left inconsistent: %v", err)
+	}
+}
