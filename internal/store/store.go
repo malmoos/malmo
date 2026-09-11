@@ -381,9 +381,9 @@ func (s *Store) migrate() error {
 		-- a portal round-trip; the dashboard mints a row here first and carries
 		-- its id through the portal, which proves the round-trip was started by
 		-- the box's own dashboard and not by a cross-site page. Single-use (the
-		-- row is deleted when spent) and short-lived; the SSO landing prunes
-		-- past-expiry rows on each write so the table stays tiny. Hosted-only;
-		-- appliance never writes a row.
+		-- row is deleted when spent) and short-lived; each mint prunes
+		-- past-expiry rows so the table stays tiny. Hosted-only; appliance never
+		-- writes a row.
 		CREATE TABLE IF NOT EXISTS elevation_challenges (
 			id         TEXT PRIMARY KEY,
 			user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
